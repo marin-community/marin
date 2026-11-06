@@ -44,6 +44,13 @@ format:
 - Tokenizes the value in `text_key`
 - Appends EOS token and prepends BOS token if not already present
 
+With `pack: false`, text documents form a continuous stream split into context-length sequences, and
+the incomplete final sequence is dropped. `LmDataConfig.validation_remainder="pad"` keeps it in
+validation with right padding, so a nonempty corpus shorter than the context length still yields an
+example. Padding has segment ID `-1` and zero loss weight, including the position predicting the first
+padding token. Document boundaries remain intact, and an empty corpus yields no examples. Training
+always drops the final sequence.
+
 ---
 
 ## `chat` Format

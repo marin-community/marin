@@ -268,3 +268,7 @@ def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
     one_rack, four_racks = arm(1), arm(4)
 
     assert one_rack.data == four_racks.data
+
+
+def test_long_context_mix_keeps_final_validation_windows(fake_store):
+    assert fake_store.data_config().validation_remainder == "pad"

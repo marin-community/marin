@@ -17,9 +17,12 @@ import haliax as hax
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
+    CausalLmDataset,
     ChatDataset,
     DatasetComponent,
     LmDataConfig,
+    PaddedTokenSeqDataset,
+    TokenSeqDataset,
     UrlDatasetSourceConfig,
     count_corpus_sizes,
     dataset_for_component,
@@ -37,7 +40,7 @@ from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
+from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, SerialCacheWriter, write_levanter_cache
 
 
 def test_dont_blow_up_without_validation_set():
@@ -55,6 +58,99 @@ def test_dont_blow_up_without_validation_set():
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
         assert config.validation_sets(Pos) == {}
+
+
+def _tiny_validation(tmp_path, token_count: int, remainder: str):
+    tokens = np.arange(1, token_count + 1, dtype=np.int32)
+    with SerialCacheWriter(str(tmp_path), {"input_ids": np.zeros(1, dtype=np.int32)}) as writer:
+        if token_count:
+            writer.write_batch([{"input_ids": tokens}])
+    config = LmDataConfig(
+        components={"tiny": DatasetComponent(format=TextLmDatasetFormat(), pack=False)},
+        tokenizer="passthrough",
+        vocab_size=32,
+        validation_remainder=remainder,
+    )
+    return tokens, config, writer.result()
+
+
+@pytest.mark.parametrize("token_count", [0, 3, 8, 11])
+def test_padded_validation_keeps_the_partial_sequence_and_training_drops_it(tmp_path, token_count):
+    tokens, config, cache = _tiny_validation(tmp_path, token_count, "pad")
+    Pos = hax.Axis("position", 8)
+    train = config.build_token_datasets({"tiny": cache}, Pos, split="train")["tiny"].as_sync_dataset()
+    validation = config.build_token_datasets({"tiny": cache}, Pos, split="validation")["tiny"].as_sync_dataset()
+
+    assert len(train) == token_count // 8
+    assert len(validation) == (token_count + 7) // 8
+    for index in range(len(validation)):
+        example = validation[index]
+        real = tokens[index * 8 : (index + 1) * 8]
+        np.testing.assert_array_equal(example.tokens[: len(real)], real)
+        expected_weights = np.zeros(8, dtype=np.float32)
+        expected_weights[: len(real) - 1] = 1
+        np.testing.assert_array_equal(example.loss_weight, expected_weights)
+        segments = np.asarray(example.attn_mask.segment_ids[0])
+        np.testing.assert_array_equal(segments >= 0, np.arange(8) < len(real))
+        if len(real) < 8:
+            assert not np.asarray(example.attn_mask.materialize_mask(8, 8))[: len(real), len(real) :].any()
+
+
+def test_padded_examples_match_dropped_examples_in_structure_and_dtype(tmp_path):
+    # The eval program is keyed on the batch's tree, shapes and dtypes. With an EOS token, as the hero's
+    # tokenizer has, a padded window must leave all of them as the drop path has them, or padding would
+    # compile a different eval program.
+    tokens = np.arange(1, 12, dtype=np.int32)
+    with SerialCacheWriter(str(tmp_path), {"input_ids": tokens}) as writer:
+        writer.write_batch([{"input_ids": tokens}])
+    Pos = hax.Axis("position", 8)
+    full = CausalLmDataset(TokenSeqDataset(writer.result(), 8), Pos, eos_id=31).as_sync_dataset()[0]
+    padded = CausalLmDataset(PaddedTokenSeqDataset(writer.result(), 8), Pos, eos_id=31).as_sync_dataset()
+
+    assert len(padded) == 2
+    for example in (padded[0], padded[1]):
+        assert jax.tree.structure(example) == jax.tree.structure(full)
+        assert jax.tree.map(lambda leaf: (leaf.shape, leaf.dtype), example) == jax.tree.map(
+            lambda leaf: (leaf.shape, leaf.dtype), full
+        )
+
+
+@pytest.mark.parametrize("block_cross_document_attention", [False, True])
+def test_padded_validation_preserves_weights_and_document_boundaries(tmp_path, block_cross_document_attention):
+    tokens = np.array([1, 3, 2, 4], dtype=np.int32)
+    weights = np.array([0.25, 0.5, 0.75, 1.0], dtype=np.float32)
+    exemplar = {"input_ids": tokens, "weights": weights}
+    with SerialCacheWriter(str(tmp_path), exemplar) as writer:
+        writer.write_batch([exemplar])
+    dataset = CausalLmDataset(
+        PaddedTokenSeqDataset(writer.result(), 8, loss_weights_key="weights"),
+        hax.Axis("position", 8),
+        eos_id=3,
+        block_cross_document_attention=block_cross_document_attention,
+    ).as_sync_dataset()
+
+    example = dataset[0]
+    np.testing.assert_array_equal(example.tokens, [1, 3, 2, 4, 0, 0, 0, 0])
+    np.testing.assert_array_equal(example.loss_weight, [0.25, 0.5, 0.75, 0, 0, 0, 0, 0])
+    expected_segments = [0, 0, 1, 1, -1, -1, -1, -1] if block_cross_document_attention else [0] * 4 + [-1] * 4
+    np.testing.assert_array_equal(example.attn_mask.segment_ids[0], expected_segments)
+
+
+@pytest.mark.parametrize("remainder", ["drop", "pad"])
+def test_validation_corpus_stats_follow_the_remainder_policy(tmp_path, local_gpt2_tokenizer_path, remainder):
+    tokens = np.arange(1, 12, dtype=np.int32)
+    for split in ("train", "validation"):
+        write_levanter_cache([{"input_ids": tokens}], str(tmp_path / split), metadata={})
+    config = LmDataConfig(
+        components={"tiny": DatasetComponent(cache_dir=str(tmp_path), format=TextLmDatasetFormat(), pack=False)},
+        tokenizer=local_gpt2_tokenizer_path,
+        validation_remainder=remainder,
+    )
+
+    stats = count_corpus_sizes(config, seq_len=8)
+
+    assert stats["data/stats/validation/tiny/total_seqs"] == (2 if remainder == "pad" else 1)
+    assert stats["data/stats/train/tiny/total_seqs"] == 1
 
 
 def test_count_corpus_sizes_handles_empty_train_cache(monkeypatch):

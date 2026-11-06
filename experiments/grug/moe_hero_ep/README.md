@@ -269,7 +269,7 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, 2816 at 16K, 704 at 65K, and 176 at 262K with the same 390251-step schedule, learning rates, and weight
-decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Training evals drop each corpus's final partial window, so at 262K `ptb` and `wikitext_103` have no window and log no loss. `eval_dropless/macro_loss` and `eval_dropless/paloma/macro_loss` exclude them, which raises the Paloma macro from 1.960 to 2.043 at step-390251. Do not lengthen the schedule
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Above the long-context threshold, a corpus keeps its final partial window with masked right padding (`validation_remainder="pad"`), so at 262K `ptb` and `wikitext_103` are scored and all 16 Paloma subsets enter the macros. Padding keeps the batch shape, so the eval compiles the same program. Shorter contexts drop that window. Do not lengthen the schedule
 to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
 [Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
 

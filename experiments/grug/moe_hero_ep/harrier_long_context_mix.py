@@ -85,6 +85,8 @@ def harrier_long_context_data_config(
         shuffle=_shuffle_config(max_seq_len),
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         mixture_start_step=start_step,
+        # Most Paloma subsets are shorter than one 262K sequence, so dropping would leave them unscored.
+        validation_remainder="pad",
     )
 
 
