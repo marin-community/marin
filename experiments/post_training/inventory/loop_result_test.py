@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -75,11 +76,81 @@ def write_observations(config, scenario):
 
 @pytest.mark.parametrize(
     "scenario",
-    ["complete", "missing_grade", "missing_step", "skipped_extra_step", "missing_checkpoint", "stale", "nonfinite_loss"],
+    [
+        "complete",
+        "missing_grade",
+        "missing_step",
+        "skipped_extra_step",
+        "missing_checkpoint",
+        "stale",
+        "nonfinite_loss",
+        "snowball-speed",
+        "snowball-panel",
+        "snowball-failed",
+        "snowball-stale-tracking",
+    ],
 )
 def test_terminal_summary_requires_native_success_complete_evidence_and_checkpoint(monkeypatch, run_config, scenario):
+    snowball = scenario.startswith("snowball-")
+    failure = RuntimeError("native attempt failed")
+    if snowball:
+        run_config = replace(
+            run_config,
+            snowball=loop_result.SnowballAttempt(
+                "speed-medium" if scenario == "snowball-speed" else "learning-medium",
+                "native-fingerprint",
+                "p40",
+                "2026.11.06",
+            ),
+        )
+        Path(run_config.skyrl.output.export_root, "tracking.json").write_text(
+            json.dumps({"wandb_url": "https://wandb.ai/team/project/runs/earlier"})
+        )
+
     def train(config):
-        write_observations(run_config, scenario)
+        if snowball:
+            export = Path(config.output.export_root)
+            (export / "metrics").mkdir(exist_ok=True)
+            (export / "metrics/step-000001.json").write_text(
+                json.dumps(
+                    {
+                        "step": 1,
+                        "attempt_id": config.attempt_id,
+                        "policy/policy_update_steps": 2,
+                        "policy/policy_loss": 0.1,
+                        "policy/raw_grad_norm": 0.2,
+                    }
+                )
+            )
+            (export / "metrics/step-000002.json").write_text(
+                json.dumps(
+                    {
+                        "step": 2,
+                        "attempt_id": "earlier",
+                        "policy/policy_update_steps": 999,
+                        "policy/policy_loss": 0.1,
+                        "policy/raw_grad_norm": 0.2,
+                    }
+                )
+            )
+            attempt = Path(config.output.attempts_root, config.attempt_id + ".json")
+            attempt.parent.mkdir(exist_ok=True)
+            attempt.write_text(
+                json.dumps(
+                    {
+                        "config": {"run": {"id": config.run_id, "attempt_id": config.attempt_id}},
+                        "result": {"iris_job_id": "/tests/current-job"},
+                    }
+                )
+            )
+            if scenario != "snowball-stale-tracking":
+                (export / "tracking.json").write_text(
+                    json.dumps({"wandb_url": "https://wandb.ai/team/project/runs/current"})
+                )
+            if scenario == "snowball-failed":
+                raise failure
+        else:
+            write_observations(run_config, scenario)
         return SkyRLRun(
             path="terminal",
             hf_model_uri=None,
@@ -93,6 +164,40 @@ def test_terminal_summary_requires_native_success_complete_evidence_and_checkpoi
         )
 
     monkeypatch.setattr(loop_result, "run_skyrl", train)
+    if snowball:
+        if scenario == "snowball-failed":
+            with pytest.raises(RuntimeError) as caught:
+                loop_result.run_loop(run_config)
+            assert caught.value is failure
+        else:
+            loop_result.run_loop(run_config)
+        path = Path(run_config.skyrl.output.export_root, "attempts", run_config.skyrl.attempt_id, "loop-result.json")
+        summary = json.loads(path.read_text())
+        assert summary["status"] == ("failed" if scenario == "snowball-failed" else "succeeded")
+        assert (summary["run_id"], summary["attempt_id"]) == ("fixture/run", "attempt-1")
+        assert summary["optimizer_steps"] == 2 and summary["iris_job_ids"] == ["/tests/current-job"]
+        assert (summary["preset"], summary["layout"], summary["config_fingerprint"], summary["campaign"]) == (
+            run_config.snowball.preset,
+            "p40",
+            "native-fingerprint",
+            "2026.11.06",
+        )
+        assert summary["evaluation"] is summary["baseline"] is summary["final"] is None
+        assert summary["wandb_run_id"] == (None if scenario == "snowball-stale-tracking" else "current")
+        assert not Path(run_config.skyrl.output.export_root, "loop-result.json").exists()
+        retained = path.read_bytes()
+        next_config = replace(run_config, skyrl=replace(run_config.skyrl, attempt_id="attempt-2"))
+        if scenario == "snowball-failed":
+            with pytest.raises(RuntimeError):
+                loop_result.run_loop(next_config)
+        else:
+            loop_result.run_loop(next_config)
+        assert path.read_bytes() == retained
+        second = json.loads(
+            path.with_name("loop-result.json").parent.with_name("attempt-2").joinpath("loop-result.json").read_text()
+        )
+        assert second["attempt_id"] == "attempt-2" and second["wandb_run_id"] is None
+        return
     if scenario == "complete":
         result = loop_result.run_loop(run_config)
         assert result.iris_job_id == "fixture-job"

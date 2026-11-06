@@ -1258,11 +1258,10 @@ def main(
         if receipt is not None and receipt.config.get("run", {}).get("attempt_id"):
             native = apply(
                 name,
-                SkyRLRun.raw_load,
+                Artifact,
                 version=version if separator else presets.PRESET_REVISION,
-                artifact_type=SkyRLRun,
                 pin=source,
-                source=source,
+                path=source,
             )
             try:
                 run(loop_publication.publication_step(native, gate=step))

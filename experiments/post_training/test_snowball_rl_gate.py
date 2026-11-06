@@ -46,7 +46,7 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.inventory import loop_publication, publish_loop_result
+from experiments.post_training.inventory import loop_publication, loop_result, publish_loop_result
 from experiments.post_training.inventory.publication_test_support import ReportTransport
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
@@ -1524,6 +1524,53 @@ def test_built_gate_and_rescore_share_inputs_and_status(
         "run crashed",
         "/tests/native-run",
     )
+    if preset == "learning-medium":
+        native_step = built.runs[0]
+        _json(tmp_path / "initializer/hf/config.json", {})
+        _json(tmp_path / "initializer/hf/tokenizer_config.json", {})
+        monkeypatch.setattr(adapter, "skyrl_temporary_run_path", lambda output_path, ttl_days: str(source / "temporary"))
+        native_config = native_step.build_config(
+            StepContext.for_run(str(source), str(tmp_path), runtime_args=native_step.runtime_args, deps=native_step.deps)
+        )
+        (source / RECORD_FILENAME).unlink()
+        (source / ".executor_status").write_text("FAILED")
+        failure = RuntimeError("first native attempt failed after optimizer work")
+
+        def failed_native(config):
+            launch["run"] = {"id": config.run_id, "attempt_id": config.attempt_id}
+            launch["artifacts"] = {"attempts_root": config.output.attempts_root}
+            _json(source / "resolved-launch.yaml", {"config": launch})
+            _json(
+                Path(config.output.attempts_root) / f"{config.attempt_id}.json",
+                {"config": launch, "result": terminal["result"] | {"state": "failed"}},
+            )
+            for path in (source / "exports/metrics").glob("step-*.json"):
+                _json(path, json.loads(path.read_text()) | {"attempt_id": config.attempt_id})
+            _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.ai/team/project/runs/failed-current"})
+            raise failure
+
+        monkeypatch.setattr(loop_result, "run_skyrl", failed_native)
+        with pytest.raises(RuntimeError) as caught:
+            native_step.run(native_config)
+        assert caught.value is failure
+        raw = source / "exports/attempts" / native_config.attempt_id / loop_result.RESULT_FILENAME
+        attempt = json.loads(raw.read_text())
+        assert attempt["status"] == "failed" and attempt["config_fingerprint"] == native_step.fingerprint()
+        saved = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
+        failed_gate = rescore(preset, "--candidate", native_step.name)
+        published = [
+            row
+            for row in publication_transport.rows.values()
+            if row["attempt_id"].startswith(native_config.attempt_id + "-gate-")
+        ]
+        assert len(published) == 1
+        assert (published[0]["status"], published[0]["verdict"], published[0]["config_fingerprint"]) == (
+            "failed",
+            failed_gate["verdict"],
+            native_step.fingerprint(),
+        )
+        assert not (source / RECORD_FILENAME).exists()
+        assert all(path.read_bytes() == content for path, content in saved.items())
 
 
 @pytest.mark.parametrize("preset", ["speed-long", "speed-medium"])
@@ -1565,40 +1612,71 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("no-wait", 0),
         ("child", 0),
         ("learning-child", 0),
+        ("train-child", 0),
         ("control", 0),
         ("generate", 0),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
-    recorded_runs, monkeypatch, case, expected, publication_transport
+    recorded_runs, monkeypatch, case, expected, publication_transport, tmp_path
 ):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
     preset_name = (
-        "learning-medium" if case == "learning-child" else "speed-short" if case == "generate" else "speed-medium"
+        "learning-medium"
+        if case == "learning-child"
+        else "train-long" if case == "train-child" else "speed-short" if case == "generate" else "speed-medium"
     )
-    controls(recorded_runs, preset_name)
+    if case != "train-child":
+        controls(recorded_runs, preset_name)
+    else:
+        monkeypatch.setattr(
+            presets,
+            "artifact_prefix",
+            lambda cluster: str(tmp_path if cluster == presets.P40.cluster else tmp_path / "reno"),
+        )
     preset = presets.PRESETS[preset_name]
     replicates = 2 if case == "learning-child" else 1
-    built = snowball.build_run(preset, control=case == "control", replicates=replicates)
+    built = snowball.build_run(
+        preset, control=case == "control", replicates=replicates, layout=presets.P40 if case == "train-child" else None
+    )
     sources = [
         recorded_runs(
             preset,
             step.name,
             speed=150 if case in {"fail", "no-wait"} else 101,
             fingerprint=step.fingerprint(),
-            initial_score=0.2 if case == "learning-child" else None,
+            initial_score=0.2 if case in {"learning-child", "train-child"} else None,
         )
         for step in built.runs
     ]
     source = sources[0]
+    if case == "train-child":
+        monkeypatch.setattr(adapter, "skyrl_temporary_run_path", lambda output_path, ttl_days: str(source / "temporary"))
+        step = built.runs[0]
+        config = step.build_config(
+            StepContext.for_run(str(source), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+        )
+
+        def completed_native(config):
+            terminal = json.loads((source / "terminal.json").read_text())
+            terminal["config"]["run"] = {"id": config.run_id, "attempt_id": config.attempt_id}
+            _json(source / "terminal.json", terminal)
+            _json(source / "resolved-launch.yaml", {"config": terminal["config"]})
+            for path in (source / "exports/metrics").glob("step-*.json"):
+                _json(path, json.loads(path.read_text()) | {"attempt_id": config.attempt_id})
+            _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.ai/team/project/runs/train-current"})
+            return SkyRLRun.raw_load(str(source))
+
+        monkeypatch.setattr(loop_result, "run_skyrl", completed_native)
+        step.run(config)
     if built.gate is not None:
         built = replace(built, gate=gate.gate_step(preset, built.runs, inputs=gate.GateInputs()))
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
-    if case not in {"missing", "control"}:
+    if built.gate is not None and case not in {"missing", "control"}:
         run(built.gate)
     if case == "parent-early":
         shutil.rmtree(source)
@@ -1611,7 +1689,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if case in {"child", "learning-child"}:
+    if case in {"child", "learning-child", "train-child"}:
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
@@ -1621,15 +1699,17 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         arguments.append("--control")
     if case == "learning-child":
         arguments.extend(("--replicates", "2"))
+    if case == "train-child":
+        arguments.extend(("--layout", "p40"))
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if case in {"no-wait", "child", "learning-child"} else [(job,)]
+    waited = [] if case in {"no-wait", "child", "learning-child", "train-child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
     assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
-    if case not in {"child", "learning-child"}:
+    if case not in {"child", "learning-child", "train-child"}:
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
@@ -1662,6 +1742,16 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         assert any(
             attempt.startswith("second-attempt-gate-") for _, attempt in set(publication_transport.rows) - first_group
         )
+    if case == "train-child":
+        snapshot = status(preset_name, ["--layout", "p40"])
+        assert "verdict" not in snapshot and snapshot["runs"][0]["rl_progress_url"].startswith(
+            "https://applets.marina.oa.dev/"
+        )
+        assert len(publication_transport.rows) == 1
+        record = next(iter(publication_transport.rows.values()))
+        assert record["verdict"] is None and record["status"] == "succeeded"
+        assert record["baseline"]["attempted"] == record["final"]["attempted"] == 100
+        assert record["layout"] == "p40" and record["wandb_run_id"] == "train-current"
     if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0

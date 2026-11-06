@@ -78,6 +78,23 @@ def _native_identity(path: str) -> tuple[str, str]:
     return identity
 
 
+def _snowball_record(path: str, native: tuple[str, str] | None = None) -> dict | None:
+    if native is None:
+        try:
+            config = read_skyrl_launch_config(path)
+        except FileNotFoundError:
+            return None
+        run = config.get("run", {})
+        native = run.get("id"), run.get("attempt_id")
+    source = StoragePath(path) / "exports/attempts" / str(native[1]) / RESULT_FILENAME
+    if not presets.exists(source):
+        return None
+    record = json.loads(presets.read_text(source))
+    if (record.get("run_id"), record.get("attempt_id")) != native:
+        raise ValueError(f"Snowball attempt metadata identity differs from its native run: {source}")
+    return record
+
+
 def _native_interval(job_id: str) -> tuple[str, str, float]:
     with ExitStack() as stack:
         info = get_job_info()
@@ -130,24 +147,33 @@ def _phase_result(
 
 def _retain_snowball_summary(
     training_path: str,
-    gate_path: str,
+    gate_path: str | None,
     native: tuple[str, str],
-    gate_identity: tuple[str, str, str],
+    gate_identity: tuple[str, str, str] | None,
     output: str,
 ) -> Artifact:
     if _native_identity(training_path) != native:
         raise ValueError("Native attempt changed before summary creation; rebuild publication")
-    gate_record = presets.artifact_record(gate_path)
-    if (gate_record.name, gate_record.version, gate_record.fingerprint) != gate_identity:
-        raise ValueError("Gate interpretation changed before summary creation; rebuild publication")
-    report = gate_record.result
-    preset = presets.PRESETS[report["preset"]]
+    metadata = _snowball_record(training_path, native)
+    report = None
+    if gate_path is not None:
+        gate_record = presets.artifact_record(gate_path)
+        if (gate_record.name, gate_record.version, gate_record.fingerprint) != gate_identity:
+            raise ValueError("Gate interpretation changed before summary creation; rebuild publication")
+        report = gate_record.result
+    preset = presets.PRESETS[report["preset"] if report is not None else metadata["preset"]]
+    if metadata is not None and metadata["preset"] != preset.name:
+        raise ValueError("Snowball attempt metadata and gate preset disagree")
     if preset.recipe.layout.role_plan.generate_only or preset.focus == presets.Focus.SPEED:
         raise ValueError("Snowball publication requires a trained panel run")
     receipt = read_skyrl_launch_receipt(training_path)
-    launch = receipt.config
-    if launch != read_skyrl_launch_config(training_path):
-        raise ValueError("Native receipt and resolved configuration disagree")
+    launch = read_skyrl_launch_config(training_path)
+    if tuple(launch["run"][key] for key in ("id", "attempt_id")) != native or any(
+        launch.get(key) != receipt.config.get(key) for key in ("inputs", "artifacts")
+    ):
+        raise ValueError("Native receipt and resolved input/artifact identities disagree")
+    if metadata is not None and metadata["status"] != receipt.result.state:
+        raise ValueError("Snowball attempt metadata and native status disagree")
     task_ids = scoring.evaluation_ids(launch["inputs"]["validation_data"])
     evaluation = next(item for item in preset.evaluations if item.harness == presets.EvalHarness.PANEL)
     if launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] != 1:
@@ -196,11 +222,19 @@ def _retain_snowball_summary(
     baseline, final = phases
     started, completed_at, elapsed = _native_interval(receipt.result.iris_job_id)
     provenance = receipt.result.provenance or {}
-    record = presets.artifact_record(training_path)
+    if metadata is None:
+        record = presets.artifact_record(training_path)
+        metadata = {
+            "campaign": record.version,
+            "config_fingerprint": record.fingerprint,
+            "layout": preset.recipe.layout.name,
+        }
     tracking = StoragePath(training_path) / "exports/tracking.json"
     summary = {
         "run_id": native[0],
-        "attempt_id": native[1] + "-gate-" + fingerprint_hash(canonical_json(gate_identity)),
+        "attempt_id": (
+            native[1] + "-gate-" + fingerprint_hash(canonical_json(gate_identity)) if gate_identity else native[1]
+        ),
         "label": preset.name,
         "run_date": started,
         "date_basis": "launch_started",
@@ -209,7 +243,7 @@ def _retain_snowball_summary(
         "elapsed_seconds": elapsed,
         "timing_scope": "native_job_start_to_finish",
         "status": "succeeded" if receipt.result.state == "succeeded" else "failed",
-        "verdict": report["verdict"],
+        "verdict": report["verdict"] if report is not None else None,
         "min_scored_fraction": presets.MINIMUM_PANEL_COVERAGE,
         "optimizer_steps": applied,
         "source_revision": f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}",
@@ -225,12 +259,17 @@ def _retain_snowball_summary(
         "baseline": baseline,
         "final": final,
         "baseline_source": prefix_join(training_path, "exports/dumped_evals/global_step_0_evals"),
-        "artifact_uri": gate_path,
-        "wandb_url": json.loads(presets.read_text(tracking))["wandb_url"] if presets.exists(tracking) else None,
-        "campaign": record.version,
+        "artifact_uri": gate_path or str(StoragePath(training_path) / "exports/attempts" / native[1] / RESULT_FILENAME),
+        "wandb_url": (
+            metadata.get("wandb_url")
+            if "wandb_url" in metadata
+            else json.loads(presets.read_text(tracking))["wandb_url"] if presets.exists(tracking) else None
+        ),
+        "wandb_run_id": metadata.get("wandb_run_id"),
+        "campaign": metadata["campaign"],
         "series": preset.name,
-        "config_fingerprint": record.fingerprint,
-        "layout": preset.recipe.layout.name,
+        "config_fingerprint": metadata["config_fingerprint"],
+        "layout": metadata["layout"],
         "iris_job_ids": [receipt.result.iris_job_id],
         "evidence": evidence,
     }
@@ -242,18 +281,20 @@ def _retain_snowball_summary(
 
 
 def publication_step(
-    training: ArtifactStep[SkyRLRun], *, gate: ArtifactStep | None = None
+    training: ArtifactStep[SkyRLRun] | ArtifactStep[Artifact], *, gate: ArtifactStep | None = None
 ) -> ArtifactStep[LoopPublication]:
     """Publish cached training, or a completed Snowball gate for its recorded native attempt."""
-    if gate is not None:
+    snowball = _snowball_record(training.path()) if gate is None else None
+    if gate is not None or snowball is not None:
         native = _native_identity(training.path())
-        record = presets.artifact_record(gate.path())
-        identity = record.name, record.version, record.fingerprint
+        record = presets.artifact_record(gate.path()) if gate is not None else None
+        identity = (record.name, record.version, record.fingerprint) if record is not None else None
+        name = gate.name if gate is not None else training.name
         source = apply(
-            f"{gate.name}/result-{fingerprint_hash(canonical_json((native, identity)))}",
+            f"{name}/result-{fingerprint_hash(canonical_json((native, identity)))}",
             _retain_snowball_summary,
-            version=gate.version,
-            training_path=training,
+            version=gate.version if gate is not None else training.version,
+            training_path=training.path(),
             gate_path=gate,
             native=native,
             gate_identity=identity,

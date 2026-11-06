@@ -121,7 +121,7 @@ from rigging.provenance import Provenance, git_output
 from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.inventory import loop_publication
+from experiments.post_training.inventory import loop_publication, loop_result
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
@@ -420,6 +420,22 @@ def _validate_control_panel_steps(
                 )
 
 
+def _recorded_step(
+    step: ArtifactStep[SkyRLRun], preset: presets.Preset, layout: presets.Layout
+) -> ArtifactStep[SkyRLRun]:
+    metadata = loop_result.SnowballAttempt(preset.name, step.fingerprint(), layout.name, step.version)
+
+    def launch(config):
+        updates = (
+            0
+            if layout.role_plan.generate_only
+            else yaml.safe_load(config.launch_config_yaml)["skyrl"]["trainer"]["max_steps"]
+        )
+        return loop_result.run_loop(loop_result.LoopRunConfig(config, preset.name, updates, snowball=metadata))
+
+    return replace(step, run=launch)
+
+
 def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
     evaluation_preset = presets.rescore_preset(preset, panel)
     selection = presets.selection_artifact(panel)
@@ -482,7 +498,7 @@ def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
                 validation_data=(ArtifactDataSource(selection, relative_path=f"{evaluation.file}.parquet"),),
                 wandb_entity=os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY,
             )
-            steps.append(step)
+            steps.append(_recorded_step(step, preset, presets.E8))
             protocols.append(protocol)
             names.append(f"{name}@{pin.revision}")
     _validate_control_panel_steps(steps, protocols, names, evaluation_preset)
@@ -643,7 +659,7 @@ def build_run(
             wandb_entity=wandb_entity,
             checkpoint_root=checkpoint_root,
         )
-        runs.append(run)
+        runs.append(_recorded_step(run, preset, preset.recipe.layout))
     gate = (
         snowball_rl_gate.gate_step(
             preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
@@ -722,16 +738,23 @@ def _completed_gate(run: SnowballRun, preset: presets.Preset) -> ArtifactStep | 
 
 
 def _publications(run: SnowballRun, preset: presets.Preset) -> tuple[ArtifactStep, ...]:
-    if run.gate is None or preset.recipe.layout.role_plan.generate_only or preset.focus == presets.Focus.SPEED:
+    if (
+        preset.recipe.layout.role_plan.generate_only
+        or preset.focus == presets.Focus.SPEED
+        or (run.gate is None and preset.focus != presets.Focus.TRAIN)
+    ):
         return ()
-    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
-    return tuple(
-        loop_publication.publication_step(
-            replace(training, override_path=training.path(prefix)),
-            gate=replace(run.gate, override_path=run.gate.path(prefix)),
+    publications = []
+    for training in run.runs:
+        execution = next(value for value in training.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
+        prefix = presets.artifact_prefix(execution.cluster)
+        publications.append(
+            loop_publication.publication_step(
+                replace(training, override_path=training.path(prefix)),
+                gate=replace(run.gate, override_path=run.gate.path(prefix)) if run.gate is not None else None,
+            )
         )
-        for training in run.runs
-    )
+    return tuple(publications)
 
 
 def _status(run: SnowballRun, preset: presets.Preset) -> dict:
@@ -815,24 +838,21 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                 ("experiments/post_training", "lib/marin/src/marin/rl", "lib/taskcompendium", "vendor/skyrl"),
             )
             verdict["rl_path_changes_since_control"] = changes
-            try:
-                publications = _publications(run, preset)
-            except (ValueError, FileNotFoundError) as error:
-                logger.warning("Could not read publication identity: %s", error)
-                publications = ()
-            for row, publication in zip(rows, publications, strict=False):
-                receipt_path = (
-                    StoragePath(publication.path(presets.artifact_prefix(preset.recipe.layout.cluster)))
-                    / "publication.json"
-                )
-                if presets.exists(receipt_path):
-                    row["rl_progress_url"] = json.loads(presets.read_text(receipt_path))["url"]
             if reason:
                 verdict["rl_path_changes_reason"] = reason
         else:
             crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
             if crashed is not None:
                 verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
+    try:
+        publications = _publications(run, preset)
+    except (ValueError, FileNotFoundError) as error:
+        logger.warning("Could not read publication identity: %s", error)
+        publications = ()
+    for row, publication in zip(rows, publications, strict=False):
+        receipt_path = StoragePath(publication.path(presets.artifact_prefix(row["cluster"]))) / "publication.json"
+        if presets.exists(receipt_path):
+            row["rl_progress_url"] = json.loads(presets.read_text(receipt_path))["url"]
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(presets.REPO_ROOT)),

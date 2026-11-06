@@ -23,12 +23,16 @@ The status lists the latest completed update and the W&B URL when the tracker ha
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
 value uses `marin-community`. Runs use the `marin-snowball-rl` project.
 
-Completed learning-medium and data-medium candidates publish one `rl_progress` record per replicate.
-The status row includes `rl_progress_url` after publication is verified. Each record keeps the group
-verdict and the run's own update-0 baseline; native success and the quality verdict are separate.
+Completed learning-medium, data-medium and train-long candidates publish one `rl_progress` record per replicate.
+The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
+verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
 Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
 Re-run the standalone gate command to retry publication after a service failure; its saved verdict
 remains available, and the retry reuses the retained summary.
+Every native attempt retains `exports/attempts/<attempt_id>/loop-result.json` under its output,
+including failed attempts. This records native status, preset, layout, configuration fingerprint and
+available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records
+remain unranked.
 
 The W&B team changes neither run identity nor pinned configuration. Grafana run and preset-panel links
 appear when the native job start time is available; active jobs link through the present time.
