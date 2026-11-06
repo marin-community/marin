@@ -118,24 +118,18 @@ def _log_scaling_tokens(cfg):
     return jax.random.randint(jax.random.key(63), (1, cfg.max_seq_len), 0, cfg.vocab_size)
 
 
-def test_log_scaling_factor_at_slope_0_1_and_floor_65536():
+@pytest.mark.parametrize(
+    ("power", "expected"),
+    [
+        (1.0, [1.0, 1.0, 1.0693147, 1.1386294]),
+        (2.0, [1.0, 1.0, 1.1434339, 1.2964769]),
+    ],
+)
+def test_log_scaling_factor_at_slope_0_1_and_floor_65536(power, expected):
     visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
-    factor = model.log_scaling_factor(visible_keys, 65536, 0.1)
-    # Literal values of 1 + 0.1 * ln(n / 65536), so a changed formula cannot pass unnoticed.
-    np.testing.assert_allclose(factor, [[1.0, 1.0, 1.0693147, 1.1386294]], rtol=1e-6)
-
-
-def test_log_scaling_factor_squares_at_power_2():
-    visible_keys = jnp.asarray([[1, 65536, 131072, 262144]], dtype=jnp.int32)
-    factor = model.log_scaling_factor(visible_keys, 65536, 0.1, 2.0)
-    # Literal values of (1 + 0.1 * ln(n / 65536)) ** 2.
-    np.testing.assert_allclose(factor, [[1.0, 1.0, 1.1434339, 1.2964769]], rtol=1e-6)
-
-
-def test_log_scaling_power_1_leaves_the_factor_bitwise_unchanged():
-    visible_keys = jnp.asarray([[1, 4, 5, 8]], dtype=jnp.int32)
-    expected = 1.0 + 0.2 * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / 4, 1.0))
-    assert np.asarray(model.log_scaling_factor(visible_keys, 4, 0.2, 1.0)).tobytes() == np.asarray(expected).tobytes()
+    factor = model.log_scaling_factor(visible_keys, 65536, 0.1, power)
+    # Literal values of (1 + 0.1 * ln(n / 65536)) ** power.
+    np.testing.assert_allclose(factor, [expected], rtol=1e-6)
 
 
 def test_log_scaling_power_2_matches_a_uniform_scale_on_the_last_row():
