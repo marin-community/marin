@@ -131,6 +131,22 @@ class _ChatResult:
     reasoning_violation_token: int | None = None
 
 
+def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
+    """Whether the response's last token is the terminator the server stopped at.
+
+    A chat template's end-of-turn token is not always the tokenizer's EOS: Llama-style tokenizers end turns
+    with ``<|eot_id|>`` while ``eos_token`` is ``<|end_of_text|>``. Any special token the server stopped at
+    ends the turn; a length stop ends on an ordinary token.
+    """
+    if not response_ids or finish_reason == "length":
+        return False
+    last = response_ids[-1]
+    if last == tokenizer.eos_token_id:
+        return True
+    added = tokenizer.added_tokens_decoder.get(last)
+    return added is not None and added.special
+
+
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
     provider_fields = choice.get("provider_specific_fields") or {}
     routes = choice.get("routed_experts", provider_fields.get("routed_experts"))
@@ -406,9 +422,8 @@ class DirectModelClient:
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.
             tokenizer = self._client.tokenizer
-            semantic_ids = (
-                response_ids[:-1] if response_ids and response_ids[-1] == tokenizer.eos_token_id else response_ids
-            )
+            stop_reason = choice["finish_reason"]
+            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
             if len(semantic_ids) != len(response_ids):
                 eos_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
                 text = text.removesuffix(eos_text)
@@ -430,14 +445,13 @@ class DirectModelClient:
                 selected = [
                     select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
                 ]
-            stop_reason = choice["finish_reason"]
             token_budget = chat_options.get("max_completion_tokens")
             if (
                 stop_reason == "tool_calls"
                 and token_budget is not None
                 and len(response_ids) >= token_budget
                 and choice.get("stop_reason") is None
-                and response_ids[-1] != tokenizer.eos_token_id
+                and len(semantic_ids) == len(response_ids)
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"

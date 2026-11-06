@@ -47,6 +47,7 @@ from verifyit.spec import NumericSpec, StructureClosureSpec
 
 class WorkerTokenizer:
     eos_token_id = 99
+    added_tokens_decoder = {}
 
     def apply_chat_template(self, messages, add_generation_prompt, **options):
         return [1, 2]
