@@ -468,7 +468,8 @@ class TaskCoverage(BaseModel):
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
     ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
     on scored outcomes when the harness permits them. Completion uses the item counts.
-    Independently sampled repetitions are separate items; extraction filters for one trial are not.
+    A repeated aggregate counts distinct benchmark problems as items and records scored trials
+    separately in ``repeat_aggregates``. Extraction filters for one trial are not new items.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
@@ -493,6 +494,29 @@ class TaskCoverage(BaseModel):
     n_correct: int | None = None
     n_unanswered: int = 0
     errors: dict[str, int] = Field(default_factory=dict)
+
+
+class RepeatCoverageBasis(StrEnum):
+    """Whether projected coverage counts items, bounds them, or retains source units."""
+
+    ITEMS = "items"
+    ITEM_LOWER_BOUND = "item_lower_bound"
+    SOURCE = "source"
+
+
+class RepeatAggregate(BaseModel):
+    """A repeated score's item and trial counts, publication uncertainty, and source coverage."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_items: int
+    n_repeats: int
+    n_trials: int
+    n_scored_trials: int | None = None
+    coverage_basis: RepeatCoverageBasis
+    stderr: float
+    stderr_basis: str
+    source_coverage: TaskCoverage | None = None
 
 
 class EvalRunRecord(BaseModel):
@@ -539,6 +563,8 @@ class EvalRunRecord(BaseModel):
     """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
     count. Empty when the mechanism reports none and on every record written before coverage existed;
     a reader treats an empty entry as unknown coverage, never as complete coverage."""
+    repeat_aggregates: dict[str, RepeatAggregate] = Field(default_factory=dict)
+    """Serving projections for repeated scores. Raw evaluator metrics and coverage remain available."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""

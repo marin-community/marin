@@ -279,6 +279,10 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     n_scored = sum(counts) if len(counts) == len(scores) else None
 
     coverage = _mechanism_coverage(record, n_scored)
+    repeated = tuple(record.repeat_aggregates.values())
+    if len(repeated) > 1:
+        raise ValueError(f"{record.run_id}: cannot combine several repeated task aggregates")
+    repeat_aggregation = repeated[0] if repeated else None
     selected = PUBLICATION_METRICS.get(record.evaluation.name)
     if selected is not None:
         # These policy metrics share their benchmark's scored-item denominator.
@@ -287,12 +291,17 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     declared = all(score.declared for score in scores)
     declared_kinds = {score.kind for score in scores if score.kind is not None}
     declared_metrics = {score.protocol_metric for score in scores if score.protocol_metric is not None}
-    kind = (
-        next(iter(declared_kinds))
-        if declared and len(declared_kinds) == 1
-        else MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    if repeat_aggregation is not None:
+        kind = MetricKind.CONTINUOUS
+    elif declared and len(declared_kinds) == 1:
+        kind = next(iter(declared_kinds))
+    else:
+        kind = MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    stderr = (
+        repeat_aggregation.stderr
+        if repeat_aggregation is not None
+        else _combined_stderr([score.stderr for score in scores])
     )
-    stderr = _combined_stderr([score.stderr for score in scores])
     n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
         # A binary metric whose value is not k/n (an unweighted rollup across subtasks) has no
@@ -311,6 +320,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         coverage=coverage,
         n_correct=n_correct,
         recorded_stderr=stderr,
+        repeat_aggregation=repeat_aggregation,
         item_cap=item_cap,
         flags=_flags(coverage, kind, stderr, item_cap),
         num_fewshot=next(iter(fewshot_values)) if len(fewshot_values) == 1 else None,
@@ -323,7 +333,11 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         status=record.status,
         declared=declared,
         protocol_metric=next(iter(declared_metrics)) if declared and len(declared_metrics) == 1 else None,
-        protocol_kind=next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None,
+        protocol_kind=(
+            MetricKind.CONTINUOUS
+            if repeat_aggregation is not None
+            else next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None
+        ),
     )
 
 

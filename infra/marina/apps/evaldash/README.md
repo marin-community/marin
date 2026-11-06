@@ -53,6 +53,18 @@ seconds and swaps its in-memory record snapshot only after a newer generation co
 serves the last good snapshot and retries after the same interval. Snapshot loads read the generation
 and records in one read-only `REPEATABLE READ` transaction, so a writer can commit during a load
 without blocking it or mixing records from different generations.
+Repeated Evalchemy benchmarks keep raw evaluator metrics and coverage in the source inventory.
+The serving projection records distinct items, repeat count, scored trials, and original coverage.
+It computes the campaign's item-level Bernoulli standard error,
+`sqrt(accuracy_avg * (1 - accuracy_avg) / (num_total - 1))`, for intervals and comparisons.
+Historical producers recorded either item counts or trial counts in coverage; the projection
+normalizes both to item counts. The third migration updates existing catalog rows and advances the
+catalog generation. It does not rewrite evaluation records in object storage. The run page and
+score tooltips show `N items × R repeats`; the raw evaluator's `accuracy_std_err` remains in Metrics.
+Trial coverage also records the actual scored-trial count when available. Partial trial counts
+produce a conservative lower bound on scored items from the declared repeat count; the UI labels
+that bound. If coverage cannot be converted, the serving record retains source coverage and still
+uses item-level uncertainty, so one incomplete run cannot stop migration or reconciliation.
 `marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running

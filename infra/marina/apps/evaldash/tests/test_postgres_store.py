@@ -4,6 +4,7 @@
 """Behavior of EvalDash's durable serving catalog and scheduled reconciliation."""
 
 import asyncio
+import math
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
@@ -12,8 +13,9 @@ import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, ingest, results_db
 from evaldash.db_migrations import apply_migrations
+from evaldash.metrics import record_headline
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRunRecord, list_records, write_record
+from marin.evaluation.records import EvalRunRecord, TaskCoverage, list_records, write_record
 from marin.execution.step_status import STATUS_RUNNING, STATUS_SUCCESS, StatusFile
 from sqlalchemy.pool import StaticPool
 
@@ -74,7 +76,7 @@ def test_migrations_adopt_existing_serving_rows_and_boot_without_object_storage(
     assert _stored(_store(engine), record.run_id)["description"] == "seeded before migration"
     with engine.begin() as conn:
         migrations = set(conn.execute(sqlalchemy.text("SELECT name FROM schema_migrations")).scalars())
-    assert migrations == {"0001_initial", "0002_record_sources"}
+    assert migrations == {"0001_initial", "0002_record_sources", "0003_repeat_aggregates"}
 
 
 def test_older_binary_rejects_a_database_with_unknown_migrations():
@@ -85,6 +87,163 @@ def test_older_binary_rejects_a_database_with_unknown_migrations():
 
     with pytest.raises(RuntimeError, match="9999_future"):
         migrate_schema(engine)
+
+
+@pytest.mark.parametrize("source_count,source_correct", [(30, 21), (300, 221)])
+def test_catalog_projection_reports_repeat_items_and_trials(tmp_path, source_count, source_correct):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    record = record.model_copy(
+        update={
+            "coverage": {
+                "aime24": TaskCoverage(
+                    n_benchmark=source_count,
+                    n_attempted=source_count,
+                    n_scored=source_count,
+                    n_correct=source_correct,
+                )
+            }
+        }
+    )
+
+    projected = EvalRunRecord.model_validate(results_db.run_row(record)["record"])
+    repeat = projected.repeat_aggregates["aime24"]
+    measurement = record_headline(projected)
+    assert measurement is not None
+
+    assert projected.coverage["aime24"].n_scored == 30
+    assert projected.coverage["aime24"].n_correct is None
+    assert (repeat.n_items, repeat.n_repeats, repeat.n_trials) == (30, 10, 300)
+    assert repeat.source_coverage.n_scored == source_count
+    assert measurement["metric_kind"] == "continuous"
+    assert measurement["repeat_aggregation"]["n_trials"] == 300
+    assert repeat.stderr == pytest.approx(math.sqrt(0.42 * 0.58 / 29))
+    assert measurement["low"] == pytest.approx(0.42 - 1.96 * repeat.stderr, abs=1e-5)
+
+
+def test_capped_repeat_uses_full_benchmark_in_item_units(tmp_path):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    metrics = {**record.metrics["aime24"], "num_total": 29.0, "solved_avg": 12.0, "accuracy_avg": 12.0 / 29}
+    record = record.model_copy(
+        update={
+            "metrics": {"aime24": metrics},
+            "coverage": {"aime24": TaskCoverage(n_benchmark=300, n_attempted=290, n_scored=290)},
+        }
+    )
+
+    projected = EvalRunRecord.model_validate(results_db.run_row(record)["record"])
+    headline = record_headline(projected)
+    assert headline is not None
+    assert projected.coverage["aime24"].n_benchmark == 30
+    assert (headline["n_attempted"], headline["n_scored"]) == (29, 29)
+    assert headline["benchmark_rate"] == pytest.approx(29 / 30)
+
+
+@pytest.mark.parametrize("source_count", [30, 300, None])
+def test_catalog_projection_recovers_historical_ungraded_or_absent_coverage(tmp_path, source_count):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    old_coverage = (
+        {"aime24": TaskCoverage(n_attempted=source_count, n_scored=0, errors={"ungraded": source_count})}
+        if source_count is not None
+        else {}
+    )
+    record = record.model_copy(update={"coverage": old_coverage})
+
+    projected = EvalRunRecord.model_validate(results_db.run_row(record)["record"])
+    headline = record_headline(projected)
+    assert headline is not None
+
+    assert projected.coverage["aime24"].n_scored == 30
+    assert projected.coverage["aime24"].n_attempted == (30 if source_count is not None else None)
+    assert headline["value"] == pytest.approx(0.42)
+    assert headline["n_scored"] == 30
+    assert headline["errors"] == {}
+
+
+def test_partial_trial_coverage_does_not_abort_catalog_projection(tmp_path):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+
+    nearly_complete = record.model_copy(
+        update={
+            "coverage": {
+                "aime24": TaskCoverage(n_benchmark=300, n_attempted=300, n_scored=299, errors={"request_failed": 1})
+            }
+        }
+    )
+    projected = EvalRunRecord.model_validate(results_db.run_row(nearly_complete)["record"])
+    assert projected.coverage["aime24"].n_scored == 30
+    assert projected.repeat_aggregates["aime24"].n_scored_trials == 299
+    assert projected.repeat_aggregates["aime24"].source_coverage.errors == {"request_failed": 1}
+
+    ambiguous = record.model_copy(update={"coverage": {"aime24": TaskCoverage(n_attempted=300, n_scored=200)}})
+    projected_partial = EvalRunRecord.model_validate(results_db.run_row(ambiguous)["record"])
+    partial_headline = record_headline(projected_partial)
+    complete_headline = record_headline(projected)
+    assert partial_headline is not None and complete_headline is not None
+    assert projected_partial.repeat_aggregates["aime24"].coverage_basis == "item_lower_bound"
+    assert projected_partial.coverage["aime24"].n_scored == 20
+    assert partial_headline["high"] - partial_headline["low"] >= complete_headline["high"] - complete_headline["low"]
+
+
+@pytest.mark.parametrize("source_count", [30, 300])
+def test_all_unanswered_repeated_trials_remain_flagged(tmp_path, source_count):
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    metrics = {**record.metrics["aime24"], "accuracy_avg": 0.0, "solved_avg": 0.0}
+    record = record.model_copy(
+        update={
+            "metrics": {"aime24": metrics},
+            "coverage": {
+                "aime24": TaskCoverage(
+                    n_benchmark=source_count,
+                    n_attempted=source_count,
+                    n_scored=source_count,
+                    n_unanswered=source_count,
+                )
+            },
+        }
+    )
+
+    projected = EvalRunRecord.model_validate(results_db.run_row(record)["record"])
+    headline = record_headline(projected)
+    assert headline is not None
+    assert projected.coverage["aime24"].n_unanswered == 30
+    assert "no_answers" in headline["flags"]
+
+
+def test_migration_rematerializes_existing_repeat_records(tmp_path):
+    engine = _engine()
+    results_db.metadata.create_all(engine)
+    source = tmp_path / "fixtures"
+    fixtures.build_fixtures(str(source))
+    record = next(record for record in list_records(str(source)) if record.evaluation.name == "aime24")
+    with engine.begin() as conn:
+        conn.execute(sqlalchemy.text("CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMP)"))
+        conn.execute(
+            sqlalchemy.text("INSERT INTO schema_migrations (name) VALUES ('0001_initial'), ('0002_record_sources')")
+        )
+        conn.execute(
+            results_db.catalog_state.insert().values(singleton=True, generation=1, updated_at=datetime.now(UTC))
+        )
+        conn.execute(
+            results_db.catalog_runs.insert(),
+            {**results_db.run_row(record), "record": record.model_dump(mode="json", by_alias=True)},
+        )
+
+    migrate_schema(engine)
+    projected = results_db.fetch_snapshot(engine).records[0]
+
+    assert projected.repeat_aggregates["aime24"].n_trials == 300
+    assert projected.coverage["aime24"].n_scored == 30
+    assert results_db.fetch_snapshot(engine).generation == 2
 
 
 def test_snapshot_reads_record_written_before_tokenizer_revision(tmp_path):

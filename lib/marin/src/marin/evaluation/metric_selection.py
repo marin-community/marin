@@ -88,6 +88,8 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
         return picked
     if declared == MRCR_RUN_METRIC:
         return declared_metric(metrics, MRCR_SAMPLE_METRIC)
+    if declared.endswith(REPEAT_MEAN_SUFFIX):
+        return declared_metric(metrics, declared.removesuffix(REPEAT_MEAN_SUFFIX))
     if declared in PASS_AT_ONE_METRICS:
         return declared_metric(metrics, "pass_rate")
     return None

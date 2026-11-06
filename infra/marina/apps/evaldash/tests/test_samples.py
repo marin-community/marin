@@ -546,6 +546,29 @@ def test_continuous_publication_samples_keep_scores_without_binary_verdicts(tmp_
     assert all(row.correct is None and row.grading.passed is None for row in page.rows)
 
 
+def test_repeat_aggregate_sample_metric_selects_trial_accuracy(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(task="aime24", doc_id=str(i), kind=SampleKind.GENERATION, metrics={"accuracy": score})
+        for i, score in enumerate((1.0, 0.0))
+    ]
+    write_sample_parquet(fs, f"{root}/samples_aime24_20261105.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "aime24",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="accuracy_avg",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+
+    assert page.available is True
+    assert page.primary_metric == "accuracy"
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+
+
 def test_missing_selected_sample_metric_is_reported_without_using_saved_verdict(tmp_path):
     fs, root = url_to_fs(str(tmp_path))
     write_sample_parquet(
