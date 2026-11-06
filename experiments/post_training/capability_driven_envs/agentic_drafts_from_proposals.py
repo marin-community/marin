@@ -17,11 +17,11 @@ to the relay (``--transport stream``). For each proposal the run writes, under
 
 A proposal that has a ``result.json`` is skipped, so a relaunch with the same ``--run`` resumes. A session that ends
 in a model or machine failure writes no ``result.json``, so the relaunch drafts it again. Bubblewrap needs the
-privileged container profile, which the workers get from their ``ResourceConfig``. Run it inside an Iris job on
+privileged container profile, which the driver's job, the coordinator and the workers need. Run it inside an Iris job on
 ``cw-rno2a``, with ``GLM_BULK_TOKEN`` set::
 
     iris --cluster=cw-rno2a job run --priority batch --cpu 1 --memory 2GB --extra cpu --timeout 0 \\
-        -e GLM_BULK_TOKEN "$(cat ~/.config/glm/bulk_token)" -- \\
+        --container-profile container_profile_privileged -e GLM_BULK_TOKEN "$(cat ~/.config/glm/bulk_token)" -- \\
         python -m experiments.post_training.capability_driven_envs.agentic_drafts_from_proposals \\
         --run probe-20261106-a --limit 20 --workers 1
 """
@@ -319,7 +319,15 @@ def main(
         .write_jsonl(str(output / "summary" / "part-{shard:05d}.jsonl"))
     )
     resources = ResourceConfig(cpu=worker_cpu, ram=worker_ram, disk="50g", container_profile=PRIVILEGED)
-    context = ZephyrContext(resources=resources, max_workers=min(workers, len(shards)), name="agentic-drafts")
+    # A task may give a child job an elevated profile only when it has that profile itself, so the workers' parent,
+    # the coordinator, gets it too, as the driver's own job does (--container-profile container_profile_privileged).
+    coordinator = ResourceConfig(cpu=0.1, ram="4g", preemptible=False, container_profile=PRIVILEGED)
+    context = ZephyrContext(
+        resources=resources,
+        coordinator_resources=coordinator,
+        max_workers=min(workers, len(shards)),
+        name="agentic-drafts",
+    )
     context.execute(dataset, verbose=True)
     logger.info("Drafted %d shards: summaries in %s", math.ceil(len(slots) / shard_size), output / "summary")
 
