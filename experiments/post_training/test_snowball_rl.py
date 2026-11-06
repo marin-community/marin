@@ -209,6 +209,8 @@ print(json.dumps([{
     "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
+    "profile_inputs": (OmegaConf.to_container(config.inputs.evaluation_data)
+                       if config.inputs.get("evaluation_data") else {}),
     "profiles": {name: OmegaConf.to_container(profile, resolve=True)
                  for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
                  for name, profile in (entry.get("additional_evaluations") or {}).items()},
@@ -259,7 +261,9 @@ print(json.dumps([{
             assert row["primary_steps"] == [25] and row["primary_start"] == [True]
             assert row["terminal_eval"] == [False]
             assert row["profiles"]["test_panel"]["schedule"] == "final"
-            assert row["profiles"]["test_panel"]["data_files"]
+            source = row["profile_inputs"]["test_panel"][0]
+            assert source["identity"].partition(":")[0] == f"rl-data/task-selection/{presets.DEFAULT_TEST_PANEL}"
+            assert source["relative_path"] == "full_validation.parquet"
             assert row["quality_wire"] == greedy_wire
             assert not row["export_hf"] and "checkpoint" not in row["callbacks"]
         if row["fixed"]:
