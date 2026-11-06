@@ -6,6 +6,7 @@
 import logging
 import os
 import shlex
+import statistics
 import sys
 
 import click
@@ -124,7 +125,8 @@ def prepare(
 ) -> None:
     """Tokenize a seeded file sample that covers the largest rung's new-data tokens into a cache."""
     if submit:
-        _submit_cpu_job(f"data-belay-prepare-{repo.replace('/', '-').lower()}", cpu=4, memory="16GB")
+        name = "-".join(part for part in (repo.replace("/", "-"), config_name, f"p{round(share * 100)}") if part)
+        _submit_cpu_job(f"data-belay-prepare-{name.lower()}", cpu=4, memory="16GB")
     logging.basicConfig(level=logging.INFO)
     report = _intake(repo, revision, config_name, split, text_field, share)
     if not report.passed:
@@ -181,21 +183,46 @@ def train(
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
 @click.option("--candidate", required=True, help="Candidate name in the treatment run ids, e.g. finemath-p20.")
 @click.option("--seeds", default="0,1,2", show_default=True, help="Treatment seeds.")
+@click.option(
+    "--against",
+    default=None,
+    help="Compare with this candidate's runs (same seeds) instead of the control: e.g. filtered against unfiltered.",
+)
 @click.option("--control-seeds", default="0,1,2,3", show_default=True)
-def report(rung: str, candidate: str, seeds: str, control_seeds: str) -> None:
-    """Verdict and per-group BPB change of a candidate against the shared control."""
-    control = arm_metrics([control_run_id(rung, int(s)) for s in control_seeds.split(",")])
-    treatment = arm_metrics([treatment_run_id(rung, candidate, int(s)) for s in seeds.split(",")])
-    verdict, deltas = judge(control, treatment, HARM_LIMITS)
-    click.echo(f"{candidate} at {rung}: {verdict}")
-    click.echo("| group | control BPB | treatment BPB | Δ | 95% interval | harm limit |")
+def report(rung: str, candidate: str, seeds: str, against: str | None, control_seeds: str) -> None:
+    """Verdict and per-group BPB change of a candidate against the shared control or another candidate."""
+    seed_list = [int(s) for s in seeds.split(",")]
+    if against is None:
+        baseline_name = "control"
+        baseline = arm_metrics([control_run_id(rung, int(s)) for s in control_seeds.split(",")])
+    else:
+        baseline_name = against
+        baseline = arm_metrics([treatment_run_id(rung, against, s) for s in seed_list])
+    treatment = arm_metrics([treatment_run_id(rung, candidate, s) for s in seed_list])
+    verdict, deltas = judge(baseline, treatment, HARM_LIMITS)
+    click.echo(f"{candidate} against {baseline_name} at {rung}: {verdict}")
+    click.echo(f"| group | {baseline_name} BPB | {candidate} BPB | Δ | 95% interval | harm limit |")
     click.echo("|---|---:|---:|---:|---|---:|")
     for d in deltas:
-        c, t = control[d.group], treatment[d.group]
+        b, t = baseline[d.group], treatment[d.group]
         click.echo(
-            f"| {d.group} | {sum(c) / len(c):.4f} | {sum(t) / len(t):.4f} | {d.delta:+.2%} | "
+            f"| {d.group} | {sum(b) / len(b):.4f} | {sum(t) / len(t):.4f} | {d.delta:+.2%} | "
             f"[{d.low:+.2%}, {d.high:+.2%}] | {d.harm_limit:.1%} |"
         )
+
+
+@cli.command()
+@click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
+@click.option("--control-seeds", default="0,1,2,3", show_default=True)
+def noise(rung: str, control_seeds: str) -> None:
+    """Seed spread of the control's group BPB: the input to the harm limits."""
+    control = arm_metrics([control_run_id(rung, int(s)) for s in control_seeds.split(",")])
+    click.echo("| group | mean BPB | seed SD | SD / mean |")
+    click.echo("|---|---:|---:|---:|")
+    for group, values in control.items():
+        mean = statistics.fmean(values)
+        sd = statistics.stdev(values)
+        click.echo(f"| {group} | {mean:.4f} | {sd:.4f} | {sd / mean:.3%} |")
 
 
 if __name__ == "__main__":
