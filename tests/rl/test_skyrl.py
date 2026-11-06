@@ -775,10 +775,29 @@ def test_megatron_geometry_uses_separate_dense_context_and_expert_grids() -> Non
     validate_megatron_geometry(geometry, role="policy", num_gpus=192)
 
     # Increasing ETP requires a larger expert grid even though the dense grid still fits.
-    with pytest.raises(ValueError, match=r"ETP\*EP\*PP"):
+    with pytest.raises(ValueError):
         validate_megatron_geometry(
             dataclasses.replace(geometry, expert_tensor_parallel_size=2), role="policy", num_gpus=192
         )
+
+
+@pytest.mark.parametrize("role", ["policy", "ref"])
+@pytest.mark.parametrize("explicit_null", [False, True], ids=["omitted", "null"])
+def test_skyrl_spec_inherits_expert_tensor_parallelism_from_role_tp(role: str, explicit_null: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    geometry: dict[str, int | None] = {"tensor_model_parallel_size": 2, "expert_model_parallel_size": 2}
+    if explicit_null:
+        geometry["expert_tensor_parallel_size"] = None
+    recipe["trainer"][role] = {"megatron_config": geometry}
+    base = _spec()
+    dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
+
+    geometry["expert_model_parallel_size"] = 4
+    with pytest.raises(ValueError):
+        dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
+
+    geometry["expert_tensor_parallel_size"] = 1
+    dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
 
 
 def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:

@@ -608,6 +608,9 @@ def _validate_skyrl_recipe(
         for dimension in fields(MegatronGeometry):
             value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
             dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+        etp = _declared_config_value(config, f"trainer.{role}.megatron_config.expert_tensor_parallel_size")
+        if etp is _MISSING_CONFIG_VALUE or etp is None:
+            dimensions["expert_tensor_parallel_size"] = dimensions["tensor_model_parallel_size"]
         validate_megatron_geometry(
             MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
         )
