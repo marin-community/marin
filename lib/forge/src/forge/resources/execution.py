@@ -19,13 +19,13 @@ async def retry_effect[T](event: Event[T], operation: Callable[[], Awaitable[T]]
             return await operation()
         except Transient as error:
             if attempt == MAX_ATTEMPTS:
-                raise Restart(f"{type(event).__name__} exhausted its retry budget") from error
+                raise Restart(f"{type(event).__name__} exhausted its retry budget: {error}") from error
             notify(Retrying(event, attempt, str(error)))
             attempt += 1
 
 
-def websocket_setup_failed(error: BaseException) -> bool:
-    """Recognize Iris's pre-command websocket failure, including rollout wrappers."""
+def exec_setup_failed(error: BaseException) -> bool:
+    """Recognize Iris exec setup/status failures, including rollout wrappers."""
     seen: set[int] = set()
     cause: BaseException | None = error
     while cause is not None and id(cause) not in seen:
@@ -36,6 +36,8 @@ def websocket_setup_failed(error: BaseException) -> bool:
         if detail.startswith("Iris exec failed: ") and (
             "'NoneType' object has no attribute 'decode'" in detail
             or detail.startswith("Iris exec failed: Websocket setup failed (status 0): ")
+            or detail.startswith("Iris exec failed: Non-integer exec status: ")
+            or ("invalid literal for int()" in detail and "error executing command in container" in detail)
         ):
             return True
         cause = cause.__cause__

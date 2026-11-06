@@ -182,6 +182,7 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
     "failure,decision",
     [
         (MachineTerminated("gone"), Hold),
+        (MachineTerminated("Iris sandbox is preempted: WorkloadEvictedDueToPreempted"), Restart),
         (RuntimeError("Machine is closed"), Hold),
         (RuntimeError("ShellSim terminated: cpu_exhausted"), Hold),
         (TimeoutError("busy"), Transient),
@@ -312,3 +313,22 @@ async def test_directory_read_names_requested_path_without_retry(failure: Except
         await read_file(ReadFile(PurePosixPath("/app")), env, notify=Notes())
     assert caught.value.filename == "/app"
     assert machine.calls == 1
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "Non-integer exec status: invalid literal for int()",
+        "invalid literal for int() with base 10: 'Internal error occurred: "
+        "error executing command in container: failed to exec'",
+    ],
+)
+async def test_noninteger_exec_status_is_retried_and_retained_at_exhaustion(detail: str) -> None:
+    machine = MemoryMachine()
+    machine.failure = RuntimeError(f"Iris exec failed: {detail}")
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    events: list[Event[None]] = []
+    with pytest.raises(Restart) as caught:
+        await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
+    assert machine.calls == 3
+    assert detail in str(caught.value)

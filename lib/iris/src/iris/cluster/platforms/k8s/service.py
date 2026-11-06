@@ -770,7 +770,11 @@ class CloudK8sService:
                                 stdout=stdout,
                                 stderr="\n".join(part for part in (stderr, timeout_error) if part),
                             )
-                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                        try:
+                            returncode = resp.returncode
+                        except ValueError as error:
+                            raise RuntimeError(f"Non-integer exec status: {error}") from error
+                        return ExecResult(returncode=returncode, stdout=stdout, stderr=stderr)
                     finally:
                         resp.close()
             except (ApiException, TransportError) as e:

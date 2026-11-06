@@ -11,7 +11,7 @@ import shlex
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -524,3 +524,13 @@ def test_empty_workdir_is_rejected_before_iris_submission():
     factory = IrisMachineFactory(controller_url="http://unused")
     with pytest.raises(ValueError, match="workdir must not be empty"):
         asyncio.run(factory.create(MachineSpec(RegistryImage("fixture"), workdir="")))
+
+
+@pytest.mark.parametrize("memory_mb", [None, 4096])
+def test_oom_termination_reports_effective_memory_request(tmp_path, memory_mb):
+    task = LocalTask(TaskState.FAILED)
+    task.status = lambda: SimpleNamespace(state=TaskState.FAILED, error_message="OOMKilled")
+    machine, _ = local_machine(tmp_path, FailingRpc(), task)
+    machine.spec = replace(machine.spec, memory_mb=memory_mb)
+    with pytest.raises(MachineTerminated, match=f"memory request: {memory_mb or 2048} MiB"):
+        asyncio.run(machine.run(Command(("true",))))

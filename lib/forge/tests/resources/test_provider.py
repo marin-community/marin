@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -11,10 +12,11 @@ from taskforge.llm.client import Attempt, AttemptOutcome, ModelRequestRejected, 
 from taskforge.llm.glm_client import FixedEndpoint, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 
+from forge import wiring
 from forge.policy import load_policy
 from forge.resources.provider import EndpointLimitedClient, WaitingBackend
 from forge.wiring import provider_policy
-from tests.resources.test_inference import Backend, provider_completion
+from tests.resources.test_inference import Backend, provider_completion, request
 
 
 class Time:
@@ -104,6 +106,15 @@ async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch:
     assert result.content == "ok"
     assert len(bodies) == 1
     assert "max_tokens" not in bodies[0] and "max_completion_tokens" not in bodies[0]
+    policy = load_policy(Path(__file__).parents[2] / "src/forge/policy/defaults")
+    monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://unused"))
+    async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
+        for role in ("author", "solver", "adversary"):
+            await resources.inference_for(role).complete(request())
+        assert resources.inference_for("author") is resources.inference
+        assert resources.inference_for("author").fingerprint() != resources.inference_for("adversary").fingerprint()
+    assert [body["model"] for body in bodies[1:]] == ["deepseek-v4.1-flash", "glm-5.3", "glm-5.3"]
+    assert all("max_tokens" not in body for body in bodies)
 
 
 def test_trial_timeouts_outlast_declared_provider_window(capsys: pytest.CaptureFixture[str]) -> None:

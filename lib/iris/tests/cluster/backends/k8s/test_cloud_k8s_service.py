@@ -283,3 +283,20 @@ def test_exec_does_not_reclassify_unrelated_attribute_errors(monkeypatch, status
     with pytest.raises(AttributeError) as raised:
         svc.exec("task-pod", ["true"])
     assert raised.value is error
+
+
+def test_exec_noninteger_status_is_reported_as_exec_failure(monkeypatch):
+    class BadStatus(_FakeExecStream):
+        @property
+        def returncode(self):
+            raise ValueError("invalid literal for int(): Internal error occurred: error executing command in container")
+
+        @returncode.setter
+        def returncode(self, value):
+            pass
+
+    stream = BadStatus(returncode=0)
+    svc = _service_with_exec_stream(monkeypatch, stream)
+    with pytest.raises(RuntimeError, match="Non-integer exec status"):
+        svc.exec("task-pod", ["true"])
+    assert stream.closed

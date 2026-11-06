@@ -18,7 +18,12 @@
   "solver.command_timeout": 30.0,
   "solver.cleanup_timeout": 60.0,
   "grader.timeout": 300.0,
-  "provider.model": "glm-5.3",
+  "author.model": "deepseek-v4.1-flash",
+  "author.context_tokens": 262144,
+  "solver.model": "glm-5.3",
+  "solver.context_tokens": 262144,
+  "adversary.model": "glm-5.3",
+  "adversary.context_tokens": 262144,
   "provider.unavailable_wait": 3600.0,
   "provider.backoff_initial": 1.0,
   "provider.backoff_maximum": 60.0,
@@ -29,6 +34,5 @@
   "sampling.temperature": 1.0,
   "sampling.top_p": 0.95,
   "sampling.reasoning_effort": "high",
-  "sampling.max_continuations": 0,
-  "provider.context_tokens": 262144
+  "sampling.max_continuations": 0
 }

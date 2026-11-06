@@ -309,3 +309,34 @@ def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, arm: st
     assert published.terminal == Terminal.ABANDONED
     assert published.session == session
     assert published.decisions == (previous, Reject(kind, (f"author stopped: {reason.value}",)))
+
+
+async def test_stage_restart_replays_on_fresh_machine_without_repeating_inference(proposal: TaskProposal) -> None:
+    class Recovers(Envs):
+        @override
+        async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+            env = await super().create(requirements)
+            self.fail = False
+            return env
+
+    envs = Recovers(fail=True)
+    resource = resources(envs, script("S"))
+    result = await run_workpiece(proposal, config("S"), resource, EventLog())
+    assert result.terminal == Terminal.ACCEPTED
+    assert len(envs.created) == 2
+    assert [env.executed for env in envs.created] == [["inspect", "write-draft"], ["inspect", "write-draft"]]
+    assert isinstance(resource.inference, FakeInference)
+    assert len(resource.inference.requests) == len(script("S"))
+
+
+async def test_stage_restart_stops_after_three_attempts_with_cause(
+    proposal: TaskProposal, caplog: pytest.LogCaptureFixture
+) -> None:
+    envs = Envs(fail=True)
+    resource = resources(envs, script("S"))
+    result = await run_workpiece(proposal, config("S"), resource, EventLog())
+    assert result.terminal == Terminal.HELD
+    assert len(envs.created) == 3
+    assert "fake machine died" in str(result.decisions[-1])
+    for attempt in (1, 2, 3):
+        assert f"attempt {attempt} of 3" in caplog.text

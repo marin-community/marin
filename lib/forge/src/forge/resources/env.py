@@ -20,7 +20,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
 from forge.effects.issues import Hold, Restart, Transient
-from forge.resources.execution import Notify, retry_effect, websocket_setup_failed
+from forge.resources.execution import Notify, exec_setup_failed, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,9 +141,10 @@ class ShellboxEnv(_RecordedEnv):
         except IsADirectoryError as error:
             raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
         except MachineTerminated as error:
-            raise Hold(f"environment terminated: {error}") from error
+            decision = Restart if "preempted" in str(error).lower() else Hold
+            raise decision(f"environment terminated: {error}") from error
         except (RuntimeError, SimulationError) as error:
-            if websocket_setup_failed(error):
+            if exec_setup_failed(error):
                 raise Transient(str(error)) from error
             detail = str(error)
             if detail.startswith("ShellSim terminated: ") or detail == "Machine is closed":
@@ -215,9 +216,10 @@ class ShellboxEnvFactory(EnvFactory):
                 prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
             )
         except MachineTerminated as error:
-            raise Hold(f"environment terminated: {error}") from error
+            decision = Restart if "preempted" in str(error).lower() else Hold
+            raise decision(f"environment terminated: {error}") from error
         except RuntimeError as error:
-            if websocket_setup_failed(error):
+            if exec_setup_failed(error):
                 raise Transient(str(error)) from error
             if str(error).startswith("ShellSim terminated: "):
                 raise Hold(f"environment terminated: {str(error).removeprefix('ShellSim terminated: ')}") from error

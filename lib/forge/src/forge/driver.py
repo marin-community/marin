@@ -116,7 +116,8 @@ async def one(args: argparse.Namespace) -> None:
                 policy = declared.overlaid(parse_overlay(source.read()))
             print("\n".join(resolution_lines(declared, policy)), flush=True)
             print(
-                f"POLICY max_prompt_tokens provider.context_tokens={policy.setting('provider.context_tokens', int)} "
+                f"POLICY max_prompt_tokens author.model={policy.setting('author.model', str)} "
+                f"author.context_tokens={policy.setting('author.context_tokens', int)} "
                 f"resolved={prompt_limit(policy)}",
                 flush=True,
             )
@@ -124,7 +125,7 @@ async def one(args: argparse.Namespace) -> None:
                 os.environ.get("GLM_BASE_URL"),
                 os.environ.get("GLM_RELAY_JOB"),
                 os.environ["GLM_API_KEY"],
-                policy.setting("provider.model", str),
+                policy.setting("author.model", str),
             )
             async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log)

@@ -4,7 +4,7 @@
 """Resources supplied to each pipeline stage."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from shellbox.machine import MachineFactory
@@ -28,6 +28,11 @@ class Resources:
     ids: Ids
     factories: Mapping[str, MachineFactory]
     web: WebClient
+    role_inference: Mapping[str, InferenceClient] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "factories", MappingProxyType(dict(self.factories)))
+        object.__setattr__(self, "role_inference", MappingProxyType(dict(self.role_inference)))
+
+    def inference_for(self, role: str) -> InferenceClient:
+        return self.role_inference.get(role, self.inference)

@@ -346,7 +346,7 @@ async def test_invalid_read_paths_are_tool_feedback(kind: str, failure: str) -> 
 
 @pytest.mark.parametrize("context_tokens", [262144, 131072])
 async def test_model_window_determines_context_exit(context_tokens: int) -> None:
-    policy = DEFAULT_POLICY.overlaid({"provider.context_tokens": context_tokens})
+    policy = DEFAULT_POLICY.overlaid({"author.context_tokens": context_tokens})
     harness = build_config(policy, "S", {}).author
     budget = context_tokens
     client = FakeInference(

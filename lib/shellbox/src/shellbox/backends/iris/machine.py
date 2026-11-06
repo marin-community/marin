@@ -156,9 +156,10 @@ class IrisMachine:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
         status = self.task.status()
         if status.state != TaskState.RUNNING:
-            raise MachineTerminated(
-                f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
-            ) from cause
+            detail = str(status.error_message or cause)
+            if "oomkilled" in detail.lower():
+                detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
+            raise MachineTerminated(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}") from cause
 
     async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
         return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)

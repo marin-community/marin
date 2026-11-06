@@ -6,8 +6,8 @@
 import logging
 import os
 from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field, replace
 from functools import partial
 from types import MappingProxyType
 from typing import override
@@ -96,7 +96,7 @@ def endpoint_source(base_url: str | None, relay_job: str | None, token: str, mod
 
 def install(ctx: Context, resources: Resources) -> None:
     for event, execute, resource in (
-        (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference),
+        (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference_for("author")),
         (SolverRollout, partial(run_rollout, notify=ctx.emit), resources.rollouts),
         (GradeCandidate, partial(grade, notify=ctx.emit), resources.grading),
         (Now, now, resources.clock),
@@ -134,7 +134,7 @@ async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: M
 
 
 def build_resources(
-    policy: Policy, client: CompletionBackend, factories: Mapping[str, MachineFactory], web: WebClient
+    policy: Policy, clients: Mapping[str, CompletionBackend], factories: Mapping[str, MachineFactory], web: WebClient
 ) -> Resources:
     settings = lowering_settings(policy)
     command_timeout = policy.setting("solver.command_timeout", float)
@@ -144,15 +144,24 @@ def build_resources(
     sampling = TypeAdapter(LLMPolicy).validate_python(
         {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
     )
+    inference = {
+        role: GlmInference(client, digest((provider, role, policy.setting(f"{role}.context_tokens", int))))
+        for role, client in clients.items()
+    }
     return Resources(
         Environments(factories, settings),
-        GlmInference(client, digest(provider)),
-        RolloutResource(engine, partial(solver_turn, client, sampling), digest((provider, sampling, execution))),
+        inference["author"],
+        RolloutResource(
+            engine,
+            partial(solver_turn, clients["solver"], sampling),
+            digest((provider, clients["solver"].model, sampling, execution)),
+        ),
         GradingResource(engine, execution),
         Clock(),
         Ids(),
         factories,
         web,
+        inference,
     )
 
 
@@ -164,9 +173,9 @@ def hydration(_wp: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
     return ()
 
 
-def prompt_limit(policy: Policy) -> int:
+def prompt_limit(policy: Policy, role: str = "author") -> int:
     """Use the served model context without reserving an output allowance."""
-    return policy.setting("provider.context_tokens", int)
+    return policy.setting(f"{role}.context_tokens", int)
 
 
 def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactory]) -> ForgeConfig:
@@ -182,7 +191,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
     )
     adversaries = {
         name: AgenticHarness(
-            prompt_limit(policy),
+            prompt_limit(policy, "adversary"),
             sampling,
             "Finish your audit.",
             policy.setting("tools.output_chars", int),
@@ -245,8 +254,7 @@ async def runtime(
         and key not in ("provider.context_tokens", "provider.unavailable_wait", "provider.max_attempts")
     }
     # The wrapper owns both busy retries and empty-pool waits under one deadline.
-    provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "max_attempts": 1, "hold_timeout": 0})
-    print(f"GLM {type(source).__name__} resolved {source.current().base_url}", flush=True)
+    provider_fields.update(max_attempts=1, hold_timeout=0)
     host = MachineHost(policy.setting("runtime.host", str))
     # Source: acceptance-measure taskforge/sandbox/factories.py; driver.py controller-url env.
     container: MachineFactory
@@ -262,15 +270,22 @@ async def runtime(
     if host == MachineHost.LAPTOP:
         factories["local"] = local_factory()
     headers = {"x-api-key": parallel_api_key}
-    async with (
-        EndpointLimitedClient(source, provider) as client,
-        httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60) as http,
-    ):
-        waiting = WaitingBackend(
-            client,
-            policy.setting("provider.unavailable_wait", float),
-            provider.backoff_initial,
-            provider.backoff_maximum,
-            provider.backoff_factor,
+    async with AsyncExitStack() as owned:
+        clients: dict[str, CompletionBackend] = {}
+        for role in ("author", "solver", "adversary"):
+            model = policy.setting(f"{role}.model", str)
+            provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
+            role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
+            print(f"MODEL role={role} model={model} endpoint={role_source.current().base_url}", flush=True)
+            client = await owned.enter_async_context(EndpointLimitedClient(role_source, provider))
+            clients[role] = WaitingBackend(
+                client,
+                policy.setting("provider.unavailable_wait", float),
+                provider.backoff_initial,
+                provider.backoff_maximum,
+                provider.backoff_factor,
+            )
+        http = await owned.enter_async_context(
+            httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60)
         )
-        yield build_config(policy, arm, factories), build_resources(policy, waiting, factories, ParallelWeb(http))
+        yield build_config(policy, arm, factories), build_resources(policy, clients, factories, ParallelWeb(http))
