@@ -63,17 +63,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
-from skyrlrecipe.sections import (
-    Algorithm,
-    Data,
-    Environment,
-    Generator,
-    Policy,
-    PolicyOptimizerConfig,
-    SamplingParams,
-    Trainer,
-)
+from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult
@@ -163,12 +153,12 @@ ICEBALL_RL_RECIPE = SkyRLRecipe(
     context_budget=ContextBudget(
         request_window_tokens=ICEBALL_SEQUENCE_LENGTH, max_new_tokens_per_turn=256, max_turns=1
     ),
-    environment=Environment(env_class=SKYRL_GSM8K_ENVIRONMENT),
-    trainer=Trainer(
+    environment=sections.Environment(env_class=SKYRL_GSM8K_ENVIRONMENT),
+    trainer=sections.Trainer(
         strategy="megatron",
         flash_attn=False,
         use_sample_packing=False,
-        algorithm=Algorithm(advantage_estimator="grpo", use_kl_loss=True),
+        algorithm=sections.Algorithm(advantage_estimator="grpo", use_kl_loss=True),
         epochs=1,
         max_steps=8,
         update_epochs_per_batch=1,
@@ -180,9 +170,9 @@ ICEBALL_RL_RECIPE = SkyRLRecipe(
         logger="wandb",
         project_name=ICEBALL_WANDB_PROJECT,
         hf_hub_repo_id=None,
-        policy=Policy(optimizer_config=PolicyOptimizerConfig(lr=2e-06, max_grad_norm=1.0)),
+        policy=sections.Policy(optimizer_config=sections.PolicyOptimizerConfig(lr=2.0e-6, max_grad_norm=1.0)),
     ),
-    generator=Generator(
+    generator=sections.Generator(
         backend="vllm",
         model_dtype="bfloat16",
         vllm_attention_backend="FLASH_ATTN",
@@ -190,9 +180,9 @@ ICEBALL_RL_RECIPE = SkyRLRecipe(
         enforce_eager=False,
         run_engines_locally=True,
         weight_sync_backend="nccl",
-        sampling_params=SamplingParams(logprobs=0, temperature=1.0, top_p=1.0),
+        sampling_params=sections.SamplingParams(logprobs=0, temperature=1.0, top_p=1.0),
     ),
-    data=Data(kind="parquet", train_data=(), val_data=()),
+    data=sections.Data(kind="parquet", train_data=(), val_data=()),
 )
 ICEBALL_RL_CONFIG = yaml.safe_dump(ICEBALL_RL_RECIPE.to_skyrl(), sort_keys=False)
 

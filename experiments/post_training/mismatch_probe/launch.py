@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 import click
@@ -84,6 +85,11 @@ def probe_block(settings: ProbeSettings) -> dict:
 ICEBALL_PROBE_RECIPE = {"generator": {"chat_template": {"source": "name", "name_or_path": "qwen3_with_thinking"}}}
 
 
+def _with_patch(config_yaml: str, patch: Mapping) -> str:
+    recipe = SkyRLRecipe.from_document(yaml.safe_load(config_yaml))
+    return yaml.safe_dump(recipe.merge(RecipePatch.from_document(patch)).to_skyrl(), sort_keys=False)
+
+
 def probe_step(spec: SkyRLSpec, execution: IrisSkyRLExecution, settings: ProbeSettings) -> ArtifactStep[SkyRLRun]:
     """Launch a probe using the model, data, topology and execution of an RL recipe."""
     name = user_owned_name(f"checkpoints/mismatch-probe/{spec.name.rsplit('/', 1)[-1]}")
@@ -91,12 +97,7 @@ def probe_step(spec: SkyRLSpec, execution: IrisSkyRLExecution, settings: ProbeSe
         spec,
         name=name,
         version=resolve_version(name, None),
-        config_yaml=yaml.safe_dump(
-            SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
-            .merge(RecipePatch.from_document(probe_block(settings)))
-            .to_skyrl(),
-            sort_keys=False,
-        ),
+        config_yaml=_with_patch(spec.config_yaml, probe_block(settings)),
         retention=replace(spec.retention, temporary_storage_ttl_days=30),
         seed=settings.seed,
     )
@@ -151,12 +152,7 @@ def main(
     spec = iceball_rl_spec(model, data)
     spec = replace(
         spec,
-        config_yaml=yaml.safe_dump(
-            SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
-            .merge(RecipePatch.from_document(ICEBALL_PROBE_RECIPE))
-            .to_skyrl(),
-            sort_keys=False,
-        ),
+        config_yaml=_with_patch(spec.config_yaml, ICEBALL_PROBE_RECIPE),
     )
     return probe_step(spec, iceball_rl_execution(), settings)
 

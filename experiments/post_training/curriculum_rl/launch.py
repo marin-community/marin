@@ -55,17 +55,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
-from skyrlrecipe.sections import (
-    Algorithm,
-    Data,
-    Environment,
-    Generator,
-    Policy,
-    PolicyOptimizerConfig,
-    SamplingParams,
-    Trainer,
-)
+from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
 
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult
@@ -525,12 +515,12 @@ def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str
             max_new_tokens_per_turn=preset.max_new_tokens,
             max_turns=1,
         ),
-        environment=Environment(env_class="gsm8k"),
-        trainer=Trainer(
+        environment=sections.Environment(env_class="gsm8k"),
+        trainer=sections.Trainer(
             strategy="megatron",
             flash_attn=True,
             use_sample_packing=False,
-            algorithm=Algorithm(advantage_estimator="grpo", use_kl_loss=True),
+            algorithm=sections.Algorithm(advantage_estimator="grpo", use_kl_loss=True),
             epochs=50,
             max_steps=preset.max_steps,
             update_epochs_per_batch=1,
@@ -541,9 +531,9 @@ def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str
             resume_mode="latest",
             logger="wandb",
             project_name=WANDB_PROJECT,
-            policy=Policy(optimizer_config=PolicyOptimizerConfig(lr=2e-06, max_grad_norm=1.0)),
+            policy=sections.Policy(optimizer_config=sections.PolicyOptimizerConfig(lr=2.0e-6, max_grad_norm=1.0)),
         ),
-        generator=Generator(
+        generator=sections.Generator(
             backend="vllm",
             model_dtype="bfloat16",
             vllm_attention_backend="FLASH_ATTN",
@@ -551,9 +541,9 @@ def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str
             enforce_eager=False,
             run_engines_locally=True,
             weight_sync_backend="nccl",
-            sampling_params=SamplingParams(temperature=1.0, top_p=1.0),
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0),
         ),
-        data=Data(kind="parquet", train_data=(), val_data=()),
+        data=sections.Data(kind="parquet", train_data=(), val_data=()),
     ).to_skyrl()
     trainer = config["trainer"]
     trainer.update({key: copy.deepcopy(value) for key, value in policy.trainer_config.items() if key != "policy"})

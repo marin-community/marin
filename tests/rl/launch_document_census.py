@@ -79,6 +79,10 @@ def _port_smoke_step(stage: str) -> ArtifactStep[SkyRLRun]:
     return getattr(skyrl_port_smoke.build_smoke(VERSION), stage)
 
 
+def _one_factor(base, axes):
+    return [base, *(base | {name: value} for name, choices in axes.items() for value in choices if value != base[name])]
+
+
 def launch_builders(
     artifact_root: Path,
 ) -> dict[str, Callable[[], ArtifactStep[SkyRLRun]]]:
@@ -104,13 +108,7 @@ def launch_builders(
         "checkpoint": (False, True),
         "export": (False, True),
     }
-    canary_variants = [
-        canary_base | {name: value}
-        for name, choices in canary_axes.items()
-        for value in choices
-        if value != canary_base[name]
-    ]
-    for options in [canary_base, *canary_variants]:
+    for options in _one_factor(canary_base, canary_axes):
         key = (
             f"canary/{options['preset']}/{options['lane']}/{options['model']}"
             f"/checkpoint={options['checkpoint']}/export={options['export']}"
@@ -140,13 +138,7 @@ def launch_builders(
         "resume": (False, True),
         "reuse": (False, True),
     }
-    probe_variants = [
-        probe_base | {name: value}
-        for name, choices in probe_axes.items()
-        for value in choices
-        if value != probe_base[name]
-    ]
-    for options in [probe_base, *probe_variants]:
+    for options in _one_factor(probe_base, probe_axes):
         cache, replay, updates, resume, reuse = (options[name] for name in probe_base)
         settings = mismatch.ProbeSettings(
             seed=17,

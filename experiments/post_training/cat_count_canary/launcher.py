@@ -35,23 +35,9 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe
+from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe.documents import MISSING, get_path
 from skyrlrecipe.sampling import EvalSamplingParams
-from skyrlrecipe.sections import (
-    Algorithm,
-    ChatTemplate,
-    Data,
-    DynamicSampling,
-    Environment,
-    Generator,
-    Policy,
-    PolicyMegatronConfig,
-    PolicyOptimizerConfig,
-    Ref,
-    RolloutBuffer,
-    SamplingParams,
-    Trainer,
-)
 
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
 from experiments.post_training.cat_count_canary.data import (
@@ -156,13 +142,13 @@ PROTECTED_SETTINGS = ROLE_SETTINGS | frozenset(
         "trainer.eval_before_train",
         "trainer.ckpt_interval",
         "trainer.callbacks",
+        "generator.eval_sampling_params.max_generate_length",
         "generator.chat_template",
         "generator.chat_template_kwargs",
         "generator.run_engines_locally",
         "generator.enable_http_endpoint",
         "generator.backend",
         "environment.env_class",
-        "data.kind",
     }
 )
 
@@ -204,8 +190,8 @@ def training_config(
     config = SkyRLRecipe(
         entrypoint=RLEntrypoint.STANDARD,
         context_budget=ContextBudget(request_window_tokens=128, max_new_tokens_per_turn=64, max_turns=1),
-        environment=Environment(env_class=ENV_CLASS),
-        trainer=Trainer(
+        environment=sections.Environment(env_class=ENV_CLASS),
+        trainer=sections.Trainer(
             strategy="megatron",
             flash_attn=False,
             use_sample_packing=False,
@@ -224,7 +210,7 @@ def training_config(
             training_metrics=True,
             policy_train_spans=True,
             rollout_spans=True,
-            algorithm=Algorithm(
+            algorithm=sections.Algorithm(
                 advantage_estimator="grpo",
                 policy_loss_type="behavior_clip" if lane == "async" else "regular",
                 eps_clip_low=0.2,
@@ -232,23 +218,23 @@ def training_config(
                 use_kl_loss=False,
                 use_kl_in_reward=False,
                 off_policy_correction="tis" if lane == "sync" else "none",
-                dynamic_sampling=DynamicSampling(type=None),
+                dynamic_sampling=sections.DynamicSampling(type=None),
             ),
-            policy=Policy(
-                optimizer_config=PolicyOptimizerConfig(
-                    optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
+            policy=sections.Policy(
+                optimizer_config=sections.PolicyOptimizerConfig(
+                    optimizer="AdamW", lr=2.0e-6, weight_decay=0.01, max_grad_norm=1.0
                 ),
-                megatron_config=PolicyMegatronConfig(**geometry, check_dp_weight_consistency=True),
+                megatron_config=sections.PolicyMegatronConfig(**geometry, check_dp_weight_consistency=True),
             ),
-            ref=Ref(megatron_config=geometry),
-            rollout_buffer=RolloutBuffer(
+            ref=sections.Ref(megatron_config=geometry),
+            rollout_buffer=sections.RolloutBuffer(
                 max_staleness_steps=0 if lane == "sync" else 2,
                 batch_policy="full_batch",
                 max_in_flight=batch_size,
                 object_store_root=None,
             ),
         ),
-        generator=Generator(
+        generator=sections.Generator(
             backend="vllm",
             model_dtype="bfloat16",
             vllm_attention_backend="FLASH_ATTN",
@@ -257,13 +243,13 @@ def training_config(
             weight_sync_backend="nccl",
             gpu_memory_utilization=0.7,
             enforce_eager=False,
-            chat_template=ChatTemplate(source="name", name_or_path=choice.chat_template),
-            sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+            chat_template=sections.ChatTemplate(source="name", name_or_path=choice.chat_template),
+            sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
             eval_sampling_params=EvalSamplingParams(temperature=0.0),
             eval_n_samples_per_prompt=1,
             inference_stats_interval=1,
         ),
-        data=Data(kind="parquet", shuffle=False, train_data=(), val_data=()),
+        data=sections.Data(kind="parquet", shuffle=False, train_data=(), val_data=()),
     ).to_skyrl()
     _materialize_role_plan_config(config, plan)
     if choice.chat_template_kwargs is not None:
@@ -275,6 +261,10 @@ def training_config(
             for protected in PROTECTED_SETTINGS
         ) or key.startswith("data."):
             raise click.BadParameter(f"{key!r} is owned by the launcher; use a typed option")
+        if not key.startswith(("trainer.", "generator.", "context_budget.")):
+            raise click.BadParameter(f"{key!r} is outside the configurable recipe")
+        if get_path(config, key) is MISSING:
+            raise click.BadParameter(f"unknown setting {key!r}")
     try:
         config = RecipePatch.from_document(config).with_settings(settings).to_skyrl()
     except ValueError as error:
@@ -323,8 +313,7 @@ def training_config(
         trainer["callbacks"].append({"type": "hf_model_save", "save_steps": trainer["hf_save_interval"]})
     if lane == "sync" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
         raise ValueError("the sync lane requires zero rollout staleness")
-    authored = SkyRLRecipe.from_document(config)
-    return authored.to_skyrl()
+    return SkyRLRecipe.from_document(config).to_skyrl()
 
 
 def run_canary(config: SkyRLRunConfig) -> SkyRLRun:

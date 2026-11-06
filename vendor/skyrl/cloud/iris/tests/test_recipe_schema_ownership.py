@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
 from cloud.iris.rl_data import resolve_rl_train_data_with_sources
-from skyrlrecipe.declared import Callback, Teacher
+from skyrlrecipe.declared import Callback, SequenceRule, Teacher, TokenRule
 from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
 from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
@@ -18,6 +18,7 @@ from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.ownership import LAUNCH_PATHS
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
 from skyrl_train.config.ftpo import FTPOConfig
+from skyrl_train.config.objective_spec import CorrectionAction, SequenceAggregate
 
 GPU_PATHS = frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"})
 
@@ -76,18 +77,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     suffix, number = "B", 4
     seeded = copy.deepcopy(full)
     for parts, value in leaves(full):
-        sentinel = (
-            not value
-            if isinstance(value, bool)
-            else (
-                31
-                if isinstance(value, int)
-                else (
-                    3.125
-                    if isinstance(value, float)
-                    else [f"/author/{suffix}"] if isinstance(value, list) else f"author-{suffix}"
-                )
-            )
+        sentinel = {bool: not value, int: 31, float: 3.125, list: [f"/author/{suffix}"]}.get(
+            type(value), f"author-{suffix}"
         )
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
@@ -148,8 +139,15 @@ def test_code_default_declarations_match_native_dataclasses_and_canonical_choice
     ):
         declared = {path.removeprefix(prefix + ".") for path in UNDECLARED if path.startswith(prefix + ".")}
         assert declared == {field.name for field in fields(config)}
-    for name, enum in (("source", TeacherSource), ("placement", TeacherPlacement), ("evidence", TeacherEvidenceKind)):
-        annotation = Teacher.model_fields[name].annotation
+    for model, name, enum in (
+        (Teacher, "source", TeacherSource),
+        (Teacher, "placement", TeacherPlacement),
+        (Teacher, "evidence", TeacherEvidenceKind),
+        (TokenRule, "action", CorrectionAction),
+        (SequenceRule, "action", CorrectionAction),
+        (SequenceRule, "aggregate", SequenceAggregate),
+    ):
+        annotation = model.model_fields[name].annotation
         if name == "placement":
             annotation = next(option for option in get_args(annotation) if option is not type(None))
         assert set(get_args(annotation)) == {choice.value for choice in enum}, name

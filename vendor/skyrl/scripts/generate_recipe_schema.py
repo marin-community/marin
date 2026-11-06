@@ -25,6 +25,7 @@ CONFIG_DIR = ROOT / "skyrl-train/skyrl_train/config"
 WORKSPACE = ROOT.parents[1]
 OUTPUT_DIR = WORKSPACE / "lib/skyrlrecipe/src/skyrlrecipe"
 SIDECAR = ROOT / "scripts/recipe_schema_sidecar.py"
+SAMPLING_PATH = "generator.eval_sampling_params"
 INLINE_COMMENT = re.compile(r"""^(?:[^"\'#]|"(?:\\.|[^"\\])*"|'[^']*')*#(.*)$""")
 
 
@@ -188,6 +189,8 @@ class RenderSchema:
     names: dict
     sidecar: dict
     paths: list
+    declared: list[str]
+    owned: frozenset[str]
 
 
 def section_paths(mapping: dict, sidecar: dict, owned: frozenset, prefix: str = ""):
@@ -284,23 +287,23 @@ def render_schema(source: SourceDocuments, sidecar: dict, owned: frozenset[str],
     declarations = ast.parse((OUTPUT_DIR / "declared.py").read_text()).body
     declared = [node.name for node in declarations if isinstance(node, ast.ClassDef)]
     declared += [node.targets[0].id for node in declarations if isinstance(node, ast.Assign)]
-    return RenderSchema(source, observed, class_names(paths, sidecar["NAMES"], declared), sidecar, paths)
+    return RenderSchema(source, observed, class_names(paths, sidecar["NAMES"], declared), sidecar, paths, declared, owned)
 
 
-def render_class(schema: RenderSchema, path: str, mapping: dict, owned: frozenset[str]) -> str:
+def render_class(schema: RenderSchema, path: str, mapping: dict) -> str:
     fields = [
         render_field(schema, child, value)
         for key, value in mapping.items()
-        if (child := f"{path}.{key}".lstrip(".")) not in owned
+        if (child := f"{path}.{key}".lstrip(".")) not in schema.owned
     ]
     return f"class {schema.names[path]}(Section):\n" + ("\n".join(fields) or "    pass") + "\n"
 
 
-def render_sections(schema: RenderSchema, owned: frozenset[str]) -> str:
+def render_sections(schema: RenderSchema) -> str:
     body = "\n\n".join(
-        render_class(schema, path, mapping, owned)
+        render_class(schema, path, mapping)
         for path, mapping in schema.paths
-        if path != "generator.eval_sampling_params"
+        if path != SAMPLING_PATH
     )
     fields = []
     for group in ("terminal_bench_config", "algorithm_recipe"):
@@ -308,11 +311,8 @@ def render_sections(schema: RenderSchema, owned: frozenset[str]) -> str:
             choices = ", ".join(repr(option) for option in sorted(options))
             fields.append(f"    {group}: Literal[{choices}] = unset_field()")
     body += "\n\nclass ConfigGroups(Section):\n" + ("\n".join(fields) or "    pass") + "\n"
-    declared = ast.parse((OUTPUT_DIR / "declared.py").read_text()).body
-    names = [node.name for node in declared if isinstance(node, ast.ClassDef)]
-    names += [node.targets[0].id for node in declared if isinstance(node, ast.Assign)]
     referenced = {node.id for node in ast.walk(ast.parse(body)) if isinstance(node, ast.Name)}
-    imports = "from .declared import " + ", ".join(name for name in names if name in referenced) + "\n"
+    imports = "from .declared import " + ", ".join(name for name in schema.declared if name in referenced) + "\n"
     if "EvalSamplingParams" in referenced:
         imports += "from .sampling import EvalSamplingParams\n"
     return generated_module(body, imports)
@@ -339,10 +339,10 @@ def generate() -> dict[str, str]:
         owned,
         recipe_documents(ROOT / "cloud/iris/configs", CONFIG_DIR, source.groups),
     )
-    path = "generator.eval_sampling_params"
+    path = SAMPLING_PATH
     modules = {
-        "sections.py": render_sections(schema, owned),
-        "sampling.py": generated_module(render_class(schema, path, dict(schema.paths)[path], owned)),
+        "sections.py": render_sections(schema),
+        "sampling.py": generated_module(render_class(schema, path, dict(schema.paths)[path])),
     }
     return {name: format_generated(code, OUTPUT_DIR / name) for name, code in modules.items()}
 
