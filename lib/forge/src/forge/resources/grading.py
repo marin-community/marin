@@ -42,9 +42,18 @@ class ScriptedModel:
         return ModelTurn(dict(message), (), (), None, "tool_calls" if "tool_calls" in message else "stop")
 
 
-def candidate_turns(candidate: Candidate) -> tuple[Mapping[str, object], ...]:
+def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mapping[str, object], ...]:
     turns: list[Mapping[str, object]] = []
+    used = {
+        call.call_id
+        for event in spec.task.context.events
+        if isinstance(event, AssistantToolCalls)
+        for call in event.calls
+    }
     for index, file in enumerate(sorted(candidate.files, key=lambda file: file.path)):
+        call_id = f"file-{index}"
+        while call_id in used:
+            call_id += "-"
         target = PurePosixPath("/", file.path)
         path, parent = shlex.quote(str(target)), shlex.quote(str(target.parent))
         data = shlex.quote(base64.b64encode(resource_bytes(file)).decode())
@@ -55,7 +64,7 @@ def candidate_turns(candidate: Candidate) -> tuple[Mapping[str, object], ...]:
                 "content": "",
                 "tool_calls": [
                     {
-                        "id": f"file-{index}",
+                        "id": call_id,
                         "type": "function",
                         "function": {"name": "shell", "arguments": json.dumps({"command": command})},
                     }
@@ -77,7 +86,7 @@ class GradingResource:
         spec = event.spec
         if event.candidate.files and spec.task_machine is None:
             raise ValueError("Candidate files require a task machine")
-        turns = candidate_turns(event.candidate)
+        turns = candidate_turns(event.candidate, spec)
         count = sum(
             isinstance(message, AssistantToolCalls) or (isinstance(message, TextMessage) and message.role == "assistant")
             for message in spec.task.context.events

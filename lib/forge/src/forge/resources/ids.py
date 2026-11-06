@@ -31,5 +31,5 @@ class Ids:
         return Fingerprint("ids", "uuid4-v1", ReplayPolicy.CACHE)
 
 
-async def new_id(event: NewId, resource: Ids) -> str:
+async def new_id(_event: NewId, resource: Ids) -> str:
     return resource.source()

@@ -21,11 +21,20 @@ from rolloutengine.models import (
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import (
+    AssistantToolCalls,
+    ConversationInput,
+    ConversationToolCall,
+    ConversationTrace,
+    TextMessage,
+    ToolResult,
+)
+from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import NumericSpec
 
 from forge.effects.issues import Restart, Transient
 from forge.model.controls import Candidate
-from forge.resources.grading import GradeCandidate, GradingResource
+from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns
 from forge.resources.rollouts import Engine, RolloutResource, SolverRollout
 
 
@@ -49,6 +58,27 @@ class FakeEngine(Engine):
 
 async def twelve(request: ModelRequest) -> ModelTurn:
     return ModelTurn({"role": "assistant", "content": "12"}, (), (), None, "stop")
+
+
+def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None:
+    history = (TextMessage(role="user", content="Solve"),)
+    for call_id in ("file-0", "file-0-", "file-1"):
+        history += (
+            AssistantToolCalls(calls=(ConversationToolCall(call_id=call_id, name="shell", arguments={}),)),
+            ToolResult(call_id=call_id, content="done"),
+        )
+    task = arithmetic_task(context=ConversationInput(events=history))
+    candidate = Candidate("12", (inline_resource("a", b"a"), inline_resource("b", b"b")))
+    turns = candidate_turns(candidate, rollout_spec(task))
+    assert turns == candidate_turns(candidate, rollout_spec(task))
+    for turn in turns[:-1]:
+        calls = turn["tool_calls"]
+        assert isinstance(calls, list)
+        call = calls[0]
+        event = AssistantToolCalls(calls=(ConversationToolCall(call_id=call["id"], name="shell", arguments={}),))
+        ConversationTrace(events=(*history, event))
+        history += (event, ToolResult(call_id=call["id"], content="done"))
+    ConversationTrace(events=(*history, TextMessage(role="assistant", content="12")))
 
 
 @pytest.mark.parametrize("operation", tuple(RolloutOperation))

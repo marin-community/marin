@@ -75,7 +75,7 @@ class Notes:
         "fake",
         "shellbox-memory",
         pytest.param("local", marks=pytest.mark.cluster),
-        pytest.param("shellsim", marks=pytest.mark.cluster),
+        "shellsim",
     ]
 )
 async def create_env(request: pytest.FixtureRequest) -> AsyncIterator[Callable[[], Awaitable[Env]]]:
