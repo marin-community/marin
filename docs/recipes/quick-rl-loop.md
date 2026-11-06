@@ -31,13 +31,10 @@ batch-invariance setting supplies `VLLM_BATCH_INVARIANT=1` to inference workers.
 The sequence cap also applies to training generation. Training throughput and
 weight-update behavior have not been qualified by the inference evaluations.
 
-Four fresh full-length passes independently graded the same 100-task panel.
-All 400 results were finite and verified, and all task-level generation, grading
-and recorded outcomes matched exactly across the four passes. A separate short
-panel measured cache hits and idle pause/clear/resume invalidation. This evidence
-covers the pinned SFT model and tested serving profile; it does not establish
-universal determinism or measure the actual graph runner. Keep detailed run
-history in the [serving reproducibility log](https://github.com/marin-community/marin/issues/11007).
+Inference qualification covers the pinned SFT model and tested serving profile.
+It does not establish universal determinism or measure the actual graph runner.
+See the [serving reproducibility log](https://github.com/marin-community/marin/issues/11007)
+for cache-hit, pause/clear/resume and independently graded fixed-panel results.
 
 ## Make or update tasks
 
