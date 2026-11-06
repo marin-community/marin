@@ -465,19 +465,3 @@ def test_data_stays_on_cooldown_weights_and_re_epochs_past_the_schedule(batch_si
 
     mix = (served[1] - served[0]) / (served[1] - served[0]).sum()
     np.testing.assert_allclose(mix, cooldown / cooldown.sum(), atol=1e-3)
-
-
-def test_optimizer_racks_pin_a_partial_rack_run_to_the_hero_optimizer():
-    step = build_diagnostic_run(
-        run_id="pin",
-        dp_racks=1,
-        num_steps=390_000,
-        schedule_steps=HERO_SCHEDULE_STEPS,
-        version="dev",
-        optimizer_racks=11,
-    )
-    pinned = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).optimizer
-    hero = _hero_config().optimizer
-
-    pinned_values = (pinned.learning_rate, pinned.adam_lr, pinned.epsilon, pinned.beta2)
-    assert pinned_values == (hero.learning_rate, hero.adam_lr, hero.epsilon, hero.beta2)

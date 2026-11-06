@@ -74,7 +74,6 @@ def build_diagnostic_run(
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None = None,
-    optimizer_racks: int | None = None,
     seed: int = 0,
     batch_size: int | None = None,
     num_experts: int | None = None,
@@ -121,10 +120,6 @@ def build_diagnostic_run(
 
     ``HERO_SCHEDULE_EXTENSION`` sets the learning rate past ``schedule_steps``, and ``num_steps`` can reach its
     last step.
-
-    ``optimizer_racks`` sizes the heuristic's learning rates, epsilon, and beta2 for that many racks of the hero's
-    tokens per rack instead of this run's batch, so a partial-rack run can take a larger run's optimizer values.
-    It requires ``schedule_steps``. ``None`` scales them from this run's batch.
     """
     if expert_axis_size is None:
         expert_axis_size = hero_expert_axis_size(context_axis_size)
@@ -160,8 +155,6 @@ def build_diagnostic_run(
             f"plus the {extension_steps}-step schedule extension"
         )
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
-    if optimizer_racks is not None and schedule_steps is None:
-        raise ValueError("optimizer_racks pins a long run's optimizer values, so it requires schedule_steps")
     model = HERO_MODEL_CONFIG
     overrides = {
         name: value
@@ -186,7 +179,7 @@ def build_diagnostic_run(
         batch_size = hero_rack_batch_size(model.max_seq_len)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=total_schedule_steps,
-        batch_size=batch_size if optimizer_racks is None else hero_rack_batch_size(model.max_seq_len) * optimizer_racks,
+        batch_size=batch_size,
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
@@ -374,15 +367,6 @@ def build_diagnostic_run(
         "Build the learning-rate schedule for this many steps instead of --num-steps. The optimizer "
         "heuristic scales its rates from the implied token budget, so this trains the head of a long "
         "run's schedule. Defaults to --num-steps."
-    ),
-)
-@click.option(
-    "--optimizer-racks",
-    type=click.IntRange(min=1),
-    default=None,
-    help=(
-        "Take the heuristic learning rates, epsilon, and beta2 for this many hero racks rather than for --batch-size. "
-        "Pass 11 with --schedule-steps 390251 for the hero's values on a partial-rack run. Default off."
     ),
 )
 @click.option(
@@ -579,7 +563,6 @@ def main(
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
-    optimizer_racks: int | None,
     seed: int,
     batch_size: int | None,
     num_experts: int | None,
@@ -615,7 +598,6 @@ def main(
         dp_racks=dp_racks,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
-        optimizer_racks=optimizer_racks,
         seed=seed,
         batch_size=batch_size,
         num_experts=num_experts,
