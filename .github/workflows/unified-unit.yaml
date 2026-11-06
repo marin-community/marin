@@ -61,7 +61,8 @@ jobs:
           elif [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
             ARGS+=(--run-all-tests)
           fi
-          if [ -f test_seconds.json ]; then
+          # An older pull-request head runs a selector without this option.
+          if [ -f test_seconds.json ] && grep -q -- '--test-seconds' infra/ci/select_tests.py; then
             ARGS+=(--test-seconds test_seconds.json)
           fi
           result=$(python3 infra/ci/select_tests.py "${ARGS[@]}")
