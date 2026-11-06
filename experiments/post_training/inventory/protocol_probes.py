@@ -80,6 +80,8 @@ SNOWBALL_V0_1 = ModelConfig(
     hf_repo_id="open-athena/Marin-Snowball-67B-A2B-v0.1",
     hf_revision="adc0078a19a4383bc998fcdb43867b3360baf5f3",
 )
+SNOWBALL_BASE_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/"
+"""The June pretrain cooldown export, the input to the SFT stages (``experiments/evaluation/models.py``)."""
 DEFAULT_MODEL = "snowball-v0.1"
 CLUSTERS = ("cw-us-east-02a", "cw-rno2a")
 GPUS_PER_NODE = 8
@@ -151,11 +153,27 @@ def snowball_v0_1() -> ArtifactHfModel:
     )
 
 
+def snowball_base() -> ArtifactHfModel:
+    """The pretrained checkpoint, served with Snowball v0.1's tokenizer so it sees the same chat and tool prompts.
+
+    The two vocabularies match by id; v0.1 only names two reserved tokens ``<tool_call>`` and ``</tool_call>``.
+    """
+    model = ArtifactStep.adopt(
+        "models/snowball-june-67b-a2b-base-step-42150", "2026.11.06", SNOWBALL_BASE_URI, kind=LevanterCheckpoint
+    )
+    return ArtifactHfModel(
+        step=model,
+        tokenizer_uri=SNOWBALL_V0_1.hf_repo_id,
+        tokenizer_revision=SNOWBALL_V0_1.hf_revision,
+        relative_path="",
+    )
+
+
 MODELS: MappingProxyType[str, Callable[[], ArtifactHfModel]] = MappingProxyType(
-    {"datakit-sft": datakit_sft, "snowball-v0.1": snowball_v0_1}
+    {"datakit-sft": datakit_sft, "snowball-base": snowball_base, "snowball-v0.1": snowball_v0_1}
 )
 """Checkpoints of the 67B-A2B family, whose serving settings this run uses: the quick loop's starting
-point and the released Snowball model."""
+point, the pretrained base and the released Snowball model."""
 
 
 def eval_config(thinking: bool) -> dict:
