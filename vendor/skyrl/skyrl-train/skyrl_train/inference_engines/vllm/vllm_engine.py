@@ -621,8 +621,6 @@ class WorkerWrap:
             weight_list.append((name, tensor))
 
         load_weights_into_vllm(self.model_runner.model, weight_list)
-        for weight in weight_list:
-            del weight
 
     # TODO (sumanthrh): Add destroy process group RPC as a atexit handler to Trainer code.
     def destroy_weights_update_group(self):

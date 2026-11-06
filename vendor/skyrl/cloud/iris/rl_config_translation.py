@@ -353,11 +353,8 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "bundle_indices",  # Calculated from parallelism config
         "num_gpus",  # Ray resource allocation
         "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        # Reserved engine aliases and worker-owned configuration
-        "model_path",
-        "tp_size",
-        "attention_backend",
-        "tokenizer",
+        "attention_backend",  # Set from generator.vllm_attention_backend
+        "tokenizer",  # Set from trainer.policy.model.tokenizer_path
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )

@@ -4,13 +4,14 @@ import math
 
 import ray
 import torch
+from transformers import AutoTokenizer
+
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
     create_ray_wrapped_inference_engines,
     create_ray_wrapped_inference_engines_with_retry,
 )
 from skyrl_train.training_batch import TrainingInputBatch
-from transformers import AutoTokenizer
 
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, router_bias_names
 

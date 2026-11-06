@@ -829,8 +829,6 @@ class RayPPOTrainer:
 
     def _finish_checkpoint_upload_blocking(self, snapshot: CheckpointSnapshot, *, commit: bool) -> tuple[float, float]:
         cleanup_duration = 0.0
-        actor_refs = self.policy_model.async_run_ray_method("pass_through", "wait_checkpoint_upload")
-        ray.get(actor_refs)
         if commit:
             io.write_bytes_atomic(snapshot.trainer_state_path, snapshot.trainer_state_payload)
             io.write_bytes_atomic(snapshot.rollout_state_path, snapshot.rollout_state_payload)
@@ -1815,8 +1813,8 @@ class RayPPOTrainer:
         Initialize policy/reference actors; CriticWorker is unused.
 
         Args:
-            policy_pg: Optional placement group reserved before inference
-                startup for the policy and colocated reference actors. When
+            policy_pg: Optional placement group supplied by the caller for
+                the policy and colocated reference actors. When
                 absent, model actors reserve their placement group lazily.
         """
         cfg = self.cfg
@@ -1901,7 +1899,7 @@ class RayPPOTrainer:
                 else:
                     pg = policy_pg
 
-            # The no-reference policy also uses the group reserved before inference.
+            # A policy without a reference model uses the caller-supplied group.
             if pg is None:
                 pg = policy_pg
 
@@ -3005,13 +3003,10 @@ class RayPPOTrainer:
                     operation="policy ppo_train",
                 )
 
-        empty_cache_refs = []
-
         policy_status = policy_statuses[0].metadata["train_status"]
         for k, v in policy_status.items():
             self.all_metrics.update({f"policy/{k}": v})
-        empty_cache_refs += self.policy_model.async_run_ray_method("pass_through", "empty_cache")
-        ray.get(empty_cache_refs)
+        ray.get(self.policy_model.async_run_ray_method("pass_through", "empty_cache"))
 
         return policy_status
 
@@ -3042,7 +3037,7 @@ class RayPPOTrainer:
 
     def _snapshot_checkpoint(self, rollout_state: TrainingContextState) -> CheckpointSnapshot:
         """
-        Stage model shards and serialize trainer state for later publication.
+        Save policy shards and serialize trainer state for publication.
 
         If colocate_all is True, assumes that the policy model is currently on GPU.
         """
@@ -3063,7 +3058,7 @@ class RayPPOTrainer:
             )
         )
 
-        # Serialize rollout data state for publication after the rank uploads complete.
+        # Serialize rollout data state for publication with the trainer state.
         rollout_state_path = os.path.join(global_step_folder, "data.pt")
         rollout_state_buffer = stdlib_io.BytesIO()
         torch.save(rollout_state, rollout_state_buffer)

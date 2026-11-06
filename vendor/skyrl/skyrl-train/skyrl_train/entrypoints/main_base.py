@@ -587,7 +587,6 @@ class BasePPOExp:
             colocate_pg=self.colocate_pg,
         )
 
-        # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
             trainer.build_models(PolicyWorker, CriticWorker, RefWorker)

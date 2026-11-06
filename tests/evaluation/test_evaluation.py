@@ -2803,6 +2803,7 @@ def test_launch_cli_reports_invalid_model_selection_as_usage_error(tmp_path):
     result = CliRunner().invoke(cli, ["launch", *options, "--evals", "mmlu-smoke", "--dry-run"])
 
     assert result.exit_code == 2
+    assert "specify exactly one of --model or --model-config" in result.output
 
 
 @pytest.mark.parametrize("code", [Code.NOT_FOUND, Code.PERMISSION_DENIED])

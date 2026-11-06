@@ -502,7 +502,6 @@ def create_ray_wrapped_inference_engines(
     inference_engine_enable_sleep=False,
     max_num_batched_tokens=8192,
     max_num_seqs=1024,
-    tokenizer=None,
     backend="vllm",
     vllm_attention_backend: str | None = None,
     sleep_level=2,  # we only set to 1 for unit tests that do not explicitly sync weights or for LoRA
@@ -522,7 +521,7 @@ def create_ray_wrapped_inference_engines(
     nccl_buffer_size_bytes: int | None = None,
 ) -> List[InferenceEngineInterface]:
     """
-    Create vLLM Ray actors; tokenizer is unused.
+    Create a list of RayWrappedInferenceEngine instances wrapping Ray actor handles to InferenceEngineInterface instances.
 
     mp_backend: opt-in. When True (and TP>1 / PP>1 and NOT colocated), run each vLLM
         inference engine with the `mp` (multiprocessing) executor backend instead of `ray`.
@@ -900,14 +899,11 @@ def create_ray_wrapped_inference_engines(
             )
 
         # Wait for every engine worker before policy weight-sync initialization.
-        startup_refs = []
         if not inference_engine_enable_sleep:
             startup_refs = [engine.inference_engine_actor.report_engine_placement.remote() for engine in engines]
-
-        if inference_engine_enable_sleep:
+        else:
             sleep_level = 1 if enable_lora else sleep_level
-            sleep_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
-            startup_refs = sleep_refs
+            startup_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
 
         if startup_refs:
             startup_results = wait_for_inference_engine_startup(

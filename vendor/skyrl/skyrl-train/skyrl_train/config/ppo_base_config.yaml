@@ -83,7 +83,7 @@ trainer:
     # geometry after launch. Do not override either field without updating the canonical launch topology.
     policy_num_nodes: 1
     policy_num_gpus_per_node: 4
-    # Retained for launcher overrides and the runtime peer-access topology probe.
+    # The peer-access probe counts this value; the OPD nightly sets it.
     critic_num_gpus_per_node: 4
     # TOPOLOGY-SENSITIVE: use_kl_loss or use_kl_in_reward activates this physical role. Do not repurpose these
     # values as generic non-policy capacity; they must describe the active reference role and its bundle.
@@ -147,7 +147,7 @@ trainer:
     sequence_parallel_size: 1
   critic:
     model:
-      # Validation requires null; callers may explicitly set this selector.
+      # Must stay null; validation rejects a critic model.
       path: null
     optimizer_config:
       lr_decay_steps: null

@@ -10,10 +10,8 @@ Uses fsspec for cloud storage abstraction.
 """
 
 import os
-import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -24,23 +22,6 @@ from marinskyrl.resource_locator import is_cloud_uri
 
 class DirectoryPublisher(Protocol):
     def __call__(self, local_path: str, cloud_path: str) -> None: ...
-
-
-@dataclass
-class PendingDirectoryUpload:
-    """A cloud directory staged on local disk and ready for publication."""
-
-    local_path: str
-    output_path: str
-
-    def publish(self) -> None:
-        try:
-            upload_directory(self.local_path, self.output_path)
-        finally:
-            try:
-                shutil.rmtree(self.local_path)
-            except OSError:
-                logger.exception(f"Failed to remove checkpoint staging directory {self.local_path}")
 
 
 def is_cloud_path(path: str) -> bool:

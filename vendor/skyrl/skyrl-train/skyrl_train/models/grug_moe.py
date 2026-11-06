@@ -17,8 +17,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 from torch import nn
-from transformers import PretrainedConfig, PreTrainedModel
-from transformers import initialization as init
+from transformers import PretrainedConfig, PreTrainedModel, initialization as init
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 from skyrl_train.models.ep_gradient import ExpertGradientAveraging
@@ -35,6 +34,7 @@ from skyrl_train.utils.flash_attention import (
     flash_pad_input,
     flash_unpad_input,
 )
+
 
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_ROUTER_BIAS_SUFFIX = ".mlp.router.bias"
