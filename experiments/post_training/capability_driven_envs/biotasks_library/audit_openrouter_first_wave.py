@@ -41,6 +41,21 @@ def _candidate_values(text: str) -> list[Any]:
     return result
 
 
+def _same_json_value(actual: Any, expected: Any) -> bool:
+    """Compare numeric JSON values without equating booleans to integers."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return isinstance(actual, bool) and isinstance(expected, bool) and actual == expected
+    if isinstance(actual, (float, int)) and isinstance(expected, (float, int)):
+        return actual == expected
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return set(actual) == set(expected) and all(_same_json_value(actual[key], expected[key]) for key in expected)
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _same_json_value(a, b) for a, b in zip(actual, expected, strict=True)
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
 def audit() -> dict[str, Any]:
     tasks = {
         row["task_id"]: row["task"]
@@ -94,7 +109,7 @@ def audit() -> dict[str, Any]:
             candidates = _candidate_values(text)
             if candidates:
                 counts["embedded_json_candidate"] += 1
-                exact = any(value == expected for value in candidates)
+                exact = any(_same_json_value(value, expected) for value in candidates)
                 if exact:
                     counts["embedded_exact_reference"] += 1
                 if grade.get("status") == "submission_failure":
