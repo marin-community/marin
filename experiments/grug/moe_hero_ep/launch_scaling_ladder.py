@@ -66,6 +66,12 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
+from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
+    LONG_CONTEXT_TAG,
+    LONG_CONTEXT_THRESHOLD,
+    harrier_long_context_data_config,
+)
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -261,9 +267,10 @@ def build_ladder_run(
 
     ``context_phases`` is the run's context history and ``flops_baseline_total`` its cumulative training
     FLOPs at the last switch. Each data bucket resumes at its next shuffle window (see
-    ``LmDataConfig.prior_context_phases``). ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
-    and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
-    length from their start. Pass both to build another history.
+    ``LmDataConfig.prior_context_phases``), or at the start of the long-context mix from the end of the history
+    when the hero's context length exceeds ``LONG_CONTEXT_THRESHOLD``. ``None`` selects the checked-in history:
+    ``HERO_CONTEXT_PHASES`` and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train
+    at their context length from their start. Pass both to build another history.
 
     d6144 splits each sequence over the checked-in ``HERO_CONTEXT_AXIS_SIZE`` devices, with each rack's expert
     axis shrunk to ``HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE``, and balances rows when
@@ -293,6 +300,10 @@ def build_ladder_run(
     if qk_mult_long_scale is not None:
         model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     seq_len = model.max_seq_len
+    # Past the threshold the hero reads the long-context mix from the end of its history instead of replaying
+    # the Harrier history; see harrier_long_context_mix.py. The FLOPs baseline and context checks still use it.
+    use_long_context_mix = hero and seq_len > LONG_CONTEXT_THRESHOLD
+    length_statistics = harrier_length_statistics() if use_long_context_mix else None
     flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len)
     validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
 
@@ -413,6 +424,7 @@ def build_ladder_run(
                     f"racks-{dp_racks}",
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
+                    *([LONG_CONTEXT_TAG] if use_long_context_mix else []),
                 ],
                 group="moe-hero-ep-scaling-ladder",
                 name=run_id,
@@ -445,14 +457,24 @@ def build_ladder_run(
         return GrugRunConfig(
             model=model,
             flops_baseline=flops_baseline,
-            data=harrier_mix_2026_08_18_data_config(
-                ctx=ctx,
-                total_steps=num_steps,
-                batch_size=batch_size,
-                max_seq_len=model.max_seq_len,
-                enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
-                validation=validation,
-                prior_context_phases=context_phases,
+            data=(
+                harrier_long_context_data_config(
+                    ctx=ctx,
+                    start_step=context_phases[-1].end_step,
+                    max_seq_len=model.max_seq_len,
+                    validation=validation,
+                    stats_path=ctx.artifact_path(length_statistics),
+                )
+                if length_statistics is not None
+                else harrier_mix_2026_08_18_data_config(
+                    ctx=ctx,
+                    total_steps=num_steps,
+                    batch_size=batch_size,
+                    max_seq_len=model.max_seq_len,
+                    enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
+                    validation=validation,
+                    prior_context_phases=context_phases,
+                )
             ),
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
@@ -483,7 +505,11 @@ def build_ladder_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+        deps=(
+            HARRIER_MIX_2026_08_18_STORE,
+            *validation,
+            *((length_statistics,) if length_statistics is not None else ()),
+        ),
         runtime_args={"train_resources": train_resources},
     )
 
