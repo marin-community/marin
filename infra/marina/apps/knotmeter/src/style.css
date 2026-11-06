@@ -1,0 +1,275 @@
+main {
+  max-width: 1320px;
+  margin: 2rem auto;
+  padding: 0 1.5rem 4rem;
+}
+h1 {
+  font-size: 2rem;
+  margin: 0 0 0.5rem;
+}
+h2 {
+  font-size: 1.2rem;
+  margin: 0;
+}
+h3 {
+  font-size: 1rem;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 0.7rem;
+  padding: 1.3rem;
+  margin-top: 1.5rem;
+}
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.muted,
+.legend,
+.section-heading > span {
+  color: var(--muted);
+  font-size: 0.87rem;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1.2rem 0;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+select,
+input,
+button {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  font: inherit;
+  max-width: 100%;
+}
+button,
+select {
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--mark);
+}
+.timeline-scroll {
+  overflow: auto;
+  max-height: 580px;
+}
+.timeline {
+  width: 100%;
+  min-width: 800px;
+}
+.timeline text {
+  fill: var(--muted);
+  font:
+    10px ui-monospace,
+    monospace;
+}
+.grid {
+  stroke: var(--edge);
+}
+.timeline g[role="button"] {
+  cursor: pointer;
+}
+.timeline g[role="button"]:focus rect {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.waiting {
+  color: #d99b38;
+}
+.decode {
+  color: #258568;
+}
+.failed {
+  color: #b1473f;
+}
+.legend span {
+  margin-left: 1rem;
+}
+.request-detail {
+  border-top: 1px solid var(--edge);
+  padding-top: 1rem;
+}
+pre,
+code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.empty {
+  padding: 2rem;
+  color: var(--muted);
+}
+a {
+  color: var(--mark);
+}
+.page-heading,
+.run-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.eyebrow {
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.page-heading .muted {
+  margin-bottom: 0;
+}
+.notice {
+  background: var(--panel);
+  border-left: 3px solid #d99b38;
+  padding: 0.8rem 1rem;
+  font-size: 0.9rem;
+}
+.notice.subtle {
+  border-color: var(--edge);
+  color: var(--muted);
+}
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.3rem;
+}
+.metric-plot {
+  width: 100%;
+}
+.metric-plot text {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.metric-plot a {
+  cursor: pointer;
+}
+.metric-plot a:hover circle {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.plot-wrap {
+  padding-top: 1rem;
+}
+.table-scroll {
+  overflow: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.8rem 0.6rem;
+  border-bottom: 1px solid var(--edge);
+}
+th {
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+td small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-top: 0.2rem;
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+.stat-grid > div {
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 0.5rem;
+}
+.stat-grid span {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.stat-grid strong {
+  display: block;
+  font-size: 1.7rem;
+  font-weight: 550;
+  margin-top: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+.provenance {
+  display: grid;
+  grid-template-columns: 11rem 1fr;
+  gap: 0.6rem 1rem;
+  font-size: 0.88rem;
+}
+.provenance dt {
+  color: var(--muted);
+}
+.provenance dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+details {
+  margin-top: 1rem;
+}
+summary {
+  cursor: pointer;
+  color: var(--mark);
+}
+details pre {
+  font-size: 0.8rem;
+  max-height: 30rem;
+  overflow: auto;
+}
+.corpus-table {
+  max-height: 38rem;
+}
+.corpus-table tr[data-selected="true"] {
+  background: var(--edge);
+}
+.warn {
+  color: var(--warn);
+}
+@media (max-width: 800px) {
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+  .stat-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .page-heading,
+  .run-heading {
+    display: block;
+  }
+  .page-heading .chip {
+    margin-top: 1rem;
+  }
+  .provenance {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+  .provenance dd {
+    margin-bottom: 0.6rem;
+  }
+  main {
+    padding: 0 1rem 3rem;
+  }
+}

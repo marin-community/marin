@@ -122,6 +122,7 @@ nav:
       - RL Data Atlas: references/rl-data-atlas.md
       - Snowball Model Family Tree: references/snowball-family-tree.md
       - Building Marina apps: references/marina.md
+      - Knotmeter: references/knotmeter.md
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
