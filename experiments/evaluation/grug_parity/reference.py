@@ -145,6 +145,7 @@ def score_snowball(predictions: tuple[Prediction, ...], weights: str, revision: 
     spec = ModelSpec(
         weights=weights,
         revision=revision,
+        tokenizer_revision=revision,
         api_model="snowball-reference",
         num_chips=jax.device_count(),
         tensor_parallel_size=1,
