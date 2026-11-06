@@ -721,6 +721,10 @@ except BaseException as exc:
 """
 
 
+PYTHON_3_12_TASK_VERSION = "3.12.15"
+"""A uv build with the pidfd APIs required by Shellbox local machines."""
+
+
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -797,7 +801,10 @@ class EnvironmentSpec:
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         if self.setup_scripts is None:
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+            if sys.version_info.major == 3 and sys.version_info.minor == 12:
+                py_version = PYTHON_3_12_TASK_VERSION
+            else:
+                py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
             extras = list(self.extras or [])
             setup_scripts = [
                 default_setup_script(
