@@ -13,7 +13,7 @@ import base64
 import json
 import re
 
-from rigging.redaction import JWT_PATTERN, REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from iris.cluster.controller.auth import PROXY_PLANE_AUDIENCE
 from iris.rpc import controller_pb2
@@ -22,9 +22,14 @@ from iris.rpc import controller_pb2
 # backslashes (JSON inside JSON doubles them, e.g. a log line in a tool output in a trace).
 _BREAK = r"(?:\s|\\+[nrt])"
 _BREAKS_RE = re.compile(rf"{_BREAK}+")
-_SEGMENT = rf"[A-Za-z0-9_\-](?:[A-Za-z0-9_\-]|{_BREAK})*"
-_BROKEN_JWT_RE = re.compile(rf"e{_BREAK}*y{_BREAK}*J{_SEGMENT}\.{_BREAK}*{_SEGMENT}\.{_BREAK}*{_SEGMENT}")
-_JWT_RE = re.compile(JWT_PATTERN)
+_CHAR = r"[A-Za-z0-9_\-]"
+# Header and payload end at their dot. The signature has no terminator, so it is matched by length:
+# capability tokens are EdDSA (Ed25519) signed, and a 64-byte signature is 86 base64url characters.
+# An unbounded signature would run through a break into the text that follows the token.
+_SIGNATURE_CHARS = 86
+_SEGMENT = rf"{_CHAR}(?:{_CHAR}|{_BREAK})*"
+_SIGNATURE = rf"(?:{_CHAR}{_BREAK}*){{{_SIGNATURE_CHARS - 1}}}{_CHAR}"
+_BROKEN_JWT_RE = re.compile(rf"e{_BREAK}*y{_BREAK}*J{_SEGMENT}\.{_BREAK}*{_SEGMENT}\.{_BREAK}*{_SIGNATURE}")
 
 # CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
 # type=(str, str). Keep in sync with the Click option definition in
@@ -121,17 +126,17 @@ def _is_capability_token(token: str) -> bool:
 
 
 def count_capability_tokens(text: str) -> int:
-    """Count Iris proxy capability tokens in *text*, after removing every line break."""
-    return sum(_is_capability_token(token) for token in _JWT_RE.findall(_BREAKS_RE.sub("", text)))
+    """Count Iris proxy capability tokens in *text*, line breaks inside a token included."""
+    return sum(_is_capability_token(match.group(0)) for match in _BROKEN_JWT_RE.finditer(text))
 
 
 def scrub_capability_tokens(text: str) -> tuple[str, int]:
     """Replace each Iris proxy capability token in *text* and return the text and the count replaced.
 
-    A capability token is a JWT with ``aud`` ``iris-proxy``; other JWTs are kept. Agents can print a
-    capability URL (e.g. an ``env`` listing), and terminals and JSON logs wrap it, so tokens split by
-    whitespace or escaped line breaks are matched too. Callers should confirm that
-    ``count_capability_tokens`` of the result is 0.
+    A capability token is a JWT with ``aud`` ``iris-proxy``; other JWTs and the text around a token are
+    kept. Agents can print a capability URL (e.g. an ``env`` listing), and terminals and JSON logs wrap
+    it, so tokens split by whitespace or escaped line breaks are matched too. Callers should confirm
+    that ``count_capability_tokens`` of the result is 0.
     """
     found = 0
 

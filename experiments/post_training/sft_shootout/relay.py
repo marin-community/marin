@@ -13,7 +13,8 @@ The student answers until one of these triggers:
 - Completion claim: the student's reply claims the task is done. The proxy withholds the reply, the
   teacher answers the same request, and the teacher keeps control until the episode ends.
 
-Terminus-2 uses ``Previous response had parsing errors:`` and ``"task_complete": true``.
+Terminus-2 uses ``Previous response had parsing errors:`` and, for a completion claim,
+``"task_complete": true`` or a ``mark_task_complete`` tool call.
 mini-swe-agent 2.1.0 uses ``Tool call error:`` (``mini.yaml`` ``format_error_template``) and
 ``echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT``.
 """

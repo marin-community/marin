@@ -158,15 +158,16 @@ def test_redact_submit_argv_attached_long_form_missing_value():
     assert redact_submit_argv(argv) == argv
 
 
-def _jwt(claims: dict) -> str:
-    def part(value: dict) -> str:
-        return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+def _jwt(claims: dict, alg: str = "EdDSA", signature_bytes: int = 64) -> str:
+    def part(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
-    return f"{part({'alg': 'HS256', 'typ': 'JWT'})}.{part(claims)}.c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+    header = json.dumps({"alg": alg, "typ": "JWT"}).encode()
+    return f"{part(header)}.{part(json.dumps(claims).encode())}.{part(bytes(range(signature_bytes)))}"
 
 
 _CAPABILITY = _jwt({"aud": "iris-proxy", "sub": "endpoint:/job/serve", "exp": 1})
-_OTHER_JWT = _jwt({"aud": "oauthlib-tests", "sub": "user"})
+_OTHER_JWT = _jwt({"aud": "oauthlib-tests", "sub": "user"}, alg="HS256", signature_bytes=32)
 
 
 def _wrapped(token: str, separator: str, width: int = 40) -> str:
@@ -187,7 +188,22 @@ def test_scrub_capability_tokens_handles_every_break_shape_and_keeps_other_jwts(
         assert count_capability_tokens(text) == 1, shape
         scrubbed, replaced = scrub_capability_tokens(text)
         assert replaced == 1 and count_capability_tokens(scrubbed) == 0, shape
-        assert REDACTED_VALUE in scrubbed and _OTHER_JWT in scrubbed
+        assert scrubbed == f"model.api_base=https://iris.example/proxy/t/{REDACTED_VALUE}/serve/v1' and {_OTHER_JWT}"
+
+
+def test_scrub_capability_tokens_keeps_the_text_after_a_token():
+    second = _jwt({"aud": "iris-proxy", "sub": "endpoint:/job/other", "exp": 1})
+    cases = [
+        (f"API_BASE={_CAPABILITY}\nHOME=/root\n", f"API_BASE={REDACTED_VALUE}\nHOME=/root\n"),
+        (f"url {_CAPABILITY} then more words", f"url {REDACTED_VALUE} then more words"),
+        (f"{_CAPABILITY}\n{second}\n", f"{REDACTED_VALUE}\n{REDACTED_VALUE}\n"),
+        (f"{_OTHER_JWT}\n{_CAPABILITY}\n", f"{_OTHER_JWT}\n{REDACTED_VALUE}\n"),
+    ]
+    for text, expected in cases:
+        scrubbed, replaced = scrub_capability_tokens(text)
+        assert scrubbed == expected
+        assert replaced == count_capability_tokens(text) == expected.count(REDACTED_VALUE)
+        assert count_capability_tokens(scrubbed) == 0
 
 
 def test_count_capability_tokens_accepts_a_list_audience():

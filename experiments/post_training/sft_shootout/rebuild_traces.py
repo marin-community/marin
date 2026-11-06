@@ -13,9 +13,9 @@ trial fields (task_name, trial_name, retry, reward, exception), triggers, tokens
 prompt, completion, reasoning), messages, tools, dropped_replies (replies the harness discarded, with
 the message index they preceded) and problems. A trial is joined to its Harbor result through the
 ``trial_correlation_id.txt`` that the agents in ``harbor_agents/trial_agents.py`` write next to their
-logs. ``problems`` reports gaps in the
-logged message ranges, echoed assistant messages that differ from the logged reply, and trials with
-no Harbor result.
+logs. ``problems`` reports gaps in the logged message ranges, echoed assistant messages that differ
+from the logged reply, assistant messages that no logged reply produced, and trials with no Harbor
+result.
 
     uv run python experiments/post_training/sft_shootout/rebuild_traces.py \
       --log <requests.jsonl> --jobs <Harbor jobs dir> --output <rebuilt.jsonl>

@@ -9,7 +9,6 @@ import math
 import re
 
 REDACTED_VALUE = "[REDACTED]"
-JWT_PATTERN = r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
 
 _MIN_KEY_ENTROPY = 3.5
 _KEY_CHARS_RE = re.compile(r"[A-Za-z0-9+/_-]+={0,2}")
@@ -22,7 +21,7 @@ PREFIXED_SECRET_RE = re.compile(
     r"|ASIA[0-9A-Z]{16}"
     r"|gh[pousr]_[A-Za-z0-9]{36,}"
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"
-    rf"|{JWT_PATTERN}"
+    r"|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
     r")(?![A-Za-z0-9_-])"
 )
 # Words that mark a key as secret-bearing, matched against the key's words

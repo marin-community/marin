@@ -15,12 +15,13 @@ teacher with ``relay.route``. For every chat completion it:
 
 Records are grouped by the per-trial correlation header (``TRIAL_HEADER``) that the agents in
 ``harbor_agents/trial_agents.py`` send. A request continues the trial's longest conversation whose
-messages are a prefix of its own. Otherwise it starts a new conversation.
+messages are a prefix of its own. Otherwise it starts a new conversation. Relay state is per trial,
+so with a ``RelayPolicy`` a request without the header is refused.
 
 The proxy also serves vLLM's ``/tokenize`` (``count`` and ``max_model_len``), which Harbor's
-mini-swe-agent context limiter calls and many hosted APIs lack. The count is the largest over the
-backends' tokenizers, so the context limit holds for whichever model answers. Streaming is not
-supported.
+mini-swe-agent context limiter calls and many hosted APIs lack. Each backend counts the request it
+would receive, overrides applied, and the count is the largest over the backends, so the context
+limit holds for whichever model answers. Streaming is not supported.
 """
 
 import asyncio
@@ -106,6 +107,11 @@ def template_message(message: dict) -> dict:
     return {**message, "tool_calls": parsed}
 
 
+def backend_request(backend: Backend, body: dict) -> dict:
+    """The request ``backend`` receives: the agent's body under the backend's overrides and model."""
+    return {**body, **backend.overrides, "model": backend.model}
+
+
 def count_tokens(tokenizer: PreTrainedTokenizerBase, body: dict) -> int:
     rendered = tokenizer.apply_chat_template(
         [template_message(m) for m in body["messages"]],
@@ -153,7 +159,10 @@ def build_proxy(
 
     async def counts(body: dict) -> dict[Author, int]:
         values = await asyncio.gather(
-            *(asyncio.to_thread(count_tokens, backend.tokenizer, body) for backend in backends.values())
+            *(
+                asyncio.to_thread(count_tokens, backend.tokenizer, backend_request(backend, body))
+                for backend in backends.values()
+            )
         )
         return dict(zip(backends, values, strict=True))
 
@@ -163,9 +172,7 @@ def build_proxy(
             retry = time.monotonic() - started < backend.retry_window
             try:
                 response = await client.post(
-                    f"{backend.base_url}/chat/completions",
-                    json={**body, **backend.overrides, "model": backend.model},
-                    headers=backend.headers,
+                    f"{backend.base_url}/chat/completions", json=backend_request(backend, body), headers=backend.headers
                 )
                 if response.status_code not in GATEWAY_STATUSES or not retry:
                     return response, time.monotonic() - started
@@ -225,6 +232,9 @@ def build_proxy(
         if body.get("stream"):
             return JSONResponse({"error": "streaming is not supported by this proxy"}, status_code=400)
         trial = request.headers.get(TRIAL_HEADER) or ""
+        if relay is not None and not trial:
+            logger.warning("refused a relay request without the %s header", TRIAL_HEADER)
+            return JSONResponse({"error": f"relay routing needs the {TRIAL_HEADER} header"}, status_code=400)
         messages = body.get("messages", [])
         index, first = track_conversation(trial, messages)
         record: dict = {

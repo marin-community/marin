@@ -23,10 +23,12 @@ FIXTURE = Path(__file__).parent / "testdata" / "effort_pilot"
 
 
 class WordTokenizer:
-    """Counts whitespace-separated words of the message contents."""
+    """Counts whitespace-separated words of the message contents, after the ``system_prompt`` template kwarg."""
 
-    def apply_chat_template(self, messages, tools=None, add_generation_prompt=True, tokenize=False, **_):
-        return " ".join(str(m.get("content") or "") for m in messages)
+    def apply_chat_template(
+        self, messages, tools=None, add_generation_prompt=True, tokenize=False, system_prompt="", **_
+    ):
+        return " ".join([system_prompt, *(str(m.get("content") or "") for m in messages)])
 
     def encode(self, text, add_special_tokens=False):
         return text.split()
@@ -164,6 +166,14 @@ def test_summarization_restart_and_retry_keep_conversations_apart(relay_app):
     assert [m["content"] for m in rebuilt.messages] == ["task", "a1 again", "$", '{"task_complete": true}']
 
 
+def test_relay_refuses_a_request_without_a_trial_header(relay_app):
+    test_client, _, calls, log_path = relay_app
+    response = test_client.post(
+        "/v1/chat/completions", json={"model": "any", "messages": [{"role": "user", "content": "task"}]}
+    )
+    assert response.status_code == 400 and calls == [] and not log_path.exists()
+
+
 def test_backend_failure_is_logged_and_returns_502(relay_app):
     test_client, _, _, log_path = relay_app  # no student reply queued: the student call raises
     response = post(test_client, [{"role": "user", "content": "fix the bug"}])
@@ -220,6 +230,15 @@ def test_backend_overrides_and_headers_are_sent_on_every_request(tmp_path):
     assert len(sent) == 2
     assert all(record["overrides"] == overrides for record in read_log(log_path))
     assert "secret" not in log_path.read_text()
+
+
+def test_tokenize_counts_the_request_each_backend_receives(tmp_path):
+    overrides = {"chat_template_kwargs": {"system_prompt": "be brief"}}
+    student = backend("http://student/v1", overrides=overrides)
+    log = RequestLog(tmp_path / "requests.jsonl")
+    app = build_proxy(backend("http://teacher/v1"), 100, log, RelayPolicy(student, 50), httpx.AsyncClient())
+    body = {"messages": [{"role": "user", "content": "fix the bug"}], "chat_template_kwargs": {"system_prompt": "x"}}
+    assert TestClient(app).post("/tokenize", json=body).json() == {"count": 5, "max_model_len": 100}
 
 
 def test_rebuild_joins_a_real_run_log_to_its_harbor_trial():
