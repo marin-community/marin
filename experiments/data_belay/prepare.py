@@ -3,10 +3,9 @@
 
 """Tokenize a seeded sample of a candidate dataset's files into a Levanter cache for the mixture runs.
 
-The sample is a seeded random subset of the split's data files that holds at least ``FILE_MARGIN`` times the new-data
-tokens of the largest rung, by the intake estimate. Whole files keep the dataset's documents whole, and a random subset
-avoids reading only the head of a dataset whose files are ordered (by date, source or score). Each tokenize shard stops
-after ``max_rows`` documents, so that a dataset with a few huge files is not tokenized whole.
+The sample selects files in seeded random order until their estimated tokens reach ``FILE_MARGIN`` times the largest
+rung's new-data tokens, or the files run out. Whole files preserve documents; random selection samples across files
+ordered by date, source or score. Each tokenize shard stops after ``max_rows`` documents.
 """
 
 import dataclasses
@@ -51,7 +50,7 @@ class CachePlan:
 
 
 def select_files(files: list[FileEntry], tokens_per_byte: float, need_tokens: int, seed: int) -> list[FileEntry]:
-    """A seeded random subset of ``files`` whose estimated tokens reach ``FILE_MARGIN * need_tokens``."""
+    """Select files until their estimated tokens reach ``FILE_MARGIN * need_tokens`` or the files run out."""
     order = sorted(files, key=lambda f: f.path)
     random.Random(seed).shuffle(order)
     target = FILE_MARGIN * need_tokens

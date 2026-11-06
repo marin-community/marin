@@ -25,20 +25,19 @@ from experiments.data_belay.rungs import DATA_BELAY_RUNGS, ladder_tokens
 from experiments.grug.fast_track import belay_tracks
 from experiments.grug.fast_track.launch import V16384_TOKENIZER
 
-CLUSTER = H100_CLUSTER
 MARIN_PREFIX = "s3://marin-us-east-02a/marin"
 PRIORITY = "batch"
 
 
 def _submit_cpu_job(job_name: str, cpu: int, memory: str) -> None:
-    """Re-run this command, without ``--submit``, as an Iris CPU job on ``CLUSTER``. Never returns."""
+    """Re-run this command, without ``--submit``, as an Iris CPU job. Never returns."""
     args = [a for a in sys.argv[1:] if a != "--submit"]
     env = ["-e", "MARIN_PREFIX", MARIN_PREFIX]
     if os.environ.get("HF_TOKEN"):
         env += ["-e", "HF_TOKEN", os.environ["HF_TOKEN"]]
     cmd = [
         *("uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources"),
-        *("--target-cluster", CLUSTER, "--priority", PRIORITY, "--cpu", str(cpu), "--memory", memory),
+        *("--target-cluster", H100_CLUSTER, "--priority", PRIORITY, "--cpu", str(cpu), "--memory", memory),
         *("--disk", "32GB", "--job-name", job_name, *env),
         *("--", "python", "-m", "experiments.data_belay", *args),
     ]
@@ -114,7 +113,7 @@ def check(
 
 @cli.command()
 @_dataset_options
-@click.option("--submit", is_flag=True, help=f"Run as an Iris CPU job on {CLUSTER}.")
+@click.option("--submit", is_flag=True, help=f"Run as an Iris CPU job on {H100_CLUSTER}.")
 def prepare(
     repo: str,
     revision: str | None,
@@ -159,7 +158,7 @@ def build_answer_bpb_command(root: str) -> None:
 )
 @click.option("--mix-cache", default=None, help="The candidate's flat train cache, from `prepare`; it sets the share.")
 @click.option("--num-steps", type=int, default=None, help="Smoke run of this many steps; the run id gets -smoke<N>.")
-@click.option("--submit", is_flag=True, help=f"Submit to {CLUSTER}; without it, print the plan.")
+@click.option("--submit", is_flag=True, help=f"Submit to {H100_CLUSTER}; without it, print the plan.")
 def train(
     rung: str,
     seed: int,
@@ -183,7 +182,7 @@ def train(
     if num_steps is not None:
         args += ["--num-steps", str(num_steps)]
     if submit:
-        args += ["--submit", "--target-cluster", CLUSTER, "--priority", PRIORITY]
+        args += ["--submit", "--target-cluster", H100_CLUSTER, "--priority", PRIORITY]
     belay_tracks.main(args)
 
 
