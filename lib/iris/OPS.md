@@ -666,13 +666,31 @@ Namespaces:
   parent's `root_submitted_at_ms`; `submitted_at_ms` is its own submit time). All
   three tables carry the job key. The two `_ms` columns are epoch milliseconds;
   the other time columns are timestamps. An attempt is `attempt_uid`, and it
-  carries the job key plus `(task_id, attempt_id)` to join `iris.task` and
-  `iris.task_event`. `node_name` (Kubernetes) or `worker_id`
-  (worker VMs) places an attempt on a machine. `iris.job_config` has one row per
-  job, written at submit, with the requested resources (`res_device_json` holds
-  the accelerator type and count). `iris.job.tags` is reserved for submit-time job
-  tags as a JSON object (`json_get(tags, 'category')`); it is NULL until Iris
-  accepts job tags at submit.
+  carries the job key plus `(task_id, attempt_id)`. `node_name` (Kubernetes) or
+  `worker_id` (worker VMs) places an attempt on a machine.
+
+  Joining `iris.task` or `iris.task_event`: `(task_id, attempt_id)` alone is
+  ambiguous, because a job name that is reused after the job ends restarts its
+  task and attempt ids. `iris.task_event` carries `attempt_uid`; join on it where
+  it is set. `iris.task` has no `attempt_uid`, so bound the join by the
+  attempt's lifetime as well:
+
+  ```sql
+  SELECT a.attempt_uid, max(t.memory_peak_mb) AS peak_memory_mb
+  FROM "iris.task_attempt" a
+  JOIN "iris.task" t
+    ON t.task_id = a.task_id AND t.attempt_id = a.attempt_id
+   AND t.ts >= a.started_at AND t.ts <= coalesce(a.finished_at, now())
+  WHERE a.root_job_id = '/user/job' AND a.state = 'TASK_STATE_SUCCEEDED'
+    AND a.ts >= now() - INTERVAL '7 days' AND t.ts >= now() - INTERVAL '7 days'
+  GROUP BY a.attempt_uid;
+  ```
+
+  `iris.job_config` has one row per job, written at submit, with the requested
+  resources (`res_device_json` holds the accelerator type and count).
+  `iris.job.tags` is reserved for submit-time job tags as a JSON object
+  (`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
+  submit.
 
   `error` is copied in full, as the controller DB stores it (like
   `iris.task_event.message`, it is not truncated).

@@ -305,8 +305,10 @@ class IrisJobConfig:
 class IrisTaskAttempt:
     """A snapshot of one controller ``task_attempts`` row, written when the attempt changes.
 
-    An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` joins
-    ``iris.task`` and ``iris.task_event``; ``(cluster, root_job_id,
+    An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` repeats
+    when a job name is reused, so a join to ``iris.task_event`` uses its
+    ``attempt_uid``, and a join to ``iris.task`` (which has none) also needs
+    ``ts`` between ``started_at`` and ``finished_at``; ``(cluster, root_job_id,
     root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.job``. ``node_name`` (Kubernetes)
     or ``worker_id`` (worker VMs) places the attempt on a machine.
     """
