@@ -635,6 +635,24 @@ def apply_overlong_filtering(
     ]
 
 
+def task_timing_metrics(env_metrics: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Summarize each per-answer task timer over the rows that record it."""
+    metrics = {}
+    for key in TASK_TIMING_KEYS:
+        values = [row[key] for row in env_metrics if key in row]
+        if values:
+            p50, p95 = np.percentile(values, [50, 95])
+            metrics.update(
+                {
+                    f"{key}/mean": float(np.mean(values)),
+                    f"{key}/p50": float(p50),
+                    f"{key}/p95": float(p95),
+                    f"{key}/max": float(np.max(values)),
+                }
+            )
+    return metrics
+
+
 def get_rollout_metrics(
     responses: List[List[int]],
     rewards: Union[List[float], List[List[float]]],
@@ -684,18 +702,7 @@ def get_rollout_metrics(
     }
 
     if env_metrics is not None:
-        for key in TASK_TIMING_KEYS:
-            values = [row[key] for row in env_metrics if key in row]
-            if values:
-                p50, p95 = np.percentile(values, [50, 95])
-                rollout_metrics.update(
-                    {
-                        f"{key}/mean": float(np.mean(values)),
-                        f"{key}/p50": float(p50),
-                        f"{key}/p95": float(p95),
-                        f"{key}/max": float(np.max(values)),
-                    }
-                )
+        rollout_metrics.update(task_timing_metrics(env_metrics))
     if env_metrics is not None and env_classes is not None:
         env_to_metrics = defaultdict(list)
         for i, metrics in enumerate(env_metrics):

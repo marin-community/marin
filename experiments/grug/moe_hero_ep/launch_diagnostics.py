@@ -19,6 +19,11 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
+from experiments.grug.moe_hero_ep.harrier_long_context_mix import (
+    LONG_CONTEXT_TAG,
+    harrier_long_context_data_config,
+)
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -86,7 +91,9 @@ def build_diagnostic_run(
     balance_attention_rows: bool = HERO_BALANCE_ATTENTION_ROWS,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
+    log_scaling_n_floor: int | None = None,
     restore_from: str | None = None,
+    long_context_start_step: int | None = None,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
@@ -158,6 +165,7 @@ def build_diagnostic_run(
             ("max_seq_len", max_seq_len),
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
+            ("log_scaling_n_floor", log_scaling_n_floor),
             ("moe_implementation", moe_implementation),
             ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
@@ -165,6 +173,11 @@ def build_diagnostic_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    if log_scaling_n_floor is not None and log_scaling_n_floor >= model.max_seq_len:
+        raise ValueError(
+            f"log_scaling_n_floor={log_scaling_n_floor} scales no query at max_seq_len={model.max_seq_len}; "
+            "this arm would be a control"
+        )
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
@@ -220,7 +233,10 @@ def build_diagnostic_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
+    if long_context_start_step and restore_from is None:
+        raise ValueError("--long-context-start-step past step 0 requires --restore-from at or after that step")
     validation = validation_datasets() if eval_every > 0 else []
+    length_statistics = harrier_length_statistics() if long_context_start_step is not None else None
     flops_per_example, _ = _compute_flops(model_config=model)
     experiment_flops = flops_per_example * batch_size * total_schedule_steps
 
@@ -264,6 +280,7 @@ def build_diagnostic_run(
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
+                    *([LONG_CONTEXT_TAG] if long_context_start_step is not None else []),
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -285,14 +302,24 @@ def build_diagnostic_run(
             ),
             context_axis_size=context_axis_size,
         )
-        data = harrier_mix_2026_08_18_data_config(
-            ctx=ctx,
-            total_steps=total_schedule_steps,
-            batch_size=batch_size,
-            max_seq_len=model.max_seq_len,
-            enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
-            validation=validation,
-        )
+        if length_statistics is None:
+            data = harrier_mix_2026_08_18_data_config(
+                ctx=ctx,
+                total_steps=total_schedule_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
+                validation=validation,
+            )
+        else:
+            assert long_context_start_step is not None
+            data = harrier_long_context_data_config(
+                ctx=ctx,
+                start_step=long_context_start_step,
+                max_seq_len=model.max_seq_len,
+                validation=validation,
+                stats_path=ctx.artifact_path(length_statistics),
+            )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -324,7 +351,11 @@ def build_diagnostic_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+        deps=(
+            HARRIER_MIX_2026_08_18_STORE,
+            *validation,
+            *((length_statistics,) if length_statistics is not None else ()),
+        ),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -546,7 +577,25 @@ def build_diagnostic_run(
     default=None,
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
+@click.option(
+    "--log-scaling-n-floor",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Scale each global-layer query seeing n keys in its document by 1 + 0.1 * ln(max(n / this value, 1)), "
+        "on top of --qk-mult and --qk-mult-long-scale. Defaults to off."
+    ),
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
+@click.option(
+    "--long-context-start-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "Train on the long-context mix, starting each bucket at this step. Pass the --restore-from step so arms "
+        "on any rack count read the same sequence stream. Defaults to the Harrier mix."
+    ),
+)
 @build_options
 def main(
     run_id: str,
@@ -581,7 +630,9 @@ def main(
     balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
+    log_scaling_n_floor: int | None,
     restore_from: str | None,
+    long_context_start_step: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -601,7 +652,9 @@ def main(
         balance_attention_rows=balance_attention_rows,
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
+        log_scaling_n_floor=log_scaling_n_floor,
         restore_from=restore_from,
+        long_context_start_step=long_context_start_step,
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),

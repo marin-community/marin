@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 
 import pytest
 from marin.execution.lazy import ArtifactStep
 from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_rl as snowball
+from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 
 
@@ -34,4 +36,16 @@ def selection(tmp_path, monkeypatch):
 def source_provenance(monkeypatch):
     monkeypatch.setattr(
         snowball, "_provenance", lambda **kwargs: Provenance("tree-one", "commit-one", False, "branch", "test")
+    )
+
+
+@pytest.fixture
+def synthetic_current_controls(monkeypatch):
+    monkeypatch.setattr(
+        gate,
+        "CONTROLS",
+        {
+            name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
+            for name, pins in gate.CONTROLS.items()
+        },
     )

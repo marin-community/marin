@@ -18,11 +18,14 @@ def run_config(config_path: Path) -> None:
     config = load_launch_config(config_path)
     module = registered_rl_entrypoint_module(str(config.runtime.entrypoint))
     run = cast(Callable[[DictConfig], None], getattr(importlib.import_module(module), "run"))
-    if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
-        with open_dict(config.skyrl):
-            config.skyrl.runtime = {
-                "checkpoint_path": str(config.skyrl.trainer.resume_path or config.inputs.model.uri),
-            }
+    with open_dict(config.skyrl):
+        config.skyrl.runtime = {
+            **config.skyrl.get("runtime", {}),
+            "run_id": str(config.run.id),
+            "attempt_id": str(config.run.attempt_id),
+        }
+        if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
+            config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
     run(config.skyrl)
 
 

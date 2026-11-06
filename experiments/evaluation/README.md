@@ -87,9 +87,9 @@ Evalchemy and Harbor run from [vendor/evalchemy](../../vendor/evalchemy/README.m
 and [vendor/harbor](../../vendor/harbor/README.md). Each has a separate environment
 and frozen lockfile. Neither is installed in the main workspace environment.
 
-Historical cohorts pinned to external evaluator commits require their recorded
-Marin checkout. The current launcher rejects those configurations with the vendored
-runtimes. Historical records remain readable.
+Historical cohorts pinned to external Evalchemy commits require their recorded
+Marin checkout. The current launcher rejects those configurations with vendored
+Evalchemy. Historical records remain readable.
 
 ### Evalchemy
 
@@ -115,6 +115,9 @@ GPQA Diamond's seeded requests require GPU vLLM; they do not work with TPU vLLM.
 Files under [configs/harbor](configs/harbor) use Harbor's `JobConfig` schema.
 Marin validates them with the vendored runtime before Iris submission.
 Each file must select one agent and one dataset; explicit `tasks` are rejected.
+
+The [Tau3 image recipe](images/tau3/README.md) pins the Pi and ACP dependencies
+and publishes reusable sandbox images to `ghcr.io/marin-community/rollout-images`.
 
 Use `datasets[].name: hf://org/repository` for Hugging Face sources, with an
 optional `ref`. Local `datasets[].path` values must be relative to the config

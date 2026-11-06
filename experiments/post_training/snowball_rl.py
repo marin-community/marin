@@ -35,7 +35,8 @@ change runs speed-medium, then learning-medium. A new task selection runs data-s
 data-medium. --require adds a condition of your own, such as a mismatch bound on a speed run or
 a per-category score on a learning run. Without --run the command prints the plan and the status
 block, including the verdict of a finished gated run; --run submits it. --wait polls every 60 s
-and prints the final status and report, exiting 0 for PASS, 1 for FAIL, 2 for INVALID.
+and prints the final status and report. It exits 0 for PASS or a finished ungated run,
+1 for FAIL, 2 for INVALID, and 3 when a required verdict is unavailable.
 --baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
 pinned controls. Status includes each run's latest completed update and saved W&B URL.
 Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
@@ -57,12 +58,12 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import subprocess
-import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
@@ -70,8 +71,6 @@ from pathlib import Path
 
 import click
 import yaml
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import get_job_info
@@ -116,11 +115,14 @@ from experiments.post_training.task_curation.inventory import (
     GraderKind,
 )
 
+logger = logging.getLogger(__name__)
+
 # Iris limit for one Snowball run, coordinator and job alike.
 RUN_TIMEOUT_HOURS = 72
 
 
 DEFAULT_WANDB_ENTITY = "marin-community"
+_WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {"failed", "killed", "worker_failed", "unschedulable"}
 
 
@@ -384,8 +386,8 @@ def build_run(
     baselines: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
-    snowball_rl_gate.check_requirements(preset, requirements, control=control)
-    if baselines and (control or preset.name not in snowball_rl_gate.CONTROLS):
+    snowball_rl_gate.validate_candidate(preset, requirements, control=control)
+    if baselines and (control or not presets.gated(preset)):
         raise click.BadParameter("--baseline needs a gated candidate preset, without --control")
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
@@ -460,7 +462,7 @@ def build_run(
         "evaluations": sorted(selected),
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    wandb_entity = os.environ.get("WANDB_ENTITY") or DEFAULT_WANDB_ENTITY
+    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
@@ -482,13 +484,14 @@ def build_run(
         snowball_rl_gate.gate_step(
             preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
         )
-        if preset.name in snowball_rl_gate.CONTROLS and not control
+        if presets.gated(preset) and not control
         else None
     )
     return SnowballRun(tuple(runs), gate)
 
 
 def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str]] | None, str | None]:
+    """Return source changes, or the reason git comparison is unavailable."""
     if not (presets.REPO_ROOT / ".git").exists():
         return None, "git metadata is unavailable on this host"
     try:
@@ -510,18 +513,18 @@ def _iris_client() -> Iterator[IrisClient]:
             yield client
 
 
-def _grafana_links(preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, cluster: str) -> dict[str, str]:
-    if receipt is None or not receipt.result.iris_job_id:
+def _grafana_links(
+    client: IrisClient | None, preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, cluster: str
+) -> dict[str, str]:
+    if client is None or receipt is None or not receipt.result.iris_job_id:
         return {}
     run_id = receipt.config.get("run", {}).get("id")
     if not run_id:
         return {}
     try:
-        with _iris_client() as client:
-            job = client.job_status(JobName.from_wire(receipt.result.iris_job_id))
-    except ConnectError as error:
-        if error.code != Code.NOT_FOUND:
-            raise
+        job = client.job_status(JobName.from_wire(receipt.result.iris_job_id))
+    except Exception as error:
+        logger.warning("Could not read Iris timing for %s: %s", receipt.result.iris_job_id, error)
         return {}
     if job.started_at is None or (job.state in TERMINAL_JOB_STATES and job.finished_at is None):
         return {}
@@ -539,73 +542,80 @@ def _grafana_links(preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, c
 
 
 def _completed_update(path: str, *, generating: bool) -> int | None:
+    key = presets.GENERATE_WALL_SECONDS_METRIC if generating else "timing/step_wall/unaccounted"
     for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")):
-        try:
-            values = json.loads(presets.read_text(metric))
-            step = int(str(metric).rsplit("step-", 1)[-1].removesuffix(".json"))
-            if not isinstance(values, dict):
-                continue
-            key = "generate/wall_seconds" if generating else "timing/step_wall/unaccounted"
-            completed = step == 0 if generating else values.get("trainer/global_step") == step
-            if completed and math.isfinite(values.get(key, math.nan)):
-                return step
-        except (ValueError, TypeError):
-            continue
+        values = json.loads(presets.read_text(metric))
+        if key in values and (generating or values.get("trainer/global_step") == values["step"]):
+            return values["step"]
     return None
 
 
 def _status(run: SnowballRun, preset: presets.Preset) -> dict:
     rows = []
     planned = []
-    for step in run.runs:
-        execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-        path = step.path(presets.artifact_prefix(execution.cluster))
-        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-        planned.append(yaml.safe_load(config.launch_config_yaml))
-        try:
-            receipt = read_skyrl_launch_receipt(path)
-        except SkyRLReceiptLookupError as error:
-            raise click.BadParameter(str(error)) from error
-        result = receipt.result if receipt is not None else None
-        tracking_path = StoragePath(path) / "exports" / TRACKING_FILENAME
-        tracking = (
-            {"wandb_url": json.loads(presets.read_text(tracking_path))["wandb_url"]}
-            if presets.exists(tracking_path)
-            else {}
-        )
-        team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
-        grafana = _grafana_links(preset, receipt, execution.cluster)
-        state = (
-            result.state
-            if result
-            else (
-                presets.read_text(get_status_path(path)).strip()
-                if presets.exists(get_status_path(path))
-                else "not built"
+    with ExitStack() as stack:
+        client, lookup_started = None, False
+        for step in run.runs:
+            execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
+            path = step.path(presets.artifact_prefix(execution.cluster))
+            config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+            planned.append(yaml.safe_load(config.launch_config_yaml))
+            try:
+                receipt = read_skyrl_launch_receipt(path)
+            except SkyRLReceiptLookupError as error:
+                raise click.BadParameter(str(error)) from error
+            result = receipt.result if receipt is not None else None
+            tracking_path = StoragePath(path) / "exports" / TRACKING_FILENAME
+            tracking = (
+                {"wandb_url": json.loads(presets.read_text(tracking_path))["wandb_url"]}
+                if presets.exists(tracking_path)
+                else {}
             )
-        )
-        rows.append(
-            {
-                "name": step.name,
-                "version": step.version,
-                "state": state,
-                "iris_job_id": result.iris_job_id if result else None,
-                "wandb_entity": team or DEFAULT_WANDB_ENTITY,
-                **tracking,
-                **({"grafana_links": grafana} if grafana else {}),
-                "latest_completed_update": _completed_update(
-                    path, generating=preset.recipe.layout.role_plan.generate_only
-                ),
-                "cluster": execution.cluster,
-                "allocation": {
-                    **planned[-1]["iris"]["allocation"],
-                    "cpu": execution.cpu,
-                    "memory": execution.memory,
-                    "disk": execution.disk,
-                },
-                "output": path,
-            }
-        )
+            team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
+            if (
+                receipt is not None
+                and receipt.result.iris_job_id
+                and receipt.config.get("run", {}).get("id")
+                and not lookup_started
+            ):
+                lookup_started = True
+                try:
+                    client = stack.enter_context(_iris_client())
+                except Exception as error:
+                    logger.warning("Could not connect to Iris for status links: %s", error)
+                    client = None
+            grafana = _grafana_links(client, preset, receipt, execution.cluster)
+            state = (
+                result.state
+                if result
+                else (
+                    presets.read_text(get_status_path(path)).strip()
+                    if presets.exists(get_status_path(path))
+                    else "not built"
+                )
+            )
+            rows.append(
+                {
+                    "name": step.name,
+                    "version": step.version,
+                    "state": state,
+                    "iris_job_id": result.iris_job_id if result else None,
+                    "wandb_entity": team or DEFAULT_WANDB_ENTITY,
+                    **tracking,
+                    **({"grafana_links": grafana} if grafana else {}),
+                    "latest_completed_update": _completed_update(
+                        path, generating=preset.recipe.layout.role_plan.generate_only
+                    ),
+                    "cluster": execution.cluster,
+                    "allocation": {
+                        **planned[-1]["iris"]["allocation"],
+                        "cpu": execution.cpu,
+                        "memory": execution.memory,
+                        "disk": execution.disk,
+                    },
+                    "output": path,
+                }
+            )
     verdict = {}
     if run.gate is not None:
         path = (
@@ -650,43 +660,34 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
 
 def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
     with _iris_client() as client:
-        while (parent := client.job_status(job)).state not in TERMINAL_JOB_STATES:
-            time.sleep(60)
+        parent = client.job(job).wait(RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
     if parent.state != JobState.SUCCEEDED:
-        click.echo(
-            yaml.safe_dump({"preset": preset.name, "verdict": "fail", "reason": f"coordinator {job} is {parent.state}"})
-        )
-        raise click.exceptions.Exit(1)
+        click.echo(yaml.safe_dump({"preset": preset.name, "reason": f"coordinator {job} is {parent.state}"}))
+        raise click.exceptions.Exit(3)
     run = SnowballRun(
         tuple(step for step in handles if step.artifact_type is SkyRLRun),
         next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
     )
     snapshot = _status(run, preset)
-    failed = any(str(row["state"]).lower() in _FAILED_RUN_STATES for row in snapshot["runs"])
-    complete = bool(run.runs) and all(str(row["state"]).lower() in {"succeeded", "success"} for row in snapshot["runs"])
-    markdown = None
-    if run.gate is not None:
-        gate_root = run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
-        marker = get_status_path(gate_root)
-        state = presets.read_text(marker).strip() if presets.exists(marker) else None
-        failed = failed or state == "FAILED"
-        markdown = str(snapshot.get("report", "")).removesuffix(".json") + ".md"
-        complete = complete and state == "SUCCESS" and presets.exists(markdown)
-    if failed:
-        snapshot.update(verdict="fail", reason="run or gate step failed")
-    elif not complete:
-        snapshot.update(verdict="invalid", reason="coordinator finished without complete run and gate evidence")
+    if run.gate is not None and "report" not in snapshot:
+        snapshot.pop("verdict", None)
+        snapshot["reason"] = "coordinator finished without a gate report"
     click.echo(yaml.safe_dump(snapshot, sort_keys=False))
-    if complete and markdown is not None:
-        click.echo(presets.read_text(markdown))
-    verdict = snapshot.get("verdict", "pass" if run.gate is None else "invalid")
+    if "report" in snapshot:
+        click.echo(presets.read_text(snapshot["report"].removesuffix(".json") + ".md"))
+    if run.gate is not None and "report" not in snapshot:
+        raise click.exceptions.Exit(3)
+    verdict = snapshot.get("verdict", "pass")
     raise click.exceptions.Exit({"pass": 0, "fail": 1, "invalid": 2}[verdict])
 
 
 def _run_command(function: Callable) -> click.Command:
-    command = click.option("--wait", is_flag=True, help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID.")(
-        presets.run_command(help_text=__doc__)(function)
-    )
+    command = click.option(
+        "--wait",
+        is_flag=True,
+        help="Wait after --run; exit 0 for PASS or a finished ungated run, "
+        "1 for FAIL, 2 for INVALID, 3 without a required verdict.",
+    )(presets.run_command(help_text=__doc__)(function))
 
     @wraps(function)
     def callback(*args, wait: bool = False, **kwargs):
@@ -694,9 +695,23 @@ def _run_command(function: Callable) -> click.Command:
             raise click.BadParameter("--wait requires --run")
 
         def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-            job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
-            if wait and job is not None:
-                _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])
+            try:
+                job = submit_or_run(
+                    "experiments.post_training.snowball_rl",
+                    handles,
+                    max_concurrent,
+                    os.environ,
+                    extra_env_vars=(_WANDB_ENTITY_ENV,),
+                )
+                if wait and job is not None:
+                    _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])
+            except click.exceptions.Exit:
+                raise
+            except Exception as error:
+                if not wait:
+                    raise
+                click.echo(yaml.safe_dump({"preset": kwargs["preset_name"], "reason": str(error)}))
+                raise click.exceptions.Exit(3) from error
 
         try:
             return build_options_with_runner(function, runner)(*args, **kwargs)

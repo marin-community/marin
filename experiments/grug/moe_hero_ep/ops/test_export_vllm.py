@@ -25,6 +25,21 @@ from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 
+def test_export_refuses_log_scaling_before_writing(tmp_path):
+    destination = tmp_path / "export"
+    request = ExportConfig(
+        checkpoint="unused",
+        metadata_digest="unused",
+        model=GrugModelConfig(vocab_size=32, log_scaling_n_floor=16),
+        destination=str(destination),
+        source_revision="unused",
+    )
+
+    with pytest.raises(ValueError, match="log_scaling_n_floor"):
+        export(request)
+    assert not destination.exists()
+
+
 def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:
     config = GrugModelConfig(
         vocab_size=32,

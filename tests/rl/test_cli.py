@@ -132,7 +132,10 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
-    assert expected_env.items() <= environment.env_vars.items()
+    assert {
+        name: value for name, value in expected_env.items() if name != "WANDB_ENTITY"
+    }.items() <= environment.env_vars.items()
+    assert "WANDB_ENTITY" not in environment.env_vars
     assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
 
 

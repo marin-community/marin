@@ -241,6 +241,37 @@ def _sequence_axis_of(x: jax.Array) -> str | None:
     return spec[1] if spec is not None and len(spec) > 1 else None
 
 
+LOG_SCALING_ALPHA = 0.1
+
+
+def log_scaling_factor(visible_keys: Int[Array, "B S"], n_floor: int) -> Float[Array, "B S"]:
+    """Return the fixed Q multiplier ``1 + LOG_SCALING_ALPHA * ln(max(n / n_floor, 1))``.
+
+    This is Inkling's log scaling, except that ``n`` counts the keys in the query's own document, not its
+    absolute position, because a packed row holds several documents. The floor keeps every query within
+    ``n_floor`` keys at the temperature the model trained with up to that context.
+    """
+    return 1.0 + LOG_SCALING_ALPHA * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / n_floor, 1.0))
+
+
+def _visible_full_causal_keys(lower_bounds: Int[Array, "B S"], valid: Bool[Array, "B S"]) -> Int[Array, "B S"]:
+    """Count the keys each query sees from its FA4 full-causal bounds, itself included; 1 on padding.
+
+    Padding carries a neighbor's bound or a sentinel, not a key range of its own.
+    """
+    positions = reshard(jnp.arange(lower_bounds.shape[1], dtype=jnp.int32)[None, :], P(None, _sequence_axis_of(valid)))
+    return jnp.where(valid, positions - lower_bounds + 1, 1)
+
+
+def _global_query_scale(
+    cfg: "GrugModelConfig", long_lower_bounds: Int[Array, "B S"], valid: Bool[Array, "B S"]
+) -> Float[Array, "B S"] | None:
+    """Return the per-query scale for the global layers, or None with log scaling off."""
+    if cfg.log_scaling_n_floor is None:
+        return None
+    return log_scaling_factor(_visible_full_causal_keys(long_lower_bounds, valid), cfg.log_scaling_n_floor)
+
+
 def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
     """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
     spec = _partition_spec_of(x)
@@ -307,6 +338,10 @@ class GrugModelConfig:
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
     """Extra Q multiplier on the global (full-causal) layers; local layers use ``qk_mult`` alone."""
+    log_scaling_n_floor: int | None = None
+    """Fixed log scaling of queries on the global layers, on top of ``qk_mult`` and ``qk_mult_long_scale``.
+    A query that sees ``n`` keys in its document is multiplied by ``log_scaling_factor``, which is 1 up to
+    this many keys. None disables it."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -348,6 +383,8 @@ class GrugModelConfig:
                 raise ValueError("num_kv_heads must equal the stored maximum of local/global KV heads")
         if self.global_every <= 0:
             raise ValueError("global_every must be positive")
+        if self.log_scaling_n_floor is not None and self.log_scaling_n_floor <= 0:
+            raise ValueError("log_scaling_n_floor must be positive")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -465,6 +502,11 @@ class GrugModelConfig:
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
+        if self.log_scaling_n_floor is not None:
+            raise ValueError(
+                "log_scaling_n_floor is set, but the vLLM and SkyRL Grug models apply only a fixed query scale per "
+                "layer; this model would be served at the wrong temperature past the floor"
+            )
         # One name per field: core fields take the universal transformers spelling, MoE fields the
         # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
         # stays tolerant of the older spellings so existing artifacts keep loading.
@@ -618,6 +660,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        global_query_scale: Float[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -718,6 +761,9 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         if self.cfg.qk_mult_long_scale != 1.0:
             q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
+        # Q holds this row's position-dependent scale from here on, so FA4's zigzag query swap carries it.
+        if global_query_scale is not None:
+            q = q * jnp.where(is_global, global_query_scale, 1.0)[..., None, None].astype(q.dtype)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which
@@ -1251,6 +1297,7 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        global_query_scale: Float[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # A remat policy acts on named intermediates, and a block argument is not one. This
         # reassignment routes every use below through the name, which lets the policy offload it.
@@ -1260,7 +1307,9 @@ class Block(eqx.Module):
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        attn_out = self.attn(
+            attn_in, mask, disable_rope=disable_rope, is_global=is_global, global_query_scale=global_query_scale
+        )
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -1398,6 +1447,7 @@ class Transformer(eqx.Module):
         long_lower_bounds = reshard(long_lower_bounds, bounds_spec)
         short_lower_bounds = reshard(short_lower_bounds, bounds_spec)
         valid = reshard(valid, bounds_spec)
+        global_query_scale = _global_query_scale(cfg, long_lower_bounds, valid)
 
         def _scan_layers(
             carry_hidden: Float[Array, "B S D"],
@@ -1412,6 +1462,7 @@ class Transformer(eqx.Module):
                 layer_mask,
                 use_long,
                 use_long,
+                global_query_scale,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(

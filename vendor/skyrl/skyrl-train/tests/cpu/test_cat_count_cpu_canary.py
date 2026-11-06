@@ -15,6 +15,7 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
+from rigging.provenance import launch_provenance
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
@@ -25,6 +26,8 @@ from skyrl_gym.envs.cat_count.reward import TARGET_WORD
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
+from skyrl_train.io import io
+from skyrl_train.utils.tracking import Tracking
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
@@ -35,6 +38,7 @@ from tests.cpu.tiny_training.cat_count import (
     cat_count_config,
     run_cat_count,
     run_cat_count_generate,
+    run_tracked_cat_count,
 )
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
 from tests.cpu.tiny_training.experiment import read_metrics
@@ -48,6 +52,34 @@ def test_policy_download_rejects_a_corrupted_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr("tests.cpu.cat_count_policy.create_s3_filesystem", lambda **_kwargs: filesystem)
     with pytest.raises(ValueError, match="manifest SHA256"):
         download_policy(tmp_path)
+
+
+def test_metrics_cleanup_uses_object_store_listing_paths(monkeypatch):
+    export_root = "s3://tracker-test/exports"
+    filesystem = fsspec.filesystem("memory")
+    list_directory = filesystem.ls
+
+    def list_objects(path, detail=True, **kwargs):
+        entries = list_directory(path, detail=detail, **kwargs)
+        return entries if detail else [entry.removeprefix("s3://") for entry in entries]
+
+    monkeypatch.setattr(filesystem, "ls", list_objects)
+    resolve = io.filesystem_and_path
+    monkeypatch.setattr(
+        io, "filesystem_and_path", lambda uri: (filesystem, uri) if uri.startswith("s3://") else resolve(uri)
+    )
+    for step in (0, 8):
+        io.write_bytes_atomic(f"{export_root}/metrics/step-{step:06d}.json", json.dumps({"old": 1}).encode())
+    config = OmegaConf.create({"trainer": {"export_path": export_root}, "runtime": {"attempt_id": "new"}})
+    with Tracking("project", "name", "files", config) as tracker:
+        tracker.start(resumed_step=None)
+        tracker.log({"loss": 0.25}, step=0)
+    assert not io.exists(f"{export_root}/metrics/step-000008.json")
+    assert json.loads(io.read_bytes(f"{export_root}/metrics/step-000000.json")) == {
+        "step": 0,
+        "attempt_id": "new",
+        "loss": 0.25,
+    }
 
 
 @pytest.fixture
@@ -256,9 +288,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     ]
     sampled_rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl")
-        .read_text()
-        .splitlines()
+        for line in (
+            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
+        )
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
@@ -309,8 +341,17 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
     tmp_path, cat_count_policy, cat_count_session, forkserver_context, step_wise
 ):
     root = tmp_path / "rloo-n"
+    directory = root / "exports/metrics"
+    directory.mkdir(parents=True)
+    for step in (0, 8):
+        (directory / f"step-{step:06d}.json").write_text(
+            json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
+        )
+    preserved = None
     for steps, resume in ((2, False), (4, True)):
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
+        OmegaConf.update(cfg, "runtime", {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}"}, force_add=True)
+        cfg.trainer.logger = ["files", "wandb"]
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
         cfg.trainer.step_wise_training = step_wise
         cfg.trainer.algorithm.group_advantage_min_size = 2
@@ -320,13 +361,41 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.trainer.micro_train_batch_size_per_gpu = 1
         cfg.trainer.micro_forward_batch_size_per_gpu = 1
         cfg.generator.n_samples_per_prompt = 2
-        for filename in (cfg.data.train_data[0], cfg.data.val_data[0]):
+        paths = []
+        environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
+        for filename in (cfg.data.train_data[0], *cfg.data.val_data):
             path = Path(filename)
-            row = json.loads(path.read_text().splitlines()[0])
-            row["prompt"][0]["content"] = "cat " * 200
-            with path.open("a") as handle:
-                handle.write(json.dumps(row) + "\n")
-        records = run_process(forkserver_context, root, cfg)
+            tasks = []
+            for index, line in enumerate(path.read_text().splitlines()):
+                row = json.loads(line)
+                n = row["extra_info"]["n"]
+                lowered = source_row_task(row, index, source_name=path.stem, environment_configs=environment_configs)
+                if index % 5 == 0:
+                    task = lowered.task.model_copy(
+                        update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
+                    )
+                    lowered = lowered_task(task, max_turns=1)
+                tasks.append(lowered)
+            tasks.append(lowered_task(text_task("overlong", prompt="cat " * 200), max_turns=1))
+            paths.append(str(path.with_suffix(".parquet")))
+            write_tasks(Path(paths[-1]), tasks)
+        cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
+        records = run_process(forkserver_context, root, cfg, runner=run_tracked_cat_count)
+        tracking = json.loads((root / "wandb-init.json").read_text())
+        assert {key: tracking[key] for key in ("run_id", "attempt_id", "source_commit", "iris_job_id")} == {
+            "run_id": "cpu-rloo-n",
+            "attempt_id": f"attempt-{steps}",
+            "source_commit": launch_provenance().base_commit,
+            "iris_job_id": "/tests/native-tracking",
+        }
+        assert [row["step"] for row in records] == list(range(steps + 1))
+        assert all("prior_attempt_only" not in row for row in records)
+        assert records[-1]["attempt_id"] == f"attempt-{steps}"
+        if preserved is not None:
+            assert (directory / "step-000001.json").read_bytes() == preserved
+            assert records[1]["attempt_id"] == "attempt-2"
+        else:
+            assert all(row["attempt_id"] == "attempt-2" for row in records)
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
@@ -336,41 +405,23 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
-
-
-@pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
-def test_task_grading_timers_reach_training_and_evaluation(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context
-):
-    root = tmp_path / "task-timers"
-    cfg = cat_count_config(root, cat_count_policy, steps=2)
-    cfg.trainer.epochs = 2
-    tasks = [
-        lowered_task(
-            text_task(str(n), prompt=PROMPT.format(N=n), source="task-timers").model_copy(
-                update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
-            ),
-            max_turns=1,
-        )
-        for n in range(1, 9)
-    ]
-    path = root / "data/tasks.parquet"
-    write_tasks(path, tasks)
-    cfg.data.train_data = [str(path)]
-    cfg.data.val_data = [str(path)]
-    records = run_process(forkserver_context, root, cfg)
-    training = [row for row in records if "policy/raw_grad_norm" in row]
-    evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
-    assert [int(row["step"]) for row in training] == [1, 2]
-    assert [int(row["step"]) for row in evaluations] == [0, 2]
-    for rows, prefix in ((training, ""), (evaluations, "eval/all/")):
-        for row in rows:
-            for raw in TASK_TIMING_KEYS:
-                values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
-                assert all(math.isfinite(value) and value >= 0 for value in values)
-                assert values[1] <= values[2] <= values[3]
-            assert row[f"{prefix}timing/grading/mean"] > 0
-            assert row[f"{prefix}timing/setup/max"] == 0
+        evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
+        timed_training = [row for row in training if "timing/grading/mean" in row]
+        assert evaluations and timed_training
+        for rows, prefix in ((timed_training, ""), (evaluations, "eval/all/")):
+            for row in rows:
+                for raw in TASK_TIMING_KEYS:
+                    values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
+                    assert all(math.isfinite(value) and value >= 0 for value in values)
+                    assert values[1] <= values[2] <= values[3]
+                assert row[f"{prefix}timing/grading/mean"] > 0
+                assert row[f"{prefix}timing/setup/max"] == 0
+        if not resume:
+            preserved = (directory / "step-000001.json").read_bytes()
+            for step in (3, 8):
+                (directory / f"step-{step:06d}.json").write_text(
+                    json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
+                )
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
