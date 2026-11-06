@@ -219,14 +219,15 @@ those a replaced run leaves behind clear themselves.
 The hero stops at the end of its 390251-step schedule unless `HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` says
 otherwise; it is set to `ScheduleExtension(steps=4335, final_lr_ratio=0.01)`, which stops at step 394586. A cutover that trains past the schedule sets it in the deploy PR as
 `ScheduleExtension(steps=N, final_lr_ratio=R)`: the run stops at 390251 + N, and over those steps the learning
-rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. `R = 0.05` holds the floor. The heuristic, weight
-decay, data stages, and checkpoint keeps still size from 390251, and every 500th step stays permanent through the extension.
-A restore past the stop step fails. A handoff at the stop step needs the extension already merged, because a restore exactly at it trains nothing. The end of the run writes the final checkpoint and then runs the dropless eval, even without a scheduled eval at that step.
-A retry that restores the permanent checkpoint of the stop step skips the eval and all other final callbacks, logs a
-`ZERO-STEP SUCCESS` warning, and succeeds, so run a missing final eval offline. A restore of a temporary checkpoint at the stop step still writes the
-permanent one and runs the eval. `HERO_STEPS_PER_EVAL` in `launch_scaling_ladder.py` sets the eval cadence. Each periodic eval runs before that step's
-checkpoint, so a failure in one costs the steps since the last checkpoint and fails again on retry until a merged change removes the cause. A periodic eval at the stop step is the exception: the final checkpoint comes first, as for the end-of-run eval.
-A rehearsal at a new context length should include an eval with `--eval-every`.
+rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. The heuristic, weight decay, data stages,
+and checkpoint keeps still size from 390251.
+
+A restore past the stop step fails and one at it trains nothing, so a handoff at the stop needs the extension already
+merged. The run writes its final checkpoint before the final dropless eval. A retry that restores the permanent
+checkpoint of the stop step skips the eval, logs `ZERO-STEP SUCCESS`, and succeeds, so run a missing final eval
+offline. Each periodic eval (`HERO_STEPS_PER_EVAL`) runs before that step's checkpoint, so a failure in one costs the
+steps since the last checkpoint and fails again on retry. A rehearsal at a new context length should include an eval
+with `--eval-every`.
 
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
 and a pristine checkout. Fork creation requires fetched main; subsequent launches
@@ -451,10 +452,9 @@ long-context mix. Its stop step, evaluation, and checkpoint policy stay independ
 The default 25-step diagnostic uses simulated epoching. Set `--schedule-steps 390251` to use the raw
 production mixture. The diagnostic default now matches the production watch and 890 GB RAM request.
 
-A diagnostic uses `HERO_SCHEDULE_EXTENSION` by default. To rehearse another extension, restore a late checkpoint and pass
-`--schedule-steps 390251 --extension-steps N --extension-final-lr-ratio R`; `--num-steps` can then reach 390251 + N. The heuristic scales
-from the diagnostic's own batch, so one rack runs the extension's ratios at 0.69 times the 11-rack hero's absolute rates and
-with a higher beta2. `--optimizer-racks 11 --schedule-steps 390251` gives a partial-rack run the hero's learning rates, epsilon, and beta2.
+A diagnostic uses `HERO_SCHEDULE_EXTENSION`, and with `--schedule-steps 390251`, `--num-steps` can reach its last step.
+The heuristic scales from the diagnostic's own batch, so one rack runs the same ratios at 0.69 times the 11-rack hero's
+absolute rates and with a higher beta2.
 
 Print the plan without a GPU run:
 

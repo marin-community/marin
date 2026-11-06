@@ -1109,17 +1109,6 @@ def _make_train_step(
     return train_step
 
 
-def _check_restored_step(restored_step: int, stop_step: int) -> None:
-    """Reject a restore past the stop step, which would otherwise train nothing and report success.
-
-    A restore exactly at the stop step is allowed, because a retry after the final checkpoint lands there.
-    """
-    if restored_step > stop_step:
-        raise ValueError(f"Restored step {restored_step} is past the stop step {stop_step}; nothing would train")
-    if restored_step == stop_step:
-        logger.warning("Restored step %d is the stop step; this run trains no steps", restored_step)
-
-
 def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
     """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
     # Every process must take the same branch around the collective save, so process 0 decides for all.
@@ -1128,19 +1117,6 @@ def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
         for candidate in discover_checkpoint_candidates(checkpointer.base_path, max_step=step)
     )
     return bool(broadcast_one_to_all(jnp.array(committed, dtype=jnp.bool_)))
-
-
-def _save_final_checkpoint(
-    checkpointer: Checkpointer | None, state: GrugTrainState, state_callbacks: StateCallbackRunner[GrugTrainState]
-) -> None:
-    if checkpointer is None:
-        return
-    with callbacks.progress_event_scope(
-        state_callbacks.emit_event,
-        callbacks.ProgressEvent.CHECKPOINT_STARTED,
-        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-    ):
-        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -1313,7 +1289,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         # both use it so a run reports against the steps it will actually take.
         stop_step = config.stop_step
         restored_step = int(state.step)
-        _check_restored_step(restored_step, stop_step)
+        # A restore exactly at the stop is allowed, because a retry after the final checkpoint lands there.
+        if restored_step > stop_step:
+            raise ValueError(f"Restored step {restored_step} is past the stop step {stop_step}; nothing would train")
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
@@ -1473,9 +1451,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {current_step}.")
                 duration = time.perf_counter() - step_start
-                # A periodic eval due at the stop step must not be able to lose the run's last steps either.
-                if current_step == stop_step:
-                    _save_final_checkpoint(checkpointer, state, state_callbacks)
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
@@ -1559,7 +1534,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     stop_step,
                 )
             else:
-                _save_final_checkpoint(checkpointer, state, state_callbacks)
+                if checkpointer is not None:
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
+                        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
                 if not preempted:
                     state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
         finally:
