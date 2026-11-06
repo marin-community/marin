@@ -135,22 +135,7 @@ reworks how RolloutEngine passes recorded turns to grading and removes tests.
     output; the corrected reading is on the issue
     (marin-community/marin#10393, issuecomment-6641107802).
 
-## Final decision
-
-- Selected approach: the probes and labels as merged through #10399 and #10932.
-  Both runs produced labels consistent with their traces once the two serving
-  bugs were fixed.
-- Marin contribution PRs: marin-community/marin#10399 (grading, fetch provider,
-  end-of-turn fix, server error capture) and marin-community/marin#10932 (quick
-  loop wiring). The launchers stay on this branch.
-- Reproduction: check out this branch and run either launcher with a fresh
-  `--version <label>-dev --run`. The dumps put each row's assessment under
-  `verification.diagnostics.protocol`, keyed by check.
-- Remaining uncertainty: 8 variants per check gives coarse rates; the thinking
-  check applies only when the launch turns thinking off, which the quick loop
-  does not do by default.
-
-## 2026-11-06: Evaluate the probes on checkpoints, outside the quick loop
+### 2026-11-06 19:30 UTC - Evaluate the probes on checkpoints, outside the quick loop
 
 - Change of direction: the probes measure a model and its serving setup, not
   RL progress, so they no longer run inside the quick RL loop or add a grading
@@ -188,3 +173,23 @@ reworks how RolloutEngine passes recorded turns to grading and removes tests.
 
 - Validation: the graph builds for both models without submission; no run
   has been launched from this revision yet.
+
+## Final decision
+
+- Selected approach: evaluate the probes against checkpoints with the launcher
+  in `experiments/post_training/inventory/protocol_probes.py`, outside the
+  quick RL loop. On the file, tool and URL probes the reward is the protocol
+  result; classify failures offline from the dumped `messages` and
+  `response_token_ids`. This replaces the earlier decision to grade per-check
+  labels into `diagnostics["protocol"]` (#10399) and run the probes in the quick
+  loop (#10932); see the 2026-11-06 entry.
+- Marin contribution PRs: marin-community/marin#11049 (probe tasks, `fetch-v1`
+  provider, per-dataset SkyRL task-spec config, `messages` in eval dumps) and
+  marin-community/marin#11050 (end-of-turn fix). Both are open drafts and
+  supersede #10399 and #10932. The launcher stays on this branch.
+- Reproduction: check out this branch and run
+  `uv run python -m experiments.post_training.inventory.protocol_probes --model <model> --version <label>-dev --run`.
+  The 2026-11-04 runs used the earlier launchers at their recorded revisions.
+- Remaining uncertainty: 8 variants per check gives coarse rates, and the tool
+  and URL variants share one prompt. The launcher has not been run yet; the
+  next run should confirm that it reproduces the 2026-11-04 Snowball rates.
