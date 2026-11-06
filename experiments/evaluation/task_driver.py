@@ -22,7 +22,7 @@ from rigging.secrets import get_secret, require_secret
 from rigging.timing import Duration, retry_with_backoff
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
-from rolloutengine.likelihood import VllmLikelihood
+from rolloutengine.likelihood import VllmLikelihood, special_prefix
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, NetworkPolicy
@@ -84,7 +84,14 @@ async def execute(
             config,
             ChatModel(client, config.model.name, config.max_tokens),
             completion_model=CompletionModel(client, config.model.name),
-            likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix),
+            likelihood=VllmLikelihood(
+                client,
+                config.model.name,
+                tokenizer,
+                config.model.context_window,
+                prefix_token_id=prefix,
+                context_prefix=special_prefix(tokenizer),
+            ),
             machine_factories=machines,
             tokenizer=tokenizer,
             judge_connection=judge_connection,

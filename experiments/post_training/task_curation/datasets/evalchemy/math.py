@@ -112,7 +112,7 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version="2026.11.04",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=0.7 if judged else 0,
@@ -204,6 +204,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             recipe=replace(amc.config.recipe, convert=convert_amc, version=scorer_revision("amc")),
             protocol=amc.config.protocol.model_copy(
                 update={
+                    "version": "2026.11.04",
                     "sampling": amc.config.protocol.sampling.model_copy(update={"max_tokens": 32768, "stop": ()}),
                 }
             ),

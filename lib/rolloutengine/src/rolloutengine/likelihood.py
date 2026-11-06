@@ -4,7 +4,9 @@
 """Token-boundary likelihood scoring through an OpenAI-compatible completion endpoint.
 
 Pair encoding and echoed logprob reduction follow lm-evaluation-harness v0.4.12
-(MIT). An echoed prompt must retain the last target token.
+(MIT). An echoed prompt must retain the last target token. A nonempty context
+starts with the tokenizer's special prefix, such as BOS, which a server adds
+when it tokenizes a text prompt.
 """
 
 import json
@@ -16,6 +18,8 @@ from openai import AsyncOpenAI
 from openai.types.completion import Completion
 
 from rolloutengine.models import TokenUsage
+
+SPECIAL_PREFIX_PROBE = "Likelihood"
 
 
 class Tokenizer(Protocol):
@@ -65,10 +69,28 @@ class InvalidLikelihoodRequest(ValueError):
     """A continuation cannot be scored with the configured tokenizer and context window."""
 
 
+def special_prefix(tokenizer: Tokenizer) -> tuple[int, ...]:
+    """Return the special tokens, such as BOS, that the tokenizer's own policy puts before text."""
+    plain = tokenizer.encode(SPECIAL_PREFIX_PROBE, add_special_tokens=False)
+    marked = tokenizer.encode(SPECIAL_PREFIX_PROBE, add_special_tokens=True)
+    if marked[len(marked) - len(plain) :] != plain:
+        raise ValueError("Likelihood scoring requires a tokenizer that adds special tokens only before the text")
+    return tuple(marked[: len(marked) - len(plain)])
+
+
 def encode_pair(
-    tokenizer: Tokenizer, context: str, continuation: str, *, prefix_token_id: int
+    tokenizer: Tokenizer,
+    context: str,
+    continuation: str,
+    *,
+    prefix_token_id: int,
+    context_prefix: tuple[int, ...],
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Move trailing context whitespace into the jointly encoded continuation."""
+    """Move trailing context whitespace into the jointly encoded continuation.
+
+    A nonempty context starts with ``context_prefix``, the tokenizer's special prefix, as a server that
+    tokenizes the text itself would add it; an empty context is the prefix token alone.
+    """
     if not context:
         return (prefix_token_id,), tuple(tokenizer.encode(continuation, add_special_tokens=False))
     spaces = len(context) - len(context.rstrip())
@@ -77,14 +99,15 @@ def encode_pair(
         context = context[:-spaces]
     whole = tokenizer.encode(context + continuation, add_special_tokens=False)
     prefix = tokenizer.encode(context, add_special_tokens=False)
-    return tuple(prefix), tuple(whole[len(prefix) :])
+    return (*context_prefix, *prefix), tuple(whole[len(prefix) :])
 
 
 @dataclass(frozen=True)
 class VllmLikelihood:
     """Score full continuation tokens with a one-token output reserve.
 
-    The caller owns the client and pins the tokenizer revision and prefix token.
+    The caller owns the client and pins the tokenizer revision, the prefix token of an empty context and the
+    context prefix, the tokenizer's ``special_prefix``.
     """
 
     client: AsyncOpenAI
@@ -92,10 +115,15 @@ class VllmLikelihood:
     tokenizer: Tokenizer
     context_size: int
     prefix_token_id: int
+    context_prefix: tuple[int, ...]
 
     def prepare(self, context: str, continuation: str) -> EncodedLikelihood:
         context_tokens, continuation_tokens = encode_pair(
-            self.tokenizer, context, continuation, prefix_token_id=self.prefix_token_id
+            self.tokenizer,
+            context,
+            continuation,
+            prefix_token_id=self.prefix_token_id,
+            context_prefix=self.context_prefix,
         )
         maximum_prompt = self.context_size - 1
         removed = max(0, len(context_tokens) + len(continuation_tokens) - maximum_prompt)

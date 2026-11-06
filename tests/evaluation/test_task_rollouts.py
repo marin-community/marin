@@ -20,12 +20,13 @@ from marin.rollouts.evaluation import (
     EvaluationRunConfig,
     JudgeIdentity,
     ModelIdentity,
+    generation_turn,
     run_evaluation,
 )
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
-from rolloutengine.likelihood import VllmLikelihood
-from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.likelihood import VllmLikelihood, special_prefix
+from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
@@ -830,7 +831,9 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(
+                client, "fixture", tokenizer, 64, prefix_token_id=0, context_prefix=special_prefix(tokenizer)
+            ),
         )
         model = ChatModel(client, "fixture", 16, extra_body={"skip_special_tokens": True})
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
@@ -1001,3 +1004,23 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         assert requests[-1] == requests[0]
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         assert len(requests) == 9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "stop_reason", "graded"),
+    [
+        # Reasoning returned beside the content does not precede the answer.
+        ({"role": "assistant", "content": "a1b2 answer", "reasoning_content": "thinking"}, "stop", "a1b2 answer"),
+        # A complete reasoning-only reply is the answer; one cut at the token limit is not.
+        ({"role": "assistant", "content": "", "reasoning_content": "a1b2 answer"}, "stop", "a1b2 answer"),
+        ({"role": "assistant", "content": "", "reasoning_content": "a1b2 unfinished"}, "length", ""),
+    ],
+)
+async def test_chat_generation_grades_the_final_answer_by_default(message, stop_reason, graded):
+    async def model(request):
+        return ModelTurn(message, prompt_token_ids=(), response_token_ids=(), logprobs=None, stop_reason=stop_reason)
+
+    request = ModelRequest(messages=({"role": "user", "content": "Repeat the poem."},), options={})
+    turn = await generation_turn(request, model=model, operation=ChatGeneration())
+    assert turn.text == graded

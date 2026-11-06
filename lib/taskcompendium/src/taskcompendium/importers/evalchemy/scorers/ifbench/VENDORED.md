@@ -2,7 +2,7 @@
 
 Source: Marin 623134de90723e7f189036da005067f36817b6e7, vendor/evalchemy/eval/chat_benchmarks/IFBench (Allen Institute for AI, 2025). Original Apache-2.0 notices are retained.
 
-Changes: package imports are relative; import-time NLTK downloads and package-directory writes are removed. Checker logic is unchanged. The dataset declares pinned checker packages and NLTK data in its grading environment. Missing data raises an error; grading never downloads it.
+Changes: package imports are relative; import-time NLTK downloads and package-directory writes are removed. `repeat:repeat_span`, `ratio:overlap`, `ratio:sentence_words`, `count:keywords_multiple`, `words:words_position` and `custom:sentence_alphabet` follow allenai/IFBench 1c40f0c, and `custom:csv_quotes` fails an empty field instead of raising; the other checkers are unchanged. The dataset declares pinned checker packages and NLTK data in its grading environment. Missing data raises an error; grading never downloads it.
 
 Original source SHA-256:
 

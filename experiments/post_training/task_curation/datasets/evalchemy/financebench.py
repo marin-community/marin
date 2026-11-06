@@ -51,7 +51,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 ),
                 EvaluationProtocol(
                     benchmark="FinanceBench",
-                    version="2026.11.02",
+                    version="2026.11.04",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
                         temperature=0,

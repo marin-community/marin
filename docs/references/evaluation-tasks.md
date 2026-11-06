@@ -48,7 +48,8 @@ generic `ContextPolicy` fields. Reference counts use the run's pinned tokenizer.
 Operations distinguish chat generation, raw-text generation, choice likelihood,
 and continuation likelihood. Chat preserves the source conversation without an
 added submission instruction. Likelihood preserves context/continuation token
-boundaries and source normalization. Ordinary protocols limit candidate rows
+boundaries and source normalization, and starts each nonempty context with the
+tokenizer's special prefix, such as BOS. Ordinary protocols limit candidate rows
 before context preflight. Protocols with `LimitStage.ELIGIBLE`, including MRCR
 and GraphWalks, refill after context exclusions until the eligible-row limit is
 met or candidates are exhausted. Both apply limits before trial expansion.
