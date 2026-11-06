@@ -2,15 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from types import SimpleNamespace
-
 import pytest
+from tokenizers import AddedToken
 
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
-PLAN, CALL, END_OF_TURN, END_OF_TEXT = 3, 4, 5, 9
-VOCABULARY = {PLAN: "plan", CALL: "call", END_OF_TURN: "<|eot_id|>", END_OF_TEXT: "<|end_of_text|>"}
+PLAN, CALL, END_OF_TURN, TOOL_CALL_END, END_OF_TEXT = 3, 4, 5, 6, 9
+VOCABULARY = {
+    PLAN: "plan",
+    CALL: "call",
+    END_OF_TURN: "<|eot_id|>",
+    TOOL_CALL_END: "<|tool_call_end|>",
+    END_OF_TEXT: "<|end_of_text|>",
+}
 
 
 class _LlamaStyleTokenizer:
@@ -18,8 +23,7 @@ class _LlamaStyleTokenizer:
 
     eos_token_id = END_OF_TEXT
     added_tokens_decoder = {
-        END_OF_TURN: SimpleNamespace(special=True),
-        END_OF_TEXT: SimpleNamespace(special=True),
+        token: AddedToken(VOCABULARY[token], special=True) for token in (END_OF_TURN, TOOL_CALL_END, END_OF_TEXT)
     }
 
     def decode(self, token_ids, skip_special_tokens):
@@ -71,3 +75,9 @@ def test_a_tool_call_that_ended_its_turn_at_the_budget_is_not_a_length_stop():
     output = _generate([CALL, END_OF_TURN], "tool_calls", {"max_completion_tokens": 2})
 
     assert output["stop_reasons"] == ["tool_calls"]
+
+
+def test_a_tool_call_cut_off_at_the_budget_on_a_special_delimiter_is_a_length_stop():
+    output = _generate([CALL, TOOL_CALL_END], "tool_calls", {"max_completion_tokens": 2})
+
+    assert output["stop_reasons"] == ["length"]

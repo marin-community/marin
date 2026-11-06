@@ -131,20 +131,21 @@ class _ChatResult:
     reasoning_violation_token: int | None = None
 
 
-def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
-    """Whether the response's last token is the terminator the server stopped at.
+# Chat-template turn terminators that can differ from the tokenizer's EOS, e.g. Llama-style templates end
+# turns with `<|eot_id|>` while `eos_token` is `<|end_of_text|>`. Other special tokens, such as a template's
+# `<|tool_call_end|>`, can end a reply cut off at the output budget without ending the turn.
+TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
 
-    A chat template's end-of-turn token is not always the tokenizer's EOS: Llama-style tokenizers end turns
-    with ``<|eot_id|>`` while ``eos_token`` is ``<|end_of_text|>``. Any special token the server stopped at
-    ends the turn; a length stop ends on an ordinary token.
-    """
+
+def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
+    """Whether the response ends with the EOS or a chat template's turn terminator."""
     if not response_ids or finish_reason == "length":
         return False
     last = response_ids[-1]
     if last == tokenizer.eos_token_id:
         return True
     added = tokenizer.added_tokens_decoder.get(last)
-    return added is not None and added.special
+    return added is not None and added.content in TURN_END_MARKERS
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
