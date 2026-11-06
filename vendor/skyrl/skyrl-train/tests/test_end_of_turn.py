@@ -53,19 +53,18 @@ def _generate(response_ids, finish_reason, chat_options=None):
     return asyncio.run(client.generate(request))
 
 
-@pytest.mark.parametrize(
-    ("response_ids", "finish_reason", "content"),
-    [
-        pytest.param([PLAN, END_OF_TURN], "stop", "plan", id="end-of-turn"),
-        pytest.param([PLAN, END_OF_TEXT], "stop", "plan", id="eos"),
-        pytest.param([PLAN, END_OF_TURN], "length", "plan<|eot_id|>", id="length-stop-keeps-token"),
-    ],
-)
-def test_a_special_terminator_that_is_not_eos_is_removed_from_the_reply(response_ids, finish_reason, content):
-    output = _generate(response_ids, finish_reason)
+@pytest.mark.parametrize("terminator", [END_OF_TURN, END_OF_TEXT], ids=["end-of-turn", "eos"])
+def test_the_special_token_a_turn_stopped_at_is_removed_from_the_reply(terminator):
+    output = _generate([PLAN, terminator], "stop")
 
-    assert output["assistant_messages"][0]["content"] == content
-    assert output["response_ids"][0] == response_ids
+    assert output["assistant_messages"][0]["content"] == "plan"
+    assert output["response_ids"][0] == [PLAN, terminator]
+
+
+def test_a_length_stop_keeps_its_last_token():
+    output = _generate([PLAN, END_OF_TURN], "length")
+
+    assert output["assistant_messages"][0]["content"] == "plan<|eot_id|>"
 
 
 def test_a_tool_call_that_ended_its_turn_at_the_budget_is_not_a_length_stop():
