@@ -74,7 +74,7 @@ group is `better` (interval below 0), `worse` (interval above its harm limit), `
 
 `B noise --rung d512` prints the control's seed spread. Confirm a d512 result at d768: at 20%,
 OpenCoder's synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable
-+2.7%). See [`judge.py`](judge.py).
++2.7%), while FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024. See [`judge.py`](judge.py).
 
 ## Validation runs (2026-11-06)
 
@@ -82,13 +82,14 @@ OpenCoder's synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` 
 |---|---|---:|---:|---:|---:|---:|---:|---|
 | FineMath-4plus, 20% | d512, 6 | +0.08% | +0.72% | +0.02% | +0.53% | −12.17% | −0.44% | trade-off |
 | FineMath-4plus, 20% | d768, 3 | +0.13% | +0.46% | −0.70% | +0.58% | −14.79% | −1.86% | trade-off |
+| FineMath-4plus, 20% | d1024, 3 | +0.33% | +0.73% | −1.15% | +0.29% | −16.70% | −4.01% | trade-off |
 | OpenCoder synthetic code, 20% | d512, 3 | +1.49% | +1.33% | +0.78% | +1.85% | +1.72% | −9.05% | trade-off |
 | OpenCoder synthetic code, 20% | d768, 3 | +2.36% | +2.68% | +2.12% | +2.57% | +3.41% | −6.52% | hurts |
 | FineWeb-2 Chinese, 20% | d512, 3 | +0.79% | +1.07% | +0.84% | +1.34% | +1.69% | +1.96% | no gain |
 | FineWeb, 50% | d512, 6 | −2.43% | −0.01% | −2.68% | −5.13% | +3.69% | +7.78% | hurts |
 | FineWeb-Edu against FineWeb, 50% | d512, 6 | +2.34% | +0.92% | +0.00% | +3.11% | −0.67% | +0.94% | hurts |
 
-Each `Δ` is BPB against the control at the same rung (6 control seeds at d512, 3 at d768), negative is better. The
+Each `Δ` is BPB against the control at the same rung (6 control seeds at d512, 3 at d768 and d1024), negative is better. The
 runs are `dbelay-<rung>-<candidate>-s<seed>` in W&B `marin-community/marin_moe`.
 
 ## Limits
