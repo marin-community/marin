@@ -299,9 +299,9 @@ thresholds; see the
 ### Long-context data
 
 The 262K extension reads the existing Harrier token caches. Each cache is split into virtual streams of documents
-at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` gives long tokens eight times the
+at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` gives long tokens four times the
 sampling weight of short tokens within each cell. For a cell with cooldown weight `w`, short-token total `S`, and
-long-token total `L`, the sampler weights are `w*S/(S+8L)` and `w*8L/(S+8L)`. The two weights sum to the cell's
+long-token total `L`, the sampler weights are `w*S/(S+4L)` and `w*4L/(S+4L)`. The two weights sum to the cell's
 cooldown weight. Each virtual stream contains its source tokens once and is shuffled independently. No token cache or
 document index is written. Both launchers build the length-statistics artifact as a training dependency when this
 mix is selected. The scan uses one Zephyr task per Harrier cell, reads only cache offsets, and writes
