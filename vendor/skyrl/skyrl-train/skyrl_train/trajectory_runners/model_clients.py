@@ -11,9 +11,7 @@ import numpy as np
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
 
-from skyrl_gym.closure_task import SNOWBALL_TURN_END_MARKERS
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
-from verifyit.closure_scoring import closure_response_content
 from verifyit.reasoning_markup import (
     REASONING_DELIMITERS,
     ReasoningViolation,
@@ -131,6 +129,28 @@ class _ChatResult:
     policy_steps: list[int] | None = None
     reasoning_violation: ReasoningViolation | None = None
     reasoning_violation_token: int | None = None
+
+
+# Chat-template turn terminators that can differ from the tokenizer's EOS, e.g. Llama-style templates end
+# turns with `<|eot_id|>` while `eos_token` is `<|end_of_text|>`. Other special tokens, such as a template's
+# `<|tool_call_end|>`, can end a reply cut off at the output budget without ending the turn.
+TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
+
+
+def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
+    """Whether the response ends with the EOS or a chat template's turn terminator."""
+    if not response_ids or finish_reason == "length":
+        return False
+    return response_ids[-1] in _turn_end_tokens(tokenizer)
+
+
+def _turn_end_tokens(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    tokens = {tokenizer.eos_token_id}
+    for marker in TURN_END_MARKERS:
+        token_ids = tokenizer.encode(marker, add_special_tokens=False)
+        if len(token_ids) == 1:
+            tokens.add(token_ids[0])
+    return tokens
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -290,13 +310,14 @@ class DirectModelClient:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
         # response_ids keep the stop token. The grader scores this text, and a stop token after a closing fence
         # leaves the fence open.
-        text = closure_response_content(
-            output["responses"][0], stop_reason=output["stop_reasons"][0], terminal_markers=SNOWBALL_TURN_END_MARKERS
-        )
+        text = output["responses"][0]
+        response_ids = output["response_ids"][0]
+        if _ends_turn(self._client.tokenizer, response_ids, output["stop_reasons"][0]):
+            text = text.removesuffix(self._client.tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
         message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
-            output["response_ids"][0],
+            response_ids,
             None if output.get("response_logprobs") is None else output["response_logprobs"][0],
             None if output.get("student_topk_indices") is None else output["student_topk_indices"][0],
             None if output.get("behavior_topk_logprobs") is None else output["behavior_topk_logprobs"][0],
