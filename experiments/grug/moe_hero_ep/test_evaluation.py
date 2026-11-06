@@ -191,3 +191,33 @@ def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path
         assert metrics[f"eval/seq_len_{length}/loss"] != metrics[f"eval/seq_len_{length}/ema/loss"]
     assert metrics["eval/loss"] == metrics["eval/seq_len_4/loss"]
     assert metrics["eval/ema/loss"] == metrics["eval/seq_len_4/ema/loss"]
+
+
+def _tiny_hooks(tmp_path, *, train_seq_len, seq_lens, eval_batch_size=4):
+    tokenizer = Tokenizer(WordLevel({"<unk>": 0, **{str(i): i for i in range(1, 32)}}, unk_token="<unk>"))
+    tokenizer.save(str(tmp_path / "tokenizer.json"))
+    cache_path = str(tmp_path / "tiny")
+    write_levanter_cache([{"input_ids": np.arange(1, 9, dtype=np.int32)}], cache_path + "/validation", metadata={})
+    data = LmDataConfig(
+        components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
+        tokenizer=str(tmp_path),
+    )
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    return train.build_eval_hooks(
+        data_config=data,
+        train_seq_len=train_seq_len,
+        mesh=mesh,
+        eval_cfg=train.GrugEvalConfig(eval_batch_size=eval_batch_size, seq_lens=seq_lens, compute_bpb=False),
+        mp=jmp.get_policy("float32"),
+        eval_ema=False,
+    )
+
+
+def test_eval_lengths_must_include_the_training_length(tmp_path):
+    # Unqualified metrics report the training length; without it the dashboards and canary lose them.
+    with pytest.raises(ValueError, match="must include the training length 8"):
+        _tiny_hooks(tmp_path, train_seq_len=8, seq_lens=(4,))

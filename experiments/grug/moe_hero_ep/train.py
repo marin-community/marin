@@ -762,17 +762,24 @@ def build_eval_hooks(
 ) -> list[Callable[..., None]]:
     """Build one evaluator per length and backend, with independent step deduplication."""
     seq_lens = tuple(dict.fromkeys(eval_cfg.seq_lens if eval_cfg.seq_lens is not None else (train_seq_len,)))
-    if not seq_lens or any(length < 2 for length in seq_lens):
+    if train_seq_len not in seq_lens:
+        raise ValueError(f"Eval lengths {seq_lens} must include the training length {train_seq_len}")
+    if any(length < 2 for length in seq_lens):
         raise ValueError("Evaluation sequence lengths must contain at least two tokens")
+    per_length_metrics = eval_cfg.seq_lens is not None
     token_budget = eval_cfg.eval_batch_size * train_seq_len
     dropless_mesh = expert_collapsed_eval_mesh(mesh) if eval_cfg.dropless_eval and mesh.shape["expert"] > 1 else None
     hooks = []
     for seq_len in seq_lens:
         if seq_len % mesh.shape["context"]:
             raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
-        length_cfg = replace(
-            eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
-        )
+        length_cfg = eval_cfg
+        if seq_len != train_seq_len:
+            length_cfg = replace(
+                eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
+            )
+        is_alias = per_length_metrics and seq_len == train_seq_len
+        length_suffix = f"/seq_len_{seq_len}" if per_length_metrics else ""
         if eval_cfg.eval_current or eval_ema:
             with set_mesh(mesh):
                 evaluator = build_tagged_evaluator(
@@ -784,8 +791,8 @@ def build_eval_hooks(
                         evaluator,
                         train_mesh=mesh,
                         mesh=mesh,
-                        prefix=f"{eval_cfg.prefix}/seq_len_{seq_len}",
-                        training_length_prefix=eval_cfg.prefix if seq_len == train_seq_len else None,
+                        prefix=eval_cfg.prefix + length_suffix,
+                        training_length_prefix=eval_cfg.prefix if is_alias else None,
                         eval_current=eval_cfg.eval_current,
                         eval_ema=eval_ema,
                     )
@@ -810,8 +817,8 @@ def build_eval_hooks(
                         evaluator,
                         train_mesh=mesh,
                         mesh=dropless_mesh,
-                        prefix=f"{prefix}/seq_len_{seq_len}",
-                        training_length_prefix=prefix if seq_len == train_seq_len else None,
+                        prefix=prefix + length_suffix,
+                        training_length_prefix=prefix if is_alias else None,
                         eval_current=True,
                         eval_ema=False,
                     )
