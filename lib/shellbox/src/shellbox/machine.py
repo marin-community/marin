@@ -233,6 +233,17 @@ class Machine(Protocol):
 
 
 @runtime_checkable
+class ResettableMachine(Protocol):
+    """Optional exclusive reset of task files and processes, preserving the runtime.
+
+    Call before the first use to establish the baseline, then between uses. Machines
+    without this capability must be closed and recreated. Reset failure requires replacement.
+    """
+
+    async def reset(self) -> None: ...
+
+
+@runtime_checkable
 class FileReader(Protocol):
     """Optional byte-range reads that reject directories without downloading them."""
 

@@ -87,6 +87,46 @@ class ExecOutput:
     stderr: str
 
 
+RESET = """
+import json, os, shutil, signal, sys
+from pathlib import Path
+processes = {}
+for path in Path('/proc').glob('[0-9]*/stat'):
+    try:
+        fields = path.read_text().rsplit(')', 1)[1].split()
+        processes[path.parent.name] = (fields[1], fields[19])
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+baseline = json.loads(sys.argv[1]) if sys.argv[1] else [processes, os.listdir('/')]
+keep, pid = set(), str(os.getpid())
+while pid in processes and pid not in keep:
+    keep.add(pid)
+    pid = processes[pid][0]
+for pid, (_, started) in processes.items():
+    if pid not in keep and baseline[0].get(pid, [None, None])[1] != started:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+task_roots = {'/app', '/workspace', '/tests', '/tmp', sys.argv[2]}
+roots = set(task_roots)
+roots.update('/' + name for name in set(os.listdir('/')) - set(baseline[1]))
+for root in roots:
+    path = Path(root)
+    entries = list(path.iterdir()) if path.is_dir() and not path.is_symlink() else [path]
+    for entry in entries:
+        if root == '/tmp' and entry.name.startswith('.shellbox'):
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink(missing_ok=True)
+    if root in task_roots:
+        path.mkdir(parents=True, exist_ok=True)
+print(json.dumps(baseline))
+"""
+
+
 class IrisMachine:
     """One Iris task container; file transfer uses bounded base64 exec calls."""
 
@@ -105,6 +145,7 @@ class IrisMachine:
         self.job = job
         self.task = task
         self.spec = spec
+        self._reset_baseline = ""
         self._closed = False
         self._timeout_available = False
         self._container_user: tuple[str, str] | None = None
@@ -149,6 +190,16 @@ class IrisMachine:
         if response.error:
             error = RuntimeError(f"Iris exec failed: {response.error}")
             self._raise_if_terminated(error)
+            if any(
+                marker in response.error
+                for marker in (
+                    "Non-integer exec status:",
+                    "error executing command in container",
+                    "cannot exec in a",
+                    "not running",
+                )
+            ):
+                raise MachineTerminated(str(error)) from error
             raise error
         return ExecOutput(exit_code=response.exit_code, stdout=response.stdout, stderr=response.stderr)
 
@@ -260,6 +311,10 @@ class IrisMachine:
             stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
             # GNU timeout returns 137 if its kill-after escalation was needed.
             expired = timed_command and command.timeout is not None and elapsed >= command.timeout
+            if timed_command and response.exit_code in (124, 137) and not expired:
+                raise MachineTerminated(
+                    f"Iris command cut after {elapsed}s before {command.timeout}s budget: exit={response.exit_code}"
+                )
             reason = ExitReason.TIMED_OUT if expired and response.exit_code in (124, 137) else ExitReason.EXITED
             return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
         except TimeoutError:
@@ -273,6 +328,21 @@ class IrisMachine:
                 await self._script(
                     f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
                 )
+
+    async def reset(self) -> None:
+        """Exclusively clear task roots and non-runtime processes; preserve mount points."""
+        if self.spec.workdir == "/":
+            raise MachineTerminated("Cannot reset the filesystem root as a task workdir")
+        try:
+            result = await self.run(
+                Command(("python3", "-c", RESET, self._reset_baseline, self.spec.workdir), cwd="/", timeout=30)
+            )
+            if result.exit_code != 0 or result.reason != ExitReason.EXITED:
+                raise MachineTerminated(f"Iris reset failed: {result.stderr.decode(errors='replace')}")
+            self._reset_baseline = result.stdout.decode().strip()
+        except BaseException:
+            await self.close()
+            raise
 
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():

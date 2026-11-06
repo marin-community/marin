@@ -7,8 +7,11 @@ import asyncio
 import json
 import os
 import pwd
+import re
 import shlex
+import signal
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
@@ -258,12 +261,12 @@ def test_command_on_an_ended_sandbox_raises_machine_terminated(tmp_path: Path, s
         asyncio.run(machine.run(Command(("true",))))
 
 
-def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Path) -> None:
+def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path) -> None:
     machine, _ = local_machine(tmp_path, FailingRpc(), LocalTask(TaskState.RUNNING))
 
     with pytest.raises(RuntimeError, match="Iris exec failed") as raised:
         asyncio.run(machine.run(Command(("true",))))
-    assert not isinstance(raised.value, MachineTerminated)
+    assert isinstance(raised.value, MachineTerminated)
 
 
 def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monkeypatch) -> None:
@@ -481,8 +484,12 @@ def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, 
 
     async def scenario():
         command = Command(("sh", "-c", "printf 'partial output'; sleep 90"), timeout=30)
+        if elapsed < 30:
+            with pytest.raises(MachineTerminated, match="before 30s budget"):
+                await machine.run(command)
+            return
         result = await machine.run(command)
-        assert result.reason == (ExitReason.TIMED_OUT if elapsed >= 30 else ExitReason.EXITED)
+        assert result.reason == ExitReason.TIMED_OUT
         assert result.exit_code == exit_code
         assert result.stdout == b"partial output" and result.stderr == b"diagnostic"
         assert not job.cancelled
@@ -587,5 +594,72 @@ def test_ranged_file_reads_transfer_only_slice_and_reject_directories(tmp_path):
         with pytest.raises(FileNotFoundError):
             await machine.read_file(str(tmp_path / "absent"), limit=5)
         await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_process_cleanup_preserves_supervisor_and_current_exec_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # PID 2 was recycled: matching its old PID alone must not preserve the leaked process.
+    # The active Python reset (92), timeout wrapper (91), and exec shell (90)
+    # are all ancestors of the cleanup command and must survive it.
+    processes = {1: (0, "100"), 2: (1, "999"), 3: (1, "300"), 90: (1, "900"), 91: (90, "910"), 92: (91, "920")}
+    killed = []
+
+    def stat(path: Path, *args: object, **kwargs: object) -> str:
+        pid = int(path.parent.name)
+        parent, started = processes[pid]
+        fields = ["S", str(parent), *(["0"] * 17), started]
+        return f"{pid} (command with spaces) " + " ".join(fields)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "glob", lambda path, pattern: iter(Path(f"/proc/{pid}/stat") for pid in processes))
+        patch.setattr(Path, "read_text", stat)
+        patch.setattr(os, "getpid", lambda: 92)
+        patch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+        patch.setattr(sys, "argv", ["reset", json.dumps([{"1": ["0", "100"], "2": ["1", "200"]}, []])])
+        exec(iris_backend.RESET.split("task_roots =", 1)[0], {})
+    assert killed == [(2, signal.SIGKILL), (3, signal.SIGKILL)]
+
+
+def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
+    # Rewrite Python literals before run() shell-quotes the script.
+    reset = iris_backend.RESET.replace("Path('/proc')", f"Path({str(tmp_path / 'proc')!r})")
+    reset = reset.replace("os.listdir('/')", f"os.listdir({str(tmp_path)!r})")
+    reset = reset.replace("roots.update('/' + name", f"roots.update({str(tmp_path)!r} + '/' + name")
+    monkeypatch.setattr(iris_backend, "RESET", reset)
+
+    class SandboxRpc(LocalRpc):
+        def exec_in_container(self, request, timeout_ms):
+            command = [
+                re.sub(r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda m: str(tmp_path / m[1]), part)
+                for part in request.command
+            ]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
+
+    for name in ("tmp", "workspace", "tests", "app", "proc"):
+        (tmp_path / name).mkdir()
+    inodes = {name: (tmp_path / name).stat().st_ino for name in ("tmp", "workspace", "tests", "app")}
+    runtime = tmp_path / "tmp/.shellbox-state"
+    runtime.write_text("keep")
+    machine, job = local_machine(tmp_path, rpc=SandboxRpc())
+    machine.spec = replace(machine.spec, workdir="/app")
+
+    async def scenario():
+        try:
+            await machine.reset()
+            for name in inodes:
+                (tmp_path / name / "residue").write_text("old candidate")
+            (tmp_path / "new-file").write_text("old candidate")
+            for _ in range(2):
+                await machine.reset()
+                assert (await machine.run(Command(("printf", "after reset")))).stdout == b"after reset"
+                assert all((tmp_path / name).stat().st_ino == inode for name, inode in inodes.items())
+                assert all(not (tmp_path / name / "residue").exists() for name in inodes)
+                assert not (tmp_path / "new-file").exists()
+                assert runtime.read_text() == "keep"
+                assert not job.cancelled
+        finally:
+            await machine.close()
 
     asyncio.run(scenario())
