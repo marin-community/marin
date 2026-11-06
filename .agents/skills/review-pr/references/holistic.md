@@ -45,12 +45,13 @@ requests; they are the population where structural findings concentrate.
    (`git show <merge-base>:<path>`), the callers of each changed interface
    (`git grep -n <symbol> <merge-base>`), and the recent history of the
    touched paths (`git log --oneline -15 <merge-base> -- <path>`). Read each
-   issue and pull request that the body or the commits link. When source,
-   stacked, or prior maintainer reviews bear on the changed interfaces, read
-   their issue comments, inline comments, and submitted reviews with
-   pagination. Start with linked PRs and this path history; expand only to
-   resolve a concrete design question. Separate human feedback from agent
-   comments, including `🤖` comments posted under a maintainer's account.
+   issue and pull request that the body or the commits link. When relevant
+   to changed interfaces, read maintainer feedback from originating PRs,
+   stacked PRs, and prior reviews. Fetch issue comments, inline comments,
+   and submitted reviews with pagination. Start with linked PRs and this
+   path history; expand only to resolve a concrete design question.
+   Separate human feedback from agent comments, including `🤖` comments
+   posted under a maintainer's account.
    Synthesize the relevant reusable themes and cite their review/comment
    URLs in the walkthrough or findings. Check them against current code and
    explicit requirements; prior feedback is context, not a new defect by
