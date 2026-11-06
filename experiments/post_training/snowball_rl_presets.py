@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -19,12 +20,16 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+from iris.cli.connect import open_iris_client
+from iris.client.client import IrisClient
+from iris.cluster.client.job_info import get_job_info
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
+    IRIS_HUB_CLUSTER_CONFIG,
     MISSING_CONFIG_VALUE,
     RESOLVED_LAUNCH_FILENAME,
     ArtifactDataSource,
@@ -620,6 +625,10 @@ def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate
     return user_owned_name(name)
 
 
+def published(preset: Preset) -> bool:
+    return not preset.recipe.layout.role_plan.generate_only and preset.focus in (Focus.LEARNING, Focus.DATA, Focus.TRAIN)
+
+
 def gated(preset: Preset) -> bool:
     return preset.name in PRESETS and preset.focus != Focus.TRAIN
 
@@ -992,3 +1001,14 @@ def run_command(*, help_text: str | None = None):
         return click.command(help=help_text)(command)
 
     return decorate
+
+
+@contextmanager
+def iris_client() -> Iterator[IrisClient]:
+    info = get_job_info()
+    if info is not None and info.controller_address:
+        with IrisClient.in_cluster(info.controller_address) as client:
+            yield client
+    else:
+        with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=REPO_ROOT) as client:
+            yield client

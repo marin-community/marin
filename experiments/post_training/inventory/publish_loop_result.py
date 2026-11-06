@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import click
 from marin.rl.evaluation_identity import validate_evaluation_identity
@@ -97,7 +97,7 @@ class RunSummary(BaseModel):
     def valid_outcome(self):
         if self.status != "running" and self.completed_at is None:
             raise ValueError("Terminal attempts require a completion timestamp")
-        if self.verdict is None and self.final is not None and (self.baseline is None or self.elapsed_seconds <= 0):
+        if self.final is not None and (self.elapsed_seconds <= 0 or (self.verdict is None and self.baseline is None)):
             raise ValueError("A final measurement requires a baseline and positive elapsed time")
         for phase in (self.baseline, self.final):
             if phase is not None and phase.attempted > self.evaluation.task_count:
@@ -181,7 +181,11 @@ def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL
         "attempt_id": summary.attempt_id,
         "inserted": inserted["row_count"] == 1,
         "verified": True,
-        "url": details["authenticated_url"],
+        "url": (
+            details["authenticated_url"]
+            + "#run="
+            + quote(json.dumps([summary.run_id, summary.attempt_id], separators=(",", ":")), safe="")
+        ),
     }
 
 

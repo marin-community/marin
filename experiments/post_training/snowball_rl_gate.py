@@ -54,8 +54,8 @@ from tabulate import tabulate
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_publication
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.inventory import loop_publication
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
 logger = logging.getLogger(__name__)
@@ -1123,23 +1123,15 @@ def _gate_artifact(
             raise click.BadParameter(str(error), param_hint="--baseline") from error
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     name += "-base-" + fingerprint_hash(canonical_json(inputs.baselines)) if inputs.baselines else ""
-    attempts = []
-    for candidate in candidates:
-        path = (
+    attempts = [
+        receipt_evidence(
             candidate.path(presets.artifact_prefix(preset.recipe.layout.cluster))
             if isinstance(candidate, ArtifactStep)
             else candidate
         )
-        try:
-            receipt = read_skyrl_launch_receipt(path)
-            native = receipt.config.get("run", {}) if receipt else {}
-            attempts.append(
-                (path, native.get("id"), native.get("attempt_id"), receipt.result.state if receipt else None)
-            )
-        except SkyRLReceiptLookupError as error:
-            attempts.append((path, str(error)))
-    name += "-attempts-" + fingerprint_hash(canonical_json(attempts))
-    name += "-panels-" + fingerprint_hash(canonical_json(evidence))
+        for candidate in candidates
+    ]
+    name += "-evidence-" + fingerprint_hash(canonical_json((evidence, attempts)))
     return apply(
         name,
         _write_gate,
@@ -1286,7 +1278,7 @@ def main(
         parse_requirement(text)
     step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
     report = run(step)[0]
-    if not preset.recipe.layout.role_plan.generate_only and preset.focus != presets.Focus.SPEED:
+    if leave_out is None and presets.published(preset):
         try:
             receipt = read_skyrl_launch_receipt(source)
         except SkyRLReceiptLookupError:
@@ -1300,7 +1292,7 @@ def main(
                 path=source,
             )
             try:
-                run(loop_publication.publication_step(native, gate=step))
+                run(snowball_rl_publication.publication_step(native, gate=step))
             except Exception as error:
                 logger.warning(
                     "Gate report is saved at %s; publication failed and can be retried: %s", report.path, error

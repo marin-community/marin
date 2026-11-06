@@ -18,7 +18,9 @@ function svg(tag, attrs = {}, text) {
 const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
 const fixed = (run) => run.run_id.includes('snowball-inventory-batch-fixed');
 const arm = (run) => run.series ?? run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
-const color = (run) => colors[arm(run)[0]] ?? '#6d6a60';
+const seriesColors = { 'learning-medium': '#286451', 'data-medium': '#a06534', 'learning-long': '#526bb2', 'data-long': '#9a5079', 'train-long': '#547e86' };
+const armColor = (name) => seriesColors[name] ?? colors[name[0]] ?? '#6d6a60';
+const color = (run) => armColor(arm(run));
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds / 3600;
 const gain = (run) => run.final && run.baseline && hours(run) > 0 ? (run.final.reward - run.baseline.reward) / hours(run) : null;
@@ -104,6 +106,7 @@ function showDetails(run) {
     ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
     ['Timing scope', run.timing_scope], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
+    ['Layout', run.layout], ['Config fingerprint', run.config_fingerprint], ['Iris job', run.iris_job_id],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
     ['Evaluation protocol', run.evaluation.protocol_sha256 ?? 'Unknown · unranked'], ['Artifact location', run.artifact_uri],
@@ -130,7 +133,7 @@ function render() {
   chart('gain', selected.filter((run) => !run.partial_coverage || run.trusted_gain_eligible), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
   $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
   $('legend').replaceChildren(...[...new Set(selected.map(arm))].map((name) => {
-    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${colors[name[0]]}` }), document.createTextNode(name)); return item;
+    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${armColor(name)}` }), document.createTextNode(name)); return item;
   }));
   $('attempts').replaceChildren(...[...selected].sort((a, b) => Date.parse(b.run_date) - Date.parse(a.run_date)).map((run) => {
     const tr = element('tr');

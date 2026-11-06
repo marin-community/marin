@@ -193,18 +193,9 @@ Learning-medium and data-medium score the same greedy test panel at update 0 and
 The run’s own update-0 dump supplies its publication baseline; the pass-rate artifact supplies
 initializer statistics by slice. `--baseline` compares separate completed runs in the gate report.
 
-Completed learning-medium, data-medium and train-long candidates publish one `rl_progress` record per replicate.
-The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
-verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
-Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
-For gated presets, re-run the standalone gate command to retry publication after a service failure;
-the saved verdict remains available. For train-long, repeat the original command to reuse its completed
-native run and retry publication. A resumed train-long run with no update-0 baseline keeps its native
-result and raw record without a dashboard row.
-Every native attempt retains `exports/attempts/<attempt_id>/loop-result.json` under its output,
-including failed attempts. This records native status, preset, layout, configuration fingerprint and
-available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records
-remain unranked.
+Published trained-panel runs expose `rl_progress_url` in status.
+Retry the gate command, or the original train-long command, to complete a failed publication.
+Each native attempt keeps an attempt record; see the recipe's [publication rules](../../../docs/recipes/snowball-rl.md#dashboard-publication).
 
 ## Record the experiment
 

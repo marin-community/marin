@@ -5,7 +5,6 @@
 
 from click.testing import CliRunner
 
-from experiments.post_training.inventory import loop_publication
 from experiments.post_training.inventory.train_quick_loop import main
 
 
@@ -13,10 +12,6 @@ def test_public_arm_cli_assigns_distinct_training_and_report_identities(monkeypa
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     submissions = []
 
-    def read_before_training(path):
-        raise AssertionError("legacy graph construction read native storage")
-
-    monkeypatch.setattr(loop_publication, "read_skyrl_launch_config", read_before_training)
     monkeypatch.setattr(
         "marin.rl.cli.submit_or_run", lambda module, handles, concurrency, env: submissions.append(handles)
     )
