@@ -126,6 +126,9 @@ diagnostic has completed; its results and remaining blockers are in
 [OPENROUTER_FIRST_WAVE_RESULTS.md](OPENROUTER_FIRST_WAVE_RESULTS.md). The
 [offline review](OPENROUTER_FIRST_WAVE_REVIEW.md) found wrong task references
 and systematic path/format problems; this provisional matrix is not IRT-ready.
+The versioned **v3 reference/path/contract** rerun and its precise reuse rules
+are described in [OPENROUTER_V3_DESIGN.md](OPENROUTER_V3_DESIGN.md). V1 and
+v2 responses remain frozen.
 
 ## GLM OpenAI-compatible solver calibration
 
