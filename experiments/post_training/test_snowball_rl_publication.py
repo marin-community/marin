@@ -76,7 +76,7 @@ def test_snowball_publication_retries_reuse_native_attempt_and_retained_summary(
         (panel / presets.TASK_MANIFEST_FILENAME).write_bytes(
             (Path(original_panel.path()) / presets.TASK_MANIFEST_FILENAME).read_bytes()
         )
-        launch["inputs"]["validation_data"][0].update(uri=str(panel), identity="test/recorded-panel@2")
+        launch["inputs"]["validation_data"][0].update(uri=str(panel), identity="test/recorded-panel@2026.11.06.2")
         write_json(
             output / "terminal.json",
             {
@@ -235,7 +235,7 @@ def test_snowball_publication_retries_reuse_native_attempt_and_retained_summary(
     assert stored["final"] == {"reward": 0.5, "attempted": 100, "scored": 100}
     assert stored["wandb_url"].endswith("/native-1")
     assert stored["evaluation"]["task_count"] == 120
-    assert stored["evaluation"]["version"] == "test/recorded-panel@2"
+    assert stored["evaluation"]["version"] == "test/recorded-panel@2026.11.06.2"
     identities = {published.attempt_id}
     for index, kind in enumerate(("98", "missing", "stale", "foreign", "nonfinite"), 2):
         scenario["kind"] = kind

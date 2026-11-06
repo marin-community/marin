@@ -113,7 +113,7 @@ def rescore(preset, *args):
 def status(preset, argv):
     result = CliRunner().invoke(snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, *argv])
     assert result.exit_code == 0, (result.output, result.exception)
-    return yaml.safe_load(result.output.split("StepSpec(", 1)[0])
+    return yaml.safe_load("preset:" + result.output.split("preset:", 1)[1].split("StepSpec(", 1)[0])
 
 
 def test_calibrate_pools_deviations_within_pins():
