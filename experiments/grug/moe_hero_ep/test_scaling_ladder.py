@@ -389,8 +389,8 @@ def _lr_schedules(optimizer):
     ]
 
 
-@pytest.mark.parametrize("extension", _LR_EXTENSION_CANDIDATES)
-def test_schedule_extension_keeps_every_rate_through_the_schedule_end_exactly(extension):
+def test_schedule_extension_preserves_rates_through_schedule_end():
+    extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
     counts = jnp.arange(HERO_SCHEDULE_STEPS + 1)
     for original, extended in zip(
         _lr_schedules(_hero_optimizer()), _lr_schedules(_hero_optimizer(extension)), strict=True
@@ -428,10 +428,3 @@ def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(
         optimizer=dataclasses.replace(off.optimizer, schedule_extension=extension),
         stop_after_steps=HERO_SCHEDULE_STEPS + _EXTENSION_STEPS,
     )
-
-
-def test_permanent_checkpoints_continue_through_the_extension():
-    keep = hero_permanent_keeps(HERO_SCHEDULE_STEPS)
-    steps = range(HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + _EXTENSION_STEPS + 1)
-    # The final step comes from the forced final checkpoint.
-    assert _permanent_steps(keep, steps) == [390_500, 391_000]

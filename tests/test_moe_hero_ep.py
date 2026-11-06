@@ -1753,7 +1753,7 @@ def _committed_checkpoints(root):
 
 
 @pytest.mark.timeout(240)
-def test_run_trains_past_its_schedule_and_resumes_at_the_extension_rate(extension_run):
+def test_run_resumes_past_schedule_at_extension_rate(extension_run):
     first = extension_run.run(stop_step=5)
     assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
     # The update at count 4 is the first past the schedule and still uses the floor.
@@ -1769,7 +1769,7 @@ def test_run_trains_past_its_schedule_and_resumes_at_the_extension_rate(extensio
 
 
 @pytest.mark.timeout(240)
-def test_final_hook_failure_keeps_the_checkpoint_and_a_retry_exits_without_repeating_either(extension_run):
+def test_final_hook_failure_keeps_checkpoint_and_retry_skips_hooks(extension_run):
     visits = []
 
     def fail_in_the_forced_pass(step):
@@ -1790,7 +1790,7 @@ def test_final_hook_failure_keeps_the_checkpoint_and_a_retry_exits_without_repea
 
 
 @pytest.mark.timeout(240)
-def test_restore_of_a_temporary_checkpoint_at_the_stop_step_promotes_it_and_runs_the_final_hooks(extension_run):
+def test_restoring_temporary_stop_checkpoint_promotes_it(extension_run):
     extension_run.run(stop_step=5)
     metadata_path = extension_run.checkpoint_root / "step-5" / "metadata.json"
     metadata = json.loads(metadata_path.read_text())
@@ -1803,7 +1803,7 @@ def test_restore_of_a_temporary_checkpoint_at_the_stop_step_promotes_it_and_runs
     assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
 
 
-def test_real_optimizer_continues_a_checkpoint_from_the_schedule_end_at_the_extension_rates(tmp_path):
+def test_muonh_resume_into_extension_scales_every_lr_group(tmp_path):
     schedule_steps = 4
     base = GrugMoeMuonHConfig(learning_rate=1e-2, adam_lr=1e-3, min_lr_ratio=0.05, warmup=0.0, use_syrk=False)
     extended = dataclasses.replace(base, schedule_extension=ScheduleExtension(steps=2, final_lr_ratio=0.01))
