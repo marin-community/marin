@@ -31,9 +31,9 @@ session on `doc` once it exists.
 ```markdown
 ## Objective
 
-## Design
-
 ## Gates
+
+## Design
 ```
 
 ## Keep the doc
@@ -48,11 +48,12 @@ session on `doc` once it exists.
 - Post progress at the top of `progress`, newest first: read it, and write it
   back with the new update first. Start each update with the UTC date and time
   in bold.
-- The Gates section lists the milestones as a numbered list, one gate per
-  item. Start each gate with one status emoji: ✅ done, 🔄 in progress, ⏸️
-  waiting, ❌ failed or dropped, ⬜ not started. Give the date after a done
-  gate and the reason after a waiting, failed, or dropped one. Change a gate's
-  emoji when you post the progress update.
+- Keep the Gates section directly below the Objective. It lists the
+  milestones as a numbered list, one gate per item. Start each gate with one
+  status emoji: ✅ done, 🔄 in progress, ⏸️ waiting, ❌ failed or dropped, ⬜
+  not started. Give the date after a done gate and the reason after a waiting,
+  failed, or dropped one. Change a gate's emoji when you post the progress
+  update.
 - When an instruction changes the objective, scope, a decision, or the plan,
   update the affected sections of `doc` as part of the work.
 - Write succinct markdown: short headings, paragraphs and lists, tables for
