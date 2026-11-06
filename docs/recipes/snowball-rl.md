@@ -181,7 +181,7 @@ data-short. Each run forwards its required keys through Iris.
 
 | gap | implication and follow-up |
 |---|---|
-| remote judge | Every preset except speed-short depends on Together: the training selection contains 6,653 Glaive tasks, and data-short also configures a remote judge session. Judge retries can extend update time. The no-judge `snowball-100k@2026.11.04.1` selection is planned for the test-panel control refresh. |
+| remote judge | Every preset except speed-short depends on Together: the training selection contains 6,653 Glaive tasks, and data-short also configures a remote judge session. Judge retries can extend update time. |
 | layout-p40-only; no-async-speed-gate | medium gates cover the 40-GPU synchronous layout; add an asynchronous speed gate |
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
