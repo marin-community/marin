@@ -235,12 +235,15 @@ def _reasoning_violation(
     An unclosed span is located at the last token. The token is ``None`` when the one-token markers are
     well formed, i.e. the violation is in literal marker text.
     """
-    violation = reasoning_span_violation(decoded, stop_reason)
+    # Training keeps the rule that a leading closing marker ends a span the chat template opened.
+    violation = reasoning_span_violation(decoded, stop_reason, prompt_opens_span=True)
     if violation is None:
         return None, None
     markers = _reasoning_marker_tokens(tokenizer)
     positions = [index for index, token in enumerate(response_ids) if token in markers]
-    error = first_reasoning_violation([markers[response_ids[index]] for index in positions], stop_reason)
+    error = first_reasoning_violation(
+        [markers[response_ids[index]] for index in positions], stop_reason, prompt_opens_span=True
+    )
     if error is None:
         return violation, None
     if error.marker_index is None:
