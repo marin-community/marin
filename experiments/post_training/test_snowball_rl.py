@@ -124,7 +124,9 @@ from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 configs = [load_launch_config(path) for path in sys.argv[1:]]
 
 async def check_panel_request(config):
-    sampling = get_sampling_params_for_backend(config.skyrl.generator.backend, config.skyrl.generator.eval_sampling_params)
+    sampling = get_sampling_params_for_backend(
+        config.skyrl.generator.backend, config.skyrl.generator.eval_sampling_params
+    )
     training = OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True)
     class Endpoint:
         model_name = "fixture"
