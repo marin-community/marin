@@ -11,7 +11,7 @@ Each dumped evaluation row keeps its score, its parsed conversation and its resp
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.examples.protocol_probes import PROBE_DATASET, lock_grader_environment, probe_tasks
+from taskcompendium.examples.protocol_probes import PROBE_DATASET, locked_grader_environment, probe_tasks
 from taskcompendium.models import SCHEMA_VERSION
 from taskcompendium.runtime.local import LOCK_FILE
 from zephyr.writers import write_parquet_file
@@ -38,7 +38,7 @@ def write_probe_tasks(output_path: str, grader_environment: str, variants: int, 
     """
     if schema_version != SCHEMA_VERSION:
         raise ValueError(f"The probe rows are written in TaskSpec schema {SCHEMA_VERSION}, not {schema_version}")
-    grader = lock_grader_environment(str(StoragePath(grader_environment) / LOCK_FILE))
+    grader = locked_grader_environment(str(StoragePath(grader_environment) / LOCK_FILE))
     tasks = probe_tasks(grader_environment=grader, variants=variants)
     destination = str(StoragePath(output_path) / PROBES_FILENAME)
     write_parquet_file(task_records(iter(tasks)), destination, schema=TASK_SCHEMA)

@@ -52,18 +52,6 @@ TASK_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem"), working_directory=WORKDIR
 )
 """The file and tool probes run in a shell simulator; the thinking and URL probes need no machine."""
-SHELLSIM_MACHINE = {
-    "backend": "shellsim",
-    "network": "deny",
-    "cpus": None,
-    "memory_mb": None,
-    "storage_mb": None,
-    "gpus": 0,
-    "user": None,
-    "startup_timeout": 60,
-    "cleanup_timeout": 60,
-}
-"""The probes' task machine, as a RolloutEngine ``MachineRuntimeSpec`` payload for runtime configuration."""
 COMMAND_TOOL = FunctionDefinition(
     name="run_command",
     description="Run a Bash command in the workspace and return its exit code and output.",
@@ -76,7 +64,7 @@ COMMAND_TOOL = FunctionDefinition(
 )
 
 
-def lock_grader_environment(lock_url: str) -> EnvironmentRequirements:
+def locked_grader_environment(lock_url: str) -> EnvironmentRequirements:
     """Grade the answer file in a process with the verifyit lock at ``lock_url``."""
     return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=lock_url)
 

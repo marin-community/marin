@@ -25,7 +25,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS, SHELLSIM_MACHINE
+from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.inventory.protocol_probes import PROBES_FILENAME, probe_tasks_step
@@ -46,6 +46,18 @@ MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 TOOL_PARSER = "hermes"
+SHELLSIM_MACHINE = {
+    "backend": "shellsim",
+    "network": "deny",
+    "cpus": None,
+    "memory_mb": None,
+    "storage_mb": None,
+    "gpus": 0,
+    "user": None,
+    "startup_timeout": 60,
+    "cleanup_timeout": 60,
+}
+"""The file and tool probes' task machine, as a RolloutEngine ``MachineRuntimeSpec`` payload."""
 
 
 def training_recipe(steps: int) -> dict:
