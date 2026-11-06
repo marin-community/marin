@@ -77,10 +77,14 @@ compatible head, MLP and vocabulary dimensions. Its portable attention path
 uses the current Grug reference implementation; selecting Splash opts into
 that backend. Context parallelism is unsupported.
 
-The initial route supports unquantized training, HF weight initialization,
-full-state Levanter checkpoints and tagged heldout evaluation. Quantization,
-adapters, HF export and optional entropy/harness callbacks are rejected by
-the training entrypoint. Native checkpoints include model architecture and
-vocabulary metadata; restore validates those fields before constructing the
+The route supports unquantized training, HF weight initialization, local
+full-model HF export, full-state Levanter checkpoints and tagged heldout
+evaluation. Set `hf_save_path` and `hf_save_steps` to export local HF snapshots
+through the standard training callback. Scratch training uses a reference-free
+export converter, so exporting does not require a reference checkpoint or Hub
+lookup. Export requires standard weighted RMSNorm and a bias-free architecture.
+Quantization, adapters, Hub uploads, merged export and optional entropy/harness
+callbacks are rejected by the training entrypoint. Native checkpoints include
+model architecture and vocabulary metadata; restore validates those fields before constructing the
 explicitly sharded template. Metadata-free weight loading relies on the
 caller's complete vocabulary and architecture configuration.

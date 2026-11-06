@@ -49,9 +49,12 @@ def prepare_model_init_context(
     use_hf_model_config: bool,
 ) -> ModelInitContext:
     if isinstance(model, NativeLlamaLmConfig):
-        converter = model.hf_checkpoint_converter(
-            initialize_from_hf if isinstance(initialize_from_hf, str) else None, tokenizer=tokenizer
-        )
+        if initialize_from_hf:
+            converter = model.hf_checkpoint_converter(
+                initialize_from_hf if isinstance(initialize_from_hf, str) else None, tokenizer=tokenizer
+            )
+        else:
+            converter = model.hf_export_converter(tokenizer)
         if initialize_from_hf and use_hf_model_config:
             model = converter.config_from_hf_config(
                 converter.default_hf_config,
