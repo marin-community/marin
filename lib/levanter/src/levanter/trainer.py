@@ -476,7 +476,8 @@ class Trainer:
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
-            # only force trainable params to param precision. Other params are cast to compute precision
+            # Only trainable params are forced to param precision. Other params are cast to compute
+            # precision unless frozen_parameter_storage keeps their loaded dtype.
             state = TrainerState.init(
                 self.optimizer,
                 model,
