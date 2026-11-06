@@ -32,7 +32,8 @@ rows, and unprocessed rows; exclusion is not a scientific-error verdict.
 The accepted set includes 31,984 model-only audits and 67,469 optional-web audits.
 Acceptance does not guarantee factual correctness. The dataset contains the
 original records, review evidence, request receipts, and manifest hashes.
-It retains NVIDIA attribution and the source's CC BY-SA 4.0 license terms;
+It retains NVIDIA attribution and the source's
+[CC BY-SA 4.0 license](https://creativecommons.org/licenses/by-sa/4.0/) terms;
 see the dataset card for attribution and provenance details.
 
 ## Later training comparison
