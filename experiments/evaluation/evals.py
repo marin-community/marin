@@ -178,7 +178,7 @@ STANDARD_EVALS: tuple[str, ...] = (
     "graphwalks",
 )
 
-_CURATED_CONFIG_DIR = Path(__file__).with_name("configs") / "curated"
+_CURATED_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 EVALS: dict[str, EvaluationDefinition] = {
     path.stem: CuratedDefinition.from_file(path) for path in sorted(_CURATED_CONFIG_DIR.glob("*.yaml"))
 }

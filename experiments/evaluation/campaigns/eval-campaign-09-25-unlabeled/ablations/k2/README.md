@@ -7,8 +7,8 @@ The first pair holds the current compiled TP2/DP1 serve path and 73,728-token se
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/model-tp2-dp1-low.yaml \
-  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/curated-configs/humanevalplus.yaml \
-  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/curated-configs/math500.yaml \
+  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
+  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
   --federated_cluster cw-rno2a --priority interactive --no-wait \
   --description 'Unlabeled K2 screen: compiled TP2/DP1, low reasoning on thinking-off tasks'
 ```

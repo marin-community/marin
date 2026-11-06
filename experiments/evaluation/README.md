@@ -222,7 +222,7 @@ To extend the catalog:
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
 - Add pinned evaluation source recipes under `experiments/post_training/task_curation/datasets/`
-  and menu declarations under [configs/curated](configs/curated/). Add standard
+  and menu declarations under [configs/evalchemy](configs/evalchemy/). Add standard
   selections to `STANDARD_EVALS` in [evals.py](evals.py).
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
