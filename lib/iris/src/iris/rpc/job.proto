@@ -716,8 +716,7 @@ enum EgressPolicy {
 message JobTags {
   // The effort the job belongs to, such as a project or issue name.
   string project = 1;
-  // The kind of work; iris.cluster.types.SUGGESTED_JOB_CATEGORIES lists the
-  // suggested values.
+  // The kind of work; lib/iris/OPS.md lists suggested values.
   string category = 2;
   // Free-form text on what the job does, at most
   // iris.cluster.types.MAX_JOB_DESCRIPTION_CHARS characters.

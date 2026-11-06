@@ -131,18 +131,6 @@ than a person, so its jobs are attributed to this well-known principal. Per-clus
 federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
 a peer only if that peer's policy names it explicitly."""
 
-# Suggested JobTags.category values: the work categories of the compute audit
-# for marin-community/marin#10720. The controller accepts any string.
-SUGGESTED_JOB_CATEGORIES = (
-    "data-processing",
-    "data-generation",
-    "pre-training",
-    "post-training",
-    "evaluation",
-    "external-collaboration",
-    "infrastructure",
-)
-
 # Longest JobTags.description the controller accepts.
 MAX_JOB_DESCRIPTION_CHARS = 1000
 

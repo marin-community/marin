@@ -197,6 +197,7 @@ def insert_job_and_config(
 
     parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
     root_submitted_ms = effective_submission_ms
+    # Not proto_to_json: JobTags fields have explicit presence, so it keeps a set empty string.
     tags = {field.name: value for field, value in request.tags.ListFields() if value}
     tags_json = json.dumps(tags) if tags else None
     if job_id.parent is not None:

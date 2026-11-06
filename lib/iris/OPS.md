@@ -204,9 +204,11 @@ iris job describe /user/job-name          # per-task state, exit, duration, peak
 ```
 
 Tag each root job you submit with what it is for: `--project <effort>`,
-`--category <kind>` and `--description "<what it does>"` (SDK: `IrisClient.submit(tags=job_pb2.JobTags(...))`). `iris job run
---help` lists the suggested categories. Child jobs without their own tags get
-the parent's. The tags go to Finelog `iris.job.tags`, for compute use by category.
+`--category <kind>` and `--description "<what it does>"` (SDK:
+`IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested categories:
+`data-processing`, `data-generation`, `pre-training`, `post-training`,
+`evaluation`, `external-collaboration`, `infrastructure`. Child jobs without
+their own tags get the parent's. The tags go to Finelog `iris.job.tags`.
 
 Kubernetes controllers reject `EXISTING_JOB_POLICY_RECREATE` while the existing
 job is active. Cancel it, verify that all pods for its job ID have disappeared

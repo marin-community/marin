@@ -51,7 +51,6 @@ from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     MAX_JOB_DESCRIPTION_CHARS,
-    SUGGESTED_JOB_CATEGORIES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -1073,11 +1072,7 @@ Examples:
     "--category",
     type=str,
     default=None,
-    help=(
-        "Job tag: the kind of work, for compute accounting. Child jobs inherit it. Suggested: "
-        + ", ".join(SUGGESTED_JOB_CATEGORIES)
-        + "."
-    ),
+    help="Job tag: the kind of work, for compute accounting. Child jobs inherit it. OPS.md suggests values.",
 )
 @click.option(
     "--description",
