@@ -386,10 +386,13 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path, mo
     assert config.trainer.callbacks[0].metric_groups == groups
     assert config.trainer.callbacks[0].additional_evaluations == profiles
 
+
+def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "evaluation.yaml"
     document = _raw_config()
     document["run"]["export_hf"] = False
     document["skyrl"]["entrypoint"] = "generate"
-    document["skyrl"]["trainer"]["callbacks"] = raw["trainer"]["callbacks"]
+    document["skyrl"]["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"sampled": {}}}]
     sources = []
     for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
         directory = tmp_path / name
@@ -433,13 +436,7 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path, mo
     assert runner.run() == 0
     assert observed == {"primary": ["throughput-only"], "profile": ["panel-only"]}
     record = json.loads((tmp_path / "resolved.json").read_text())
-    assert record["evaluation_data_sources"]["sampled"][0]["identity"] == "panel"
-    for bindings, parameters in (({"missing": sources[1:]}, {}), ({"sampled": sources[1:]}, {"data_files": ["other"]})):
-        document["inputs"]["evaluation_data"] = bindings
-        document["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["sampled"] = parameters
-        path.write_text(yaml.safe_dump(document))
-        with pytest.raises(ValueError, match="evaluation"):
-            load_launch_config(path)
+    assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "panel"
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:

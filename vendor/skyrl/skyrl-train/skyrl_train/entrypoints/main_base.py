@@ -413,7 +413,7 @@ class BasePPOExp:
             **terminal_options,
         )
 
-    def get_eval_dataset(self, data_files=None):
+    def get_eval_dataset(self, data_files: list[str] | None = None):
         """Load validation prompts for evaluation or new mismatch-probe generation."""
         data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe

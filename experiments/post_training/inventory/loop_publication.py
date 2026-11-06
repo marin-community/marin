@@ -11,7 +11,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.post_training.inventory.loop_result import RESULT_FILENAME, LoopRunConfig, run_loop
+from experiments.post_training.inventory.loop_result import LoopRunConfig, run_loop
 from experiments.post_training.inventory.publish_loop_result import publish_result
 
 
@@ -45,7 +45,7 @@ def run_recorded_loop(config: LoopRunConfig) -> SkyRLRun:
         try:
             publish_summary(
                 PublicationConfig(
-                    summary_uri=prefix_join(config.skyrl.output.export_root, RESULT_FILENAME),
+                    summary_uri=prefix_join(config.skyrl.output.export_root, "loop-result.json"),
                     receipt_uri=prefix_join(config.skyrl.output.export_root, "loop-publication.json"),
                 )
             )
@@ -59,7 +59,7 @@ def publication_step(training: ArtifactStep[SkyRLRun]) -> ArtifactStep[LoopPubli
 
     def build_config(ctx: StepContext) -> PublicationConfig:
         return PublicationConfig(
-            summary_uri=prefix_join(ctx.artifact_path(training), f"exports/{RESULT_FILENAME}"),
+            summary_uri=prefix_join(ctx.artifact_path(training), "exports/loop-result.json"),
             receipt_uri=prefix_join(ctx.output_path, "publication.json"),
         )
 

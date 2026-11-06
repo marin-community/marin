@@ -151,7 +151,7 @@ class LocalRLRunner:
         with filesystem.open(path, "w") as destination:
             json.dump(record, destination, sort_keys=True)
 
-    def _resolve_data_inputs(self, data_kind: str, evaluation_data=None) -> None:
+    def _resolve_data_inputs(self, data_kind: str, evaluation_data: dict | None = None) -> None:
         for role, attribute in (("train", "train_data"), ("validation", "val_data")):
             values = getattr(self.config, attribute)
             if not values:

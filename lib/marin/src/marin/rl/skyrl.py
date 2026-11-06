@@ -481,15 +481,8 @@ class SkyRLSpec:
         names = [name for name, _ in self.evaluation_data]
         if len(names) != len(set(names)):
             raise ValueError("duplicate evaluation data names")
-        recipe = yaml.safe_load(self.config_yaml)
         for name, _ in self.evaluation_data:
-            profiles = [
-                profile
-                for callback in recipe.get("trainer", {}).get("callbacks") or []
-                if callback.get("type") == "evaluation"
-                for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
-                if profile_name == name
-            ]
+            profiles = named_evaluation_profiles(self.config_yaml, name)
             if not profiles:
                 raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
             if any(profile.get("data_files") is not None for profile in profiles):
@@ -560,6 +553,16 @@ def _parsed_config(config_yaml: str) -> dict[str, object]:
     if not isinstance(config, dict):
         raise ValueError("SkyRL config_yaml must contain a mapping at the document root")
     return config
+
+
+def named_evaluation_profiles(config_yaml: str, name: str) -> list[dict]:
+    return [
+        profile
+        for callback in _parsed_config(config_yaml).get("trainer", {}).get("callbacks") or []
+        if callback.get("type") == "evaluation"
+        for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
+        if profile_name == name
+    ]
 
 
 def declared_config_value(config: dict[str, object], dotted_key: str) -> object:

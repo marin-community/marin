@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -56,7 +55,7 @@ from experiments.post_training.task_curation.inventory import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-PRESET_REVISION = "2026.11.06"
+PRESET_REVISION = "2026.11.06.1"
 RUN_PREFIX = "checkpoints/snowball-rl"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
@@ -68,10 +67,9 @@ MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 DEFAULT_SELECTION_VERSION = "2026.11.04.1"
-DEFAULT_TEST_PANEL = "snowball-test-panel@2026.11.04.2"
-JUDGE_KEY = "TOGETHER_API_KEY"
+DEFAULT_TEST_PANEL_NAME = "snowball-test-panel"
+DEFAULT_TEST_PANEL_VERSION = "2026.11.06.1"
 EVAL_REPLY_TOKENS = 8192
-VLLM_ATTENTION_HELPER_SHA256 = "08cdc141ebf05c4773b7328864549e93dd4600ba4e172a404c1b0de56ab2a940"
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 GRAFANA_SPEED_PANELS = (
     ("response_tokens", 3),
@@ -102,14 +100,17 @@ class WindowStatistic(StrEnum):
 
 
 class Gap(StrEnum):
-    REMOTE_JUDGE = "remote-judge"
     LAYOUT_P40_ONLY = "layout-p40-only"
     NO_ASYNC_SPEED_GATE = "no-async-speed-gate"
     AAII_COVERAGE = "aaii-coverage"
-    REUSED_DEV_PANEL = "reused-dev-panel"
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
+
+
+class EngineProfile(StrEnum):
+    THROUGHPUT = "throughput"
+    DETERMINISTIC = "deterministic"
 
 
 class EvalHarness(StrEnum):
@@ -155,6 +156,7 @@ class Recipe:
     staleness: int
     estimator: Mapping[str, object]
     optimizer: Mapping[str, object]
+    engine_profile: EngineProfile = EngineProfile.DETERMINISTIC
     max_turns: int = 1
     engine_init_kwargs: Mapping[str, object] = field(default_factory=dict)
     policy_megatron_overrides: Mapping[str, object] = field(default_factory=dict)
@@ -240,19 +242,23 @@ class PanelEvaluator:
                 tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], local_only=evaluation.local_only
             )
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
-        sampling = {
-            "temperature": 0.0 if evaluation.answers == 1 else 1.0,
-            "top_p": 1.0,
-            "logprobs": None,
-            "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
-        }
-        if evaluation.answers == 1:
-            sampling.update(
-                seed=config["trainer"]["seed"],
-                logprobs=None,
-                ignore_eos=False,
-                max_generate_length=EVAL_REPLY_TOKENS,
-            )
+        sampling = (
+            {
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "seed": config["trainer"]["seed"],
+                "logprobs": None,
+                "ignore_eos": False,
+                "max_generate_length": EVAL_REPLY_TOKENS,
+            }
+            if evaluation.answers == 1
+            else {
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "logprobs": None,
+                "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
+            }
+        )
         config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
         return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
@@ -271,8 +277,16 @@ EVALUATIONS = MappingProxyType(
         for evaluation in (
             Evaluation(name="panel-100", file=Path(VALIDATION_FILENAME).stem),
             Evaluation(name="panel-910", file=Path(FULL_VALIDATION_FILENAME).stem),
-            Evaluation(name="test_panel", file=Path(FULL_VALIDATION_FILENAME).stem, source=DEFAULT_TEST_PANEL),
-            Evaluation(name="fast_panel", file=Path(VALIDATION_FILENAME).stem, source=DEFAULT_TEST_PANEL),
+            Evaluation(
+                name="test_panel",
+                file=Path(FULL_VALIDATION_FILENAME).stem,
+                source=f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}",
+            ),
+            Evaluation(
+                name="test_panel_100",
+                file=Path(VALIDATION_FILENAME).stem,
+                source=f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}",
+            ),
             Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4, local_only=True),
             Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
@@ -379,7 +393,7 @@ _GAPS = (
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
 )
-_PANEL = EVALUATIONS["fast_panel"]
+_PANEL = EVALUATIONS["test_panel_100"]
 _TIMER_REPORTS = tuple(
     Metric(f"{phase}/{statistic}", False)
     for phase in sorted(TASK_TIMING_KEYS)
@@ -471,7 +485,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.SHORT,
-                recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
+                recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096, engine_profile=EngineProfile.THROUGHPUT),
                 updates=0,
                 measured=range(1),
                 evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["test_panel"]),
@@ -489,7 +503,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.DATA,
                 duration=Duration.SHORT,
-                recipe=replace(_LEARNING, layout=E8),
+                recipe=replace(_LEARNING, layout=E8, engine_profile=EngineProfile.THROUGHPUT),
                 updates=0,
                 measured=range(1),
                 evaluations=(EVALUATIONS["screen-256x4"],),
@@ -511,6 +525,7 @@ PRESETS = MappingProxyType(
                 recipe=replace(
                     _LEARNING,
                     fixed_reply_tokens=4096,
+                    engine_profile=EngineProfile.THROUGHPUT,
                     estimator={**_ESTIMATOR, "rloo_n_filter_zero_reward_groups": False},
                 ),
                 updates=10,
@@ -526,7 +541,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
-                recipe=_ASYNC_P40,
+                recipe=replace(_ASYNC_P40, engine_profile=EngineProfile.THROUGHPUT),
                 updates=20,
                 measured=range(3, 21),
                 guards=(
@@ -836,24 +851,21 @@ def control_name(preset: str, commit: str, replicate: int) -> str:
 
 
 def panel_evaluation(preset: Preset) -> Evaluation | None:
-    panels = [evaluation for evaluation in preset.evaluations if evaluation.harness == EvalHarness.PANEL]
-    if not panels:
-        return None
     return next(
         (
             evaluation
-            for evaluation in panels
+            for evaluation in preset.evaluations
             if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
         ),
-        next((evaluation for evaluation in panels if evaluation.file != Path(TRAIN_FILENAME).stem), panels[0]),
+        None,
     )
 
 
-def control_panel_name(control: str, revision: str, panel: str) -> str:
+def panel_rescore_name(control: str, revision: str, panel: str) -> str:
     return f"{control}/panel-{fingerprint_hash(json.dumps((revision, panel)))}"
 
 
-def rescore_preset(preset: Preset, panel: str) -> Preset:
+def panel_rescore_preset(preset: Preset, panel: str) -> Preset:
     evaluation = panel_evaluation(preset)
     if not gated(preset) or evaluation is None or evaluation.file == Path(TRAIN_FILENAME).stem:
         raise click.BadParameter("--rescore-panel requires a gated preset with a heldout panel")
@@ -868,44 +880,6 @@ def rescore_preset(preset: Preset, panel: str) -> Preset:
         checkpoint_every=0,
         budget="Evaluation only; 8 H100 per control replicate",
     )
-
-
-def panel_settings(preset: Preset, launch: dict) -> dict:
-    evaluation = panel_evaluation(preset)
-    if evaluation is None or evaluation.file == Path(TRAIN_FILENAME).stem:
-        raise ValueError("The control has no heldout evaluation profile")
-    config = launch["skyrl"]
-    generator = deepcopy(config["generator"])
-    if evaluation.name in launch["inputs"].get("evaluation_data", {}):
-        profiles = [
-            callback.get("additional_evaluations", {})[evaluation.name]
-            for callback in config["trainer"].get("callbacks", ())
-            if evaluation.name in callback.get("additional_evaluations", {})
-        ]
-        if len(profiles) != 1:
-            raise ValueError("The recorded named panel has no unique evaluation profile")
-        profile = profiles[0]
-        generator["eval_sampling_params"].update(profile.get("sampling_params") or {})
-        if profile.get("n_samples_per_prompt") is not None:
-            generator["eval_n_samples_per_prompt"] = profile["n_samples_per_prompt"]
-    elif any(source["relative_path"] != f"{evaluation.file}.parquet" for source in launch["inputs"]["validation_data"]):
-        raise ValueError("The control did not record the expected heldout evaluation file")
-    for key in ("model_name", "served_model_name", "model_source_identity", "trajectory_retention"):
-        generator.pop(key, None)
-    generator.get("engine_init_kwargs", {}).pop("served_model_name", None)
-    return {
-        "generator": generator,
-        "data": {
-            key: value
-            for key, value in config.get("data", {}).items()
-            if key not in {"train_data", "val_data", "expected_eval_rows"}
-        },
-        "trainer": {
-            key: config["trainer"].get(key)
-            for key in ("seed", "eval_batch_size", "eval_num_prompts", "evaluation_runner", "max_prompt_length")
-        },
-        "task_env": launch.get("runtime", {}).get("task_env", {}),
-    }
 
 
 def run_command(*, help_text: str | None = None):

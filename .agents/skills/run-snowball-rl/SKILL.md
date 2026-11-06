@@ -19,7 +19,7 @@ belong to `launch-rl`; job inspection and logs belong to `use-iris`; object-stor
   run name contains the working tree's hash, so changed code gets a new run and never reuses an old
   result.
 - Selections must contain no AI-judge-graded tasks. The default training selection is
-  `snowball-100k@2026.11.04.1`. Set `WANDB_API_KEY` at submission; `WANDB_ENTITY` selects the W&B
+  `snowball-100k@SELECTION_VERSION`. Set `WANDB_API_KEY` at submission; `WANDB_ENTITY` selects the W&B
   team, falling back to `marin-community`.
 - Print the plan without `--run`:
 
@@ -92,12 +92,12 @@ you need and read under the run's `output` path:
   for an evaluation after update N, or `eval_only` for data-short. Each line is one answer with
   `task_id`, `input_prompt`, `output_response`, `score`, `stop_reason`, and `verification`.
 - learning-medium and data-medium write the 1,500-task `test_panel` at update 0 and after update 25;
-  train-long writes the 100-task `fast_panel` at update 0 and every 10 updates.
+  train-long writes the 100-task `test_panel_100` at update 0 and every 10 updates.
 - speed-short's quality answers are under
   `exports/test_panel/dumped_evals/eval_only/<data source>.jsonl`; its primary throughput answers are
   forced to 4,096 tokens.
 - data-short writes four answers from the pinned SFT model to each of 256 tasks sampled from its
-  `--tasks` selection, in 10–15 minutes on 8 H100. `--tasks snowball-100k@2026.11.04.1` samples the
+  `--tasks` selection, in 10–15 minutes on 8 H100. `--tasks snowball-100k@SELECTION_VERSION` samples the
   default training tasks.
 
 Named panels use seeded greedy decoding and natural replies up to `EVAL_REPLY_TOKENS` (8,192).
@@ -126,7 +126,7 @@ window, or a panel slice. It refuses other keys before launch.
 
 ### Evaluation
 
-- The default evaluation artifact is `snowball-test-panel@2026.11.04.2`: 1,500 full tasks and a
+- The default evaluation artifact is `snowball-test-panel@2026.11.06.1`: 1,500 full tasks and a
   100-task fast subset, with source parts recorded in its recipe and manifest. learning-medium and
   data-medium use the full panel; train-long uses the fast subset.
   Its recipe pins the initializer pass-rate artifact used for difficulty and reference-score rows;
@@ -151,18 +151,15 @@ window, or a panel slice. It refuses other keys before launch.
     --keep-weights --version dev --run
   ```
 
-  Kept HF exports have no expiry and can initialize another learning or train-long run with `--init`.
-- Score every pinned control on a different heldout panel using its retained weights and recorded engine settings:
+- Score every pinned control on a different heldout panel:
 
   ```bash
   uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
     --control --rescore-panel PANEL_NAME@VERSION --version dev --run --wait
   ```
 
-  This uses one 8-H100 evaluation job per replicate. Omit experiment overrides and `--replicates`.
-  Missing learning-control weights are refused before submission; speed-short uses its original initializer.
-  The CPU gate requires matching control/model/tokenizer/panel/file/protocol evidence and keeps the original
-  training and throughput measurements. Re-run it after scoring completes. Speed-medium and speed-long have no panel.
+  See the recipe's [binding rules](../../../docs/recipes/snowball-rl.md#change-one-input)
+  for kept weights and control panel re-scoring.
 - Re-score one finished replicate on CPU with added requirements or baselines, without GPU work:
 
   ```bash

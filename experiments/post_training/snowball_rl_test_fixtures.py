@@ -32,7 +32,7 @@ def selection(tmp_path, monkeypatch):
             }
         )
     )
-    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    panel_name, panel_version = (presets.DEFAULT_TEST_PANEL_NAME, presets.DEFAULT_TEST_PANEL_VERSION)
     panel = tmp_path / panel_name / panel_version
     panel.mkdir(parents=True)
     (panel / "summary.json").write_text(
