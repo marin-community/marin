@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -834,6 +835,79 @@ def control_name(preset: str, commit: str, replicate: int) -> str:
     return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
 
 
+def panel_evaluation(preset: Preset) -> Evaluation | None:
+    panels = [evaluation for evaluation in preset.evaluations if evaluation.harness == EvalHarness.PANEL]
+    if not panels:
+        return None
+    return next(
+        (
+            evaluation
+            for evaluation in panels
+            if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
+        ),
+        next((evaluation for evaluation in panels if evaluation.file != Path(TRAIN_FILENAME).stem), panels[0]),
+    )
+
+
+def control_panel_name(control: str, revision: str, panel: str) -> str:
+    return f"{control}/panel-{fingerprint_hash(json.dumps((revision, panel)))}"
+
+
+def rescore_preset(preset: Preset, panel: str) -> Preset:
+    evaluation = panel_evaluation(preset)
+    if not gated(preset) or evaluation is None or evaluation.file == Path(TRAIN_FILENAME).stem:
+        raise click.BadParameter("--rescore-panel requires a gated preset with a heldout panel")
+    return replace(
+        preset,
+        recipe=replace(preset.recipe, layout=E8, fixed_reply_tokens=None),
+        updates=0,
+        measured=range(1),
+        evaluations=(replace(evaluation, source=panel, every=None, at_start=False),),
+        guards=tuple(metric for metric in preset.guards if metric.key.startswith(evaluation.name + "/")),
+        reported=tuple(metric for metric in preset.reported if metric.key.startswith(evaluation.name + "/")),
+        checkpoint_every=0,
+        budget="Evaluation only; 8 H100 per control replicate",
+    )
+
+
+def panel_settings(preset: Preset, launch: dict) -> dict:
+    evaluation = panel_evaluation(preset)
+    if evaluation is None or evaluation.file == Path(TRAIN_FILENAME).stem:
+        raise ValueError("The control has no heldout evaluation profile")
+    config = launch["skyrl"]
+    generator = deepcopy(config["generator"])
+    if evaluation.name in launch["inputs"].get("evaluation_data", {}):
+        profiles = [
+            callback.get("additional_evaluations", {})[evaluation.name]
+            for callback in config["trainer"].get("callbacks", ())
+            if evaluation.name in callback.get("additional_evaluations", {})
+        ]
+        if len(profiles) != 1:
+            raise ValueError("The recorded named panel has no unique evaluation profile")
+        profile = profiles[0]
+        generator["eval_sampling_params"].update(profile.get("sampling_params") or {})
+        if profile.get("n_samples_per_prompt") is not None:
+            generator["eval_n_samples_per_prompt"] = profile["n_samples_per_prompt"]
+    elif any(source["relative_path"] != f"{evaluation.file}.parquet" for source in launch["inputs"]["validation_data"]):
+        raise ValueError("The control did not record the expected heldout evaluation file")
+    for key in ("model_name", "served_model_name", "model_source_identity", "trajectory_retention"):
+        generator.pop(key, None)
+    generator.get("engine_init_kwargs", {}).pop("served_model_name", None)
+    return {
+        "generator": generator,
+        "data": {
+            key: value
+            for key, value in config.get("data", {}).items()
+            if key not in {"train_data", "val_data", "expected_eval_rows"}
+        },
+        "trainer": {
+            key: config["trainer"].get(key)
+            for key in ("seed", "eval_batch_size", "eval_num_prompts", "evaluation_runner", "max_prompt_length")
+        },
+        "task_env": launch.get("runtime", {}).get("task_env", {}),
+    }
+
+
 def run_command(*, help_text: str | None = None):
     def decorate(function):
         options = (
@@ -887,6 +961,12 @@ def run_command(*, help_text: str | None = None):
                 help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
                 "learning-medium and train-long only. The initial weights are evaluated too, so the report shows "
                 "the gain.",
+            ),
+            click.option(
+                "--rescore-panel",
+                metavar="NAME@VERSION",
+                help="With --control, evaluate every pinned control on an immutable panel version using its retained "
+                "weights and recorded evaluation settings. No training or control refresh; omit --replicates.",
             ),
             click.option(
                 "--keep-weights",
