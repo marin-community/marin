@@ -4,27 +4,28 @@
 import json
 
 import pytest
+from rolloutengine.harness.fetch import FetchProvider
+from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.test_support import SHELL, ReplayModel, engine, machine_runtime, rollout_spec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
-from taskcompendium.examples.protocol_probes import (
+from taskcompendium.fetch import FETCH_ACTION_INTERFACE, HttpPage, NetworkFailure, fetch_requirement
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+
+from experiments.post_training.task_curation.datasets.protocol_probes import (
     FETCH_REQUIREMENT,
     NONCE_FILE,
     PROBE_URL,
     ProtocolCheck,
-    probe_check,
     probe_nonce,
     probe_tasks,
 )
-from taskcompendium.fetch import FETCH_ACTION_INTERFACE, HttpPage, NetworkFailure, fetch_requirement
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
-from rolloutengine.harness.fetch import FetchProvider
-from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.test_support import SHELL, ReplayModel, engine, machine_runtime, rollout_spec
+pytestmark = pytest.mark.asyncio
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE)
-TASKS = {probe_check(task): task for task in probe_tasks(grader_environment=ENVIRONMENT, variants=1)}
+TASKS = {task.id: task for task in probe_tasks(grader_environment=ENVIRONMENT, variants=1)}
 FETCH_HARNESS = {SHELL: ShellHarness(command_timeout=None, tools={FETCH_ACTION_INTERFACE: FetchProvider()})}
 
 
@@ -42,7 +43,7 @@ def tool_observations(graded) -> list[dict]:
     return [json.loads(message["content"]) for message in messages if message["role"] == "tool"]
 
 
-TOOL_TASK = TASKS[ProtocolCheck.TOOL_EXECUTION]
+TOOL_TASK = TASKS[f"{ProtocolCheck.TOOL_EXECUTION}-0"]
 
 
 @pytest.mark.parametrize(
@@ -57,11 +58,10 @@ TOOL_TASK = TASKS[ProtocolCheck.TOOL_EXECUTION]
     ],
 )
 async def test_tool_probe_rewards_only_an_executed_command(turns, reward):
-    task = TOOL_TASK
     model = ReplayModel(turns)
 
     graded = await engine(model, {Backend.SHELLSIM: ShellSimMachineFactory()}).run_task(
-        rollout_spec(task, machine=machine_runtime(backend=Backend.SHELLSIM))
+        rollout_spec(TOOL_TASK, machine=machine_runtime(backend=Backend.SHELLSIM))
     )
 
     assert graded.grade.reward == reward
@@ -76,7 +76,7 @@ async def test_tool_probe_rewards_only_an_executed_command(turns, reward):
     ],
 )
 async def test_url_probe_serves_declared_pages_as_observations(page, observation, reward):
-    task = TASKS[ProtocolCheck.URL_LOADING]
+    task = TASKS[f"{ProtocolCheck.URL_LOADING}-0"]
     if page is not None:
         environment = task.environment_requirements.model_copy(
             update={"tool_providers": {FETCH_REQUIREMENT: fetch_requirement({PROBE_URL: page})}}
