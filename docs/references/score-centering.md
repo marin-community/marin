@@ -45,10 +45,11 @@ training without candidate heads.
 ## Correction and alignment
 
 The head contains the sampler's natural top K token IDs and their probabilities
-normalized over the full vocabulary. Megatron scores the same IDs at the same
-causal positions before and during optimization. Outside the head, old and
-behavior probabilities are modeled as proportional to the current policy,
-preserving their measured omitted masses.
+normalized over the full vocabulary. Behavior is the generating policy; old is
+the learner before optimization; current is the learner being optimized. Megatron
+scores the same IDs at the same causal positions before and during optimization.
+Outside the head, old and behavior probabilities are modeled as proportional to
+the current policy, preserving their measured omitted masses.
 
 SC subtracts the sampler's expected clipped, TIS-weighted score contribution.
 Its probability coefficients and clip decisions are detached; gradients flow
@@ -66,15 +67,15 @@ cross CP ranks; vocabulary logits stay local.
 
 The compact chat adapter transports owned NumPy arrays through existing vLLM
 APIs. K128 requests 129 candidates to preserve the natural head when the sampled
-token lies outside it. Selection retains the chat display limit, probability and
-token-ID ordering, and −9999 floor. Aborted continuations retain response-token
+token lies outside it. Numeric scores retain ordinary chat's −9999 minimum; ties sort by probability
+and then token ID. Aborted continuations retain response-token
 alignment and policy stamps. Public chat responses keep their schema.
 
 ## Capture cost and evidence
 
 `score_centering_capture/` reports admitted `requests`, `captured_tokens`,
 `captured_head_bytes` and `exported_head_bytes`. K128 uses 1,024 numeric bytes per
-captured token. `learner_input_bytes` and `learner_returned_head_bytes` include
+captured token: 128 pairs of int32 token IDs and FP32 log probabilities. `learner_input_bytes` and `learner_returned_head_bytes` include
 padding. These counters exclude Python/storage overhead and are not measured
 network traffic.
 
