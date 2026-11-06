@@ -89,7 +89,9 @@ def publication_transport(monkeypatch):
 
 
 @pytest.fixture
-def recorded_runs(selection, tmp_path, monkeypatch, publication_transport):
+def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, request):
+    set_job_info(None)
+    request.addfinalizer(lambda: set_job_info(None))
     native_job = SimpleNamespace(
         started_at=Timestamp.from_ms(1794000000000), finished_at=Timestamp.from_ms(1794003600000)
     )
@@ -1752,6 +1754,28 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         assert record["verdict"] is None and record["status"] == "succeeded"
         assert record["baseline"]["attempted"] == record["final"]["attempted"] == 100
         assert record["layout"] == "p40" and record["wandb_run_id"] == "train-current"
+        initial = source / "exports/dumped_evals/global_step_0_evals"
+        resumed = source / "exports/dumped_evals/global_step_10_evals"
+        initial.rename(resumed)
+        for path in (source / "exports/metrics").glob("step-*.json"):
+            if json.loads(path.read_text())["step"] <= 10:
+                path.unlink()
+        checkpoint = Path(config.output.checkpoint_root, "latest_ckpt_global_step.txt")
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text("10")
+        resumed_config = replace(config, attempt_id="resumed-at-10")
+        step.run(resumed_config)
+        try:
+            repeated = CliRunner().invoke(snowball.main, arguments)
+        finally:
+            set_job_info(None)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert len(publication_transport.rows) == 1
+        raw = source / "exports/attempts/resumed-at-10/loop-result.json"
+        assert json.loads(raw.read_text())["status"] == "succeeded"
+        resumed_status = status(preset_name, ["--layout", "p40"])
+        assert resumed_status["runs"][0]["state"] == "succeeded"
+        assert "rl_progress_url" not in resumed_status["runs"][0]
     if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0

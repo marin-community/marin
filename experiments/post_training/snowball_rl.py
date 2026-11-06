@@ -934,7 +934,14 @@ def _run_command(function: Callable) -> click.Command:
                         build_artifacts(completed.gate, max_concurrent=max_concurrent)
                     publications = _publications(completed, preset)
                     if publications:
-                        build_artifacts(*publications, max_concurrent=max_concurrent)
+                        try:
+                            build_artifacts(*publications, max_concurrent=max_concurrent)
+                        except Exception as error:
+                            if completed.gate is not None:
+                                raise
+                            logger.warning(
+                                "Native run completed; publication is unavailable and can be retried: %s", error
+                            )
                     job = None
                 if wait and job is not None:
                     preset = presets.PRESETS[kwargs["preset_name"]]

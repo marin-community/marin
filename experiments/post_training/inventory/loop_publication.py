@@ -161,6 +161,8 @@ def _retain_snowball_summary(
         if (gate_record.name, gate_record.version, gate_record.fingerprint) != gate_identity:
             raise ValueError("Gate interpretation changed before summary creation; rebuild publication")
         report = gate_record.result
+    if report is None and metadata is None:
+        raise ValueError("Snowball attempt metadata is required before train-long publication")
     preset = presets.PRESETS[report["preset"] if report is not None else metadata["preset"]]
     if metadata is not None and metadata["preset"] != preset.name:
         raise ValueError("Snowball attempt metadata and gate preset disagree")
@@ -284,8 +286,7 @@ def publication_step(
     training: ArtifactStep[SkyRLRun] | ArtifactStep[Artifact], *, gate: ArtifactStep | None = None
 ) -> ArtifactStep[LoopPublication]:
     """Publish cached training, or a completed Snowball gate for its recorded native attempt."""
-    snowball = _snowball_record(training.path()) if gate is None else None
-    if gate is not None or snowball is not None:
+    if gate is not None or presets.TRAIN_LONG_RUN in training.name:
         native = _native_identity(training.path())
         record = presets.artifact_record(gate.path()) if gate is not None else None
         identity = (record.name, record.version, record.fingerprint) if record is not None else None

@@ -200,8 +200,10 @@ Completed learning-medium, data-medium and train-long candidates publish one `rl
 The status row includes `rl_progress_url` after publication is verified. Gated records keep the group
 verdict; train-long has no quality verdict. Each uses its own update-0 baseline and keeps the native result.
 Coverage below 99% cannot rank. Speed presets and data-short keep their results in the gate report.
-Re-run the standalone gate command to retry publication after a service failure; its saved verdict
-remains available, and the retry reuses the retained summary.
+For gated presets, re-run the standalone gate command to retry publication after a service failure;
+the saved verdict remains available. For train-long, repeat the original command to reuse its completed
+native run and retry publication. A resumed train-long run with no update-0 baseline keeps its native
+result and raw record without a dashboard row.
 Every native attempt retains `exports/attempts/<attempt_id>/loop-result.json` under its output,
 including failed attempts. This records native status, preset, layout, configuration fingerprint and
 available Iris/W&B identity. Runtime task-content and protocol hashes remain unknown, so these records

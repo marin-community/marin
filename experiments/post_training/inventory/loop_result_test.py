@@ -85,7 +85,7 @@ def write_observations(config, scenario):
         "stale",
         "nonfinite_loss",
         "snowball-speed",
-        "snowball-panel",
+        "snowball-no-optimizer",
         "snowball-failed",
         "snowball-stale-tracking",
     ],
@@ -102,6 +102,21 @@ def test_terminal_summary_requires_native_success_complete_evidence_and_checkpoi
                 "p40",
                 "2026.11.06",
             ),
+        )
+        terminal = Path(run_config.skyrl.output.export_root).parent / "terminal.json"
+        run_config = replace(
+            run_config,
+            skyrl=replace(
+                run_config.skyrl, output=replace(run_config.skyrl.output, terminal_manifest_uri=str(terminal))
+            ),
+        )
+        terminal.write_text(
+            json.dumps(
+                {
+                    "config": {"run": {"id": "earlier", "attempt_id": "earlier"}},
+                    "result": {"iris_job_id": "/tests/earlier-job"},
+                }
+            )
         )
         Path(run_config.skyrl.output.export_root, "tracking.json").write_text(
             json.dumps({"wandb_url": "https://wandb.ai/team/project/runs/earlier"})
@@ -133,6 +148,9 @@ def test_terminal_summary_requires_native_success_complete_evidence_and_checkpoi
                     }
                 )
             )
+            if scenario == "snowball-no-optimizer":
+                for path in (export / "metrics").glob("step-*.json"):
+                    path.unlink()
             attempt = Path(config.output.attempts_root, config.attempt_id + ".json")
             attempt.parent.mkdir(exist_ok=True)
             attempt.write_text(
@@ -175,7 +193,8 @@ def test_terminal_summary_requires_native_success_complete_evidence_and_checkpoi
         summary = json.loads(path.read_text())
         assert summary["status"] == ("failed" if scenario == "snowball-failed" else "succeeded")
         assert (summary["run_id"], summary["attempt_id"]) == ("fixture/run", "attempt-1")
-        assert summary["optimizer_steps"] == 2 and summary["iris_job_ids"] == ["/tests/current-job"]
+        assert summary["optimizer_steps"] == (None if scenario == "snowball-no-optimizer" else 2)
+        assert summary["iris_job_ids"] == ["/tests/current-job"]
         assert (summary["preset"], summary["layout"], summary["config_fingerprint"], summary["campaign"]) == (
             run_config.snowball.preset,
             "p40",

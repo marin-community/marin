@@ -12,7 +12,7 @@ def test_public_arm_cli_assigns_distinct_training_and_report_identities(monkeypa
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     submissions = []
     monkeypatch.setattr(
-        "marin.rl.cli._submit_or_run", lambda module, handles, concurrency, env: submissions.append(handles)
+        "marin.rl.cli.submit_or_run", lambda module, handles, concurrency, env: submissions.append(handles)
     )
     version = "2026.11.02"
     for arm in ("a", "b", "c", "d"):
