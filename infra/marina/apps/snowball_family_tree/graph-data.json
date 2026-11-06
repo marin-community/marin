@@ -5597,9 +5597,187 @@
         "basis": "Hub repository creation",
         "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TIES-d0.5/commits/main"
       }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-Identity-PathB-A13-2026.10.30",
+      "title": "Identity SFT A13 · lead candidate · 36 updates",
+      "short": "Identity A13 (lead)",
+      "model": "open-athena/Snowball-67B-A2B-Identity-PathB-A13-2026.10.30",
+      "parents": [
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "SFT",
+        "identity data",
+        "self-replay",
+        "frozen router bias"
+      ],
+      "summary": "Lead candidate. Path B identity SFT from v0.1 (Snowball-Smartie-RL .32 step 14) on Will Held's identity data (marin-community/identity-data @665ac6e) mixed with replay of v0.1's own answers; 36 updates, batch 8, LR 2e-6. The target identity is \"Marin's Latest MoE, developed and trained by the Marin Community\", with no system prompt. A13 = A8a plus the thinking-ON tool-calling replay rows duplicated. BFCL 28.3% over five runs vs v0.1 27.6% (+0.7 [-3.4, +4.4]); with thinking on it names itself in 35/52 core prompts and never claims another lab (v0.1 46/52); GSM8K -1.1 [-1.9, -0.3], MATH500 unchanged.",
+      "source": "https://github.com/marin-community/marin/issues/10695",
+      "flops": "FLOPs unknown · training H100-hours not audited for this node",
+      "notes": "HF weight revision 55dbe0be30b4c712b974895e1a5b7c14ca50ccb2; later Hub commits may change only the model card. Packed training input SHA256 f860030d rebuilds exactly from preserved inputs. 104 frozen fields including the router biases; special-token rows frozen. Five-run BFCL at temperature 1.0 with a run-level bootstrap. Small fixed cohorts; not a release finding.",
+      "status": "public checkpoint; research candidate, not a release",
+      "confidence": "documented",
+      "edge_kind": "initialization",
+      "lane": "10T",
+      "retained": [],
+      "timeline": {
+        "date": "2026-10-30",
+        "basis": "Checkpoint date in the repository name",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-A13-2026.10.30/tree/55dbe0be30b4c712b974895e1a5b7c14ca50ccb2"
+      },
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-A13-2026.10.30/tree/55dbe0be30b4c712b974895e1a5b7c14ca50ccb2",
+          "text": "Pinned Hugging Face weights and model card"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/10695",
+          "text": "Identity SFT summary issue with the full results"
+        },
+        {
+          "url": "https://github.com/marin-community/marin-logbooks/blob/58e821a0/logbooks/10695-identity-sft/REPRODUCE.md",
+          "text": "Reproduction guide (marin-logbooks)"
+        }
+      ],
+      "stage": "SFT"
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-Identity-PathB-A8a-2026.10.30",
+      "title": "Identity SFT A8a · 10% thinking-ON identity rows · 36 updates",
+      "short": "Identity A8a",
+      "model": "open-athena/Snowball-67B-A2B-Identity-PathB-A8a-2026.10.30",
+      "parents": [
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "SFT",
+        "identity data",
+        "self-replay",
+        "frozen router bias"
+      ],
+      "summary": "Recipe that A13 builds on. Path B identity SFT from v0.1 (Snowball-Smartie-RL .32 step 14) on Will Held's identity data (marin-community/identity-data @665ac6e) mixed with replay of v0.1's own answers; 36 updates, batch 8, LR 2e-6. The target identity is \"Marin's Latest MoE, developed and trained by the Marin Community\", with no system prompt. Identity rows rendered with thinking OFF plus a 10% share (179 rows) of thinking-ON identity rows with GLM-written reasoning. BFCL 26.2% (-1.5 [-4.9, +1.5]) vs v0.1; a 30% share collapses BFCL to 17.2%. GSM8K -1.1 [-1.9, -0.3], MATH500 +0.7 [-0.5, +1.9].",
+      "source": "https://github.com/marin-community/marin/issues/10695",
+      "flops": "FLOPs unknown · training H100-hours not audited for this node",
+      "notes": "HF weight revision bf59ad4ec6af76fbe1bd4f4d42ff578ba9789ac2; later Hub commits may change only the model card. Shows the main finding of the experiment: thinking-ON identity rows teach the model to answer and stop in thinking mode, breaking tool calls, unless their share is small.",
+      "status": "public checkpoint; research candidate, not a release",
+      "confidence": "documented",
+      "edge_kind": "initialization",
+      "lane": "10T",
+      "retained": [],
+      "timeline": {
+        "date": "2026-10-30",
+        "basis": "Checkpoint date in the repository name",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-A8a-2026.10.30/tree/bf59ad4ec6af76fbe1bd4f4d42ff578ba9789ac2"
+      },
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-A8a-2026.10.30/tree/bf59ad4ec6af76fbe1bd4f4d42ff578ba9789ac2",
+          "text": "Pinned Hugging Face weights and model card"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/10695",
+          "text": "Identity SFT summary issue with the full results"
+        },
+        {
+          "url": "https://github.com/marin-community/marin-logbooks/blob/58e821a0/logbooks/10695-identity-sft/REPRODUCE.md",
+          "text": "Reproduction guide (marin-logbooks)"
+        }
+      ],
+      "stage": "SFT"
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-Identity-PathB-A3-2026.10.30",
+      "title": "Identity SFT A3 · thinking-OFF identity rows only · 36 updates",
+      "short": "Identity A3 (fallback)",
+      "model": "open-athena/Snowball-67B-A2B-Identity-PathB-A3-2026.10.30",
+      "parents": [
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "SFT",
+        "identity data",
+        "self-replay",
+        "frozen router bias"
+      ],
+      "summary": "Fallback candidate. Path B identity SFT from v0.1 (Snowball-Smartie-RL .32 step 14) on Will Held's identity data (marin-community/identity-data @665ac6e) mixed with replay of v0.1's own answers; 36 updates, batch 8, LR 2e-6. The target identity is \"Marin's Latest MoE, developed and trained by the Marin Community\", with no system prompt. Identity rows rendered with thinking OFF only. Best BFCL of the arms, 31.1% (+3.4 [-0.5, +7.2]) vs v0.1, but its reasoning often invents a system message (17/52), and GSM8K -1.7 [-2.6, -0.9] trips the pre-set 1.5-point stop line.",
+      "source": "https://github.com/marin-community/marin/issues/10695",
+      "flops": "FLOPs unknown · training H100-hours not audited for this node",
+      "notes": "HF weight revision 64fa692a0872e34e0f7880aa624ca832f5ca51fe; later Hub commits may change only the model card. Names itself in 31/52 (ON) and 30/52 (OFF) core prompts; v0.1 0/52.",
+      "status": "public checkpoint; research candidate, not a release",
+      "confidence": "documented",
+      "edge_kind": "initialization",
+      "lane": "10T",
+      "retained": [],
+      "timeline": {
+        "date": "2026-10-30",
+        "basis": "Checkpoint date in the repository name",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-A3-2026.10.30/tree/64fa692a0872e34e0f7880aa624ca832f5ca51fe"
+      },
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-A3-2026.10.30/tree/64fa692a0872e34e0f7880aa624ca832f5ca51fe",
+          "text": "Pinned Hugging Face weights and model card"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/10695",
+          "text": "Identity SFT summary issue with the full results"
+        },
+        {
+          "url": "https://github.com/marin-community/marin-logbooks/blob/58e821a0/logbooks/10695-identity-sft/REPRODUCE.md",
+          "text": "Reproduction guide (marin-logbooks)"
+        }
+      ],
+      "stage": "SFT"
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-Identity-PathB-M25-2026.10.30",
+      "title": "Identity merge M25 · 0.75 A3 + 0.25 A8a",
+      "short": "Identity merge M25",
+      "model": "open-athena/Snowball-67B-A2B-Identity-PathB-M25-2026.10.30",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-Identity-PathB-A3-2026.10.30",
+        "open-athena/Snowball-67B-A2B-Identity-PathB-A8a-2026.10.30"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "linear merge"
+      ],
+      "summary": "Linear weight merge of two identity SFT arms (0.75 A3 + 0.25 A8a), both trained from v0.1. BFCL 30.4% (+2.8 [-0.8, +6.0]) vs v0.1, but GSM8K -1.5 [-2.4, -0.7] trips the stop line. Merges did not separate A3's tool-calling strength from A8a's cleaner reasoning: both switch together near t = 0.5.",
+      "source": "https://github.com/marin-community/marin/issues/10695",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "HF weight revision 5c8f0b1e8da27fa53e7532e0192282b091cf3c2c; later Hub commits may change only the model card. Merge weights are on the two SFT checkpoints' full parameters; no further training.",
+      "status": "public checkpoint; research candidate, not a release",
+      "confidence": "documented",
+      "edge_kind": "initialization",
+      "lane": "10T",
+      "retained": [],
+      "timeline": {
+        "date": "2026-10-30",
+        "basis": "Checkpoint date in the repository name",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-M25-2026.10.30/tree/5c8f0b1e8da27fa53e7532e0192282b091cf3c2c"
+      },
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Identity-PathB-M25-2026.10.30/tree/5c8f0b1e8da27fa53e7532e0192282b091cf3c2c",
+          "text": "Pinned Hugging Face weights and model card"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/10695",
+          "text": "Identity SFT summary issue with the full results"
+        },
+        {
+          "url": "https://github.com/marin-community/marin-logbooks/blob/58e821a0/logbooks/10695-identity-sft/REPRODUCE.md",
+          "text": "Reproduction guide (marin-logbooks)"
+        }
+      ],
+      "stage": "Merge"
     }
   ],
   "unplaced": [],
-  "snapshot": "2026-10-23",
+  "snapshot": "2026-11-04",
   "methodology": "Source-estimated analytic FLOPs or explicitly scoped 6ND parameter proxies; unknown RL totals remain unknown."
 }

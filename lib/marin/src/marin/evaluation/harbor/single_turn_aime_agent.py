@@ -108,6 +108,9 @@ def _completion_content(
     if not isinstance(message, Mapping):
         raise ValueError("model response choice must contain text content")
     content = message.get("content")
+    if "content" in message and content is None and choices[0].get("finish_reason") == "length":
+        # A reasoning model can exhaust the smoke budget before emitting final text.
+        return ""
     if not isinstance(content, str):
         raise ValueError("model response choice must contain text content")
     return content
@@ -127,7 +130,8 @@ class SingleTurnAimeAgent(BaseAgent):
     Unlike an interactive terminal agent, this smoke agent deliberately accepts an OpenAI
     completion whose finish reason is ``length``. That keeps weak or newly initialized models
     gradeable without letting missing EOS behavior turn a Harbor integration smoke into an
-    unbounded agent retry loop.
+    unbounded agent retry loop. A length-truncated null final response writes an invalid answer;
+    reasoning text is never treated as the answer.
     """
 
     @staticmethod
@@ -163,7 +167,7 @@ class SingleTurnAimeAgent(BaseAgent):
         self._request_retry_initial = request_retry_initial
 
     def version(self) -> str:
-        return "1.1.0"
+        return "1.1.1"
 
     async def setup(self, environment: BaseEnvironment) -> None:
         return

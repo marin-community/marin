@@ -37,29 +37,21 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+qemu = ["marin-shellbox[qemu]"]
+shellsim = ["marin-shellbox[shellsim]"]
 sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
 datasets = ["datasets>=4.4.1"]
-e2b = ["e2b>=2.4.2", "dockerfile-parse>=2.0.1"]
-daytona = ["daytona==0.200.2"]
-islo = ["islo>=0.3.0", "dockerfile-parse>=2.0.1"]
-modal = ["modal>=1.4.0"]
-runloop = ["runloop-api-client>=1.2.0", "dockerfile-parse>=2.0.1"]
-tensorlake = ["tensorlake>=0.5.18"]
-gke = ["kubernetes>=32.0.0"]
-novita = ["novita-sandbox==2.0.0a3", "dockerfile-parse>=2.0.1"]
-cwsandbox = ["cwsandbox>=0.23.3"]
-wandb = ["wandb>=0.27", "cwsandbox>=0.23.3"]
-cloud = ["harbor[cwsandbox,wandb,e2b,daytona,islo,modal,runloop,gke,tensorlake,novita]"]
-all = ["harbor[analysis,cloud,datasets,tinker]"]
+daytona = ["marin-shellbox[daytona]"]
+all = ["harbor[analysis,runtime,qemu,shellsim,datasets,tinker]"]
 tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
 
 [dependency-groups]
 test = [
-    "harbor[cwsandbox,wandb]",
+    "harbor[shellsim]",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
@@ -87,16 +79,23 @@ module-name = ["harbor", "harbor_config"]
 [tool.uv.sources]
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
+marin-shellbox = { path = "../../lib/shellbox", editable = true }
+marin-finelog = { path = "../../lib/finelog", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60
 testpaths = ["tests/unit"]
 pythonpath = ["."]
-addopts = ["-v", "--tb=short", "--strict-markers", "--strict-config"]
+addopts = [
+    "-v", "--tb=short", "--strict-markers", "--strict-config",
+    "-m", "not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not runtime and not windows_containers",
+]
 markers = [
     "asyncio: asynchronous tests",
     "unit: offline unit tests",
     "integration: tests requiring external services",
+    "docker: tests requiring a Docker daemon",
+    "manual: tests requiring explicit operator setup",
     "runtime: tests requiring a container runtime",
     "windows_containers: tests requiring Windows containers",
 ]

@@ -50,7 +50,7 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeImplementation,
 )
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _axis_names, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -75,6 +75,7 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     apply_qb_betas,
 )
+from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -329,7 +330,7 @@ class GrugTrainerConfig:
     # restarts at step 0.
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # Grug builds its own compact (replica_dcn, data, expert, context, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
@@ -490,7 +491,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -504,20 +505,57 @@ def build_train_loader(
     )
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
+    """Return ``train_mesh`` with its ``expert`` axis folded into ``data``, for the dropless eval.
 
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
+    Every device keeps its training ``context`` group, and its eval ``data`` group is its training
+    ``(data, expert)`` group, so eval collectives need no NCCL communicator that training lacks.
     """
+    names = train_mesh.axis_names
+    if names[names.index("data") + 1] != "expert":
+        raise ValueError(f"expert must follow data in the training mesh, got {names}")
+    shape = dict(train_mesh.shape)
+    shape["data"] *= shape["expert"]
+    shape["expert"] = 1
+    devices = train_mesh.devices.reshape(tuple(shape[name] for name in names))
+    return Mesh(devices, names, axis_types=train_mesh.axis_types)
+
+
+def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
+    """Rename a training PartitionSpec for ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    At training ``data`` size one, ``expert`` becomes the eval ``data`` axis and training ``data``
+    drops out, so every device keeps the shard it already holds. Otherwise the spec is unchanged:
+    a leaf sharded on ``expert`` without ``data`` lands replicated and the move transfers it.
+    """
+    if train_mesh.shape["data"] != 1:
+        return spec
+
+    def rename(entry):
+        renamed = tuple("data" if name == "expert" else name for name in _axis_names(entry) if name != "data")
+        if not renamed:
+            return None
+        return renamed if len(renamed) > 1 else renamed[0]
+
+    return P(*(rename(entry) for entry in spec))
+
+
+def _move_tree_to_eval_mesh(tree, train_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    The move must not need a collective when training ``data`` has size one. A collective here runs
+    on a communicator training does not hold, and that communicator's NCCL buffers stay outside the
+    allocator pool for the life of the process, taking room the next train step's arena needs. The
+    model's own ``reshard`` calls fix the layout inside the forward, so any valid placement on the
+    eval mesh suffices. Non-array leaves pass through.
+    """
+    eval_mesh = expert_collapsed_eval_mesh(train_mesh)
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
         spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
+        return jax.device_put(leaf, NamedSharding(eval_mesh, _expert_folded_spec(spec, train_mesh)))
 
     return jax.tree.map(move, tree)
 
@@ -589,7 +627,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -1198,12 +1236,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
             if dropless:
-                dropless_eval_mesh = compact_grug_mesh(
-                    expert_axis_size=1,
-                    replica_axis_size=mesh.shape["replica_dcn"],
-                    model_axis_size=mesh.shape["model"],
-                    context_axis_size=mesh.shape["context"],
-                )
+                dropless_eval_mesh = expert_collapsed_eval_mesh(mesh)
                 # Build under the eval mesh so every constant the evaluator captures at construction
                 # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
                 # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
@@ -1303,10 +1336,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                    # the expert axis lands replicated, and the copy is much larger than the
-                    # train-mesh params. The train step needs almost the whole device budget for
-                    # its temporary buffer, thus this copy must die before the next step.
+                    # `model` must stay a local. In a multi-process run the move copies each leaf,
+                    # also when the leaf stays on its devices. The copy adds to the train-mesh
+                    # params, and the train step needs almost the whole device budget for its
+                    # temporary buffer, thus this copy must die before the next step.
                     with (
                         callbacks.progress_event_scope(
                             step.emit_event,
@@ -1315,7 +1348,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _move_tree_to_eval_mesh(step.model, mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
@@ -1349,6 +1382,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc_start_step = current_step + GC_WARMUP_STEPS
 
         # Main optimization loop.
+        preemption = GracefulPreemption()
+        preemption.install()
+        preempted = False
         try:
             while current_step < stop_step:
                 iteration_start = time.perf_counter()
@@ -1440,26 +1476,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step=step,
                 )
 
+                preempted = preemption.should_stop(int(state.step))
+                if preempted:
+                    break
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if not preempted:
+                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
                     callbacks.ProgressEvent.CHECKPOINT_STARTED,
                     callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                    checkpointer.wait_until_finished()
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
         finally:
+            preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:

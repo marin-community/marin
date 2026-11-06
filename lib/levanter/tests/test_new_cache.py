@@ -20,6 +20,7 @@ from levanter.data.sharded_datasource import TextUrlDataSource
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
+    CacheOptions,
     SerialCacheWriter,
     ShardedCacheLayout,
     TreeCache,
@@ -397,16 +398,21 @@ def test_full_end_to_end_cache():
         check_datasets_equal(all_data, expected)
 
 
-def test_full_end_to_end_cache_with_groups():
+def test_full_end_to_end_cache_with_partial_processor_batches():
+    """Shards processed in several batches, ending in a short one, keep every row in order."""
+    rows_per_shard = 10
+    batch_size = 3
+    assert rows_per_shard % batch_size != 0
     td = tempfile.TemporaryDirectory()
     with td as tmpdir:
         cache = build_or_load_cache(
             tmpdir,
-            SimpleShardSource(num_shards=5),
+            SimpleShardSource(num_shards=5, rows_per_shard=rows_per_shard),
             TestProcessor(),
+            CacheOptions(batch_size=batch_size),
         )
 
-        expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5))
+        expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5, rows_per_shard=rows_per_shard))
 
         all_data = cache[:]
 
@@ -520,23 +526,6 @@ def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
                 [f"{tmpdir}/data.txt", f"{tmpdir}/data.txt.1"],
             )
 
-            build_or_load_cache(tmpdir, dataset, TestProcessor())
-
-
-@pytest.mark.asyncio
-async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with open(f"{tmpdir}/data.not_a_real_extension", "w") as f:
-            f.write("")
-
-        dataset = TextUrlDataSource(
-            [f"{tmpdir}/data.not_a_real_extension"],
-        )
-
-        with pytest.raises(ZephyrWorkerError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor())
-
-        with pytest.raises(ZephyrWorkerError):
             build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 

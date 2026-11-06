@@ -11,7 +11,6 @@ import tomllib
 from pathlib import Path
 
 from iris.rpc.proto_display import priority_band_value
-from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, harbor_runtime_descriptor
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import inference_config_for_model
@@ -77,7 +76,6 @@ def main() -> None:
     judge = load_model_config(args.judge_config)
     if judge.serve.max_model_len != 262144 or judge.serve.tensor_parallel_size != 8:
         raise ValueError("replay requires the pinned 262144-token TP8 MiniMax config")
-    harbor_pin = HARBOR_SOURCE.commit
     prefix = args.output_prefix
     provenance = {
         "source_manifest_sha256": hashlib.sha256(args.sources.read_bytes()).hexdigest(),
@@ -85,8 +83,6 @@ def main() -> None:
         "judge_config_sha256": hashlib.sha256(args.judge_config.read_bytes()).hexdigest(),
         "judge_config": args.judge_config.read_text(),
         "evalchemy_commit": evalchemy_pin,
-        "harbor_commit": harbor_pin,
-        "harbor_runtime": harbor_runtime_descriptor(),
         "judge_request_extra_body": regrade_olympiadbench.JUDGE_EXTRA_BODY,
         "benchmarks": list(benchmarks),
         "prior_olympiad_prefix": args.prior_olympiad_prefix,
@@ -128,7 +124,6 @@ def main() -> None:
                         allow_live=True,
                     )
                 result["evalchemy_commit"] = evalchemy_pin
-                result["harbor_commit"] = harbor_pin
                 regrade_olympiadbench.write_json(uri, result)
                 LOGGER.info(
                     "%s/%s: %.3f -> %.3f",

@@ -36,7 +36,7 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SELECTION_PREFIX = "rl-data/task-selection"
-DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
+DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
@@ -73,6 +73,12 @@ def training_recipe(steps: int) -> dict:
         NCCL_IB_DISABLE="1",
         NCCL_SOCKET_FAMILY="AF_INET",
     )
+    config["generator"]["trajectory_reward_shaping"] = {
+        "enabled": True,
+        # Enabling shaping would also apply the DAPO overlong penalty over the derived l_cache window.
+        "overlong": {"penalty_scale": 0.0},
+        "reasoning_span": {"penalty": 0.1, "target": "marker"},
+    }
     trainer = config["trainer"]
     trainer.update(
         seed=SEED,

@@ -10,8 +10,11 @@ for declaration fields and artifact outputs.
 
 ## Adding a dataset
 
-1. Add an `RlDataSource` to the closest family module for runnable sources, or
-   [unconverted.py](unconverted.py) for inventory-only entries.
+1. Add an `RlDataSource` to the closest family module for runnable sources; for
+   inventory-only entries use [unconverted.py](unconverted.py) when the conversion is
+   unfinished or excluded, or [campaign_releases.py](campaign_releases.py) when the
+   entry records an externally published campaign release whose admission lives in the
+   release itself and must not be re-converted.
    Set `SourceInfo`'s stable `id`, display `title`, `origin`, family and tags.
    Leave `count=None` unless the pinned input population has been counted.
    Keep an existing ID when updating a source so its Atlas reviews remain linked.
@@ -90,6 +93,9 @@ it receives the endpoint and credentials is follow-up work.
 ## Sources without conversion recipes
 
 [unconverted.py](unconverted.py) retains excluded sources and available releases
-whose TaskSpec conversions are unfinished. These entries remain visible in the
+whose TaskSpec conversions are unfinished. [campaign_releases.py](campaign_releases.py)
+declares externally published campaign releases kept as data pointers: their admission,
+split and qualification evidence lives in the pinned release itself, so a conversion
+recipe would invent a second provenance. These entries remain visible in the
 Atlas and are omitted from campaign execution. Add a recipe when a source's
 conversion is implemented, retaining its stable source ID.

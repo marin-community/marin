@@ -7,6 +7,7 @@ These exercise the Reconcile RPC handler in-process by calling
 ``worker.handle_reconcile(request)`` directly on a real Worker instance.
 """
 
+import threading
 from unittest.mock import Mock
 
 import pytest
@@ -72,6 +73,17 @@ def _observations_by_uid(
     response: worker_pb2.Worker.ReconcileResponse,
 ) -> dict[str, worker_pb2.Worker.AttemptObservation]:
     return {obs.attempt_uid: obs for obs in response.observed}
+
+
+def _running_handle_exits_on_term():
+    handle = create_mock_container_handle()
+    stopped = threading.Event()
+    handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]
+        phase=ContainerPhase.STOPPED if stopped.is_set() else ContainerPhase.RUNNING,
+        exit_code=143 if stopped.is_set() else None,
+    )
+    handle.stop_hook = lambda _force: stopped.set()
+    return handle
 
 
 def test_inline_spec_enqueues_and_reports_building(worker, mock_runtime):
@@ -140,34 +152,13 @@ def test_second_reconcile_without_spec_is_cache_hit(worker, mock_runtime):
         task.thread.join(timeout=5.0)
 
 
-def test_no_spec_unknown_attempt_reports_missing(worker):
-    """intent=run for an unknown attempt with no inline spec → TASK_STATE_MISSING."""
-    uid = "uid-unknown"
-
-    # Worker has no prior knowledge of this attempt.
-    assert worker.task_by_uid(uid) is None
-
-    response = _reconcile(worker, [_run_desired(uid, run_request=None)])
-
-    obs = _observations_by_uid(response)
-    assert uid in obs
-    assert obs[uid].state == job_pb2.TASK_STATE_MISSING
-
-    # Nothing should have been enqueued.
-    assert worker.task_by_uid(uid) is None
-
-
 def test_stop_intent_kills_running_attempt(worker, mock_runtime):
     """intent=stop signals the worker to kill the attempt asynchronously."""
     task_id = _task_id("stop-intent")
     uid = "uid-stop-intent"
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
 
     # Submit a task so it's locally known.
     worker.submit_task(run_req)
@@ -212,11 +203,7 @@ def test_zombie_attempt_is_killed(worker, mock_runtime):
     uid = "uid-zombie"
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
 
     worker.submit_task(run_req)
     task = worker.task_by_uid(uid)
@@ -247,11 +234,7 @@ def test_reconcile_addressed_to_other_worker_is_refused(worker, mock_runtime):
     uid = "uid-not-a-zombie"
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
 
     worker.submit_task(run_req)
     task = worker.task_by_uid(uid)
@@ -522,25 +505,3 @@ def test_run_intent_unknown_attempt_no_spec_reports_missing(worker):
     # MISSING observation echoes the UID so the controller can route it.
     assert missing.attempt_uid == "uid-unknown"
     assert worker.task_by_uid("uid-unknown") is None
-
-
-def test_stop_intent_routes_to_attempt_by_uid(worker, mock_runtime):
-    """A stop intent carrying a known UID kills that attempt."""
-    task_id = _task_id("stop-uid")
-    run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-stop-1")
-
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
-    worker.submit_task(run_req)
-    task = worker.task_by_uid("uid-stop-1")
-    assert task is not None
-    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
-
-    _reconcile(worker, [_stop_desired("uid-stop-1")])
-
-    assert task.should_stop is True
-    task.thread.join(timeout=5.0)
-    assert task.status == job_pb2.TASK_STATE_KILLED
