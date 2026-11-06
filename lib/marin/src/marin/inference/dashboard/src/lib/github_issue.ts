@@ -25,10 +25,10 @@ export interface IssueDraft {
 /**
  * Build a prefilled GitHub new-issue URL for a conversation the model handled poorly.
  *
- * `transcript` is the conversation's plain-text rendering (see `plainTextChat`), or `null` when the
+ * `chatTranscript` is the conversation's plain-text rendering (see `plainTextChat`), or `null` when the
  * reporter omits the conversation. Omitting it also drops the conversation title and custom
- * template instructions, which are conversation content. Included instructions open the
- * transcript so the URL budget can shorten them.
+ * template instructions, which are conversation content. Included instructions are prepended
+ * to the transcript so URL truncation covers them.
  *
  * The dashboard URL is never included: it carries the Iris capability token.
  */
