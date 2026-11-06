@@ -51,16 +51,40 @@ price, finish reason, route fields, and any API-side revision. The current
 `ChatModel` records `response_id` and usage but does **not** itself check routed
 provider or cost; implement and test that adapter before official trials.
 
-A 50-model manifest should be frozen only after inspecting `/api/v1/models` and
-provider endpoints for tool support, `temperature`, `top_p`, `max_tokens`,
+A **12-model** manifest should be frozen only after inspecting `/api/v1/models`
+and provider endpoints for tool support, `temperature`, `top_p`, `max_tokens`,
 context length >= 32768, quotas and current price. A public catalog query on
 2026-11-06 returned 453 models; catalog availability is **not** evidence that a
-particular provider accepts our fixed policy. Select approximately ten small,
-15 midrange, 15 strong-open and ten frontier models across many independent
-model families and serving providers. Do not count multiple routes or repeated
-samples of one model as independent respondents. Freeze manifest JSON with model
-ID, provider slug, context window, pricing timestamp, capabilities, cohort,
-route policy and hash; do not silently replace withdrawn models.
+particular provider accepts our fixed policy. Avoid a floor of models that
+cannot do the task; sample a compact, capable middle band across independent
+families and **one** expensive upper anchor. Candidate IDs (not yet pinned
+routes or confirmed capabilities):
+
+| Band | Candidate model ID | 305-item indicative cost* |
+|---|---|---:|
+| capable middle | `qwen/qwen3.5-122b-a10b` | $1.29 |
+| capable middle | `deepseek/deepseek-v3.2` | $0.63 |
+| capable middle | `mistralai/mistral-medium-3-5` | $5.69 |
+| capable middle | `meta-llama/llama-4-maverick` | $1.04 |
+| capable middle | `google/gemini-2.5-flash` | $1.53 |
+| capable middle | `openai/gpt-4.1-mini` | $1.36 |
+| capable middle | `anthropic/claude-haiku-4.5` | $3.80 |
+| capable middle | `moonshotai/kimi-k2.5` | $1.90 |
+| incumbent comparison | `z-ai/glm-5.3` | $0.68 |
+| strong but inexpensive | `x-ai/grok-4.3` | $3.28 |
+| strong but inexpensive | `nvidia/nemotron-3-ultra-550b-a55b` | $2.04 |
+| sole premium anchor | `anthropic/claude-sonnet-4.6` | $11.39 |
+
+*Catalog prices on 2026-11-06, using GLM-v1 median 6,043 input and 1,281
+output tokens/trial. Sum ~$34.63, ~$36.54 with an illustrative 5.5% credit
+purchase fee; **not** a ceiling. Reasoning/tool-heavy models can use many more
+tokens, and model/provider prices change. Cap actual billed spend with an
+independent usage/price ledger, not this estimate. If the selected provider
+lacks tool support, replace the candidate **before** the manifest is frozen.
+Do not count multiple routes or repeated samples of one model as independent
+respondents. Freeze manifest JSON with model ID, provider slug, context window,
+pricing timestamp, capabilities, cohort, route policy and hash; do not silently
+replace withdrawn models.
 
 ## Trial execution and analysis
 
@@ -69,10 +93,10 @@ route policy and hash; do not silently replace withdrawn models.
    timeout categorization, and ShellSim isolation. Smoke calls are billable;
    estimate and cap their cost separately.
 2. Freeze eligible TaskSpec digests, model/provider manifest, policy and code
-   revision. Schedule one official trial per pair. At 305 verified items × 50
-   respondents this is 15,250 trials; if only a smaller vetted cohort is ready,
-   declare its exact item count and interpretability limitations *before*
-   starting. Never attempt an official trial of a disputed item.
+   revision. Schedule one official trial per pair. At 305 independently verified
+   items × 12 respondents this would be **3,660 trials**; if only a smaller vetted
+   cohort is ready, declare its exact count and interpretability limitations
+   *before* starting. Never attempt an official trial of a disputed item.
 3. Persist raw trajectories and item-response records in private, immutable
    attempt paths, with request IDs and generation metadata, then publish a
    complete snapshot/manifest last. Infrastructure failure is missing data and
@@ -80,12 +104,12 @@ route policy and hash; do not silently replace withdrawn models.
    format failure is zero and never resampled to improve the score. Fail closed
    if spend, route, or trial uniqueness constraints are violated.
 4. Analyze raw binary responses (retain full trial data): CTT diagnostics and
-   Rasch/1PL first; then regularized hierarchical Bayesian 2PL with model-family
-   and provider effects. No unregularized 3PL with ~50 respondents. Treat
-   all-correct/all-wrong items as weakly identified, and uncertainty intervals
-   as mandatory. Stratify future gVisor and ShellSim populations rather than
-   pooling them.
+   regularized Rasch/1PL with uncertainty intervals. **Twelve respondents per
+   item are not enough for credible item-level 2PL discrimination estimates**;
+   do not make 2PL/3PL claims from this lean panel. Treat all-correct/all-wrong
+   items as weakly identified. Stratify future gVisor and ShellSim populations
+   rather than pooling them.
 
-Before implementation/launch: agree on the audited cohort and the actual
-allowed spend, finish independent reference checks, pin the 50 exact
-model/provider routes, then build fail-closed routing/cost instrumentation.
+Before implementation/launch: agree on the audited cohort and allowed spend,
+finish independent reference checks, pin the 12 exact model/provider routes,
+then build fail-closed routing/cost instrumentation.
