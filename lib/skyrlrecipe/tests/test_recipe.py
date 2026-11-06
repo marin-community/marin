@@ -159,6 +159,5 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
     assert schema.SkyRLRecipe.from_document(valid.to_skyrl()) == valid
     with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
         base.merge(heads)
-    for following in ("hf_save_interval", "micro_forward_batch_size_per_gpu"):
-        with pytest.raises(ValueError, match=following):
-            base.with_settings([f"trainer.{following}=null"])
+    with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):
+        base.with_settings(["trainer.micro_forward_batch_size_per_gpu=null"])

@@ -494,7 +494,7 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
-    max_staleness_steps: int = field(0)
+    max_staleness_steps: NonNegativeInt = field(0)
     "How many steps the generating policy may lag the step that trains on its group. colocate_all requires 0."
     batch_policy: Literal["full_batch", "rolling"] = field("full_batch")
     """How committed groups form batches when max_staleness_steps > 0. full_batch trains each step on exactly the
@@ -688,7 +688,7 @@ class SpeculatorModel(Section):
     source_identity: str = unset_field()
 
 
-class Training(Section):
+class SpeculatorTraining(Section):
     interval_steps: PositiveInt = unset_field()
     max_tokens_per_update: PositiveInt = unset_field()
     max_window_tokens: PositiveInt = unset_field()
@@ -708,7 +708,7 @@ class SpeculativeDecoding(Section):
     method: Literal["eagle3"] = unset_field()
     model: SpeculatorModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
-    training: Training | None = field(None)
+    training: SpeculatorTraining | None = field(None)
 
 
 class SamplingParams(Section):

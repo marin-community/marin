@@ -73,13 +73,17 @@ NAMES = {"trainer.policy.model": "PolicyModel", "trainer.critic.model": "CriticM
 """
 
 
+def _skipped(path, value):
+    return path in DERIVED_PATHS | LAUNCH_PATHS or generator.following_source(value) is not None
+
+
 def _author_document(document):
     authored = {}
 
     def visit(mapping, target, prefix=""):
         for key, value in mapping.items():
             path = f"{prefix}.{key}" if prefix else key
-            if path in DERIVED_PATHS | LAUNCH_PATHS or generator.following_source(value):
+            if _skipped(path, value):
                 continue
             if isinstance(value, dict):
                 target[key] = {}
@@ -100,7 +104,7 @@ def test_repository_generation_matches_hydra_author_defaults_and_all_group_optio
     def compare(mapping, actual, prefix=""):
         for key, expected in mapping.items():
             path = f"{prefix}.{key}" if prefix else key
-            if path in DERIVED_PATHS | LAUNCH_PATHS or generator.following_source(expected):
+            if _skipped(path, expected):
                 continue
             if path in OPEN and expected:
                 continue
@@ -143,7 +147,7 @@ def test_generator_preserves_observed_types_comments_and_sidecar_drift(tmp_path,
     exec(SIDECAR, sidecar)
     sources = generator.source_documents(configs)
     owned = frozenset()
-    code = generator.render_sections(generator.render_schema(sources, sidecar, owned), owned)
+    code = generator.render_sections(generator.render_schema(sources, sidecar, owned))
     module = ModuleType("skyrlrecipe._fixture")
     module.__package__ = "skyrlrecipe"
     monkeypatch.setitem(sys.modules, module.__name__, module)

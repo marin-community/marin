@@ -40,4 +40,4 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path) -> 
     report = json.loads(output.read_text())
     assert not report["failures"], report["failures"]
     assert result.returncode == 0, result.stderr
-    assert tuple(entry["case"] for entry in report["documents"]) == census.cases
+    assert tuple(report["cases"]) == census.cases
