@@ -753,6 +753,16 @@ class WorkerMetadata(_message.Message):
     provenance: Provenance
     def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
+class JobTags(_message.Message):
+    __slots__ = ("project", "category", "description")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    category: str
+    description: str
+    def __init__(self, project: _Optional[str] = ..., category: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
+
 class EgressRule(_message.Message):
     __slots__ = ("domain", "cidr", "ports")
     DOMAIN_FIELD_NUMBER: _ClassVar[int]

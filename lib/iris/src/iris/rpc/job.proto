@@ -711,6 +711,20 @@ enum EgressPolicy {
   EGRESS_POLICY_ALLOWLIST = 4;
 }
 
+// A job's purpose, for compute accounting. Written to the Finelog iris.job
+// table's tags column as a JSON object; empty fields are omitted.
+message JobTags {
+  // The effort the job belongs to, such as a project or issue name, at most
+  // iris.cluster.types.MAX_JOB_TAG_CHARS characters.
+  string project = 1;
+  // The kind of work, at most MAX_JOB_TAG_CHARS characters; lib/iris/OPS.md
+  // lists suggested values.
+  string category = 2;
+  // Free-form text on what the job does, at most
+  // iris.cluster.types.MAX_JOB_DESCRIPTION_CHARS characters.
+  string description = 3;
+}
+
 // A destination an ALLOWLIST task may reach beyond the cluster's allowlist.
 message EgressRule {
   oneof destination {

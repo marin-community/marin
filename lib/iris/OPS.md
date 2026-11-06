@@ -203,6 +203,13 @@ iris job cancel --prefix /user/job-prefix # all jobs with this ID prefix
 iris job describe /user/job-name          # per-task state, exit, duration, peak memory
 ```
 
+Tag each root job you submit with what it is for: `--project <effort>`,
+`--category <kind>` and `--description "<what it does>"` (SDK:
+`IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested categories:
+`data-processing`, `data-generation`, `pre-training`, `post-training`,
+`evaluation`, `external-collaboration`, `infrastructure`. On a child job, each
+tag it leaves unset comes from the parent. The tags go to Finelog `iris.job.tags`.
+
 Kubernetes controllers reject `EXISTING_JOB_POLICY_RECREATE` while the existing
 job is active. Cancel it, verify that all pods for its job ID have disappeared
 in Kubernetes, then submit the replacement. A terminal Iris job state alone does
@@ -691,9 +698,9 @@ Namespaces:
 
   `iris.job_config` has one row per job, written at submit, with the requested
   resources (`res_device_json` holds the accelerator type and count).
-  `iris.job.tags` is reserved for submit-time job tags as a JSON object
-  (`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
-  submit.
+  `iris.job.tags` holds the job's tags as a JSON object
+  (`json_get(tags, 'category')`), or NULL for an untagged job; jobs submitted
+  before tags existed are untagged.
 
   `error` is copied in full, as the controller DB stores it (like
   `iris.task_event.message`, it is not truncated).
