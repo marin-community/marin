@@ -91,6 +91,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         initial_score=None,
         omit_step=None,
         version=presets.PRESET_REVISION,
+        record_version=None,
         fixed=True,
         mixed=128,
         fingerprint="",
@@ -113,7 +114,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         )
         record = ArtifactRecord(
             name=name,
-            version=version,
+            version=record_version or version,
             fingerprint=fingerprint,
             result_type=result_type_name(SkyRLRun),
             result=result.result_payload(),
@@ -324,6 +325,16 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
         ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None),
         ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None),
+        pytest.param(
+            "speed-medium",
+            {},
+            {"fault": {"record_version": "2026.10.01"}},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="candidate-and-control-evaluation-revisions-differ",
+        ),
         ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"panel-910/batch_finished"}, None),
         (
             "speed-medium",
@@ -377,6 +388,9 @@ def test_rescore_reports_candidate_and_control_contracts(
     assert Path(report["report"]).with_suffix(".md").exists()
     if "version" in fault:
         assert fault["version"] in report["reason"] and presets.PRESET_REVISION in report["reason"]
+    if "record_version" in control_fault.get("fault", {}):
+        assert control_fault["fault"]["record_version"] in report["reason"]
+        assert presets.PRESET_REVISION in report["reason"]
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
     assert not fault.get("unresolved_receipt") or report["reason"].startswith(
         "cannot identify the Iris job lookup-missing-job"
