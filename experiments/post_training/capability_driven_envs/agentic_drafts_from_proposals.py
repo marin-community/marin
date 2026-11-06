@@ -80,6 +80,9 @@ LISTING_THREADS = 32
 """Threads that read the capabilities' ``result.json`` files when the driver lists the accepted slots."""
 BATCH_FLUSH = 1.0
 BATCH_POLL = 5.0
+SESSION_TIMEOUT = 3600
+"""Seconds that one draft session can take. A session that hangs gives its slot back and is drafted again on the
+next launch, because a failed session writes no ``result.json``."""
 
 
 class Transport(StrEnum):
@@ -173,7 +176,7 @@ async def _draft_all(slots: Sequence[Slot], settings: RunSettings) -> list[dict[
         workspace_factory=workspace,
         solver_factories={backend: solver_factory(backend) for backend in (Backend.SHELLSIM, Backend.LOCAL)},
         judge=JudgeConnection(endpoint.base_url, endpoint.token, default_model=DEEPSEEK_MODEL),
-        agent_limits=agent_limits(settings.turns),
+        agent_limits=agent_limits(settings.turns).model_copy(update={"attempt_timeout": SESSION_TIMEOUT}),
         solver_limits=SOLVER_LIMITS,
         command_timeout=COMMAND_TIMEOUT,
     )
