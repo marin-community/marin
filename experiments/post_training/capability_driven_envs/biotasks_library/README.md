@@ -119,7 +119,10 @@ confirmed by the GLM auditor (not independently validated). The v1 snapshot
 and trial scores remain frozen. Do not treat v2 as a fully audited bank or run
 an official IRT panel on disputed items. See
 [OPENROUTER_DESIGN.md](OPENROUTER_DESIGN.md) for the experiment gate, provider
-pinning, metadata and budget requirements.
+pinning, metadata and budget requirements. The **one-task, twelve-model**
+diagnostic has completed; its results and remaining blockers are in
+[OPENROUTER_FIRST12_RESULTS.md](OPENROUTER_FIRST12_RESULTS.md). No full-bank
+OpenRouter panel has launched.
 
 ## GLM OpenAI-compatible solver calibration
 
