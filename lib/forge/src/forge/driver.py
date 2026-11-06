@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 import traceback
@@ -17,6 +18,7 @@ from urllib.parse import urlsplit
 from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
@@ -25,7 +27,7 @@ from forge.model.review import Incomplete
 from forge.model.serialization import TASK_PROPOSAL, WORKPIECE
 from forge.model.workpiece import Terminal, Workpiece
 from forge.policy import load_policy, parse_overlay, resolution_lines
-from forge.wiring import runtime
+from forge.wiring import endpoint_source, runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +55,7 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
         with open_url(source, "rt") as stream:
             paths = tuple(line.strip() for line in stream if line.strip())
     else:
-        paths = tuple(fs.unstrip_protocol(path) for path in sorted(fs.glob(f"{prefix.rstrip('/')}/*.proposal.json")))
+        paths = tuple(fs.unstrip_protocol(path) for path in sorted(fs.glob(prefix_join(prefix, "*.proposal.json"))))
     if ranks and not source.endswith("sample.json"):
         raise ValueError("Rank selection requires sample.json")
     if not paths:
@@ -65,7 +67,7 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
 
 def publish(workdir: Path, destination: str) -> None:
     for name in ("events.jsonl", "workpiece.json", "status.json"):
-        with (workdir / name).open("rb") as source, open_url(f"{destination}/{name}", "wb") as target:
+        with (workdir / name).open("rb") as source, open_url(prefix_join(destination, name), "wb") as target:
             target.write(source.read())
 
 
@@ -87,7 +89,13 @@ async def one(args: argparse.Namespace) -> None:
         with open_url(args.policy, "rt") as source:
             policy = declared.overlaid(parse_overlay(source.read()))
         print("\n".join(resolution_lines(declared, policy)), flush=True)
-        async with runtime(policy, args.arm) as (config, resources):
+        source = endpoint_source(
+            os.environ.get("GLM_BASE_URL"),
+            os.environ.get("GLM_RELAY_JOB"),
+            os.environ["GLM_API_KEY"],
+            policy.setting("provider.model", str),
+        )
+        async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
             wp = await run_workpiece(proposal, config, resources, log)
     except Exception:
         detail = traceback.format_exc()
@@ -99,7 +107,7 @@ async def one(args: argparse.Namespace) -> None:
         (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
         status = fold(tuple(record.event for record in log.records))
         (workdir / "status.json").write_text(json.dumps(asdict(status)))
-        publish(workdir, f"{args.output.rstrip('/')}/{identity}")
+        publish(workdir, prefix_join(args.output, str(identity)))
 
 
 async def run(args: argparse.Namespace) -> None:
