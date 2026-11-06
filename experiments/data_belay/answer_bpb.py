@@ -63,7 +63,7 @@ class AnswerTask:
     revision: str
     config: str | None
     split: str
-    to_example: Callable[[dict], AnswerExample | None]
+    to_example: Callable[[dict], AnswerExample]
 
 
 def _mmlu_pro(row: dict) -> AnswerExample:

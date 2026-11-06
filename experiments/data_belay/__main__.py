@@ -19,7 +19,7 @@ from experiments.data_belay.answer_bpb import MANIFEST_NAME as ANSWER_BPB_MANIFE
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
 from experiments.data_belay.judge import HARM_LIMITS, judge
 from experiments.data_belay.prepare import build_cache, plan_cache
-from experiments.data_belay.results import arm_metrics, control_run_id, treatment_run_id
+from experiments.data_belay.results import CONTROL_SEEDS, arm_metrics, control_run_id, treatment_run_id
 from experiments.data_belay.rungs import DATA_BELAY_RUNGS, ladder_tokens
 from experiments.grug.fast_track import belay_tracks
 from experiments.grug.fast_track.launch import V16384_TOKENIZER
@@ -153,21 +153,28 @@ def build_answer_bpb_command(root: str) -> None:
 @cli.command()
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
 @click.option("--seed", type=int, required=True)
-@click.option("--run-id", required=True)
-@click.option("--mix-cache", default=None, help="The candidate's flat train cache; omit for the control.")
+@click.option(
+    "--candidate", default=None, help="Candidate name for the run id, e.g. finemath-p20; omit for the control."
+)
+@click.option("--mix-cache", default=None, help="The candidate's flat train cache, from `prepare`.")
 @click.option("--mix-share", type=float, default=None)
-@click.option("--num-steps", type=int, default=None, help="Override the rung's steps (smoke runs only).")
+@click.option("--num-steps", type=int, default=None, help="Smoke run of this many steps; the run id gets -smoke<N>.")
 @click.option("--submit", is_flag=True, help=f"Submit to {CLUSTER}; without it, print the plan.")
 def train(
     rung: str,
     seed: int,
-    run_id: str,
+    candidate: str | None,
     mix_cache: str | None,
     mix_share: float | None,
     num_steps: int | None,
     submit: bool,
 ) -> None:
     """Train one arm on the Belay `vanilla` Track: the control, or the base cache mixed with a candidate's cache."""
+    if (candidate is None) != (mix_cache is None) or (mix_cache is None) != (mix_share is None):
+        raise click.UsageError("a candidate needs --candidate, --mix-cache and --mix-share; the control takes none")
+    run_id = control_run_id(rung, seed) if candidate is None else treatment_run_id(rung, candidate, seed)
+    if num_steps is not None:
+        run_id += f"-smoke{num_steps}"
     args = ["--track", "vanilla", "--size", rung, "--run-id", run_id, "--seed", str(seed)]
     args += ["--eval-manifest", prefix_join(ANSWER_BPB_ROOT, ANSWER_BPB_MANIFEST)]
     if mix_cache is not None:
@@ -188,13 +195,12 @@ def train(
     default=None,
     help="Compare with this candidate's runs (same seeds) instead of the control: e.g. filtered against unfiltered.",
 )
-@click.option("--control-seeds", default="0,1,2,3", show_default=True)
-def report(rung: str, candidate: str, seeds: str, against: str | None, control_seeds: str) -> None:
+def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
     """Verdict and per-group BPB change of a candidate against the shared control or another candidate."""
     seed_list = [int(s) for s in seeds.split(",")]
     if against is None:
         baseline_name = "control"
-        baseline = arm_metrics([control_run_id(rung, int(s)) for s in control_seeds.split(",")])
+        baseline = arm_metrics([control_run_id(rung, s) for s in CONTROL_SEEDS[rung]])
     else:
         baseline_name = against
         baseline = arm_metrics([treatment_run_id(rung, against, s) for s in seed_list])
@@ -213,10 +219,9 @@ def report(rung: str, candidate: str, seeds: str, against: str | None, control_s
 
 @cli.command()
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
-@click.option("--control-seeds", default="0,1,2,3", show_default=True)
-def noise(rung: str, control_seeds: str) -> None:
+def noise(rung: str) -> None:
     """Seed spread of the control's group BPB: the input to the harm limits."""
-    control = arm_metrics([control_run_id(rung, int(s)) for s in control_seeds.split(",")])
+    control = arm_metrics([control_run_id(rung, s) for s in CONTROL_SEEDS[rung]])
     click.echo("| group | mean BPB | seed SD | SD / mean |")
     click.echo("|---|---:|---:|---:|")
     for group, values in control.items():

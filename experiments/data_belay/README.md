@@ -23,12 +23,14 @@ B check --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2
 # 2. Tokenize a seeded sample of the dataset's files into a cache (an Iris CPU job).
 B prepare --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2 --submit
 
-# 3. Train each seed of the treatment (the control runs once per rung and seed).
-B train --rung d512 --seed 0 --run-id dbelay-d512-finemath-p20-s0 \
+# 3. Train each seed of the treatment; the run id is dbelay-<rung>-<candidate>-s<seed>.
+#    The control (no --candidate) runs once per rung and seed, for the seeds in results.CONTROL_SEEDS.
+B train --rung d512 --seed 0 --candidate finemath-p20 \
     --mix-cache s3://marin-us-east-02a/marin/data_belay/caches/<...>/train --mix-share 0.2 --submit
 
-# 4. Verdict against the shared control.
+# 4. Verdict against the shared control, or against another candidate at the same seeds.
 B report --rung d512 --candidate finemath-p20 --seeds 0,1,2
+B report --rung d512 --candidate fineweb-edu-p50 --against fineweb-p50 --seeds 0,1,2,3,4,5
 ```
 
 `check` refuses a license that is not on the allowlist (NC and ND licenses, `other`, a missing license, or a second
@@ -66,8 +68,7 @@ group is `better` (interval below 0), `worse` (interval above its harm limit), `
 | `hurts` | a group is worse |
 | `no gain` | no group is better and none is worse |
 
-`B noise --rung d512` prints the control's seed spread. `B report --against <candidate>` compares two candidates at
-the same seeds, for example a filtered dataset against the unfiltered one. Confirm a d512 result at d768: at 20%,
+`B noise --rung d512` prints the control's seed spread. Confirm a d512 result at d768: at 20%,
 OpenCoder's synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable
 +2.7%). See [`judge.py`](judge.py).
 

@@ -8,6 +8,8 @@ import wandb
 from experiments.data_belay.judge import GROUP_METRICS
 
 WANDB_PATH = "marin-community/marin_moe"
+# Seeds of the shared control runs at each rung; every candidate at the rung is compared with all of them.
+CONTROL_SEEDS = {"d512": (0, 1, 2, 3, 4, 5), "d768": (0, 1, 2), "d1024": (0, 1, 2)}
 
 
 def control_run_id(rung: str, seed: int) -> str:
