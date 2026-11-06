@@ -525,7 +525,9 @@ class RayPPOTrainer:
     ) -> Dict[str, float]:
         """Evaluate the current policy with optional sampling overrides and a named output directory."""
         cfg = evaluation_profile_config(
-            self.cfg, EvaluationProfile(sampling_params=sampling_params, n_samples_per_prompt=n_samples_per_prompt), val_set_name
+            self.cfg,
+            EvaluationProfile(sampling_params=sampling_params, n_samples_per_prompt=n_samples_per_prompt),
+            val_set_name,
         )
         evaluator = evaluate_step_wise if cfg.trainer.step_wise_training else evaluate
         session = nullcontext(evaluation_pool) if evaluation_pool is not None else self._evaluation_session()

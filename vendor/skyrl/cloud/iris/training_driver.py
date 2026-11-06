@@ -137,7 +137,11 @@ class LocalRLRunner:
                     "config": config,
                     "train_data_sources": self._train_data_sources,
                     "val_data_sources": self._val_data_sources,
-                    **({"evaluation_data_sources": self._evaluation_data_sources} if self._evaluation_data_sources else {}),
+                    **(
+                        {"evaluation_data_sources": self._evaluation_data_sources}
+                        if self._evaluation_data_sources
+                        else {}
+                    ),
                 }
             ),
             resolve=True,

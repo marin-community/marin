@@ -412,7 +412,9 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
-        assert all(row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training)
+        assert all(
+            row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training
+        )
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20

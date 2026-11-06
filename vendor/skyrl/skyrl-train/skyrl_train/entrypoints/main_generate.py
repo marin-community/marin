@@ -133,7 +133,9 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     continue
                 for name, profile in parse_evaluation_profiles(callback.get("additional_evaluations")).items():
                     profile_cfg = evaluation_profile_config(self.cfg, profile, name)
-                    dataset = self.eval_dataset if profile.data_files is None else self.get_eval_dataset(profile.data_files)
+                    dataset = (
+                        self.eval_dataset if profile.data_files is None else self.get_eval_dataset(profile.data_files)
+                    )
                     if dataset is None:
                         raise ValueError(f"evaluation profile {name} requires a dataset")
                     profile_results = await evaluate(
@@ -145,7 +147,9 @@ class EvalOnlyEntrypoint(BasePPOExp):
                         val_set_name=name,
                         trajectory_sink=trajectory_sink,
                     )
-                    results.update({f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in profile_results.items()})
+                    results.update(
+                        {f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in profile_results.items()}
+                    )
         finally:
             try:
                 await trajectory_runner.shutdown()
