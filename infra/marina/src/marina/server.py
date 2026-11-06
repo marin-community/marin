@@ -62,6 +62,7 @@ from marina.applets import (
     AppletPackage,
     AppletRuntime,
     AppletStore,
+    AppletSummary,
     IndexFallback,
     InvalidQuery,
     PublishResult,
@@ -250,7 +251,9 @@ def public_applet_surface(app: ASGIApp) -> ASGIApp:
             return await app(scope, receive, send)
         path = scope["path"]
         method = scope["method"]
-        if method in {"GET", "HEAD"} and (path == "/healthz" or path == "/a" or path.startswith("/a/")):
+        # Named routes decide per request whether their app is public; kernel routes stay hidden.
+        first_segment = path.split("/", 2)[1]
+        if method in {"GET", "HEAD"} and first_segment and (first_segment not in KERNEL_PREFIXES or first_segment in {"a", "healthz"}):
             return await app(scope, receive, send)
         return await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
 
@@ -1299,15 +1302,28 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     api.mount(MCP_READ_PATH, AuthenticatedMount(read_mcp_app, policy))
     api.mount(MCP_PATH, AuthenticatedMount(mcp_app, policy))
 
-    @api.api_route("/{name}", methods=["GET", "HEAD"], include_in_schema=False)
-    @requires_auth
-    def named_without_slash(name: str) -> RedirectResponse:
-        if applet_store is None:
+    def named_reader(name: str, request: Request) -> tuple[AppletSummary, VerifiedIdentity | None]:
+        """Resolve a named app for this surface: a signed-in caller, or an anonymous read of a public app."""
+        if config.surface is MarinaSurface.AUTHENTICATED:
+            identity = request_identity(request)
+        elif request.method not in {"GET", "HEAD"}:
+            raise HTTPException(status_code=404, detail="app not found")
+        else:
+            identity = None
+        if applet_store is None or name in KERNEL_PREFIXES:
             raise HTTPException(status_code=404, detail="app not found")
         try:
-            applet_store.named_applet(name)
+            selected = applet_store.named_applet(name)
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="app not found") from error
+        if config.surface is MarinaSurface.PUBLIC_APPLETS and selected.mode is not AppletMode.PUBLIC:
+            raise HTTPException(status_code=404, detail="app not found")
+        return selected, identity
+
+    @api.api_route("/{name}", methods=["GET", "HEAD"], include_in_schema=False)
+    @public
+    def named_without_slash(name: str, request: Request) -> RedirectResponse:
+        named_reader(name, request)
         return RedirectResponse(f"/{name}/")
 
     @api.api_route(
@@ -1315,12 +1331,11 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         include_in_schema=False,
     )
-    @requires_auth
+    @public
     async def named_application(name: str, path: str, request: Request) -> Response:
-        if applet_store is None:
-            raise HTTPException(status_code=404, detail="app not found")
+        selected, identity = await run_in_threadpool(named_reader, name, request)
+        assert applet_store is not None
         try:
-            selected = await run_in_threadpool(applet_store.named_applet, name)
             record = await run_in_threadpool(applet_store.version, selected.id, selected.current_version)
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="app not found") from error
@@ -1332,13 +1347,13 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 selected.current_version,
                 path.removeprefix("api").lstrip("/"),
                 request,
-                identity_for(request, policy),
+                identity,
             )
         if request.method not in {"GET", "HEAD"}:
             raise HTTPException(status_code=405, detail="method not allowed")
         manifest = record.manifest
         connect_src = manifest.connect_src
-        if manifest.agent is not None and config.agent_panel is not None:
+        if manifest.agent is not None and config.agent_panel is not None and identity is not None:
             connect_src += (config.agent_panel.origin,)
         if path.startswith(DATA_PREFIX):
             data_url = manifest.data_url or prefix_join(config.data_root, name)
@@ -1360,13 +1375,19 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                     raise
         else:
             raise HTTPException(status_code=404, detail="application file not found")
-        response.headers["Cache-Control"] = "private, no-cache"
+        response.headers["Cache-Control"] = (
+            "public, no-cache" if config.surface is MarinaSurface.PUBLIC_APPLETS else "private, no-cache"
+        )
         response.headers["Content-Security-Policy"] = content_security_policy(connect_src)
         return response
 
     authenticated = RouteAuthMiddleware(api, policy)
     if config.surface is MarinaSurface.PUBLIC_APPLETS:
-        return public_applet_surface(authenticated)
+        surface = public_applet_surface(authenticated)
+        if config.applet_domains and applet_store is not None:
+            # A public vanity host serves its one bound app; the per-request mode check still applies.
+            return named_applet_hosts(surface, applet_store, config.applet_domains)
+        return surface
     if config.applet_domains:
         if applet_store is None:
             raise ValueError(f"{APPLET_DOMAINS_ENV} requires a database")

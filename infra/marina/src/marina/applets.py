@@ -569,8 +569,6 @@ class AppletStore:
             package.manifest.data_url is not None or package.manifest.jobs or package.manifest.agent is not None
         ):
             raise ValueError("Data URLs, scheduled jobs and agent panels require a named application")
-        if package.manifest.name is not None and mode is AppletMode.PUBLIC:
-            raise ValueError("Named applications are private; public applets use the isolated applet origin")
         with self.engine.begin() as connection:
             self._lock_applet(connection, applet_id)
             version, effective_mode = self._allocate_version(
@@ -919,12 +917,6 @@ class AppletStore:
     ) -> None:
         with self.engine.begin() as connection:
             self._check_current_version(connection, applet_id, base_version)
-            if (
-                mode is AppletMode.PUBLIC
-                and connection.execute(text("SELECT name FROM applets WHERE id = :id"), {"id": applet_id}).scalar_one()
-                is not None
-            ):
-                raise ValueError("Named applications remain private")
             connection.execute(
                 text("UPDATE applets SET mode = :mode, updated_at = now() WHERE id = :id"),
                 {"id": applet_id, "mode": mode.value},
