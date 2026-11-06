@@ -1,6 +1,6 @@
 ---
 name: run-snowball-rl
-description: Choose, run, and read a Snowball RL preset through `experiments/post_training/snowball_rl.py` (speed-short, speed-medium, speed-long, data-short, data-medium, learning-medium, train-long) and its pass, fail, or invalid verdict against pinned controls. Use to measure or regression-check a vLLM, inference-speed, trainer, numerics, task-selection, task-sampling, evaluation, or RL-algorithm change on Snowball, to read Snowball answers for chain-of-thought inspection, and to explain a Snowball gate report. New RL launch files and other RL experiments belong to launch-rl.
+description: Choose, run, and read a Snowball RL preset through `experiments/post_training/snowball_rl.py` (speed-short, speed-medium, speed-long, data-short, data-medium, learning-medium, train-long) and its pass, fail, or invalid verdict against pinned controls, and record each experiment in a GitHub experiment issue. Use to measure or regression-check a vLLM, inference-speed, trainer, numerics, task-selection, task-sampling, evaluation, or RL-algorithm change on Snowball, to read Snowball answers for chain-of-thought inspection, and to explain a Snowball gate report. New RL launch files and other RL experiments belong to launch-rl.
 ---
 
 # Run Snowball RL
@@ -31,7 +31,8 @@ belong to `launch-rl`; job inspection and logs belong to `use-iris`; object-stor
   reported metrics, known gaps, and each run's `output` path. Invalid settings fail here, before any
   GPU work. `--version dev` satisfies the launcher interface; Snowball steps use the fixed
   `PRESET_REVISION`.
-- Before `--run`, tell the person the preset, `budget_estimate`, and replicate count. Submit
+- Before `--run`, tell the person the preset, `budget_estimate`, and replicate count, and open the
+  experiment's issue ([Record the experiment](#record-the-experiment)). Submit
   train-long (112 H100 by default, hours to days) or more than one replicate of a 40-H100 preset only
   when the person asked for it.
 - `--run` submits and exits 0 once the submission is accepted. Read the result later by running the
@@ -162,6 +163,22 @@ uv run python -m experiments.post_training.snowball_rl --preset learning-medium 
   train-long export.
 - train-long is the release loop: checkpoints, periodic panel evaluation, and an HF export, with no
   verdict. `--layout p40` runs it on 40 H100.
+
+## Record the experiment
+
+One experiment is one change under test, with every run and preset used to judge it. It has one
+GitHub issue: use the issue the person names, or open one with `file-issue` (kind `experiment`) in
+`marin-community/marin` before the first `--run`.
+
+- Description: the change under test (branch and commit, and each `--set`, `--tasks`, or `--init`
+  value) and the presets planned.
+- Hypothesis or Goal: the guard or reported metric the change should move, and in which direction.
+- Links: the command, and each run's `name`, `iris_job_id`, `wandb_url`, and `grafana_links` once the
+  status block shows them.
+
+After each verdict, add a comment with the preset, `verdict`, `label`, each guard's change against its
+tolerance, and the `gate_report.md` path, then update the TL;DR and Status. A later preset for the
+same change, such as speed-medium after speed-short, goes in the same issue.
 
 ## Read the result
 
