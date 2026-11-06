@@ -1161,7 +1161,7 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     try:
         receipt = read_skyrl_launch_receipt(path)
     except SkyRLReceiptLookupError as error:
-        logging.warning("Could not recover recorded command options for %s: %s", path, error)
+        logger.warning("Could not recover recorded command options for %s: %s", path, error)
         return None, GateInputs()
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
     command = presets.run_command()(lambda **kwargs: ())
@@ -1281,23 +1281,21 @@ def main(
     report = run(step)[0]
     if leave_out is None and presets.published(preset):
         try:
-            receipt = read_skyrl_launch_receipt(source)
-        except SkyRLReceiptLookupError:
-            receipt = None
-        if receipt is not None and receipt.config.get("run", {}).get("attempt_id"):
-            native = apply(
-                name,
-                Artifact,
-                version=version if separator else presets.PRESET_REVISION,
-                pin=source,
-                path=source,
-            )
             try:
-                run(snowball_rl_publication.publication_step(native, gate=step))
-            except Exception as error:
-                logger.warning(
-                    "Gate report is saved at %s; publication failed and can be retried: %s", report.path, error
+                receipt = read_skyrl_launch_receipt(source)
+            except SkyRLReceiptLookupError:
+                receipt = None
+            if receipt is not None and receipt.config.get("run", {}).get("attempt_id"):
+                native = apply(
+                    name,
+                    Artifact,
+                    version=version if separator else presets.PRESET_REVISION,
+                    pin=source,
+                    path=source,
                 )
+                run(snowball_rl_publication.publication_step(native, gate=step))
+        except Exception as error:
+            logger.warning("Gate report is saved at %s; publication failed and can be retried: %s", report.path, error)
     payload = {
         "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
         **report.model_dump(mode="json", exclude={"path"}),

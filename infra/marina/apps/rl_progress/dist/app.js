@@ -35,7 +35,10 @@ function coverageLabel(run) {
 function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
 function selectedFromHash() {
   if (!location.hash.startsWith('#run=')) return null;
-  return runs.find((run) => route(run) === location.hash) ?? null;
+  try {
+    const selected = JSON.stringify(JSON.parse(decodeURIComponent(location.hash.slice(5))));
+    return runs.find((run) => identity(run) === selected) ?? null;
+  } catch { return null; }
 }
 
 function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, labelDots = false, baseline = false } = {}) {

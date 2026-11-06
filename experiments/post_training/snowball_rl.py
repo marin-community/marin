@@ -707,7 +707,7 @@ def _completed_gate(run: SnowballRun, preset: presets.Preset) -> ArtifactStep | 
 
 
 def _publications(run: SnowballRun, preset: presets.Preset) -> tuple[ArtifactStep, ...]:
-    if not presets.published(preset):
+    if not presets.published(preset) or (run.gate is None and preset.focus != presets.Focus.TRAIN):
         return ()
     publications = []
     for training in run.runs:

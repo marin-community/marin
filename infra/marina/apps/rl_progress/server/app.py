@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 
 def comparison_fields(run: dict) -> dict:
-    """Retain the dashboard's content/protocol/timing comparison boundary."""
+    """Validate evaluation identity and compute coverage, gain and comparison eligibility."""
     evaluation = run["evaluation"]
     validate_evaluation_identity(
         task_ids=evaluation.get("task_ids"),
@@ -79,7 +79,7 @@ def create_api(services):
             ).mappings()
             for row in rows:
                 run = dict(row["record"])
-                # Match the prior API's UTC datetime serialization.
+                # Serialize UTC datetimes with a Z suffix.
                 for field in ("run_date", "started_at", "completed_at"):
                     if run.get(field):
                         run[field] = datetime.fromisoformat(run[field]).isoformat().replace("+00:00", "Z")

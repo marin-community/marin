@@ -21,11 +21,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ResolvedModelLocator, SkyRLOutputPaths, SkyRLRun, SkyRLRunConfig, skyrl_cpu_command
 from rigging.provenance import Provenance
 from rigging.timing import Timestamp
-from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import Source
-from taskcompendium.pipeline.models import RawRow
-from verifyit.spec import ExactSpec
 
 from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
@@ -34,7 +30,6 @@ from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.inventory import loop_result
 from experiments.post_training.inventory import publish_loop_result as publication
 from experiments.post_training.inventory.publication_test_support import ReportTransport
-from experiments.post_training.task_curation.inventory import TASK_SPEC_COLUMN
 
 
 @pytest.fixture
@@ -202,12 +197,11 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
         initial_unscored=0,
         first_answer_task="task-0",
         attempt_id="recorded-attempt",
-        native_state="succeeded",
         panel_identity="",
     ):
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
-        result = SkyRLRun(
+        result_run = SkyRLRun(
             path=str(root),
             hf_model_uri=None,
             global_step=preset.updates,
@@ -223,12 +217,12 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
             version=record_version or version,
             fingerprint=fingerprint,
             result_type=result_type_name(SkyRLRun),
-            result=result.result_payload(),
+            result=result_run.result_payload(),
         )
         write_json(root / RECORD_FILENAME, record.model_dump(mode="json"))
         commit = gate.CONTROLS.get(preset.name, gate.CONTROLS["learning-medium"])[0].main_commit
         source = {"tree_hash": "native-tree", "base_commit": commit, "dirty": False, "command_line": list(argv)}
-        result = {"state": native_state, "iris_job_id": "/tests/native-run", "provenance": source | (provenance or {})}
+        result = {"state": "succeeded", "iris_job_id": "/tests/native-run", "provenance": source | (provenance or {})}
         (root / ".executor_status").write_text("SUCCESS")
         for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
             row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
@@ -306,6 +300,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
                 original = pq.read_table(run_panel / presets.TASK_MANIFEST_FILENAME).to_pylist()
                 run_panel = root / f"heldout-{evaluation.name}"
                 run_panel.mkdir()
+                (run_panel / "summary.json").write_bytes((Path(selected.path()) / "summary.json").read_bytes())
                 manifest = [
                     {**row, "task_id": first_panel_task} if row["task_id"] == "task-0" else row for row in original
                 ]
@@ -390,17 +385,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
             write_json(root / "terminal.json", {"config": launch, "result": result})
         if not missing_receipt:
             write_json(root / "resolved-launch.yaml", {"config": launch})
-        native_run = SkyRLRun(
-            path=str(root),
-            hf_model_uri=None,
-            global_step=preset.updates,
-            tokenizer_uri="tokenizer",
-            tokenizer_revision="revision",
-            checkpoint_root=str(root / "checkpoints"),
-            draft_checkpoint_root=None,
-            terminal_manifest_uri=str(root / "terminal.json"),
-            iris_job_id="/tests/native-run",
-        )
+        native_run = result_run.model_copy(update={"tokenizer_uri": "tokenizer", "tokenizer_revision": "revision"})
         config = SkyRLRunConfig(
             launch_config_yaml=yaml.safe_dump(launch),
             run_id=launch["run"].get("id", name),
@@ -439,18 +424,3 @@ def write_json(path, value):
 def answer(task, score, *, low=0, high=1, status="verified", tokens=1, error=None):
     verification = {"status": status, "score": score, "score_min": low, "score_max": high}
     return {"task_id": task, "response_token_ids": [1] * tokens, "exception_type": error, "verification": verification}
-
-
-def task_parquet(path, identifiers):
-    template = answer_task(
-        RawRow("template", Source(dataset="fixture", revision="1", row="template", importer_revision="1"), {}),
-        prompt="Reply yes.",
-        spec=ExactSpec(expected=("yes",)),
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(
-        pa.Table.from_pylist(
-            [{TASK_SPEC_COLUMN: template.model_copy(update={"id": item}).model_dump_json()} for item in identifiers]
-        ),
-        path,
-    )
