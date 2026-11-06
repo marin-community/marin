@@ -176,11 +176,11 @@ For a later authorized deployment:
    secret shell. Populate secret values out of band. A second person must run
    `review-grant` on the focused IAM draft and apply its reviewed startup bindings
    in global stack `marin`. The intended Marina human allowlist is unchanged.
-4. Build/push the committed candidate to the future image destinations. Deploy the
-   service, then have the reviewer apply the service IAP/invoker bindings. Transfer
-   ownership of the existing DNS CNAME to the renamed stack through a reviewed state
-   move/import; preserve its value and avoid duplicate DNS resources. Create the
-   domain mapping and verify managed TLS.
+4. Before the first full application apply, transfer ownership of the existing DNS
+   CNAME to the renamed stack through a reviewed state move/import. Preserve its
+   value and avoid duplicate DNS resources. Build/push the committed candidate to
+   the future image destinations, deploy the service and domain mapping, then have
+   the reviewer apply the service IAP/invoker bindings. Verify managed TLS.
 5. Reimport the two authentic saved bundles and corpus into `knotmeter`; repeat the
    local parity, replay and role checks. Verify authorized browser access, anonymous
    denial on vanity/direct URLs and APIs, and the intended GitHub WIF import/refresh.

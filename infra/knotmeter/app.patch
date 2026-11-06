@@ -350,6 +350,55 @@ index 9a21e1f..49986c5 100644
                        target="_blank"
                        rel="noopener noreferrer"
                        className="text-xs hover:underline text-foreground underline"
+diff --git a/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx b/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx
+index e1cf052..471bf0d 100644
+--- a/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx
++++ b/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx
+@@ -75,7 +75,7 @@ const STRINGS = {
+       "The interactivity operating point used for interpolation. Move the slider to see how each chip's performance changes at different interactivity levels.",
+     captionTitle: (yTitle: string, target: number, isAgentic: boolean) =>
+       `${yTitle} Over Time at ${target} tok/s/user ${isAgentic ? 'P90 ' : ''}Interactivity`,
+-    source: 'Source: SemiAnalysis InferenceX™',
++    source: 'Source: Knotmeter (Marin)',
+     updated: 'Updated:',
+     logScale: 'Log Scale',
+     highContrast: 'High Contrast',
+@@ -100,7 +100,7 @@ const STRINGS = {
+     targetTooltip: '设置插值计算采用的交互性水平。移动滑块可比较不同交互性水平下的芯片性能。',
+     captionTitle: (yTitle: string, target: number, isAgentic: boolean) =>
+       `${yTitle} 随时间变化（${isAgentic ? 'P90 ' : ''}交互性 ${target} tok/s/user）`,
+-    source: '来源：SemiAnalysis InferenceX™',
++    source: '来源：Knotmeter (Marin)',
+     updated: '更新时间：',
+     logScale: '对数缩放',
+     highContrast: '高对比度',
+@@ -436,7 +436,7 @@ export default function HistoricalTrendsDisplay() {
+               analyticsPrefix="historical"
+               zoomResetEvent="d3chart_zoom_reset_historical-trend"
+               setIsLegendExpanded={setIsLegendExpanded}
+-              exportFileName={`InferenceX_historical_${selectedModel}`}
++              exportFileName={`Knotmeter_historical_${selectedModel}`}
+               onExportCsv={() => {
+                 const { headers, rows } = historicalTrendToCsv(
+                   trendLines,
+@@ -445,7 +445,7 @@ export default function HistoricalTrendsDisplay() {
+                   targetInteractivity,
+                   isAgentic ? 'p90' : 'median',
+                 );
+-                exportToCsv(`InferenceX_historical_${selectedModel}`, headers, rows);
++                exportToCsv(`Knotmeter_historical_${selectedModel}`, headers, rows);
+               }}
+             />
+             <Card>
+@@ -479,7 +479,7 @@ export default function HistoricalTrendsDisplay() {
+                       date={
+                         selectedRunDate ? historicalRunDate(selectedRunDate, locale) : undefined
+                       }
+-                      source="SemiAnalysis InferenceX™"
++                      source="Knotmeter (Marin)"
+                     />
+                     {showsJalapenoPreview && <JalapenoOfficialPreviewNotice />}
+                     {showsVeraRubinPreview && <VeraRubinOfficialPreviewNotice />}
 diff --git a/packages/app/src/hooks/api/use-trace-server-metrics.ts b/packages/app/src/hooks/api/use-trace-server-metrics.ts
 index 2605cfb..a4b2c85 100644
 --- a/packages/app/src/hooks/api/use-trace-server-metrics.ts
