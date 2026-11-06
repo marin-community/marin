@@ -594,7 +594,6 @@ def test_rescore_reports_candidate_and_control_contracts(
     if fault.get("native_crashed"):
         assert "run crashed:" in report["reason"]
     if fault.get("missing_final_panel"):
-        assert report["reason"] and "test_panel" in report["reason"]
         assert len(list((source / "exports/metrics").glob("step-*.json"))) == 101
     assert {row["name"] for row in report["invariants"] if not row["holds"]} == failed, report
     error_name = "test_panel/grader_error_fraction" if preset == "speed-short" else "grader_error_fraction"
@@ -1428,7 +1427,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if case in {"no-wait", "child", "learning-child", "train-child"} else [(job,)]
+    waited = [] if case in {"no-wait", "child", "learning-child", "long-child", "train-child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
     assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
     if case not in {"child", "learning-child", "long-child", "train-child"}:

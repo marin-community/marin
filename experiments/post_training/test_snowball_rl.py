@@ -61,7 +61,13 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
-    long_init = ArtifactStep.adopt("tests/long-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
+    initializer_path = tmp_path / "long-initializer" / "hf"
+    initializer_path.mkdir(parents=True)
+    for filename in ("config.json", "tokenizer_config.json"):
+        (initializer_path / filename).write_text("{}")
+    long_init = ArtifactStep.adopt(
+        "tests/long-initializer", "2026.10.26", str(initializer_path.parent), kind=LevanterCheckpoint
+    )
     initialized = snowball.build_run(presets.PRESETS["learning-long"], init=long_init).runs[0]
     path = tmp_path / "initialized-long.yaml"
     _render(initialized, path, runtime=True)
