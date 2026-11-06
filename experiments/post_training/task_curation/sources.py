@@ -3,7 +3,12 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-from experiments.post_training.task_curation.datasets import campaign_releases, structure_closure, unconverted
+from experiments.post_training.task_curation.datasets import (
+    ai2_qasper_verifiable,
+    campaign_releases,
+    structure_closure,
+    unconverted,
+)
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
@@ -71,6 +76,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *ai2_qasper_verifiable.sources(),
         *structure_closure.sources(),
         *campaign_releases.sources(),
         *unconverted.sources(),
