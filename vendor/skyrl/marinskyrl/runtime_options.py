@@ -5,6 +5,11 @@ from enum import StrEnum
 from typing import Any
 
 
+class BatchBuilder(StrEnum):
+    DRIVER = "driver"
+    WORKER = "worker"
+
+
 class R3Transport(StrEnum):
     BY_VALUE = "by_value"
     RESIDENT = "resident"

@@ -141,10 +141,13 @@ class RowFacts:
     spanning_policy_steps: tuple[bool, ...]
     prompt_len: np.ndarray
     response_len: np.ndarray
+    score: np.ndarray
+    loss_tokens: np.ndarray
     is_last_step: np.ndarray
     exclude_from_baseline: np.ndarray
     fields: BatchFields
     rewards: GroupRewards
+    scalar_rewards: bool
     loop_credit: bool
     shaping_components: tuple[RewardShapingComponents, ...] | None
     shaping_response_tokens: tuple[int, ...]
@@ -193,12 +196,23 @@ class RowFacts:
             spanning_policy_steps=tuple(bool(steps.size and steps.min() != steps.max()) for steps in stamped_steps),
             prompt_len=np.asarray([len(row) for row in batch["prompt_token_ids"]], dtype=np.int64),
             response_len=np.asarray([len(row) for row in batch["response_ids"]], dtype=np.int64),
+            score=np.asarray(
+                [
+                    np.sum(reward, dtype=np.float32) if isinstance(reward, list) else float(reward) if response else 0.0
+                    for reward, response in zip(batch["rewards"], responses, strict=True)
+                ],
+                dtype=np.float32,
+            ),
+            loss_tokens=np.asarray([mask.sum() for mask in masks], dtype=np.int64),
             is_last_step=np.asarray(batch.get("is_last_step") or [True] * count, dtype=bool),
             exclude_from_baseline=np.asarray(
                 batch.get("exclude_from_baseline") or [False] * len(batch["response_ids"]), dtype=bool
             ),
             fields=BatchFields.from_batch(batch),
             rewards=rewards,
+            scalar_rewards=all(
+                not isinstance(reward, list) or np.count_nonzero(reward) <= 1 for reward in batch["rewards"]
+            ),
             loop_credit=any(np.count_nonzero(row) for row in batch.get("loop_advantages") or ()),
             shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
             if batch.get("reward_shaping_components") is not None

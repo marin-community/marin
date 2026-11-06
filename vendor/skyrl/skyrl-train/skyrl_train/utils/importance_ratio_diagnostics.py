@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
+from typing import Literal, Protocol
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
@@ -40,6 +41,53 @@ LOG_RATIO_BASE_METRIC_KEYS = (
     "log_ratio_abs_p99",
     "log_ratio_diagnostics_failed",
 )
+
+
+class MetricReduction(Protocol):
+    """Reduce diagnostic tensors at one local or distributed ownership scope."""
+
+    def mean(self, values: torch.Tensor) -> float: ...
+    def sum(self, values: torch.Tensor) -> torch.Tensor: ...
+    def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor: ...
+
+
+class LocalReduction:
+    """Preserve local tensor arithmetic for driver diagnostics."""
+
+
+    def mean(self, values: torch.Tensor) -> float:
+        return values.mean().item()
+
+
+    def sum(self, values: torch.Tensor) -> torch.Tensor:
+        return values.sum()
+
+    def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor:
+        return values
+
+
+class WorldReduction:
+    """Count one contribution per ordinary DP slice in world-wide diagnostics."""
+
+    def __init__(self, all_reduce: Callable, contributes: bool):
+        self.all_reduce = all_reduce
+        self.contributes = contributes
+
+    def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor:
+        values = values.clone()
+        if not self.contributes:
+            minimum = -math.inf if values.is_floating_point() else torch.iinfo(values.dtype).min
+            values.fill_(0 if operation == "sum" else minimum)
+        return self.all_reduce(values, operation)
+
+    def sum(self, values: torch.Tensor) -> torch.Tensor:
+        return self.combine(values.double().sum(), "sum")
+
+
+    def mean(self, values: torch.Tensor) -> float:
+        totals = torch.stack([values.new_tensor(values.numel(), dtype=torch.float64), values.double().sum()])
+        count, total = self.combine(totals, "sum").tolist()
+        return total / count if count else math.nan
 
 
 def linear_quantiles(values: torch.Tensor, probabilities: tuple[float, ...]) -> list[float]:
@@ -141,6 +189,7 @@ def mismatch_ratio_metrics(
     *,
     eps_clip_low: float = 0.2,
     eps_clip_high: float = 0.2,
+    reduction: MetricReduction | None = None,
 ) -> dict[str, float]:
     """Trainer-minus-vLLM log-ratio statistics by per-token staleness bucket and response position."""
     mask = loss_mask.detach().cpu() > 0
@@ -161,16 +210,20 @@ def mismatch_ratio_metrics(
         key: total.view(len(MISMATCH_STALENESS_BUCKETS), 4)
         for key, total in _grouped_moments(values, groups, 4 * len(MISMATCH_STALENESS_BUCKETS)).items()
     }
+    if reduction is not None:
+        grid = {key: reduction.combine(total, "sum") for key, total in grid.items()}
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
-    # Only these two buckets get the sorted statistics; the others take moments from the grid.
-    staleness0 = groups < 4
-    pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
-    full_statistics = {
-        "pooled": pooled,
-        "staleness0": pooled
-        if bool(staleness0.all())
-        else ratio_statistics(values[staleness0], eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high),
-    }
+    full_statistics = {}
+    if reduction is None:
+        # Only these two buckets get the sorted statistics; the others take moments from the grid.
+        staleness0 = groups < 4
+        pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
+        full_statistics = {
+            "pooled": pooled,
+            "staleness0": pooled
+            if bool(staleness0.all())
+            else ratio_statistics(values[staleness0], eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high),
+        }
     bucket_rows = {"pooled": slice(None)}
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})
 
