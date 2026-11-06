@@ -8,7 +8,7 @@
   "budget.max_validation_retries": 2,
   "budget.max_modify_rounds": 2,
   "author.max_turns": 100,
-  "author.max_prompt_tokens": 120000,
+  "author.max_prompt_tokens": 160000,
   "tools.output_chars": 20000,
   "runtime.host": "iris",
   "author.image": "",
@@ -33,5 +33,6 @@
   "sampling.top_p": 0.95,
   "sampling.reasoning_effort": "high",
   "sampling.max_continuations": 0,
-  "sampling.max_tokens": 131072
+  "sampling.max_tokens": 131072,
+  "author.soft_prompt_tokens": 130000
 }

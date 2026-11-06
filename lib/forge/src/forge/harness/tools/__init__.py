@@ -25,7 +25,7 @@ def standard_tools(
 ) -> Mapping[str, Tool[object]]:
     task_path = policy.setting("author.workdir", str).rstrip("/") + "/task.json"
     tools: tuple[Tool[object], ...] = (
-        ShellTool(policy.setting("tools.output_chars", int)),
+        ShellTool(),
         ReadFileTool(),
         WriteFileTool(),
         GradeTool(task_path, factories, settings),
@@ -38,10 +38,10 @@ def standard_tools(
 
 
 def adversary_tools(
-    *, policy: Policy, task_path: str, factories: Mapping[str, MachineFactory], settings: LoweringSettings
+    *, task_path: str, factories: Mapping[str, MachineFactory], settings: LoweringSettings
 ) -> Mapping[str, Tool[object]]:
     tools: tuple[Tool[object], ...] = (
-        ShellTool(policy.setting("tools.output_chars", int)),
+        ShellTool(),
         ReadFileTool(),
         GradeTool(task_path, factories, settings),
         ReportTool(),

@@ -19,7 +19,6 @@ class ShellArgs:
 
 @dataclass(frozen=True, slots=True)
 class ShellTool(ValidatedTool[ShellArgs]):
-    output_chars: int
     name = "shell"
     description = "Run a shell command with a timeout in seconds."
     args_type = ShellArgs
@@ -31,13 +30,9 @@ class ShellTool(ValidatedTool[ShellArgs]):
             json.dumps(
                 {
                     "exit_code": result.exit_code,
-                    "stdout": result.stdout[: self.output_chars],
-                    "stderr": result.stderr[: self.output_chars],
-                    "truncated": (
-                        result.truncated
-                        or len(result.stdout) > self.output_chars
-                        or len(result.stderr) > self.output_chars
-                    ),
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "truncated": result.truncated,
                 }
             )
         )

@@ -162,12 +162,24 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
     )
     author = AgenticHarness(
-        Limits(policy.setting("author.max_turns", int), policy.setting("author.max_prompt_tokens", int)),
+        Limits(
+            policy.setting("author.max_turns", int),
+            policy.setting("author.max_prompt_tokens", int),
+            policy.setting("author.soft_prompt_tokens", int),
+        ),
         sampling,
         policy.prompt("author.nudge").template,
+        policy.prompt("author.wrap_up").template,
+        policy.setting("tools.output_chars", int),
     )
     adversaries = {
-        name: AgenticHarness(Limits(policy.setting("adversary.max_turns", int), None), sampling, "Finish your audit.")
+        name: AgenticHarness(
+            Limits(policy.setting("adversary.max_turns", int), None),
+            sampling,
+            "Finish your audit.",
+            "Summarize your findings and report now.",
+            policy.setting("tools.output_chars", int),
+        )
         for name in policy.setting("adversary.roster", tuple)
     }
     tools = {"author": standard_tools(policy=policy, factories=factories, settings=settings, gate=submit_gate)}
@@ -179,7 +191,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         }
     tools.update(
         {
-            name: adversary_tools(policy=policy, task_path=f"{root}/task.json", factories=factories, settings=settings)
+            name: adversary_tools(task_path=f"{root}/task.json", factories=factories, settings=settings)
             for name in adversaries
         }
     )

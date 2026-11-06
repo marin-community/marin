@@ -35,6 +35,7 @@ from forge.resources.inference import InferenceClient, InferenceRequest, complet
 class Limits:
     max_turns: int | None
     max_prompt_tokens: int | None
+    soft_prompt_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,12 +43,19 @@ class AgenticHarness(Harness):
     limits: Limits
     sampling: Sampling
     nudge: str
+    wrap_up: str
+    output_chars: int
+
+    def __post_init__(self) -> None:
+        if self.output_chars < 1:
+            raise ValueError("Tool output cap must be positive")
 
     @override
     async def run(
         self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         turns, prompt_tokens, nudged = 0, 0, False
+        warned = Message("user", self.wrap_up) in session.messages
         schemas = tuple(tool.schema for tool in tools.values())
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
@@ -59,9 +67,17 @@ class AgenticHarness(Harness):
                     return Stopped(StopReason.TURN_LIMIT, session)
                 if self.limits.max_prompt_tokens is not None and prompt_tokens >= self.limits.max_prompt_tokens:
                     return Stopped(StopReason.CONTEXT_LIMIT, session)
+                if (
+                    not warned
+                    and self.limits.soft_prompt_tokens is not None
+                    and prompt_tokens >= self.limits.soft_prompt_tokens
+                ):
+                    session = Conversation((*session.messages, Message("user", self.wrap_up)), schemas)
+                    warned = True
                 result = await ctx.emit(InferenceRequest(session.messages, schemas, self.sampling))
                 turns += 1
-                prompt_tokens = result.usage.prompt_tokens + result.usage.cached_tokens
+                # Provider prompt_tokens already includes the cached portion.
+                prompt_tokens = result.usage.prompt_tokens
                 session = Conversation(
                     (
                         *session.messages,
@@ -88,10 +104,12 @@ class AgenticHarness(Harness):
                         return Returned(outcome.tool, outcome.payload, session)
                     if isinstance(outcome, FinishRequest):
                         return Stopped(StopReason.FINISHED, session)
-                    await ctx.emit(ToolReturned(call.id, call.name, outcome.content))
-                    session = Conversation(
-                        (*session.messages, Message("tool", outcome.content, tool_call_id=call.id)), schemas
-                    )
+                    content = outcome.content
+                    if len(content) > self.output_chars:
+                        marker = "\n[output truncated]"
+                        content = content[: max(0, self.output_chars - len(marker))] + marker[: self.output_chars]
+                    await ctx.emit(ToolReturned(call.id, call.name, content))
+                    session = Conversation((*session.messages, Message("tool", content, tool_call_id=call.id)), schemas)
                 if not result.tool_calls and result.finish_reason == FinishReason.STOP:
                     if nudged:
                         return Stopped(StopReason.FINISHED, session)
