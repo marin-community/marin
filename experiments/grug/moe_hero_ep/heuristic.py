@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling LR heuristic and the EP64 hero config builder.
+"""Compute-scaling LR heuristic and the hero config builder.
 
 ``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
@@ -97,12 +97,13 @@ HERO_MODEL = GrugModelConfig(
     local_kv_heads=12,
     global_kv_heads=6,
     head_dim=128,
-    max_seq_len=65536,
+    max_seq_len=262144,
     sliding_window=2048,
     global_every=4,
     capacity_factor=1.5,
     initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
     qk_mult=1.66,
+    qk_mult_long_scale=1.108,
     sconv=True,
     attention_implementation="gpu_fa4_cute_sm100",
     moe_implementation="ragged_all_to_all",
@@ -116,7 +117,7 @@ HERO_MODEL = GrugModelConfig(
 
 
 def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
+    """The fixed hero model plus its compute-scaled MuonH optimizer."""
     model = HERO_MODEL
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,
