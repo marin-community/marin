@@ -23,10 +23,10 @@ Segment semantics: each maximal run of equal segment IDs is one document, the pa
 ID that reappears after a different ID starts a new document here, whereas ``reference_attention`` would let the
 two runs see each other. Query and key segment IDs must be equal (self-attention).
 
-JAX 0.11 deprecates the Pallas Triton backend, and Mosaic GPU, its replacement, does not target AMD GPUs. The same
-kernels launched through ``jax_triton`` replace this module once jaxlib fixes a race in its ROCm kernel loader: on a
-kernel's first launch it reads and deletes the compiled hsaco file without holding its cache lock, so a jax_triton
-kernel fails when one process launches it on several AMD GPUs at once.
+JAX 0.11 deprecates the Pallas Triton backend, and Mosaic GPU, its replacement, does not target AMD GPUs.
+``gpu_triton_flash`` (``_triton_flash.py``) runs the same kernels through ``jax_triton`` and is meant to replace this
+module. It needs ``jax_rocm10_plugin`` 0.12.0 or newer, whose kernel loader no longer races when one process launches
+a new kernel on several GPUs at once.
 """
 
 import dataclasses
