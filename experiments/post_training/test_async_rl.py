@@ -7,6 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import click
 import pytest
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import _launcher_command as launcher_command_for_test
@@ -24,6 +25,7 @@ print(json.dumps({
     "entrypoint": launch.runtime.entrypoint,
     "training_type": launch.runtime.training_type,
     "batch_policy": launch.skyrl.trainer.rollout_buffer.batch_policy,
+    "seed": launch.skyrl.trainer.seed,
 }))
 """
 
@@ -63,8 +65,19 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
         version="2026.09.18",
         settings=("trainer.rollout_buffer.max_in_flight=1",),
     )
+    seeded = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", seed=23)
+    assert seeded.rl.name != run.rl.name
     assert capped.rl.name != run.rl.name
     assert capped.evaluation.name != run.evaluation.name
+
+
+@pytest.mark.parametrize(
+    "setting",
+    ("trainer.rollout_buffer.max_staleness_steps=-1", "trainer.rollout_buffer.max_in_flight=0"),
+)
+def test_invalid_rollout_limits_are_rejected_before_launch(setting):
+    with pytest.raises(click.BadParameter):
+        async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", settings=(setting,))
 
 
 @pytest.mark.timeout(180)  # A cold cache must install the locked CPU-safe launcher dependencies.
@@ -81,7 +94,7 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
 def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, settings, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
-    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18", settings=settings)
+    run = async_rl.build_run(SNOWBALL_POLICY, preset, version="2026.09.18", settings=settings, seed=23)
     launch = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(launch.launch_config_yaml)
@@ -91,6 +104,7 @@ def test_launcher_composes_pinned_rollout_buffer_config(preset, training_type, s
         "entrypoint": "skyrl_train.entrypoints.main_base",
         "training_type": training_type,
         "batch_policy": "rolling",
+        "seed": 23,
     }
 
 
