@@ -23,7 +23,6 @@ import numpy as np
 import optax
 import pytest
 import tensorstore as ts
-from levanter.tensorstore_serialization import _create_ocdbt_spec
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
@@ -41,6 +40,7 @@ from levanter.grug.grug_moe import (
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
+from levanter.tensorstore_serialization import _create_ocdbt_spec
 from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
