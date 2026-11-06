@@ -7,44 +7,39 @@
 helper declarations), the theorem ``statement`` through its final ``:=``, and the ``target`` theorem
 name. The reply's last ``lean4``/``lean`` code block (else its last code block, else the whole reply)
 is either a proof term or, when it declares the target theorem itself, a whole file after the imports.
-Both files below are named ``Task.lean``, so that private names agree. Each step runs as its own
-unprivileged Unix uid, chosen afresh for each grade, after the machine's world-writable directories and
-``/tests``, where a source may keep a reference proof hidden from the solver, are closed to those uids;
-the three steps that write run in a directory only their uid can write, and verification writes nothing:
+Both files below are named ``Task.lean``, so that private names agree. Each grade runs in a fresh
+sandbox. Root runs the trusted steps; the reply's own steps run as one unprivileged uid, chosen at random
+for the grade, in a directory only that uid can write, after the machine's world-writable directories
+and ``/tests``, where a source may keep a reference proof hidden from the solver, are closed to it:
 
-1. The reference step compiles the reference: the statement proved by ``sorry``, then a check, run by
-   Lean, that the module declares the target as a theorem, that no declaration's statement uses
-   ``sorry``, that only the target's proof does, and that the module declares no axiom
-   (``native_decide`` declares one).
-2. The candidate step compiles the candidate: the statement followed by the proof term in parentheses, or
-   the imports followed by the reply's file. Elaboration runs arbitrary code, including any commands
+1. Root compiles the reference: the statement proved by ``sorry``, then a check, run by Lean, that the
+   module declares the target as a theorem, that no declaration's statement uses ``sorry``, that only
+   the target's proof does, and that the module declares no axiom (``native_decide`` declares one).
+2. The candidate's uid compiles the candidate: the statement followed by the proof term in parentheses,
+   or the imports followed by the reply's file. Elaboration runs arbitrary code, including any commands
    the reply contains, so everything this uid writes is untrusted data; only the target, as replayed
    below, counts.
-3. The export step runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's
-   object file into bounded JSON data.
-4. The verify step runs ``lean-verify``, which reads only that JSON and the reference object file, and
-   replays the target's dependency closure in the kernel against the reference's imports. The target
-   scores 1 only if it is accepted in proving mode, with the reference's type and the reference's
-   statement declarations unchanged, and its axioms are among ``propext``, ``Classical.choice`` and
-   ``Quot.sound``.
+3. The same uid runs ``lean-export`` from Prime Intellect's checker, which turns the candidate's object
+   file into bounded JSON data. Then every process of that uid is killed, and root copies the data, a
+   regular file opened without following links.
+4. Root runs ``lean-verify``, which reads only that copy and the reference object file, and replays the
+   target's dependency closure in the kernel against the reference's imports. The target scores 1 only
+   if it is accepted in proving mode, with the reference's type and the reference's statement
+   declarations unchanged, and its axioms are among ``propext``, ``Classical.choice`` and ``Quot.sound``.
 
-Root only orchestrates, and adopts the steps' orphaned processes so that it reaps them whatever the
-machine's init does. After each step every process of the step's uid is killed and System V IPC
-objects are removed, before root copies the step's output, a regular file opened without following
-links; while a step runs, its directory's size and file count are checked, a soft bound that a hard
-storage limit on the grading machine would make strict. The reward on stdout is 0
-only for an outcome the proof caused: the candidate's compile or export failing in any way (the
-reference has just compiled on the same machine, and the export reads only the candidate's object file),
-the candidate's own time or space allowance exceeded, or a rejection by ``lean-verify``. Any other
-failure (a tool or user switch that does not work, a reference that does not validate, ``lean-verify``
-failing or exceeding its allowance, which a valid but slow proof can do, a malformed verdict, the overall
-deadline) exits non-zero, so the pipeline records an infrastructure error rather than a score. RL
-training masks those rollouts; of these outcomes, a reply can reach only ``lean-verify`` running out of
-time or failing on the proof data, after its proof has compiled and exported. Details go to stderr as
-JSON.
+While the candidate's steps run, their directory's size and file count are checked, a soft bound that a
+hard storage limit on the grading machine would make strict. The reward on stdout is 0 only for an
+outcome the proof caused: the candidate's compile or export failing in any way (the reference has just
+compiled on the same machine, and the export reads only the candidate's object file), the candidate's
+own time or space allowance exceeded, its proof data missing or unreadable, or a rejection by
+``lean-verify``. Any other failure (a tool or uid switch that does not work, a reference that does not
+validate, ``lean-verify`` failing or exceeding its allowance, which a valid but slow proof can do, a
+malformed verdict, the overall deadline) exits non-zero, so the pipeline records an infrastructure error
+rather than a score. RL training masks those rollouts; of these outcomes, a reply can reach only
+``lean-verify`` running out of time or failing on the proof data, after its proof has compiled and
+exported. Details go to stderr as JSON.
 """
 
-import ctypes
 import errno
 import json
 import os
@@ -56,7 +51,6 @@ import stat
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -68,24 +62,22 @@ LEAN_ROOT = Path("/opt/lean")
 VERIFY_BIN = LEAN_ROOT / "verify/.lake/build/bin/lean-verify"
 EXPORT_BIN = LEAN_ROOT / "verify/.lake/build/bin/lean-export"
 SETPRIV = Path("/usr/bin/setpriv")
-IPCRM = Path("/usr/bin/ipcrm")
 WORK = Path("/tmp/lean-grade")
 MODULE_FILE = "Task.lean"
 OBJECT_FILE = "Task.olean"
 PROOF_DATA = "proof.json"
 """The file ``lean-export`` writes and ``lean-verify`` reads."""
 LEAN_VERSION = "4.34.1"
-"""The Lean release ``lean.Dockerfile`` installs (``LEAN_TOOLCHAIN``); each step's uid must run it."""
+"""The Lean release ``lean.Dockerfile`` installs (``LEAN_TOOLCHAIN``); the candidate's uid must run it."""
 LEAN_THREADS = "--threads=4"
-"""Bounds each compile's threads, which count against the step uid's process limit."""
+"""Bounds each compile's threads, which count against the candidate uid's process limit."""
 
-FIRST_STEP_UID, STEP_UID_BLOCKS = 20000, 10000
-"""Each grade's four step uids are a block of consecutive uids from 20000 up, chosen at random: process
-limits count every process of a uid on the host, so fixed uids would let one grade starve another. Two
-grades on one host share a block with probability 1 in 10,000, which neither can see."""
-PR_SET_CHILD_SUBREAPER = 36
+CANDIDATE_UIDS = range(20000, 60000)
+"""Where each grade's candidate uid is drawn from at random: process limits count every process of a uid
+on the host, so a fixed uid would let one grade starve another. Two grades on one host share a uid with
+probability 1 in 40,000, which neither can see."""
 SHARED_DIRECTORIES = ("/tmp", "/var/tmp", "/run/lock", "/dev/shm")
-"""The machine's world-writable directories, closed to the step uids before any step runs."""
+"""The machine's world-writable directories, closed to the candidate's uid before any step runs."""
 ALLOWED_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 TARGET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_'.!?]*")
 """A target name that is safe to write into the reference check as a Lean string."""
@@ -110,15 +102,14 @@ MAX_REPLY = 1 << 20
 MAX_PROOF = 1 << 16
 """Longest proof graded, in bytes."""
 MAX_FILE = 1 << 28
-"""Largest file a step's uid may write."""
+"""Largest file the candidate's uid may write."""
 MAX_STEP_BYTES = 1 << 29
 MAX_STEP_FILES = 2000
-"""Bytes and directory entries a step may leave in its directory before it is stopped."""
-MAX_OBJECT = 1 << 28
+"""Bytes and directory entries the candidate's steps may leave in their directory before they are stopped."""
 MAX_PROOF_DATA = 1 << 27
-"""Largest object file and exported proof data copied between steps, in bytes."""
+"""Largest exported proof data root copies for ``lean-verify``, in bytes."""
 MAX_PROCESSES = 1024
-"""Processes and threads each step's uid may run."""
+"""Processes and threads the candidate's uid may run."""
 OUTPUT_TAIL = 4000
 """Bytes of a step's output kept for diagnostics."""
 FENCE = re.compile(r"```[ \t]*(?P<language>[\w+-]*)[ \t]*\n(?P<code>.*?)```", re.DOTALL)
@@ -156,7 +147,7 @@ class Stop(StrEnum):
     DEADLINE = "deadline"
     """The overall deadline came first: an infrastructure error, whichever step it was."""
     QUOTA = "quota"
-    """The step's directory grew past its allowance."""
+    """The candidate's directory grew past its allowance."""
 
 
 class GraderFailure(Exception):
@@ -256,8 +247,8 @@ def candidate_source(contract: Contract, block: str) -> str:
     return f"{contract.prefix.rstrip()}\n\n{contract.statement.rstrip()}\n  (\n{body}\n  )\n"
 
 
-def make_step_dir(name: str, uid: int) -> Path:
-    """A fresh directory for one step that only ``uid`` can write."""
+def make_step_dir(name: str, uid: int = 0) -> Path:
+    """A fresh directory that only ``uid`` can write."""
     path = WORK / name
     path.mkdir(mode=0o700)
     os.chown(path, uid, uid)
@@ -266,7 +257,7 @@ def make_step_dir(name: str, uid: int) -> Path:
 
 
 def close_grader_files() -> None:
-    """Make ``/tests`` root-only, so that no step reads the task's evidence or the grader's own files."""
+    """Make ``/tests`` root-only, so that the candidate reads neither the task's evidence nor the grader's files."""
     os.chown(TESTS, 0, 0)
     TESTS.chmod(0o700)
     if TESTS.stat().st_mode & 0o077:
@@ -274,7 +265,7 @@ def close_grader_files() -> None:
 
 
 def close_shared_directories() -> None:
-    """Make the machine's world-writable directories writable by root only, so a step writes only its own."""
+    """Make the machine's world-writable directories writable by root only, so the candidate writes only its own."""
     for directory in SHARED_DIRECTORIES:
         path = Path(directory)
         if not path.is_dir():
@@ -284,27 +275,9 @@ def close_shared_directories() -> None:
             raise GraderFailure(f"{directory} is still world-writable")
 
 
-def become_subreaper() -> None:
-    """Make the grader the parent of every orphaned process a step leaves, so that the grader reaps them."""
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
-        raise GraderFailure(f"cannot adopt the steps' processes: {os.strerror(ctypes.get_errno())}")
-
-
-def reap_orphans() -> None:
-    """Collect every exited process the grader has adopted; called only once the step's own process is collected."""
-    while True:
-        try:
-            pid, _ = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            return
-        if pid == 0:
-            return
-
-
 def kill_user(uid: int) -> None:
-    """Kill every process of ``uid`` in this PID namespace with one signal sent as that user, and reap them,
-    until none is left."""
+    """Kill every process of ``uid`` in this PID namespace with one signal sent as that uid, until none is left.
+    The sandbox's init reaps them."""
     for _ in range(50):
         child = os.fork()
         if child == 0:
@@ -316,11 +289,10 @@ def kill_user(uid: int) -> None:
             finally:
                 os._exit(0)
         os.waitpid(child, 0)
-        reap_orphans()
         if not processes_of(uid):
             return
         time.sleep(0.05)
-    raise GraderFailure(f"processes of user {uid} survived repeated kills")
+    raise GraderFailure(f"processes of uid {uid} survived repeated kills")
 
 
 def processes_of(uid: int) -> list[int]:
@@ -343,19 +315,11 @@ def processes_of(uid: int) -> list[int]:
     return pids
 
 
-def remove_ipc() -> None:
-    """Remove System V IPC objects a step left, which would otherwise outlive it."""
-    result = subprocess.run([str(IPCRM), "--all"], capture_output=True, text=True, check=False, timeout=30)
-    if result.returncode != 0:
-        raise GraderFailure(f"ipcrm failed: {result.stderr.strip()}")
-
-
-def apply_step_limits() -> None:
-    """In each step's child, still as root: cap files, processes and message queues; die first on OOM."""
+def apply_candidate_limits() -> None:
+    """In each of the candidate's steps, still as root: cap files and processes; die first on OOM."""
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE, MAX_FILE))
     resource.setrlimit(resource.RLIMIT_NPROC, (MAX_PROCESSES, MAX_PROCESSES))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_MSGQUEUE, (0, 0))
     Path("/proc/self/oom_score_adj").write_text("1000")
 
 
@@ -365,8 +329,8 @@ def as_user(uid: int) -> list[str]:
 
 
 def over_quota(directory: Path) -> bool:
-    """Whether ``directory`` holds more than the step allowance, counted without following links; a file or
-    directory that cannot be measured counts as too much."""
+    """Whether ``directory`` holds more than the candidate's allowance, counted without following links; a
+    file or directory that cannot be measured counts as too much."""
     entries, size, unreadable = 0, 0, []
     for root, directories, files in os.walk(directory, onerror=unreadable.append):
         entries += len(directories) + len(files)
@@ -393,31 +357,14 @@ def has_lean_error(log: Path) -> bool:
     return False
 
 
-@dataclass(frozen=True)
-class StepUsers:
-    """The uids the four steps run as, for one grade."""
-
-    reference: int
-    candidate: int
-    export: int
-    verify: int
-
-    @classmethod
-    def choose(cls) -> "StepUsers":
-        first = FIRST_STEP_UID + 4 * secrets.randbelow(STEP_UID_BLOCKS)
-        return cls(first, first + 1, first + 2, first + 3)
-
-    def __iter__(self) -> Iterator[int]:
-        return iter((self.reference, self.candidate, self.export, self.verify))
-
-
 class GraderSteps:
     """Runs the grader's steps against one overall deadline."""
 
-    def __init__(self, start: float, lean: str, lean_path: str, users: StepUsers) -> None:
+    def __init__(self, start: float, lean: str, lean_path: str, uid: int) -> None:
         self.start = start
         self.lean = lean
-        self.users = users
+        self.uid = uid
+        """The candidate's uid."""
         self.environment = {"PATH": f"{Path(lean).parent}:/usr/bin:/bin", "LEAN_PATH": lean_path}
         """``lean-verify`` runs ``lean`` itself, to find the toolchain's library, so the toolchain is on ``PATH``."""
         self.logs = WORK / "logs"
@@ -432,8 +379,11 @@ class GraderSteps:
         """Seconds left before the overall deadline."""
         return DEADLINE_SECONDS - (time.monotonic() - self.start)
 
-    def run(self, step: str, uid: int, argv: list[str], cwd: Path, capture: bool = False) -> StepResult:
-        """Run ``argv`` as ``uid`` in ``cwd``; stop it at its allowance, the overall deadline, or its quota."""
+    def run(
+        self, step: str, argv: list[str], cwd: Path, *, candidate: bool = False, capture: bool = False
+    ) -> StepResult:
+        """Run ``argv`` in ``cwd``, as the candidate's uid within its limits or as root; stop it at its
+        allowance, the overall deadline, or, for the candidate, its quota."""
         available = self.remaining()
         if available <= 1:
             raise GraderFailure(f"the {DEADLINE_SECONDS:g} s grading deadline left no time for the {step} step")
@@ -447,69 +397,64 @@ class GraderSteps:
         with log.open("wb") as err, stdout.open("wb") if stdout else err as out:
             try:
                 process = subprocess.Popen(
-                    [*as_user(uid), *argv],
+                    [*as_user(self.uid), *argv] if candidate else argv,
                     cwd=cwd,
                     env={**self.environment, "HOME": str(cwd)},
                     stdin=subprocess.DEVNULL,
                     stdout=out,
                     stderr=err,
                     start_new_session=True,
-                    preexec_fn=apply_step_limits,
+                    preexec_fn=apply_candidate_limits if candidate else None,
                 )
             except OSError as error:
                 raise GraderFailure(f"cannot start the {step} step: {error}") from error
             while process.poll() is None:
                 if time.monotonic() - started > limit:
                     stopped = bound
-                elif over_quota(cwd):
+                elif candidate and over_quota(cwd):
                     stopped = Stop.QUOTA
                 if stopped:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
                     break
                 time.sleep(0.2)
-        kill_user(uid)
-        remove_ipc()
         self.timings[step] = round(time.monotonic() - started, 2)
         return StepResult(None if stopped else process.returncode, stopped, log, stdout)
 
 
 def copy_untrusted(source: Path, destination: Path, limit: int) -> bool:
-    """Copy a regular file a step wrote, without following links; ``False`` if it is absent, not regular, or too big."""
+    """Copy a regular file the candidate wrote, without following links; ``False`` if it is absent, not regular,
+    too big, or cannot be read or written, which only the candidate's steps can cause."""
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError as error:
-        if error.errno in (errno.ENOENT, errno.ELOOP, errno.ENXIO):
+        with os.fdopen(fd, "rb") as reader:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                return False
+            data = reader.read(limit + 1)
+        if len(data) > limit:
             return False
-        raise GraderFailure(f"cannot read {source}: {error}") from error
-    with os.fdopen(fd, "rb") as reader:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
-            return False
-        data = reader.read(limit + 1)
-    if len(data) > limit:
+        destination.write_bytes(data)
+    except OSError:
         return False
-    destination.write_bytes(data)
-    destination.chmod(0o644)
     return True
 
 
-def check_users(steps: GraderSteps) -> None:
-    """Fail as the grader, not as the proof, when a step's uid is in use or cannot run the toolchain."""
-    for uid in steps.users:
-        if processes_of(uid):
-            raise GraderFailure(f"user {uid} already runs processes")
-        result = subprocess.run(
-            [*as_user(uid), steps.lean, "--version"],
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd="/",
-            env=steps.environment,
-            timeout=30,
-        )
-        if result.returncode != 0 or LEAN_VERSION not in result.stdout:
-            raise GraderFailure(f"user {uid} cannot run {steps.lean}: {(result.stdout + result.stderr).strip()[:500]}")
+def check_candidate_uid(steps: GraderSteps) -> None:
+    """Fail as the grader, not as the proof, when the candidate's uid is in use or cannot run the toolchain."""
+    if processes_of(steps.uid):
+        raise GraderFailure(f"uid {steps.uid} already runs processes")
+    result = subprocess.run(
+        [*as_user(steps.uid), steps.lean, "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/",
+        env=steps.environment,
+        timeout=30,
+    )
+    if result.returncode != 0 or LEAN_VERSION not in result.stdout:
+        raise GraderFailure(f"uid {steps.uid} cannot run {steps.lean}: {(result.stdout + result.stderr).strip()[:500]}")
 
 
 def accepted(verdict: object, target: str) -> bool:
@@ -548,16 +493,13 @@ class Rejected(Exception):
 
 
 def compile_reference(contract: Contract, steps: GraderSteps) -> Path:
-    """Compile and check the reference; its object file, which only root can read. Fails as the grader."""
-    reference = make_step_dir("reference", steps.users.reference)
+    """Compile and check the reference as root; its object file, which only root can read. Fails as the grader."""
+    reference = make_step_dir("reference")
     (reference / MODULE_FILE).write_text(reference_source(contract))
-    (reference / MODULE_FILE).chmod(0o644)
-    result = steps.run("reference", steps.users.reference, steps.compile_argv(), reference)
-    trusted = WORK / "trusted"
-    trusted.mkdir(mode=0o700)
-    if result.exit_code != 0 or not copy_untrusted(reference / OBJECT_FILE, trusted / OBJECT_FILE, MAX_OBJECT):
+    result = steps.run("reference", steps.compile_argv(), reference)
+    if result.exit_code != 0 or not (reference / OBJECT_FILE).is_file():
         raise GraderFailure(f"the reference does not validate ({result.stopped or result.exit_code}): {result.tail()}")
-    return trusted / OBJECT_FILE
+    return reference / OBJECT_FILE
 
 
 def graded_block(reply: bytes) -> str:
@@ -572,51 +514,45 @@ def graded_block(reply: bytes) -> str:
     return block
 
 
-def compile_candidate(contract: Contract, block: str, steps: GraderSteps, shared: Path) -> Path:
-    """Compile the candidate as the candidate step's uid; its object file, copied into ``shared``."""
-    candidate = make_step_dir("candidate", steps.users.candidate)
+def build_candidate(contract: Contract, block: str, steps: GraderSteps) -> Path:
+    """Compile the candidate and export its proof data as the candidate's uid, then stop that uid; the data,
+    copied where only root can write."""
+    candidate = make_step_dir("candidate", steps.uid)
     (candidate / MODULE_FILE).write_text(candidate_source(contract, block))
     (candidate / MODULE_FILE).chmod(0o644)
-    result = steps.run("candidate", steps.users.candidate, steps.compile_argv(), candidate)
-    if result.stopped == Stop.DEADLINE:
-        raise GraderFailure("the grading deadline passed while the candidate compiled")
-    if result.stopped:
-        raise Rejected(status=f"compile_{result.stopped}", output=result.tail())
-    if result.exit_code != 0:
-        status = "compile_failed" if result.exit_code == 1 and has_lean_error(result.log) else "compile_crashed"
-        raise Rejected(status=status, exit_code=result.exit_code, output=result.tail())
-    if not copy_untrusted(candidate / OBJECT_FILE, shared / "candidate.olean", MAX_OBJECT):
-        raise Rejected(status="object_missing_or_oversized")
-    return shared / "candidate.olean"
-
-
-def export_candidate(candidate: Path, steps: GraderSteps, shared: Path) -> Path:
-    """Export the candidate's object file to proof data as the export step's uid; the data, copied into ``shared``."""
-    export = make_step_dir("export", steps.users.export)
-    result = steps.run("export", steps.users.export, [str(EXPORT_BIN), str(candidate), str(export / PROOF_DATA)], export)
-    if result.stopped == Stop.DEADLINE:
-        raise GraderFailure("the grading deadline passed while the candidate was exported")
-    if result.stopped:
-        raise Rejected(status=f"export_{result.stopped}")
-    if result.exit_code != 0:
-        output = result.tail()
-        rejected = result.exit_code == 1 and any(message in output for message in EXPORT_REJECTIONS)
-        raise Rejected(
-            status="export_rejected" if rejected else "export_crashed", exit_code=result.exit_code, output=output
-        )
-    if not copy_untrusted(export / PROOF_DATA, shared / PROOF_DATA, MAX_PROOF_DATA):
-        raise Rejected(status="proof_data_missing_or_oversized")
-    candidate.unlink()
-    return shared / PROOF_DATA
+    try:
+        compiled = steps.run("candidate", steps.compile_argv(), candidate, candidate=True)
+        if compiled.stopped == Stop.DEADLINE:
+            raise GraderFailure("the grading deadline passed while the candidate compiled")
+        if compiled.stopped:
+            raise Rejected(status=f"compile_{compiled.stopped}", output=compiled.tail())
+        if compiled.exit_code != 0:
+            failed = compiled.exit_code == 1 and has_lean_error(compiled.log)
+            status = "compile_failed" if failed else "compile_crashed"
+            raise Rejected(status=status, exit_code=compiled.exit_code, output=compiled.tail())
+        argv = [str(EXPORT_BIN), OBJECT_FILE, PROOF_DATA]
+        exported = steps.run("export", argv, candidate, candidate=True)
+        if exported.stopped == Stop.DEADLINE:
+            raise GraderFailure("the grading deadline passed while the candidate was exported")
+        if exported.stopped:
+            raise Rejected(status=f"export_{exported.stopped}")
+        if exported.exit_code != 0:
+            output = exported.tail()
+            rejected = exported.exit_code == 1 and any(message in output for message in EXPORT_REJECTIONS)
+            status = "export_rejected" if rejected else "export_crashed"
+            raise Rejected(status=status, exit_code=exported.exit_code, output=output)
+    finally:
+        kill_user(steps.uid)
+    verify = make_step_dir("verify")
+    if not copy_untrusted(candidate / PROOF_DATA, verify / PROOF_DATA, MAX_PROOF_DATA):
+        raise Rejected(status="proof_data_missing_or_unreadable")
+    return verify / PROOF_DATA
 
 
 def verify_candidate(contract: Contract, reference: Path, proof_data: Path, steps: GraderSteps) -> tuple[float, dict]:
-    """Replay the proof data against the reference as the verify step's uid; the reward and ``lean-verify``'s verdict."""
-    shared = proof_data.parent
-    (shared / "reference.olean").write_bytes(reference.read_bytes())
-    (shared / "reference.olean").chmod(0o644)
-    argv = [str(VERIFY_BIN), str(shared / "reference.olean"), str(proof_data), "--target", contract.target]
-    result = steps.run("verify", steps.users.verify, argv, shared, capture=True)
+    """Replay the proof data against the reference as root; the reward and ``lean-verify``'s verdict."""
+    argv = [str(VERIFY_BIN), str(reference), str(proof_data), "--target", contract.target]
+    result = steps.run("verify", argv, proof_data.parent, capture=True)
     assert result.stdout is not None
     lines = [line for line in result.stdout.read_text(errors="replace").splitlines() if line.startswith("{")]
     if result.exit_code != 0 or not lines:
@@ -632,12 +568,8 @@ def verify_candidate(contract: Contract, reference: Path, proof_data: Path, step
 def grade(contract: Contract, reply: bytes, steps: GraderSteps) -> tuple[float, dict]:
     """The reward and its details: the reference is checked first, so a broken one never yields a score."""
     reference = compile_reference(contract, steps)
-    shared = WORK / "shared"
-    shared.mkdir(mode=0o755)
     try:
-        block = graded_block(reply)
-        candidate = compile_candidate(contract, block, steps, shared)
-        proof_data = export_candidate(candidate, steps, shared)
+        proof_data = build_candidate(contract, graded_block(reply), steps)
     except Rejected as rejection:
         return 0.0, rejection.details
     return verify_candidate(contract, reference, proof_data, steps)
@@ -653,21 +585,18 @@ def main() -> None:
         lean_path = (LEAN_ROOT / "lean-path").read_text().strip()
     except OSError as error:
         raise GraderFailure(f"the Lean toolchain is not installed: {error}") from error
-    for tool in (Path(lean), VERIFY_BIN, EXPORT_BIN, SETPRIV, IPCRM):
+    for tool in (Path(lean), VERIFY_BIN, EXPORT_BIN, SETPRIV):
         if not os.access(tool, os.X_OK):
             raise GraderFailure(f"missing grader tool {tool}")
     WORK.mkdir(mode=0o755)
-    become_subreaper()
     close_grader_files()
     close_shared_directories()
-    resource.setrlimit(resource.RLIMIT_MSGQUEUE, (0, 0))
-    steps = GraderSteps(start, lean, lean_path, StepUsers.choose())
-    check_users(steps)
+    steps = GraderSteps(start, lean, lean_path, CANDIDATE_UIDS[secrets.randbelow(len(CANDIDATE_UIDS))])
+    check_candidate_uid(steps)
     try:
         reward, details = grade(contract, reply, steps)
     finally:
-        for uid in steps.users:
-            kill_user(uid)
+        kill_user(steps.uid)
     if steps.remaining() <= 0:
         raise GraderFailure(f"the {DEADLINE_SECONDS:g} s grading deadline passed before the verdict")
     print(json.dumps({**details, "seconds": steps.timings}, ensure_ascii=False, default=str), file=sys.stderr)

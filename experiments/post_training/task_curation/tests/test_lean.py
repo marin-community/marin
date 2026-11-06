@@ -4,10 +4,7 @@
 """Lean proof sources freeze each statement into the contract the kernel-replay grader checks."""
 
 import os
-import subprocess
-import sys
 import time
-from pathlib import Path
 
 import pytest
 from taskcompendium.models import TextMessage
@@ -18,6 +15,7 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     GraderFailure,
     accepted,
     candidate_source,
+    copy_untrusted,
     declares_target,
     over_quota,
     proof_block,
@@ -233,23 +231,14 @@ def test_a_file_whose_path_is_too_long_to_measure_counts_as_over_quota(tmp_path)
     assert over_quota(tmp_path)
 
 
-ADOPTION_PROBE = """
-import os, subprocess, time
-from experiments.post_training.task_curation.datasets.lean.lean_grade import become_subreaper, reap_orphans
-become_subreaper()
-orphan = subprocess.run(["sh", "-c", "sleep 0.5 > /dev/null 2>&1 & echo $!"], capture_output=True, text=True).stdout
-status = open(f"/proc/{orphan.strip()}/status").read()
-parent = next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:"))
-deadline = time.monotonic() + 60
-while "State:\tZ" not in open(f"/proc/{orphan.strip()}/status").read() and time.monotonic() < deadline:
-    time.sleep(0.05)
-reap_orphans()
-print(parent == str(os.getpid()), os.path.exists(f"/proc/{orphan.strip()}"))
-"""
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="child subreapers are a Linux feature")
-def test_the_grader_adopts_and_reaps_what_a_step_leaves_running():
-    root = Path(__file__).resolve().parents[4]
-    result = subprocess.run([sys.executable, "-c", ADOPTION_PROBE], capture_output=True, text=True, cwd=root, check=True)
-    assert result.stdout.split() == ["True", "False"], result.stderr
+def test_root_copies_only_a_regular_file_the_candidate_left_and_never_fails_as_the_grader(tmp_path):
+    (tmp_path / "data").write_bytes(b"{}")
+    os.mkfifo(tmp_path / "pipe")
+    (tmp_path / "folder").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "data")
+    assert copy_untrusted(tmp_path / "data", tmp_path / "copy", 16)
+    assert (tmp_path / "copy").read_bytes() == b"{}"
+    for source in ("missing", "pipe", "folder", "link"):
+        assert not copy_untrusted(tmp_path / source, tmp_path / f"{source}.copy", 16)
+    assert not copy_untrusted(tmp_path / "data", tmp_path / "no-such-directory" / "copy", 16)
+    assert not copy_untrusted(tmp_path / "data", tmp_path / "small", 1)
