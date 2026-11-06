@@ -14,7 +14,7 @@ from forge.model.content_hash import digest
 from forge.model.controls import Control
 from forge.model.llm import Message, ToolSchema
 from forge.model.proposal import TaskProposal
-from forge.model.review import Decision, ValidationResult
+from forge.model.review import BandOutcome, Decision, ValidationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +52,8 @@ class WorkpieceChanges(TypedDict, total=False):
     evidence: tuple[ValidationResult, ...]
     decisions: tuple[Decision, ...]
     terminal: Terminal | None
+    too_easy_baseline: Submission | None
+    accepted_with: BandOutcome | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +66,8 @@ class Workpiece:
     evidence: tuple[ValidationResult, ...] = ()
     decisions: tuple[Decision, ...] = ()
     terminal: Terminal | None = None
+    too_easy_baseline: Submission | None = None
+    accepted_with: BandOutcome | None = None
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
         return replace(self, **changes)

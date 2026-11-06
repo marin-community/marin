@@ -11,6 +11,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from forge.model.review import (
     Accept,
+    BandOutcome,
     BandRules,
     Cause,
     Decision,
@@ -72,8 +73,11 @@ def default_review(result: ValidationResult, band: BandRules) -> Decision:
         return Modify(findings)
     solved = sum(passed(trial.grade) for trial in result.solver if trial.grade is not None)
     place = band.place(solved / len(result.solver))
-    return (
-        Accept(place)
-        if place in band.accepted
-        else Modify((f"{solved} of {len(result.solver)} trials solved: {place}",))
-    )
+    if place in band.accepted:
+        return Accept(place)
+    finding = f"{solved} of {len(result.solver)} trials solved: {place}"
+    if place is BandOutcome.TOO_EASY:
+        finding += (
+            ". Make the task harder while preserving correct controls and grading. This is the one hardening attempt."
+        )
+    return Modify((finding,), placement=place)

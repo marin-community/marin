@@ -10,7 +10,7 @@ from forge.config import Edge, Transitions
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.validate import ValidateRequest
 from forge.model.llm import Message, ToolCall
-from forge.model.review import Accept, Budget, Incomplete, Modify, Reject, RejectKind, Retry
+from forge.model.review import Accept, BandOutcome, Budget, Incomplete, Modify, Reject, RejectKind, Retry
 from forge.model.serialization import VALIDATION_RESULT
 from forge.model.stage import Exit, Stage
 from forge.model.workpiece import Conversation, Terminal, Workpiece
@@ -54,10 +54,22 @@ def decided(wp: Workpiece, result: Exit, *, budget: Budget, policy: Policy) -> W
     if not isinstance(result, Decided):
         raise ValueError("Review edge requires Decided")
     decision = result.decision
+    if (
+        isinstance(decision, Modify)
+        and decision.placement is BandOutcome.TOO_EASY
+        and wp.round >= budget.max_modify_rounds
+    ):
+        decision = Accept(BandOutcome.TOO_EASY, ("accepted_with: too_easy", "Shared modification budget exhausted"))
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
         case Accept():
-            return wp.with_(terminal=Terminal.ACCEPTED)
+            if decision.revert and wp.too_easy_baseline is None:
+                raise ValueError("Cannot revert hardening without the too-easy baseline")
+            return wp.with_(
+                terminal=Terminal.ACCEPTED,
+                submission=wp.too_easy_baseline if decision.revert else wp.submission,
+                accepted_with=BandOutcome.TOO_EASY if decision.band is BandOutcome.TOO_EASY else None,
+            )
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
         case Modify(findings):
@@ -69,7 +81,11 @@ def decided(wp: Workpiece, result: Exit, *, budget: Budget, policy: Policy) -> W
             system = tuple(message for message in previous.messages if message.role == "system")
             prompt = policy.prompt("author.revision").render(kind="review", detail="\n".join(findings))
             return wp.with_(
-                round=wp.round + 1, session=Conversation((*system, Message("user", prompt)), previous.tool_schemas)
+                round=wp.round + 1,
+                session=Conversation((*system, Message("user", prompt)), previous.tool_schemas),
+                too_easy_baseline=(
+                    wp.submission if decision.placement is BandOutcome.TOO_EASY else wp.too_easy_baseline
+                ),
             )
         case Retry():
             retries = sum(isinstance(item, Retry) for item in wp.decisions)

@@ -96,6 +96,8 @@ class RejectKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Accept:
     band: BandOutcome
+    reasons: tuple[str, ...] = ()
+    revert: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +109,7 @@ class Reject:
 @dataclass(frozen=True, slots=True)
 class Modify:
     findings: tuple[str, ...]
+    placement: BandOutcome | None = None
 
 
 @dataclass(frozen=True, slots=True)

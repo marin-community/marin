@@ -14,6 +14,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.runtime.resources import inline_resource
 
+from forge.arms import decided
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
 from forge.effects.issues import Hold, Restart
@@ -40,6 +41,7 @@ from forge.model.proposal import (
 )
 from forge.model.review import (
     Accept,
+    AdversaryFinding,
     AdversaryResult,
     BandOutcome,
     BandRules,
@@ -52,7 +54,7 @@ from forge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from forge.model.workpiece import Conversation, Submission, Workpiece
+from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
 from forge.policy import Policy, load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
@@ -382,6 +384,87 @@ async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpi
     assert isinstance(await triage(ctx, workpiece, setup, bundle), Triaged)
     assert len(inference.requests) == repair_budget
     await ctx.drain()
+
+
+@pytest.mark.parametrize("revision", ["in_band", "too_easy", "control", "task_defect", "too_hard", "adversary"])
+@pytest.mark.asyncio
+async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, revision: str) -> None:
+    assert workpiece.submission is not None
+    original = workpiece.submission
+    evidence = ValidationResult(
+        original.digest,
+        tuple(TrialResult(index, GradeResult(Outcome.GRADED, 1)) for index in range(3)),
+        (ControlResult(0, GradeResult(Outcome.GRADED, 1), True),),
+        (),
+    )
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    setup = config(harness)
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    # An earlier unrelated modification already consumed one round of the shared budget.
+    current = workpiece.with_(
+        round=1,
+        session=Conversation((Message("system", "author"),), ()),
+        evidence=(evidence,),
+        decisions=(Modify(("fix initial controls",)),),
+    )
+    first = await review(ctx, current, setup, bundle)
+    assert isinstance(first.decision, Modify) and first.decision.placement is BandOutcome.TOO_EASY
+    assert "Make the task harder" in first.decision.findings[0]
+    pending = decided(current, first, budget=setup.budget, policy=setup.policy)
+    assert pending.round == 2 and pending.terminal is None
+    assert pending.too_easy_baseline == original
+    updated = replace(original, task=original.task.model_copy(update={"labels": {"revision": "harder"}}))
+    solved = 2 if revision == "in_band" else 0 if revision == "too_hard" else 3
+    controls = evidence.controls
+    adversary = ()
+    if revision == "control":
+        controls = (replace(controls[0], met=False),)
+    if revision == "task_defect":
+        controls = (replace(controls[0], met=False, cause=Cause.GRADER_INVALID_CHECKS),)
+    if revision == "adversary":
+        finding = AdversaryFinding(
+            "wrong answer accepted",
+            Candidate("wrong"),
+            RewardBand(Outcome.GRADED, 1),
+            GradeResult(Outcome.GRADED, 1),
+            True,
+        )
+        adversary = (AdversaryResult("finder", True, (finding,)),)
+    revised = replace(
+        evidence,
+        task_digest=updated.digest,
+        solver=tuple(TrialResult(index, GradeResult(Outcome.GRADED, float(index < solved))) for index in range(3)),
+        controls=controls,
+        adversary=adversary,
+    )
+    current = pending.with_(submission=updated, evidence=(*pending.evidence, revised))
+    second = await review(ctx, current, setup, bundle)
+    final = decided(current, second, budget=setup.budget, policy=setup.policy)
+    restored = wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(final))
+    assert restored.terminal is Terminal.ACCEPTED and restored.round == 2
+    assert isinstance(second.decision, Accept)
+    assert sum(isinstance(item, Modify) for item in restored.decisions) == 2
+    regressed = revision not in ("in_band", "too_easy")
+    assert restored.submission == (original if regressed else updated)
+    assert second.decision.revert is regressed
+    if revision == "in_band":
+        assert restored.accepted_with is None and second.decision.band is BandOutcome.IN_BAND
+    else:
+        assert restored.accepted_with is BandOutcome.TOO_EASY
+        assert "accepted_with: too_easy" in second.decision.reasons
+    await ctx.drain()
+
+
+def test_too_easy_does_not_create_an_extra_modification_budget(workpiece: Workpiece) -> None:
+    setup = config(RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))))
+    current = workpiece.with_(round=setup.budget.max_modify_rounds)
+    decision = Decided(Modify(("make harder",), placement=BandOutcome.TOO_EASY))
+    final = decided(current, decision, budget=setup.budget, policy=setup.policy)
+    assert final.terminal is Terminal.ACCEPTED and final.round == current.round
+    assert final.submission == workpiece.submission and final.too_easy_baseline is None
+    assert final.accepted_with is BandOutcome.TOO_EASY and isinstance(final.decisions[-1], Accept)
+    assert "Shared modification budget exhausted" in final.decisions[-1].reasons
 
 
 @pytest.mark.asyncio
