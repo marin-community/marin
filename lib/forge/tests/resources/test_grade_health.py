@@ -4,10 +4,10 @@
 import pytest
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import StdoutReward
+from taskcompendium.models import ScriptGrader, StdoutReward
 
 from forge.effects.issues import Restart
-from forge.lowering import requirements, script_grader
+from forge.lowering import requirements
 from forge.model.review import Cause
 from forge.resources.grade_health import check_timeout
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
@@ -18,9 +18,13 @@ from forge.stages.classify import grade_cause
 @pytest.mark.parametrize("failure", [None, GradingFailure.TIMEOUT])
 def test_early_command_cut_is_restart_not_authored_timeout(exit_code: int, failure: GradingFailure | None) -> None:
     task = arithmetic_task(
-        grader=script_grader(
-            ("run",), StdoutReward(), environment=requirements(image=GRADER_BASE_IMAGE), timeout=600, answer_path=None
-        ).grader
+        grader=ScriptGrader(
+            argv=("run",),
+            reward=StdoutReward(),
+            environment=requirements(image=GRADER_BASE_IMAGE),
+            timeout=600,
+            answer_path=None,
+        )
     )
     result = GradeResult(
         Outcome.INFRA_ERROR,

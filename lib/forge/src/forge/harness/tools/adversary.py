@@ -12,7 +12,6 @@ from forge.harness.tools.base import ValidatedTool
 from forge.harness.tools.grade import CandidateArgs, read_candidate
 from forge.lowering import check_candidates
 from forge.model.controls import Candidate, RewardBand
-from forge.resources.env import Env
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +53,7 @@ class ReportTool(ValidatedTool[ReportArgs]):
         object.__setattr__(self, "task", self.task.model_copy(deep=True))
 
     @override
-    async def run(self, ctx: Context, args: ReportArgs, env: Env) -> ToolResult | ReturnRequest[AdversaryReport]:
+    async def run(self, ctx: Context, args: ReportArgs) -> ToolResult | ReturnRequest[AdversaryReport]:
         try:
             findings = tuple(
                 [
@@ -63,6 +62,6 @@ class ReportTool(ValidatedTool[ReportArgs]):
                 ]
             )
             check_candidates(self.task, tuple(finding.candidate for finding in findings))
-        except (ValueError, FileNotFoundError, KeyError) as error:
+        except ValueError as error:
             return ToolResult(f"Invalid report: {error}")
         return ReturnRequest("report", AdversaryReport(findings))

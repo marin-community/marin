@@ -19,6 +19,7 @@ from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
+from rigging.log_setup import configure_logging
 
 from forge.checkpoint import CheckpointSink
 from forge.coordinator import run_workpiece
@@ -28,8 +29,8 @@ from forge.model.proposal import TaskProposal
 from forge.model.review import Incomplete
 from forge.model.serialization import TASK_PROPOSAL, WORKPIECE
 from forge.model.workpiece import Terminal, Workpiece
-from forge.policy import Policy, load_policy, parse_overlay, resolution_lines
-from forge.wiring import endpoint_source, prompt_limit, runtime
+from forge.policy import Policy, load_policy, parse_overlay
+from forge.wiring import endpoint_source, runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +101,7 @@ def eligible(proposal: TaskProposal, policy: Policy) -> bool:
     environment = proposal.header.environment.value
     if environment in policy.setting("proposals.environments", tuple):
         return True
-    print(f"SKIP {proposal.header.id}: environment={environment}", flush=True)
+    logging.info("SKIP %s: environment=%s", proposal.header.id, environment)
     return False
 
 
@@ -108,7 +109,7 @@ async def one(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
-    declared, policy = run_policy(args.policy)
+    _, policy = run_policy(args.policy)
     if not eligible(proposal, policy):
         return
     identity = proposal_key(args.proposals)
@@ -120,7 +121,7 @@ async def one(args: argparse.Namespace) -> None:
     restored = recover(workdir, destination)
     if restored is not None and restored.terminal is not None:
         terminal = Terminal(restored.terminal)
-        print(f"SKIP {identity}: published terminal={terminal.value}", flush=True)
+        logging.info("SKIP %s: published terminal=%s", identity, terminal.value)
         return
     sink = JsonlSink(str(workdir / "events.jsonl"))
     previous = await sink.read() if Path(sink.path).exists() else ()
@@ -129,13 +130,6 @@ async def one(args: argparse.Namespace) -> None:
     log = EventLog(sink=checkpoints, replay_from=previous)
     try:
         async with checkpoints.running():
-            print("\n".join(resolution_lines(declared, policy)), flush=True)
-            print(
-                f"POLICY max_prompt_tokens author.model={policy.setting('author.model', str)} "
-                f"author.context_tokens={policy.setting('author.context_tokens', int)} "
-                f"resolved={prompt_limit(policy)}",
-                flush=True,
-            )
             source = endpoint_source(
                 os.environ.get("GLM_BASE_URL"),
                 os.environ.get("GLM_RELAY_JOB"),
@@ -217,6 +211,7 @@ async def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("run", "one"):

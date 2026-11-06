@@ -12,7 +12,6 @@ from forge.effects.context import Context
 from forge.model.llm import ToolSchema
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation, Submission
-from forge.resources.env import Env
 from forge.resources.inference import InferenceClient
 
 
@@ -73,7 +72,7 @@ class Tool[P](Protocol):
     def schema(self) -> ToolSchema: ...
 
     async def __call__(
-        self, ctx: Context, args: Mapping[str, object], env: Env
+        self, ctx: Context, args: Mapping[str, object]
     ) -> ToolResult | SubmitRequest | ReturnRequest[P] | FinishRequest: ...
 
 
@@ -82,7 +81,6 @@ class Harness(Protocol):
         self,
         ctx: Context,
         session: Conversation,
-        env: Env,
         client: InferenceClient,
         tools: Mapping[str, Tool[object]],
     ) -> Exit: ...

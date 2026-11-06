@@ -9,7 +9,6 @@ from types import MappingProxyType
 
 from shellbox.machine import MachineFactory
 
-from forge.harness.web import WebClient
 from forge.resources.clock import Clock
 from forge.resources.env import EnvFactory
 from forge.resources.grading import GradingResource
@@ -17,6 +16,7 @@ from forge.resources.ids import Ids
 from forge.resources.inference import InferenceClient
 from forge.resources.rollouts import RolloutResource
 from forge.resources.verifier import VerifierPool
+from forge.resources.web import WebClient
 
 
 @dataclass(frozen=True, slots=True)

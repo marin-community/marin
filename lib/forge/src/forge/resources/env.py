@@ -282,7 +282,10 @@ class FakeEnv(_RecordedEnv):
         self._check_open()
         if offset < 0 or (limit is not None and limit < 0):
             raise ValueError("offset and limit must be nonnegative")
-        return self.files[path][offset : None if limit is None else offset + limit]
+        try:
+            return self.files[path][offset : None if limit is None else offset + limit]
+        except KeyError as error:
+            raise FileNotFoundError(errno.ENOENT, "No such file", str(path)) from error
 
     @override
     async def write(self, path: PurePosixPath, data: bytes) -> None:

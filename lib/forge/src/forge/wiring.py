@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import override
 
@@ -31,7 +32,6 @@ from forge.effects.context import Context
 from forge.harness.loop import AgenticHarness
 from forge.harness.tools import adversary_tools, standard_tools
 from forge.harness.tools.validate import ValidateTool
-from forge.harness.web import ParallelWeb, WebClient, WebFetch, WebSearch, fetch, search
 from forge.lowering import (
     LoweringSettings,
     host_requirements,
@@ -44,7 +44,7 @@ from forge.model.content_hash import digest
 from forge.model.llm import Sampling
 from forge.model.review import BandOutcome, BandRules, Budget
 from forge.model.workpiece import Submission, Workpiece
-from forge.policy import Policy
+from forge.policy import Policy, load_policy, resolution_lines
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock, Now, now
 from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
@@ -59,6 +59,7 @@ from forge.resources.sandbox.factories import (
     shellsim_factory,
 )
 from forge.resources.verifier import VerifierEngine, VerifierFactory, VerifierPool
+from forge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch, fetch, search
 from forge.stages.rules import default_review
 
 
@@ -201,16 +202,26 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         )
         for name in policy.setting("adversary.roster", tuple)
     }
-    tools = {"author": standard_tools(policy=policy, factories=factories, settings=settings, gate=submit_gate)}
-    root = policy.setting("author.workdir", str)
+    root = PurePosixPath(policy.setting("author.workdir", str))
+    task_path, controls_path = str(root / "task.json"), str(root / "controls.json")
+    tools = {
+        "author": standard_tools(
+            task_path=task_path,
+            controls_path=controls_path,
+            policy=policy,
+            factories=factories,
+            settings=settings,
+            gate=submit_gate,
+        )
+    }
     if arm == "T":
         tools["author"] = {
             **tools["author"],
-            "validate": ValidateTool(submit_gate, f"{root}/task.json", f"{root}/controls.json"),
+            "validate": ValidateTool(submit_gate, task_path, controls_path),
         }
     tools.update(
         {
-            name: adversary_tools(task_path=f"{root}/task.json", factories=factories, settings=settings)
+            name: adversary_tools(task_path=task_path, policy=policy, factories=factories, settings=settings)
             for name in adversaries
         }
     )
@@ -240,8 +251,6 @@ def provider_policy(policy: Policy) -> Policy:
     turn = max(policy.setting("solver.turn_timeout", float), window + policy.setting("provider.stall_timeout", float))
     attempt = max(policy.setting("solver.attempt_timeout", float), 2 * turn)
     resolved = policy.overlaid({"solver.turn_timeout": turn, "solver.attempt_timeout": attempt})
-    for key in ("provider.unavailable_wait", "solver.turn_timeout", "solver.attempt_timeout"):
-        print(f"POLICY {key} declared={policy.setting(key, float)} resolved={resolved.setting(key, float)}", flush=True)
     return resolved
 
 
@@ -250,6 +259,8 @@ async def runtime(
     policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
 ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
     policy = provider_policy(policy)
+    declared = load_policy(Path(__file__).parent / "policy/defaults")
+    logging.info("\n".join(resolution_lines(declared, policy)))
     provider_fields = {
         key.removeprefix("provider."): value
         for key, value in policy.entries.items()
@@ -272,7 +283,7 @@ async def runtime(
             model = policy.setting(f"{role}.model", str)
             provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
             role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
-            print(f"MODEL role={role} model={model} endpoint={role_source.current().base_url}", flush=True)
+            logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
             client = await owned.enter_async_context(EndpointLimitedClient(role_source, provider))
             clients[role] = WaitingBackend(
                 client,

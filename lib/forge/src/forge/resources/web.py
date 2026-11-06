@@ -51,7 +51,9 @@ class ParallelWeb(WebClient):
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429 or error.response.status_code >= 500:
                 raise Transient(f"Web status {error.response.status_code}") from error
-            raise Hold(f"Web request rejected: {error.response.status_code}") from error
+            if error.response.status_code in (401, 403):
+                raise Hold(f"Web credentials rejected: {error.response.status_code}") from error
+            return f"Web request rejected ({error.response.status_code}): {error.response.text}"
         return response.text
 
     @override

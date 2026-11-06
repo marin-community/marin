@@ -24,7 +24,6 @@ from forge.effects.events import StageCompleted
 from forge.effects.issues import Restart
 from forge.effects.log import EventLog, JsonlSink, fold
 from forge.harness.protocol import Stopped, StopReason
-from forge.harness.web import FakeWeb
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, ToolCall
 from forge.model.proposal import TaskProposal
@@ -41,6 +40,7 @@ from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference, InferenceRequest
 from forge.resources.rollouts import Engine, RolloutResource
 from forge.resources.verifier import VerifierPool
+from forge.resources.web import FakeWeb
 from forge.wiring import build_config
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)

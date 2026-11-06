@@ -7,7 +7,6 @@ from typing import override
 from forge.effects.context import Context
 from forge.harness.protocol import FinishRequest
 from forge.harness.tools.base import ValidatedTool
-from forge.resources.env import Env
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,5 +21,5 @@ class FinishTool(ValidatedTool[FinishArgs]):
     args_type = FinishArgs
 
     @override
-    async def run(self, ctx: Context, args: FinishArgs, env: Env) -> FinishRequest:
+    async def run(self, ctx: Context, args: FinishArgs) -> FinishRequest:
         return FinishRequest(args.reason)
