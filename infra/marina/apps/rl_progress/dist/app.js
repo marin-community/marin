@@ -24,7 +24,7 @@ const hours = (run) => run.elapsed_seconds / 3600;
 const gain = (run) => run.final && run.baseline && hours(run) > 0 ? (run.final.reward - run.baseline.reward) / hours(run) : null;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
 function visibleRuns() {
-  return runs.filter((run) => $('campaign').value === 'all' || (run.campaign ? run.campaign === $('campaign').value : fixed(run) === ($('campaign').value === 'fixed')));
+  return runs.filter((run) => $('campaign').value === 'all' || (run.campaign ?? (fixed(run) ? 'fixed' : 'earlier')) === $('campaign').value);
 }
 function coverageLabel(run) {
   if (run.partial_coverage) return run.trusted_gain_eligible ? 'Incomplete · eligible at declared coverage threshold' : 'Incomplete · excluded';
@@ -127,7 +127,7 @@ function render() {
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
-  chart('gain', selected.filter((run) => run.trusted_gain_eligible), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
+  chart('gain', selected.filter((run) => !run.partial_coverage || run.trusted_gain_eligible), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
   $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
   $('legend').replaceChildren(...[...new Set(selected.map(arm))].map((name) => {
     const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${colors[name[0]]}` }), document.createTextNode(name)); return item;
