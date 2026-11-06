@@ -141,7 +141,7 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
         assert recovered == expected, f"shard {shard_idx} mismatch"
 
 
-def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
+def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch, tmp_path):
     path = "s3://marin-us-east-02a/execution/stage0/shard-0000/scatter/c0000.parquet"
     calls = []
     frame = pl.DataFrame(
@@ -158,6 +158,15 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-mounted-secrets"))
+    for name in (
+        "CW_KEY_ID",
+        "CW_KEY_SECRET",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
     schema = frame.collect_schema()
@@ -794,7 +803,7 @@ def test_merge_sorted_frames_multi_pass_preserves_order(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing(monkeypatch):
+def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing(monkeypatch, tmp_path):
     frames = [_make_sorted_frame([value]) for value in range(5)]
     spill_bytes: dict[str, bytes] = {}
     scan_calls: list[tuple[str, dict[str, str]]] = []
@@ -822,6 +831,15 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "no-mounted-secrets"))
+    for name in (
+        "CW_KEY_ID",
+        "CW_KEY_SECRET",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(StoragePath, "mkdirs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(StoragePath, "open", open_spill)
     monkeypatch.setattr(StoragePath, "rm", remove_spill)

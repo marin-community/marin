@@ -6,6 +6,8 @@ related_issues:
   - "https://github.com/marin-community/marin/issues/10393"
   - "https://github.com/marin-community/marin/pull/10399"
   - "https://github.com/marin-community/marin/pull/10932"
+  - "https://github.com/marin-community/marin/pull/11049"
+  - "https://github.com/marin-community/marin/pull/11050"
 research_branch: "codex/32-protocol-probes"
 marin_base_revision: "f24a46889a8b3a16858a32d25ad5565532c4f456"
 archive_template_revision: "f54b3aa0e6ee533e988d2b97e9db0d1523f934dd"
@@ -147,3 +149,42 @@ reworks how RolloutEngine passes recorded turns to grading and removes tests.
 - Remaining uncertainty: 8 variants per check gives coarse rates; the thinking
   check applies only when the launch turns thinking off, which the quick loop
   does not do by default.
+
+## 2026-11-06: Evaluate the probes on checkpoints, outside the quick loop
+
+- Change of direction: the probes measure a model and its serving setup, not
+  RL progress, so they no longer run inside the quick RL loop or add a grading
+  layer. On the file, tool and URL probes the nonce makes the ordinary reward
+  the protocol result, so the per-check labels in `diagnostics["protocol"]`
+  were dropped; failure modes are classified offline from the dumped
+  `messages` and `response_token_ids`. Rewarding protocol compliance directly
+  was considered and rejected for now: outcome reward already covers the file,
+  tool and URL checks, and per-action rewards invite gaming.
+- Marin contribution PRs: marin-community/marin#11049 supersedes #10399 and
+  #10932 with the library pieces only (probe tasks, `fetch-v1` provider,
+  per-dataset turn and task-machine config in the SkyRL task spec, `messages`
+  in eval dumps). marin-community/marin#11050 carries the end-of-turn fix with
+  a regression test. The model-server error capture from #10399 was dropped.
+- Source: this branch merges the #11049 head
+  `8f94ccc9188e2b3755acb8b2ffaccce46f065d83`, which is based on Marin `main`
+  `6b9428b21b916b97e55fc3851d09e3fce079c84c`. The tree matches #11049 apart from
+  this directory and the launcher; the earlier `protocol_probes_eval.py`,
+  `protocol_probes_smoke.py`, the grading layer and the quick-loop wiring are
+  removed. The recorded runs above keep their exact source revisions.
+- Launcher: `experiments/post_training/inventory/protocol_probes.py` publishes
+  the probe dataset and evaluates it against one checkpoint on one 8xH100 node
+  through SkyRL's evaluation-only `generate` entrypoint, starting from the
+  quick loop's `training_recipe()`, which stays unchanged. It enables vLLM's
+  Hermes tool parser and turns thinking off unless `--thinking` is passed.
+  `--model` is `datakit-sft` (the quick loop's starting checkpoint, adopted from
+  its existing copy) or `snowball-v0.1`; other 67B-A2B checkpoints in HF format
+  need a `MODELS` entry. The default cluster is `cw-us-east-02a`, where the SFT
+  weights live.
+
+  ```bash
+  uv run python -m experiments.post_training.inventory.protocol_probes \
+    --model snowball-v0.1 --version "<label>-dev" --run
+  ```
+
+- Validation: the graph builds for both models without submission; no run
+  has been launched from this revision yet.

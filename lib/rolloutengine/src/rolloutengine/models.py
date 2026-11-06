@@ -4,7 +4,7 @@
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
@@ -107,7 +107,9 @@ class ModelTurn:
     """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop refuses the next ``reply``.
 
     It is ``"length"`` whenever generation ended on the output token budget, including a reply that a server's tool
-    parser reports as tool calls. The shell harness does not execute tool calls from such a turn.
+    parser reports as tool calls. A ``ChatModel`` with a ``context_window`` also reports ``"length"`` for a tool-call
+    reply whose prompt and completion tokens fill that window. The shell harness does not execute tool calls from
+    such a turn.
     """
     text: str = ""
     """The response as plain text. A harness that reads tags in the text, not tool calls, uses it."""
@@ -115,10 +117,6 @@ class ModelTurn:
     """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
-    raw_response: str | None = None
-    """The response decoded with its special tokens, for transports that decode it."""
-    request_settings: Mapping[str, Any] | None = None
-    """The request options the transport applied, including settings it merged in, for transports that report them."""
     reasoning_violation: ReasoningViolation | None = None
     """The malformed reasoning span that the transport found in the reply, if any."""
 
@@ -132,6 +130,10 @@ class ModelTurn:
 
 Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 """The policy under rollout: it serves one model request and returns the exact turn."""
+
+
+class ContextWindowExceeded(RuntimeError):
+    """Reject one request while allowing the harness to compact and send another."""
 
 
 class GenerationLimitReached(Exception):
@@ -464,12 +466,13 @@ class RolloutLimits(BaseModel):
     ``max_total_tokens`` stops model requests when the tokens spent, plus the known part of the next
     prompt, reach the threshold. The known part is the last request's prompt and response. The new
     observations of a request are not in that count, so the last request sent can exceed the threshold
-    by its observation and response tokens. ``None`` sets no threshold.
+    by its observation and response tokens. ``None`` sets no threshold. A ``max_turns`` of ``None`` sets no
+    turn limit, so the attempt ends only on its token budget, its deadlines, or a ``"length"`` stop.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    max_turns: int = Field(gt=0)
+    max_turns: int | None = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)

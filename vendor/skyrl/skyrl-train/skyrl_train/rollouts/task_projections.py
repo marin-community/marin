@@ -418,7 +418,6 @@ def _attach_failure_channels(batch: TrajectoryBatch, decisions: Sequence[_Traini
             "category": decision.verification.diagnostics["error_category"],
             "request_id": decision.verification.diagnostics.get("request_id"),
             "status_code": decision.verification.diagnostics.get("status_code"),
-            "message": decision.verification.diagnostics.get("error_message"),
         }
         if "error_category" in decision.verification.diagnostics
         else None

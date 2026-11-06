@@ -763,10 +763,9 @@ class InferenceEngineClient(InferenceEngineInterface):
                 # breaks LiteLLM's error classification in downstream consumers
                 # like Harbor.
                 logger.warning(
-                    "Inference engine error: category={}, request_id={}, message={}",
+                    "Inference engine error: category={}, request_id={}",
                     partial_response.get("error_category", "server_error"),
                     partial_response.get("request_id"),
-                    (partial_response.get("error") or {}).get("message"),
                 )
                 return partial_response
 

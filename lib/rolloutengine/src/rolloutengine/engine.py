@@ -207,7 +207,6 @@ class RolloutEngine:
                     spec,
                     messages,
                     attempt.outputs,
-                    recorder.graded_turns(),
                     machine,
                     self.machine_factories,
                     attempt.cleanup,

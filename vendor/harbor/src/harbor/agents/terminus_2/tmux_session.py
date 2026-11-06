@@ -7,6 +7,11 @@ import uuid
 from dataclasses import dataclass
 from typing import NoReturn
 
+from shellbox.process_session import (
+    PROCESS_GROUP_ABSENT_EXIT_CODE,
+    PROBE_PROCESS_GROUP_COMMAND,
+)
+
 from harbor.agents.base import encode_model_output
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -14,6 +19,7 @@ from harbor.utils.logger import logger
 
 DEFAULT_BATCH_EXEC_TIMEOUT_MARGIN_SEC = 180.0
 _MAX_CAPTURE_BYTES = 1_000_000
+_FOREGROUND_STOP_TIMEOUT = 5
 _ENTER_KEYS = {"Enter", "C-m", "KPEnter", "C-j", "^M", "^J"}
 
 
@@ -294,7 +300,9 @@ class TmuxSession:
 
         # Package manager commands with non-interactive flags
         install_commands = {
-            "apt-get": "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux",
+            "apt-get": (
+                "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux"
+            ),
             "dnf": "dnf install -y tmux",
             "yum": "yum install -y tmux",
             "apk": "apk add --no-cache tmux",
@@ -499,6 +507,44 @@ class TmuxSession:
             user=self._user,
         )
         return result.return_code == 0
+
+    async def close(self) -> None:
+        """Stop the agent terminal when its owner releases the session."""
+        if not await self.is_session_alive():
+            return
+        result = await self.environment.exec(
+            command=f"tmux kill-session -t {shlex.quote(self._session_name)}",
+            user=self._user,
+        )
+        if result.return_code != 0 or await self.is_session_alive():
+            raise TmuxCommandError("Cannot stop the agent tmux session")
+
+    async def interrupt(self) -> None:
+        """Stop the terminal's foreground job while preserving prior background jobs."""
+        if not await self.is_session_alive():
+            return
+        # Builtins run in the shell group; external foreground pipelines have
+        # their own group. Interrupt the shell so it discards the pending list.
+        command = (
+            "set -eu; "
+            f"pane_pid=$(tmux display-message -p -t {shlex.quote(self._session_name)} '#{{pane_pid}}'); "
+            'pane_status=$(<"/proc/$pane_pid/stat"); pane_status=${pane_status##*) }; '
+            'read -r state parent shell_group session tty foreground_group remaining <<< "$pane_status"; '
+            'if [ "$foreground_group" -gt 0 ]; then '
+            'kill -INT -- "-$shell_group"; '
+            'if [ "$foreground_group" != "$shell_group" ]; then '
+            'kill -KILL -- "-$foreground_group" 2>/dev/null || true; '
+            "while :; do "
+            f'if /bin/sh -c {shlex.quote(PROBE_PROCESS_GROUP_COMMAND)} probe-group "$foreground_group"; '
+            "then sleep 0.01; "
+            f'else status=$?; [ "$status" -eq {PROCESS_GROUP_ABSENT_EXIT_CODE} ] || exit "$status"; '
+            "break; fi; done; fi; fi"
+        )
+        result = await self.environment.exec(
+            command=command, user=self._user, timeout_sec=_FOREGROUND_STOP_TIMEOUT
+        )
+        if result.return_code != 0:
+            raise TmuxCommandError("Cannot stop the agent terminal's foreground job")
 
     def _is_executing_command(self, key: str) -> bool:
         return self._is_enter_key(key) or self._ends_with_newline(key)

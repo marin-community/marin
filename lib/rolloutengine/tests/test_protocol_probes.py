@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from dataclasses import dataclass, field
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -11,30 +10,22 @@ from taskcompendium.examples.protocol_probes import (
     FETCH_REQUIREMENT,
     NONCE_FILE,
     PROBE_URL,
+    ProtocolCheck,
     probe_check,
     probe_nonce,
     probe_tasks,
 )
 from taskcompendium.fetch import FETCH_ACTION_INTERFACE, HttpPage, NetworkFailure, fetch_requirement
-from taskcompendium.models import (
-    CHAT_TEMPLATE_KWARGS,
-    ENABLE_THINKING,
-    CommandSemantics,
-    EnvironmentRequirements,
-    TaskSpec,
-)
-from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, ProtocolCheck
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from rolloutengine.harness.fetch import FetchProvider
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.models import ModelRequest, ModelTurn, Prompt
 from rolloutengine.test_support import SHELL, ReplayModel, engine, machine_runtime, rollout_spec
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=FIXTURE_IMAGE)
 TASKS = {probe_check(task): task for task in probe_tasks(grader_environment=ENVIRONMENT, variants=1)}
 FETCH_HARNESS = {SHELL: ShellHarness(command_timeout=None, tools={FETCH_ACTION_INTERFACE: FetchProvider()})}
-THINKING_OFF = {CHAT_TEMPLATE_KWARGS: {ENABLE_THINKING: False}}
 
 
 def tool_call(name: str, arguments: dict, call_id: str = "call-0") -> dict:
@@ -46,35 +37,45 @@ def reply(content: str) -> dict:
     return {"role": "assistant", "content": content}
 
 
-def protocol(graded) -> dict:
-    return graded.grade.diagnostics.get(PROTOCOL_DIAGNOSTICS_KEY, {})
+def tool_observations(graded) -> list[dict]:
+    messages = graded.rollout.conversations[0].messages
+    return [json.loads(message["content"]) for message in messages if message["role"] == "tool"]
 
 
-async def test_tool_probe_grades_a_real_shell_rollout():
-    task = TASKS[ProtocolCheck.TOOL_EXECUTION]
-    model = ReplayModel([tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}), reply(probe_nonce(task.id))])
+TOOL_TASK = TASKS[ProtocolCheck.TOOL_EXECUTION]
+
+
+@pytest.mark.parametrize(
+    "turns,reward",
+    [
+        pytest.param(
+            [tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}), reply(probe_nonce(TOOL_TASK.id))],
+            1.0,
+            id="executed",
+        ),
+        pytest.param([reply(f"$ cat /{NONCE_FILE}\n0123456789abcdef")], 0.0, id="narrated"),
+    ],
+)
+async def test_tool_probe_rewards_only_an_executed_command(turns, reward):
+    task = TOOL_TASK
+    model = ReplayModel(turns)
 
     graded = await engine(model, {Backend.SHELLSIM: ShellSimMachineFactory()}).run_task(
         rollout_spec(task, machine=machine_runtime(backend=Backend.SHELLSIM))
     )
 
-    assessment = protocol(graded)["tool_execution"]
-    assert (assessment["label"], assessment["protocol_compliance"], assessment["answer_correctness"]) == (
-        "executed",
-        True,
-        True,
-    )
+    assert graded.grade.reward == reward
 
 
 @pytest.mark.parametrize(
-    "page,label,correct",
+    "page,observation,reward",
     [
-        pytest.param(None, "retrieved", True, id="retrieved"),
-        pytest.param(HttpPage(status=503, body="Unavailable"), "http_error", False, id="http-error"),
-        pytest.param(NetworkFailure(error="Connection reset"), "network_error", False, id="network-error"),
+        pytest.param(None, {"status": 200}, 1.0, id="retrieved"),
+        pytest.param(HttpPage(status=503, body="Unavailable"), {"status": 503, "body": "Unavailable"}, 0.0, id="http"),
+        pytest.param(NetworkFailure(error="Connection reset"), {"error": "Connection reset"}, 0.0, id="network"),
     ],
 )
-async def test_url_probe_serves_declared_pages_and_labels_failed_retrievals(page, label, correct):
+async def test_url_probe_serves_declared_pages_as_observations(page, observation, reward):
     task = TASKS[ProtocolCheck.URL_LOADING]
     if page is not None:
         environment = task.environment_requirements.model_copy(
@@ -86,14 +87,10 @@ async def test_url_probe_serves_declared_pages_and_labels_failed_retrievals(page
 
     graded = await engine(model, harnesses=FETCH_HARNESS).run_task(rollout_spec(task))
 
-    [_, observation] = graded.rollout.conversations[0].messages[-3:-1]
-    assert json.loads(observation["content"])["url"] == PROBE_URL
-    assessment = protocol(graded)["url_loading"]
-    assert (assessment["label"], assessment["protocol_compliance"], graded.grade.reward == 1.0) == (
-        label,
-        True,
-        correct,
-    )
+    [served] = tool_observations(graded)
+    assert served["url"] == PROBE_URL
+    assert observation.items() <= served.items()
+    assert graded.grade.reward == reward
 
 
 async def test_fetch_provider_answers_unknown_urls_and_bad_arguments_as_observations():
@@ -108,53 +105,5 @@ async def test_fetch_provider_answers_unknown_urls_and_bad_arguments_as_observat
 
     graded = await engine(model, harnesses=FETCH_HARNESS).run_task(rollout_spec(task))
 
-    tool_messages = [message for message in graded.rollout.conversations[0].messages if message["role"] == "tool"]
-    assert [json.loads(message["content"]).get("status") for message in tool_messages] == [None, 404]
-    assert protocol(graded)["url_loading"]["label"] == "not_attempted"
-
-
-@dataclass
-class ServedModel:
-    """Answer with a fixed raw response, recording each request."""
-
-    raw_response: str
-    requests: list[ModelRequest] = field(default_factory=list)
-
-    async def complete(self, request: ModelRequest) -> ModelTurn:
-        self.requests.append(request)
-        visible = self.raw_response.rsplit("</think>", 1)[-1]
-        return ModelTurn(
-            reply(visible),
-            (10, 11),
-            (20,),
-            (-0.5,),
-            "stop",
-            raw_response=self.raw_response,
-            request_settings=request.options,
-        )
-
-
-class ThinkingOffHarness:
-    """Ask the model with thinking turned off, as a launch that disables thinking does."""
-
-    def check(self, task: TaskSpec, limits) -> None:
-        pass
-
-    async def run(self, context, session) -> None:
-        [instruction] = context.task.context.events
-        await session.start(Prompt(({"role": "user", "content": instruction.content},), THINKING_OFF))
-
-
-async def test_thinking_is_assessed_from_the_served_raw_response_only_when_the_request_turned_thinking_off():
-    task = TASKS[ProtocolCheck.THINKING_DISABLED]
-    emitted = ServedModel(f"<think>easy</think>{probe_nonce(task.id)}")
-
-    off = await engine(emitted, harnesses={"off": ThinkingOffHarness()}).run_task(rollout_spec(task, harness="off"))
-    no_raw = await engine(ReplayModel([reply(probe_nonce(task.id))]), harnesses={"off": ThinkingOffHarness()}).run_task(
-        rollout_spec(task, harness="off")
-    )
-    default = await engine(emitted).run_task(rollout_spec(task))
-
-    assert (protocol(off)["thinking_disabled"]["label"], off.grade.reward) == ("reasoning_emitted", 1.0)
-    assert "not_evaluable" in protocol(no_raw)["thinking_disabled"]
-    assert protocol(default) == {}
+    assert [observation.get("status") for observation in tool_observations(graded)] == [None, 404]
+    assert graded.grade.reward == 0.0

@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One minimal task per agent protocol check.
+"""One minimal evaluation task per agent protocol.
 
 Each answer is a nonce derived from the task id, so a model cannot guess it without following the
-protocol: writing the answer file, running the shell tool, or fetching the declared page. The
-thinking probe asks for a bare token; its check applies when the launch turns thinking off.
+protocol: writing the answer file, running the shell tool, or fetching the declared page. On those
+probes the ordinary reward is the protocol result. The thinking probe asks for a bare token; it
+tests a launch that turns thinking off, whose response tokens show whether reasoning was emitted.
 """
 
 import hashlib
+from enum import StrEnum
 
 from verifyit.spec import DEFAULT_WORKSPACE, ExactSpec
 
@@ -27,8 +29,15 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.protocol import ProtocolCheck
 from taskcompendium.runtime.resources import inline_resource
+
+
+class ProtocolCheck(StrEnum):
+    REQUIRED_FILE = "required_file"
+    TOOL_EXECUTION = "tool_execution"
+    THINKING_DISABLED = "thinking_disabled"
+    URL_LOADING = "url_loading"
+
 
 PROBE_DATASET = "protocol-probes"
 PROBE_REVISION = "1"
@@ -43,18 +52,6 @@ TASK_ENVIRONMENT = EnvironmentRequirements(
     command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem"), working_directory=WORKDIR
 )
 """The file and tool probes run in a shell simulator; the thinking and URL probes need no machine."""
-SHELLSIM_MACHINE = {
-    "backend": "shellsim",
-    "network": "deny",
-    "cpus": None,
-    "memory_mb": None,
-    "storage_mb": None,
-    "gpus": 0,
-    "user": None,
-    "startup_timeout": 60,
-    "cleanup_timeout": 60,
-}
-"""The probes' task machine, as a RolloutEngine ``MachineRuntimeSpec`` payload for runtime configuration."""
 COMMAND_TOOL = FunctionDefinition(
     name="run_command",
     description="Run a Bash command in the workspace and return its exit code and output.",
@@ -67,7 +64,7 @@ COMMAND_TOOL = FunctionDefinition(
 )
 
 
-def lock_grader_environment(lock_url: str) -> EnvironmentRequirements:
+def locked_grader_environment(lock_url: str) -> EnvironmentRequirements:
     """Grade the answer file in a process with the verifyit lock at ``lock_url``."""
     return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=lock_url)
 
