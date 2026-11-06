@@ -374,6 +374,8 @@ def test_rescore_reports_candidate_and_control_contracts(
     error = next((row for row in report["invariants"] if row["name"] == "grader_error_fraction"), {})
     assert bounds is None or (error["lower_bound"], error["upper_bound"]) == bounds
     assert Path(report["report"]).with_suffix(".md").exists()
+    if "version" in fault:
+        assert fault["version"] in report["reason"] and presets.PRESET_REVISION in report["reason"]
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
     assert not fault.get("unresolved_receipt") or report["reason"].startswith(
         "cannot identify the Iris job lookup-missing-job"

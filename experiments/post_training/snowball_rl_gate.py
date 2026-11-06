@@ -665,6 +665,12 @@ def _write_gate(
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
+        if any(candidate.version != controls[0].version for candidate in (*runs, *controls)):
+            raise InvalidComparison(
+                "preset revisions differ, including effective evaluation sampling: "
+                f"candidate={sorted({candidate.version for candidate in runs})}; "
+                f"controls={sorted({candidate.version for candidate in controls})}"
+            )
         if any(candidate.version != presets.PRESET_REVISION for candidate in runs):
             raise InvalidComparison("preset revision differs")
         if any(candidate.panel_ids != controls[0].panel_ids for candidate in (*runs, *controls)):
