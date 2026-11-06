@@ -174,6 +174,20 @@ reworks how RolloutEngine passes recorded turns to grading and removes tests.
 - Validation: the graph builds for both models without submission; no run
   has been launched from this revision yet.
 
+### 2026-11-06 20:30 UTC - Drop the thinking probe after #11049 review
+
+- Why: review of #11049 found the `thinking_disabled` probe's exact-match
+  reward independent of whether the model reasoned, since the transport moves
+  reasoning out of the reply. The thinking-off check already covers every row
+  through the launch setting, as in the 2026-11-04 run (27 of 32 rows).
+- Change: merged #11049 at 78a04d1846. The probe set is now three checks, 24
+  rows under `PROBE_ARTIFACT_VERSION = "2026.11.06.1"`. `PROBE_TURNS` and
+  `locked_grader_environment` moved into the launcher. #11049 also unified
+  the task-machine rule (`task_machine_reason`) that `task_machine_by_dataset`
+  uses.
+- Validation: the launcher imports and builds 24 probe rows with thinking off;
+  no run launched.
+
 ## Final decision
 
 - Selected approach: evaluate the probes against checkpoints with the launcher

@@ -42,12 +42,10 @@ from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Backend, NetworkPolicy
 from taskcompendium.examples.protocol_probes import (
     PROBE_DATASET,
-    PROBE_TURNS,
     ProtocolCheck,
-    locked_grader_environment,
     probe_tasks,
 )
-from taskcompendium.models import SCHEMA_VERSION
+from taskcompendium.models import SCHEMA_VERSION, CommandSemantics, EnvironmentRequirements
 from taskcompendium.runtime.local import LOCK_FILE
 from zephyr.writers import write_parquet_file
 
@@ -67,11 +65,13 @@ from experiments.post_training.task_curation.inventory import TASK_SCHEMA, task_
 
 PROBES_FILENAME = "probes.parquet"
 PROBE_ARTIFACT_NAME = f"rl-data/{PROBE_DATASET}"
-PROBE_ARTIFACT_VERSION = "2026.11.04.1"
+PROBE_ARTIFACT_VERSION = "2026.11.06.1"
 """Bump when the probe tasks change; the schema, grader environment and variant count enter the identity."""
 PROBE_VARIANTS = 8
 """Tasks per check; one evaluation of all variants gives each check's rate."""
 PROBE_ROWS = len(ProtocolCheck) * PROBE_VARIANTS
+PROBE_TURNS = 4
+"""Model turns enough to call a tool, read its result and answer."""
 GRADER_ENVIRONMENT = Environment()
 """verifyit alone; the exact-match grader of the answer file needs nothing else."""
 
@@ -100,6 +100,11 @@ SHELLSIM_MACHINE = MachineRuntimeSpec(
     cleanup_timeout=60,
 )
 """The file and tool probes' task machine."""
+
+
+def locked_grader_environment(lock_url: str) -> EnvironmentRequirements:
+    """Grade the answer file in a process with the verifyit lock at ``lock_url``."""
+    return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=lock_url)
 
 
 def write_probe_tasks(output_path: str, grader_environment: str, variants: int, schema_version: str) -> None:
@@ -156,8 +161,8 @@ point and the released Snowball model."""
 def eval_config(thinking: bool) -> dict:
     """The quick loop's recipe, reduced to serving the model and evaluating the probes on one node.
 
-    ``thinking`` sets the chat template's ``enable_thinking`` for every probe; the thinking probe tests
-    only a run with thinking off.
+    ``thinking`` sets the chat template's ``enable_thinking`` for every probe; with it off, the response
+    tokens of every row show whether the model still reasoned.
     """
     config = training_recipe(steps=1)
     config["entrypoint"] = "generate"
