@@ -23,6 +23,8 @@ from decimal import Decimal
 from functools import partial
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import fsspec
@@ -164,6 +166,76 @@ def _run_shard(
                 }
 
 
+def _verify_routes(rows: list[dict[str, Any]], model: PinnedModel, result_uri: str) -> None:
+    """Resolve delayed generation metadata without changing frozen response rows."""
+    if any(
+        evidence.get("metadata_error") and not isinstance(evidence.get("response_id"), str)
+        for row in rows
+        for evidence in row.get("provider_evidence", [])
+    ):
+        raise RuntimeError(f"Completion lacks response ID for {model.model}")
+    pending = {
+        evidence["response_id"]
+        for row in rows
+        for evidence in row.get("provider_evidence", [])
+        if evidence.get("metadata_error") and isinstance(evidence.get("response_id"), str)
+    }
+    immediate_mismatch = [
+        evidence
+        for row in rows
+        for evidence in row.get("provider_evidence", [])
+        if not evidence.get("route_matches") and not evidence.get("metadata_error")
+    ]
+    if immediate_mismatch:
+        raise RuntimeError(f"Verified provider mismatch or missing response ID for {model.model}")
+    if not pending:
+        return
+    overlay_uri = result_uri.replace("results.jsonl", "route-metadata-backfill.jsonl")
+    fs, path = fsspec.core.url_to_fs(overlay_uri)
+    if fs.exists(path):
+        with fs.open(path, "rt") as source:
+            backfill = [json.loads(line) for line in source if line.strip()]
+    else:
+        key = os.environ["OPENROUTER_API_KEY"]
+        backfill = []
+        for response_id in sorted(pending):
+            for wait in (2, 5, 10, 20, 40):
+                time.sleep(wait)
+                request = Request(
+                    "https://openrouter.ai/api/v1/generation?" + urlencode({"id": response_id}),
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+                try:
+                    with urlopen(request, timeout=30) as response:
+                        metadata = json.load(response)["data"]
+                    break
+                except HTTPError as error:
+                    if error.code != 404:
+                        raise
+            else:
+                raise RuntimeError(f"Generation metadata still unavailable: {response_id}")
+            backfill.append(
+                {
+                    "response_id": response_id,
+                    "provider_name": metadata.get("provider_name"),
+                    "served_model": metadata.get("model"),
+                    "request_id": metadata.get("request_id"),
+                    "total_cost": metadata.get("total_cost"),
+                }
+            )
+        if {row["response_id"] for row in backfill} != pending or any(
+            row["provider_name"] != model.provider_name for row in backfill
+        ):
+            raise RuntimeError(f"OpenRouter generation route mismatch in metadata backfill: {model.model}")
+        with fs.open(path, "wb") as destination:
+            destination.write(b"".join(json.dumps(row, sort_keys=True).encode() + b"\n" for row in backfill))
+    if {row["response_id"] for row in backfill} != pending or any(
+        row["provider_name"] != model.provider_name for row in backfill
+    ):
+        raise RuntimeError(f"Existing OpenRouter metadata backfill disagrees with pinned route: {model.model}")
+    print(f"BACKFILL model={model.model} generations={len(backfill)} uri={overlay_uri}", flush=True)
+
+
 def _key_budget() -> tuple[Decimal, Decimal]:
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
@@ -249,13 +321,7 @@ def main() -> None:
             existing = _read_completed(uri, tasks, model, manifest_sha)
             if existing is None:
                 raise RuntimeError(f"No immutable model output after successful pipeline: {uri}")
-        mismatches = [
-            r["task_id"]
-            for r in existing
-            if any(not evidence.get("route_matches") for evidence in r.get("provider_evidence", []))
-        ]
-        if mismatches:
-            raise RuntimeError(f"Provider mismatch for {model.model}: {mismatches[:5]}")
+        _verify_routes(existing, model, uri)
         counts = Counter(
             "infrastructure_error" if "infrastructure_error" in row else row["trial"]["status"] for row in existing
         )
