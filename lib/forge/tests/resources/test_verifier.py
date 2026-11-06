@@ -270,21 +270,26 @@ from pathlib import Path
 answer = Path('/app/answer.txt').read_text()
 expected = answer == 'first'
 clean = not Path('/custom/leftover').exists()
+Path('/custom').mkdir(exist_ok=True)
 Path('/custom/leftover').write_text('must not survive')
-print(int(clean and Path('/custom/output').read_text() == answer and Path('/rootfile').exists() == expected))
+valid = Path('/workspace/custom/output').read_text() == answer
+rootfile = Path('/workspace/rootfile')
+print(int(clean and valid and rootfile.exists() == expected and (not expected or rootfile.stat().st_size == 210000)))
 """
     candidate = event(script)
     task = candidate.spec.task.model_copy(
         update={
             "environment_requirements": requirements(image=None),
-            "output_paths": ("/custom/output", "/rootfile"),
+            "output_paths": ("/workspace/custom/output", "/workspace/rootfile"),
         }
     )
     spec = candidate.spec.model_copy(update={"task": task, "task_machine": machine_runtime(backend="shellsim")})
     factory = CountedFactory()
     pool, resource = setup(factory)
     try:
-        first = Candidate("first", (inline_resource("custom/output", b"first"), inline_resource("rootfile", b"present")))
+        first = Candidate(
+            "first", (inline_resource("custom/output", b"first"), inline_resource("rootfile", b"present" * 30000))
+        )
         second = Candidate("second", (inline_resource("custom/output", b"second"),))
         assert (await resource.grade(GradeCandidate(spec, first))).reward == 1
         assert (await resource.grade(GradeCandidate(spec, second))).reward == 1
