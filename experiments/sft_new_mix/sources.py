@@ -42,7 +42,7 @@ def accepted_science_sources() -> dict[str, DatakitSource]:
     return sources
 
 
-def candidate_sft_sources() -> dict[str, DatakitChatSource | DatakitSource]:
+def candidate_sft_sources_v1() -> dict[str, DatakitChatSource | DatakitSource]:
     """Replace only the four science components in the candidate SFT source map."""
     sources: dict[str, DatakitChatSource | DatakitSource] = dict(all_sft_sources())
     sources.update(accepted_science_sources())

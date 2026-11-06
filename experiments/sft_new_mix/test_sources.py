@@ -10,14 +10,14 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.sft_sources import all_sft_sources
 
-from experiments.datasets.accepted_science import candidate_sft_sources
+from experiments.sft_new_mix.sources import candidate_sft_sources_v1
 
 
 def test_accepted_science_preserves_duplicate_rows_and_serialized_text(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     all_sft_sources.cache_clear()
     original = all_sft_sources()
-    candidate = candidate_sft_sources()
+    candidate = candidate_sft_sources_v1()
     changed = {key for key in original if candidate[key] is not original[key]}
     assert changed == {f"nemotron_sft_v3/science_v2/{part}" for part in ("rqa", "so", "syn_mcq", "vendor")}
     assert candidate.keys() == original.keys()
