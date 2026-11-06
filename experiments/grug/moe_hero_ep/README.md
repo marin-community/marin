@@ -10,7 +10,8 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
   (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
-  1.66, times 1.108 on the global layers (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
+  1.66, with global-layer queries past 65536 keys scaled by (1 + 0.1 ln(n/65536))^2, up to 2.15 at 262K (1.3 at 4K,
+  1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
   shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are
@@ -230,8 +231,8 @@ steps since the last checkpoint and fails again on retry. A rehearsal at a new c
 with `--eval-every`.
 
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
-and a pristine checkout. Fork creation requires fetched main; subsequent launches
-use the same SHA recorded on the child, even if main advances.
+and a pristine checkout. Fork creation requires the approved launch commit, checked out and reachable from
+`origin/hero-lce-log65536sq`; subsequent launches use the same SHA recorded on the child, even if the branch advances.
 
 For checkpoint `step-N`, the first replayed update logs `global_step=N`. Find the
 parent row with `global_step=N-1` and use its actual W&B `_step` in
@@ -245,7 +246,7 @@ Do not inherit parent results for the replayed updates.
 Create the child tracker once, outside training retry loops:
 
 ```bash
-experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb
+experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb <launch-commit>
 ```
 
 After preflight and confirmation that the old coordinator is terminal, submit:
@@ -283,14 +284,14 @@ both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE
 `hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
 rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
 (see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
-only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor` on
-`launch_diagnostics.py`, the only launcher with that flag.
-`qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor` adds a
+only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor`,
+`--log-scaling-alpha` and `--log-scaling-power` on `launch_diagnostics.py`, the only launcher with those flags.
+`qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor` and `log_scaling_alpha`, which must be set together, add a
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
-keys in its document is multiplied by `1 + 0.1 * ln(max(n / log_scaling_n_floor, 1))`, so queries within
-the floor are unchanged. At the end of a 262K document, a floor of 65536 gives 1.139 and a floor of 128000
-gives 1.072. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
-Hero exports and upload, refuses this field instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
+keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
+the floor are unchanged. At the end of a 262K document, a floor of 65536 gives `1 + 1.386 * log_scaling_alpha` and a floor of 128000
+gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, default 1, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
+Hero exports and upload, refuses log scaling instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
@@ -423,8 +424,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default: the hero's 1.108, which gives 1.84 from 1.66) |
-| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + 0.1 * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default 1) |
+| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + alpha * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
+| `--log-scaling-alpha` | the slope `alpha` of that scale; unset keeps the hero's 0.1 |
+| `--log-scaling-power` | raises that scale to this exponent; unset keeps the hero's 2 |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |

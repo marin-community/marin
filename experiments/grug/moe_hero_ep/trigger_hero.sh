@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 1 || ( "$1" != fork-wandb && "$1" != launch ) ]]; then
-  echo "Usage: $0 {fork-wandb|launch}" >&2
+if [[ !( $# -eq 2 && "$1" == fork-wandb ) && !( $# -eq 1 && "$1" == launch ) ]]; then
+  echo "Usage: $0 {fork-wandb <launch-commit>|launch}" >&2
   exit 2
 fi
 mode=$1
@@ -20,6 +20,9 @@ WANDB_FORK_FROM='hero-ctx65k-step372k?_step=390250'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
+LAUNCH_BRANCH=hero-lce-log65536sq
+# The first finalist shares this run's racks, so the two must not be live together.
+SIBLING_RUN_ID=hero-lce-global184-step390k
 
 if [[ "$RUN_ID $HANDOFF_CHECKPOINT $WANDB_FORK_FROM" == *REPLACE_BEFORE_DEPLOYMENT* ]]; then
   echo "Handoff is not finalized: replace the run ID, checkpoint, and W&B fork point." >&2
@@ -38,17 +41,22 @@ fi
 
 launch_commit=$(git rev-parse HEAD)
 if [[ "$mode" == fork-wandb ]]; then
-  git fetch --quiet origin main
-  main_commit=$(git rev-parse FETCH_HEAD)
-  if [[ "$launch_commit" != "$main_commit" ]]; then
-    echo "Check out the fetched origin/main commit ${main_commit} before creating the fork." >&2
+  # This run launches from a branch. A commit cannot name its own SHA, so the operator names the approved commit,
+  # the fork records it, and launch verifies that record.
+  if [[ "$launch_commit" != "$2" ]]; then
+    echo "Check out the approved launch commit $2 (full SHA) before creating the fork." >&2
+    exit 1
+  fi
+  git fetch --quiet origin "$LAUNCH_BRANCH"
+  if ! git merge-base --is-ancestor "$launch_commit" FETCH_HEAD; then
+    echo "Launch commit ${launch_commit} is not on origin/${LAUNCH_BRANCH}." >&2
     exit 1
   fi
 fi
 
 # Create the tracker lineage once, outside the coordinator and training retry loops.
 # launch verifies the same child and lets training resume it without fork_from.
-uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" "$IRIS_CONFIG" <<'PYTHON'
+uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" "$launch_commit" "$IRIS_CONFIG" "$SIBLING_RUN_ID" <<'PYTHON'
 import csv
 import io
 import os
@@ -60,7 +68,7 @@ import wandb
 from iris.cluster.types import TERMINAL_JOB_STATES
 from levanter.tracker.wandb import _WANDB_FORK_FROM_PATTERN
 
-mode, run_id, project, fork_from, checkpoint, launch_commit, iris_config = sys.argv[1:]
+mode, run_id, project, fork_from, checkpoint, launch_commit, iris_config, sibling_id = sys.argv[1:]
 entity = "marin-community"
 lineage = {
     "hero_handoff_checkpoint": checkpoint,
@@ -100,7 +108,7 @@ else:
     # namespace so a parent relaunched under another IRIS_USER still blocks the child.
     coordinator_sql = (
         "SELECT job_id, state FROM jobs WHERE depth = 1 AND "
-        f"(job_id LIKE '%/{parent_id}-coord-%' OR job_id LIKE '%/{run_id}-coord-%')"
+        f"(job_id LIKE '%/{parent_id}-coord-%' OR job_id LIKE '%/{run_id}-coord-%' OR job_id LIKE '%/{sibling_id}-coord-%')"
     )
     result = subprocess.run(
         ["uv", "run", "iris", "--config", iris_config, "query", "-f", "csv", coordinator_sql],
@@ -134,8 +142,8 @@ launch_job_name="${RUN_ID}-coord-${short_uuid}"
 echo "Recording hero launch on ${HERO_ISSUE}"
 launch_record_file=$(mktemp)
 trap 'rm -f "$launch_record_file"' EXIT
-printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
-  "$RUN_ID" "$launch_commit" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION" \
+printf 'Hero launch requested.\n\n- Run ID: `%s`\n- Branch: `%s`; recover from this branch at the commit below, not from main\n- Commit: `%s`\n- Coordinator job: `%s`\n- Target: `%s` (%s)\n\nW&B fork: `%s`; handoff checkpoint: `%s`.\n' \
+  "$RUN_ID" "$LAUNCH_BRANCH" "$launch_commit" "$launch_job_name" "$TARGET_CLUSTER" "$TARGET_DESCRIPTION" \
   "$WANDB_FORK_FROM" "$HANDOFF_CHECKPOINT" > "$launch_record_file"
 gh issue comment "$HERO_ISSUE" --body-file "$launch_record_file"
 echo "Launching hero from commit ${launch_commit}"
