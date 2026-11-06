@@ -8,9 +8,10 @@ configurations. Probes leave the training objective and optimizer inputs unchang
 
 ## Adjust probes
 
-The default captures one eligible prompt group at startup and after every ten
-published policy steps, using K128 and at most 32 loss-eligible positions per
-response. A policy step numbers a learner batch. Set interval `0` to disable
+The default marks the next dispatched prompt group at startup and after every
+ten published policy steps. A group contains the answers to one prompt. Capture
+uses K128 and at most 32 loss-eligible positions per response. A policy step
+numbers a learner batch. Set interval `0` to disable
 probes; K is shared with SC:
 
 ```yaml
@@ -22,9 +23,10 @@ skyrl:
         interval: 10
 ```
 
-Selection spans the first through last loss-eligible response position. Later
-trainer masks can remove selected evidence. Admission can reject the group;
-scheduled requests need not become observations. The position bound limits
+Positions are evenly spaced over the list of loss-eligible tokens, including
+the first and last. Later trainer masks can remove selected evidence. Normal
+batch admission and reward-selection checks can reject the group, so scheduled
+requests need not become observations. The position bound limits
 export and trainer scoring. vLLM collects heads at every generated position in
 the selected group, and a head request can make neighboring requests compute
 top K. Sampled-token-only outputs discard unused candidates before CPU token
@@ -38,14 +40,15 @@ an isolated head tensor, then removes probe tensors before optimization.
 | --- | --- |
 | `available`, `interval`, `observed`, `sampled_tokens`, `coverage` | Support, requested cadence and consumed evidence. Coverage divides sampled positions by batch loss tokens; one prompt group is not an unbiased population sample. |
 | `steps_since_previous`, `seconds_since_previous` | Spacing between consumed observations. Steps advance on intervening batches; seconds appear at the next observation. |
-| `sampled_response_length_{mean,max}`, `first256_tokens`, `last256_tokens`, `long_response_tokens`, `long_responses` | Actual position/length coverage. The mean weights each sampled token's response length. Long means at least 2,048 response tokens. |
-| `{fresh,stale,unknown}_source_tokens`, `long_response/{fresh,stale,unknown}_tokens`, source-age summaries | Coverage by generating-policy stamp. Unknown stamps stay separate; empty subsets omit means. |
+| `sampled_response_length_{mean,max}`, `first256_tokens`, `last256_tokens`, `long_response_tokens`, `long_responses` | Position counts pool selected tokens across responses. The mean weights each sampled token's response length. Long means at least 2,048 response tokens. |
+| `{fresh,stale,unknown}_source_tokens`, `long_response/{fresh,stale,unknown}_tokens`, source-age summaries | Source age is learner step minus generating-policy stamp. Fresh is zero; stale is positive; negative stamps are unknown. Empty subsets omit means. |
 | `hypothetical_loss_*`, `ordinary_loss_abs_mean`, `unit_advantage_loss_*`, `zero_advantage_fraction` | Unweighted sample means of additive SC and ordinary PPO/TIS losses. Unit-advantage companions explain flat-reward groups and are never applied to training. |
 | `logit_correction_l1_mean`, `ordinary_logit_gradient_l1_mean`, `logit_correction_l1_ratio`, `unit_advantage_logit_correction_l1_mean` | Hypothetical output-gradient L1 norms, including the modeled tail. The ratio divides sums over the same positions and is omitted for a zero denominator. |
-| `old_behavior_log_ratio_*`, `sampled_tis_clipped_fraction`, `*_omitted_mass_mean`, `tail_floor_fraction` | Chosen-token mismatch, TIS truncation, omitted probability mass and use of the 1e-6 tail floor. |
+| `old_behavior_log_ratio_*`, `sampled_tis_clipped_fraction`, `*_omitted_mass_mean`, `tail_floor_fraction` | Log(old chosen-token probability / behavior probability), the fraction above log(TIS cap), omitted current/behavior mass and use of the 1e-6 tail floor. |
 
-Current and old trainer probabilities coincide at this snapshot. Stale sources
-also include weight drift. Output-gradient sensitivity does not establish
+Probes score before the optimizer update, so current and old learner policies
+coincide. Fresh-source disagreement measures sampler/learner numerical mismatch;
+stale sources also include weight drift. Output-gradient sensitivity does not establish
 parameter-gradient error or learning benefit. Small omitted masses are sensitive
 to FP32 subtraction, even just above the floor; inspect mass and floor use together.
 Increase the interval when capture is costly, then check consumed observation
@@ -92,10 +95,11 @@ training; set the probe interval to zero for a control without candidate heads.
 ## Correction and alignment
 
 The head contains the sampler's natural top K token IDs and their probabilities
-normalized over the full vocabulary. Megatron scores the same IDs at the same
-causal positions before and during optimization. Outside the head, old and
-behavior probabilities are modeled as proportional to the current policy,
-preserving their measured omitted masses.
+normalized over the full vocabulary. Behavior is the generating policy; old is
+the learner before optimization; current is the learner being optimized. Megatron
+scores the same IDs at the same causal positions before and during optimization.
+Outside the head, old and behavior probabilities are modeled as proportional to
+the current policy, preserving their measured omitted masses.
 
 SC subtracts the sampler's expected clipped, TIS-weighted score contribution.
 Its probability coefficients and clip decisions are detached; gradients flow
@@ -113,8 +117,8 @@ cross CP ranks; vocabulary logits stay local.
 
 The compact chat adapter transports owned NumPy arrays through existing vLLM
 APIs. K128 requests 129 candidates to preserve the natural head when the sampled
-token lies outside it. Selection retains the chat display limit, probability and
-token-ID ordering, and −9999 floor. Aborted continuations retain response-token
+token lies outside it. Numeric scores retain ordinary chat's −9999 minimum; ties sort by probability
+and then token ID. Aborted continuations retain response-token
 alignment and policy stamps. Public chat responses keep their schema.
 
 ## Capture cost and evidence
@@ -122,7 +126,7 @@ alignment and policy stamps. Public chat responses keep their schema.
 `score_centering_capture/` reports admitted `requests`, their `probe_requests`
 subset, `captured_tokens`,
 `captured_head_bytes` and `exported_head_bytes`. K128 uses 1,024 numeric bytes per
-captured token. `learner_input_bytes` and `learner_returned_head_bytes` include
+captured token: 128 pairs of int32 token IDs and FP32 log probabilities. `learner_input_bytes` and `learner_returned_head_bytes` include
 padding. These counters exclude Python/storage overhead and are not measured
 network traffic.
 
