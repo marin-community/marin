@@ -75,7 +75,6 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
         w_down = jax.device_put(w_down, expert_sharding)
         cotangent = jax.device_put(cotangent, batch_sharding)
 
-        implementation = implementation
         extra = {}
         if implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
             extra["pooled_transport_capacity_factor"] = 4.0
