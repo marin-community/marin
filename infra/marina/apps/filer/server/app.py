@@ -10,6 +10,7 @@ import math
 import mimetypes
 import tarfile
 import zipfile
+from collections import defaultdict
 from dataclasses import asdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -125,16 +126,15 @@ def parquet_preview(url: str, offset: int, limit: int, columns: list[str] | None
         source.seek(0)
         parquet = pq.ParquetFile(source)
         metadata = parquet.metadata
+        chunks_by_path = defaultdict(list)
+        for group_index in range(metadata.num_row_groups):
+            group = metadata.row_group(group_index)
+            for column_index in range(group.num_columns):
+                chunk = group.column(column_index)
+                chunks_by_path[chunk.path_in_schema].append(chunk)
         schema = []
         for field in parquet.schema_arrow:
-            chunks = []
-            for group_index in range(metadata.num_row_groups):
-                group = metadata.row_group(group_index)
-                chunks.extend(
-                    group.column(index)
-                    for index in range(group.num_columns)
-                    if group.column(index).path_in_schema == field.name
-                )
+            chunks = chunks_by_path.get(field.name, [])
             stats = [chunk.statistics for chunk in chunks]
             available_stats = [item for item in stats if item is not None]
             complete_stats = len(available_stats) == metadata.num_row_groups
@@ -273,10 +273,11 @@ def text_preview(url: str, offset: int, limit: int) -> dict:
 
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
+    engine = services.engine()
 
     @api.get("/favorites")
     def favorites() -> dict:
-        with services.engine().connect() as connection:
+        with engine.connect() as connection:
             rows = connection.execute(
                 text("SELECT url FROM favorites WHERE user_id = :user_id ORDER BY created_at DESC, url"),
                 {"user_id": caller_id()},
@@ -286,7 +287,7 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.post("/favorites")
     def add_favorite(favorite: FavoriteRequest) -> dict:
         checked_url(favorite.url)
-        with services.engine().begin() as connection:
+        with engine.begin() as connection:
             connection.execute(
                 text("INSERT INTO favorites (user_id, url) VALUES (:user_id, :url) ON CONFLICT DO NOTHING"),
                 {"user_id": caller_id(), "url": favorite.url},
@@ -296,7 +297,7 @@ def create_api(services: AppletServices) -> FastAPI:
     @api.delete("/favorites")
     def remove_favorite(url: str) -> dict:
         checked_url(url)
-        with services.engine().begin() as connection:
+        with engine.begin() as connection:
             connection.execute(
                 text("DELETE FROM favorites WHERE user_id = :user_id AND url = :url"),
                 {"user_id": caller_id(), "url": url},

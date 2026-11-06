@@ -23,13 +23,15 @@ from infra.marina.apps.filer.server import app as filer
 @pytest.fixture
 def storage_client(tmp_path, monkeypatch):
     fs = fsspec.filesystem("file")
+    engine = create_engine("sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
     def route(url):
         return fs, str(tmp_path / url.split("/", 3)[3])
 
     monkeypatch.setattr(filer, "filesystem_for", route)
     monkeypatch.setattr("rigging.fsutil.listing.filesystem_for", route)
-    return TestClient(filer.create_api(None)), tmp_path
+    yield TestClient(filer.create_api(SimpleNamespace(engine=lambda: engine))), tmp_path
+    engine.dispose()
 
 
 def test_parquet_pages_preserve_nested_records_across_groups(storage_client):
