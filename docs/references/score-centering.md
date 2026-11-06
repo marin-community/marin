@@ -121,25 +121,14 @@ token lies outside it. Numeric scores retain ordinary chat's −9999 minimum. Ca
 probability, then token ID. Aborted continuations retain response-token
 alignment and policy stamps. Public chat responses keep their schema.
 
-## Capture cost and evidence
-
-`score_centering_capture/` reports admitted `requests`, their `probe_requests`
-subset, `captured_tokens`,
-`captured_head_bytes` and `exported_head_bytes`. K128 uses 1,024 numeric bytes per
-captured token: 128 pairs of int32 token IDs and FP32 log probabilities. `learner_input_bytes` and `learner_returned_head_bytes` include
-padding. These counters exclude Python/storage overhead and are not measured
-network traffic.
-
-`collection_seconds_sum` covers generation and grading; `assembly_seconds_sum`
-covers trajectory assembly before payload storage. `timing/score_centering_collation`
-measures driver collation. Concurrent stage sums can overlap training and cannot
-establish added cycle time.
+## Evidence
 
 The [periodic Grug cost study](https://github.com/marin-community/marin-logbooks/issues/29)
 and [packed CP5 qualification](https://wandb.ai/marin-community/score-centering-cp-packing/artifacts/qualification/packed-cp5-qualification-01a16b97/v0)
 retain measurements and their methods. The
 [dated Snowball report](https://github.com/yonromai/marin/blob/14dae4c5e21179fd1b664e97ae6104b21837d6cd/docs/reports/score-centering-tim.md)
-contains earlier experiments. Results qualify their pinned source and workload;
-no Snowball learning benefit is established. See [SkyRL runtime](../dev-guide/skyrl.md)
+contains earlier experiments. Cost results qualify their pinned instrumented
+source and workload. Current training omits capture-stage timers and payload-byte
+accounting. No Snowball learning benefit is established. See [SkyRL runtime](../dev-guide/skyrl.md)
 for the independent lock, editable dependencies and Iris workspace bundle.
 vLLM remains pinned to `39e62869693c`.

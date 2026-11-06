@@ -73,7 +73,6 @@ from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.objective.score_centering import collate_score_centering
 from skyrl_train.objective.score_centering_probe import collate_score_probe, hypothetical_score_probe
-from skyrl_train.metric_names import SCORE_CAPTURE_METRIC_PREFIX
 from skyrl_train.config.objective_spec import (
     off_policy_correction,
     score_centering_probe_unavailable_reason,
@@ -2247,15 +2246,14 @@ class RayPPOTrainer:
         if self.cfg.trainer.algorithm.get("score_centering_enabled", False):
             if rollout_logprobs_tensor is None:
                 raise ValueError("score centering requires sampled behavior log probabilities on every batch")
-            with Timer("score_centering_collation", self.all_timings, log_events=False):
-                score_tensors = collate_score_centering(
-                    trajectory_batch["student_topk_indices"],
-                    trajectory_batch["behavior_topk_logprobs"],
-                    response_ids,
-                    loss_masks,
-                    self.cfg.trainer.algorithm.score_centering_top_k,
-                    sampled_logprobs=rollout_logprobs_tensor,
-                )
+            score_tensors = collate_score_centering(
+                trajectory_batch["student_topk_indices"],
+                trajectory_batch["behavior_topk_logprobs"],
+                response_ids,
+                loss_masks,
+                self.cfg.trainer.algorithm.score_centering_top_k,
+                sampled_logprobs=rollout_logprobs_tensor,
+            )
         # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
         policy_steps = None
         if rollout_staleness is None:
@@ -2285,13 +2283,12 @@ class RayPPOTrainer:
         if "score_probe_positions" in trajectory_batch:
             if probe_reason is not None:
                 raise ValueError(f"Received score probe evidence when probes are unavailable: {probe_reason}")
-            with Timer("score_centering_probe_collation", self.all_timings):
-                probe_tensors = collate_score_probe(
-                    trajectory_batch,
-                    response_ids,
-                    self.cfg.trainer.algorithm.score_centering_top_k,
-                    sampled_logprobs=rollout_logprobs_tensor,
-                )
+            probe_tensors = collate_score_probe(
+                trajectory_batch,
+                response_ids,
+                self.cfg.trainer.algorithm.score_centering_top_k,
+                sampled_logprobs=rollout_logprobs_tensor,
+            )
             if probe_tensors:
                 positions = probe_tensors["score_probe_positions"]
                 probe_tensors["score_probe_source_steps"] = (
@@ -2323,10 +2320,6 @@ class RayPPOTrainer:
         )
         training_input.update(distillation_tensors)
         training_input.update(score_tensors)
-        if score_tensors:
-            self.all_metrics[f"{SCORE_CAPTURE_METRIC_PREFIX}learner_input_bytes"] = float(
-                sum(tensor.numel() * tensor.element_size() for tensor in score_tensors.values())
-            )
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
             candidates, scores, _ = collate_student_selected_rollout(
@@ -3072,9 +3065,6 @@ class RayPPOTrainer:
             if old_selected.shape != training_input["score_behavior_logprobs"].shape:
                 raise ValueError("old-trainer top-K log probabilities must align with captured behavior evidence")
             training_input["score_old_logprobs"] = old_selected
-            self.all_metrics[f"{SCORE_CAPTURE_METRIC_PREFIX}learner_returned_head_bytes"] = float(
-                old_selected.numel() * old_selected.element_size()
-            )
         values = values[: len(sequences_all)] if values is not None else None
 
         if "ftpo_chosen_mask" in training_input:

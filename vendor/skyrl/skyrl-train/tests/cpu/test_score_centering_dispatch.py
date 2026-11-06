@@ -1,4 +1,4 @@
-"""Capture costs travel with real task execution and projected training data."""
+"""Candidate heads survive real task execution and training-data projection."""
 
 import numpy as np
 import pytest
@@ -16,7 +16,7 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topk,probe_tokens", [(0, 0), (32, 0), (128, 0), (32, 32), (128, 32)])
-async def test_training_task_retains_heads_and_capture_costs(topk, probe_tokens):
+async def test_training_task_retains_heads(topk, probe_tokens):
     length = 40 if probe_tokens else 4
     response = list(range(11, 11 + length))
     ids = np.tile(np.arange(topk or 1, dtype=np.int32), (length, 1))
@@ -73,7 +73,6 @@ async def test_training_task_retains_heads_and_capture_costs(topk, probe_tokens)
     batch = writer.group.trajectory_batch
     assert writer.group.policy_step == 7
     assert batch["response_ids"] == [response]
-    metrics = batch.get("rollout_metrics", {})
     if topk:
         if probe_tokens:
             positions = batch["score_probe_positions"][0]
@@ -85,14 +84,5 @@ async def test_training_task_retains_heads_and_capture_costs(topk, probe_tokens)
         else:
             np.testing.assert_array_equal(batch["student_topk_indices"][0], ids)
             np.testing.assert_array_equal(batch["behavior_topk_logprobs"][0], scores)
-        assert metrics["score_centering_capture/requests"] == 1
-        assert metrics["score_centering_capture/captured_tokens"] == length
-        assert metrics["score_centering_capture/captured_head_bytes"] == length * topk * 8
-        assert metrics["score_centering_capture/exported_head_bytes"] == (
-            32 * (topk * 8 + 4) if probe_tokens else length * topk * 8
-        )
-        assert metrics["score_centering_capture/collection_seconds_sum"] >= 0
-        assert metrics["score_centering_capture/assembly_seconds_sum"] >= 0
     else:
         assert batch.get("student_topk_indices") is None
-        assert not any(name.startswith("score_centering_capture/") for name in metrics)
