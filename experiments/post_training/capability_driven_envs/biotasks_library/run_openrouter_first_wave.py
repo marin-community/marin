@@ -190,7 +190,11 @@ def _verify_routes(rows: list[dict[str, Any]], model: PinnedModel, result_uri: s
         raise RuntimeError(f"Verified provider mismatch or missing response ID for {model.model}")
     if not pending:
         return
-    overlay_uri = result_uri.replace("results.jsonl", "route-metadata-backfill.jsonl")
+    filename = Path(result_uri).name
+    overlay_name = (
+        "route-metadata-backfill.jsonl" if filename == "results.jsonl" else f"route-metadata-backfill-{filename}"
+    )
+    overlay_uri = result_uri.rsplit("/", 1)[0] + "/" + overlay_name
     fs, path = fsspec.core.url_to_fs(overlay_uri)
     if fs.exists(path):
         with fs.open(path, "rt") as source:
