@@ -1,5 +1,11 @@
 <script setup>
-import { ref, computed, onMounted, defineAsyncComponent } from "vue";
+import {
+  ref,
+  computed,
+  onMounted,
+  onUnmounted,
+  defineAsyncComponent,
+} from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import AppBar from "@marina/AppBar.vue";
@@ -17,6 +23,12 @@ const busy = ref(false),
   filter = ref(""),
   search = ref(""),
   tab = ref("table");
+const favorites = ref([]),
+  favoriteError = ref(""),
+  copyNotice = ref(""),
+  viewMode = ref("list"),
+  imageExpanded = ref(false),
+  rowNumber = ref(1);
 const nextToken = ref(null),
   selected = ref(null),
   visibleColumns = ref([]),
@@ -26,7 +38,12 @@ const sortKey = ref("name"),
   pageSize = ref(50),
   duration = ref(0);
 let generation = 0;
+let requestedUrl = "";
 const recent = ref(JSON.parse(localStorage.getItem("filer.recent") || "[]"));
+const isFavorite = computed(() => favorites.value.includes(location.value));
+const mediaUrl = computed(
+  () => `api/media?${new URLSearchParams({ url: location.value })}`,
+);
 const filename = computed(
   () => location.value.replace(/\/$/, "").split("/").pop() || "All buckets",
 );
@@ -107,8 +124,11 @@ const parent = computed(() => {
   const parts = crumbs.value;
   return parts.length > 1 ? parts[parts.length - 2].url + "/" : "";
 });
-async function api(route, params = {}) {
-  const response = await fetch(`api/${route}?${new URLSearchParams(params)}`);
+async function api(route, params = {}, options = {}) {
+  const response = await fetch(
+    `api/${route}?${new URLSearchParams(params)}`,
+    options,
+  );
   if (!response.ok) {
     let detail;
     try {
@@ -122,6 +142,57 @@ async function api(route, params = {}) {
   }
   return response.json();
 }
+function entryUrl(entry) {
+  return entry.url + (entry.is_dir && !entry.url.endsWith("/") ? "/" : "");
+}
+function hasThumbnail(entry) {
+  return (
+    !entry.is_dir &&
+    entry.size > 0 &&
+    entry.size <= 1024 * 1024 &&
+    /\.(png|jpe?g|gif|webp|avif)$/i.test(entry.name)
+  );
+}
+function thumbnailUrl(entry) {
+  return `api/thumbnail?${new URLSearchParams({ url: entry.url })}`;
+}
+function filerLink(url) {
+  const base = ["localhost", "127.0.0.1"].includes(window.location.hostname)
+    ? window.location.href.split("#")[0]
+    : "https://filer.marina.oa.dev/";
+  return `${base}#${encodeURIComponent(url)}`;
+}
+async function copy(value, label) {
+  try {
+    await navigator.clipboard.writeText(value);
+    copyNotice.value = `${label} copied`;
+  } catch {
+    copyNotice.value = `Could not copy ${label.toLowerCase()}`;
+  }
+}
+async function toggleFavorite() {
+  const url = location.value;
+  favoriteError.value = "";
+  try {
+    if (isFavorite.value) {
+      await api("favorites", { url }, { method: "DELETE" });
+      favorites.value = favorites.value.filter((item) => item !== url);
+    } else {
+      await api(
+        "favorites",
+        {},
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        },
+      );
+      favorites.value = [url, ...favorites.value];
+    }
+  } catch (e) {
+    favoriteError.value = e.message;
+  }
+}
 function remember(url) {
   if (!url) return;
   recent.value = [url, ...recent.value.filter((item) => item !== url)].slice(
@@ -130,9 +201,16 @@ function remember(url) {
   );
   localStorage.setItem("filer.recent", JSON.stringify(recent.value));
 }
-async function open(url, kind = "auto", offset = 0, projection = null) {
+async function open(
+  url,
+  kind = "auto",
+  offset = 0,
+  projection = null,
+  navigation = "push",
+) {
   const id = ++generation,
     start = performance.now();
+  requestedUrl = url;
   busy.value = true;
   error.value = "";
   selected.value = null;
@@ -156,6 +234,8 @@ async function open(url, kind = "auto", offset = 0, projection = null) {
     address.value = url;
     filter.value = "";
     search.value = "";
+    chooseColumns.value = false;
+    imageExpanded.value = false;
     if (listing) {
       entries.value = listing.entries;
       nextToken.value = listing.next_token;
@@ -163,6 +243,7 @@ async function open(url, kind = "auto", offset = 0, projection = null) {
     } else {
       preview.value = result;
       visibleColumns.value = result.columns || [];
+      rowNumber.value = (result.offset || 0) + 1;
       if (!offset)
         tab.value =
           result.kind === "table"
@@ -171,7 +252,10 @@ async function open(url, kind = "auto", offset = 0, projection = null) {
               ? "json"
               : "preview";
     }
-    history.replaceState(null, "", `#${encodeURIComponent(url)}`);
+    const hash = `#${encodeURIComponent(url)}`;
+    if (navigation === "replace") history.replaceState(null, "", hash);
+    else if (navigation === "push" && window.location.hash !== hash)
+      history.pushState(null, "", hash);
     remember(url);
   } catch (e) {
     if (id === generation) error.value = e.message;
@@ -208,8 +292,16 @@ function sort(key) {
     sortDirection.value = 1;
   }
 }
-async function share() {
-  await navigator.clipboard.writeText(window.location.href);
+function goToRow() {
+  const row = Number(rowNumber.value);
+  if (Number.isInteger(row) && row >= 1 && row <= preview.value.total)
+    open(location.value, "auto", row - 1, visibleColumns.value);
+}
+function goBack() {
+  window.history.back();
+}
+function goForward() {
+  window.history.forward();
 }
 function exportPage() {
   const blob = new Blob([JSON.stringify(preview.value.rows, null, 2)], {
@@ -222,16 +314,36 @@ function exportPage() {
   a.click();
   URL.revokeObjectURL(url);
 }
+function fromHistory() {
+  const url = decodeURIComponent(window.location.hash.slice(1));
+  if (url !== requestedUrl) open(url, "auto", 0, null, "none");
+}
 onMounted(async () => {
+  api("favorites")
+    .then((result) => {
+      favorites.value = result.urls;
+    })
+    .catch((e) => {
+      favoriteError.value = e.message;
+    });
   try {
     buckets.value = (await api("browse")).entries;
   } catch (e) {
     error.value = e.message;
   }
-  await open(decodeURIComponent(window.location.hash.slice(1)));
-  window.addEventListener("hashchange", () =>
-    open(decodeURIComponent(window.location.hash.slice(1))),
+  await open(
+    decodeURIComponent(window.location.hash.slice(1)),
+    "auto",
+    0,
+    null,
+    "replace",
   );
+  window.addEventListener("popstate", fromHistory);
+  window.addEventListener("hashchange", fromHistory);
+});
+onUnmounted(() => {
+  window.removeEventListener("popstate", fromHistory);
+  window.removeEventListener("hashchange", fromHistory);
 });
 </script>
 
@@ -271,6 +383,20 @@ onMounted(async () => {
           >
         </button>
       </div>
+      <div class="section-label">FAVORITES</div>
+      <button
+        v-for="url in favorites"
+        :key="url"
+        class="recent favorite-link"
+        :title="url"
+        @click="open(url)"
+      >
+        <span aria-hidden="true">★</span
+        >{{ url.replace(/\/$/, "").split("/").pop() }}
+      </button>
+      <p v-if="!favorites.length && !favoriteError" class="sidebar-hint">
+        Save a file or folder to find it here.
+      </p>
       <div class="section-label">RECENT LOCATIONS</div>
       <button
         v-for="url in recent.slice(0, 4)"
@@ -289,10 +415,23 @@ onMounted(async () => {
     <main>
       <header class="topbar">
         <div>
-          <span class="eyebrow">WORKSPACE</span
+          <span class="eyebrow">FILER</span
           ><span class="top-title">Object storage</span>
         </div>
-        <span class="read-only">Read only</span>
+        <div class="topbar-actions">
+          <button type="button" title="Back" aria-label="Back" @click="goBack">
+            ←
+          </button>
+          <button
+            type="button"
+            title="Forward"
+            aria-label="Forward"
+            @click="goForward"
+          >
+            →
+          </button>
+          <span class="read-only">Read only</span>
+        </div>
       </header>
       <form class="address-bar" @submit.prevent="open(address.trim())">
         <span class="address-icon">↗</span
@@ -303,6 +442,23 @@ onMounted(async () => {
           spellcheck="false"
         /><button type="submit" :disabled="busy">Open <span>↵</span></button>
       </form>
+      <details v-if="favorites.length" class="mobile-favorites">
+        <summary>Favorites ({{ favorites.length }})</summary>
+        <button
+          v-for="url in favorites"
+          :key="url"
+          :title="url"
+          @click="open(url)"
+        >
+          {{ url.replace(/\/$/, "").split("/").pop() }}
+        </button>
+      </details>
+      <div v-if="copyNotice" class="copy-notice" role="status">
+        {{ copyNotice }}
+      </div>
+      <div v-if="favoriteError" class="favorite-error" role="alert">
+        {{ favoriteError }}
+      </div>
       <nav class="breadcrumbs" aria-label="Breadcrumbs">
         <button @click="open('')">Buckets</button
         ><template v-for="(crumb, i) in crumbs" :key="crumb.url"
@@ -362,13 +518,27 @@ onMounted(async () => {
               >
               <template v-if="preview.schema"
                 >{{ preview.schema.length }} columns <span>·</span></template
+              ><template v-if="preview.row_groups != null"
+                >{{ preview.row_groups }} row groups <span>·</span></template
               >{{ duration.toFixed(2) }}s
             </p>
           </div>
           <div class="heading-actions">
             <button v-if="location" @click="open(parent, 'directory')">
               ↑ Parent</button
-            ><button v-if="location" @click="share">Copy link</button
+            ><button
+              v-if="location"
+              :aria-pressed="isFavorite"
+              @click="toggleFavorite"
+            >
+              {{ isFavorite ? "★ Saved" : "☆ Save" }}</button
+            ><button
+              v-if="location"
+              @click="copy(filerLink(location), 'Filer link')"
+            >
+              Copy Filer link</button
+            ><button v-if="location" @click="copy(location, 'Storage URL')">
+              Copy storage URL</button
             ><button @click="open(location, preview ? 'auto' : 'directory')">
               ↻ Refresh
             </button>
@@ -378,14 +548,14 @@ onMounted(async () => {
         <template v-if="!preview">
           <div v-if="!location" class="welcome">
             <div>
-              <span class="eyebrow">JUMP INTO A DATASET</span>
-              <h2>Every file, a useful view.</h2>
+              <span class="eyebrow">GET STARTED</span>
+              <h2>Open a storage location</h2>
               <p>
-                Inspect rows, expand nested records, and read long prompts
-                without leaving your browser.
+                Paste an object URL above, choose a bucket, or open a recent
+                location.
               </p>
               <button class="primary" @click="open(example)">
-                Open a Gretel SQL dataset <span>→</span>
+                Open example Parquet file <span>→</span>
               </button>
             </div>
             <div class="format-stack">
@@ -406,8 +576,24 @@ onMounted(async () => {
               aria-label="Filter files"
               placeholder="Filter names in loaded listing…"
             />
+            <div class="view-switch" aria-label="Listing view">
+              <button
+                :class="{ selected: viewMode === 'list' }"
+                :aria-pressed="viewMode === 'list'"
+                @click="viewMode = 'list'"
+              >
+                List
+              </button>
+              <button
+                :class="{ selected: viewMode === 'grid' }"
+                :aria-pressed="viewMode === 'grid'"
+                @click="viewMode = 'grid'"
+              >
+                Grid
+              </button>
+            </div>
           </div>
-          <div class="table-wrap">
+          <div v-if="viewMode === 'list'" class="table-wrap">
             <table class="files">
               <thead>
                 <tr>
@@ -423,19 +609,23 @@ onMounted(async () => {
                   v-for="entry in shownEntries"
                   :key="entry.url"
                   @click="
-                    open(
-                      entry.url +
-                        (entry.is_dir && !entry.url.endsWith('/') ? '/' : ''),
-                      entry.is_dir ? 'directory' : 'auto',
-                    )
+                    open(entryUrl(entry), entry.is_dir ? 'directory' : 'auto')
                   "
                 >
                   <td>
                     <button class="file-link">
+                      <img
+                        v-if="hasThumbnail(entry)"
+                        class="file-thumbnail"
+                        :src="thumbnailUrl(entry)"
+                        :alt="`${entry.name} thumbnail`"
+                        loading="lazy"
+                      />
                       <span
+                        v-else
                         :class="entry.is_dir ? 'folder-icon' : 'file-icon'"
                         >{{ entry.is_dir ? "▱" : "▤" }}</span
-                      >{{ entry.name }}
+                      ><span>{{ entry.name }}</span>
                     </button>
                   </td>
                   <td class="mono muted">{{ size(entry.size) }}</td>
@@ -451,10 +641,57 @@ onMounted(async () => {
                       entry.mtime ? new Date(entry.mtime).toLocaleString() : "—"
                     }}
                   </td>
-                  <td class="muted">→</td>
+                  <td class="row-actions">
+                    <button
+                      :aria-label="`Copy Filer link for ${entry.name}`"
+                      title="Copy Filer link"
+                      @click.stop="
+                        copy(filerLink(entryUrl(entry)), 'Filer link')
+                      "
+                    >
+                      ↗</button
+                    ><span>→</span>
+                  </td>
                 </tr>
               </tbody>
             </table>
+            <div v-if="!shownEntries.length && !busy" class="empty">
+              {{
+                filter
+                  ? "No matching names in this page."
+                  : "This location is empty."
+              }}
+            </div>
+          </div>
+          <div v-else class="file-grid">
+            <button
+              v-for="entry in shownEntries"
+              :key="entry.url"
+              class="file-card"
+              @click="
+                open(entryUrl(entry), entry.is_dir ? 'directory' : 'auto')
+              "
+            >
+              <span class="card-preview">
+                <img
+                  v-if="hasThumbnail(entry)"
+                  :src="thumbnailUrl(entry)"
+                  :alt="`${entry.name} thumbnail`"
+                  loading="lazy"
+                />
+                <span
+                  v-else
+                  :class="entry.is_dir ? 'folder-icon' : 'file-icon'"
+                  >{{ entry.is_dir ? "▱" : "▤" }}</span
+                >
+              </span>
+              <span class="card-name" :title="entry.name">{{
+                entry.name
+              }}</span>
+              <span class="card-meta">{{
+                entry.is_dir ? "Folder" : size(entry.size)
+              }}</span>
+            </button>
             <div v-if="!shownEntries.length && !busy" class="empty">
               {{
                 filter
@@ -592,12 +829,38 @@ onMounted(async () => {
                     <tr>
                       <th>Column</th>
                       <th>Data type</th>
+                      <template v-if="preview.format === 'Parquet'">
+                        <th>Nulls</th>
+                        <th>Min</th>
+                        <th>Max</th>
+                        <th>Compressed</th>
+                      </template>
                     </tr>
                   </thead>
                   <tbody>
                     <tr v-for="column in preview.schema" :key="column.name">
                       <td class="mono">{{ column.name }}</td>
                       <td class="mono muted">{{ column.type }}</td>
+                      <template v-if="preview.format === 'Parquet'">
+                        <td class="mono muted">
+                          {{ column.null_count ?? "—" }}
+                        </td>
+                        <td
+                          class="mono muted statistic"
+                          :title="compact(column.min)"
+                        >
+                          {{ compact(column.min) }}
+                        </td>
+                        <td
+                          class="mono muted statistic"
+                          :title="compact(column.max)"
+                        >
+                          {{ compact(column.max) }}
+                        </td>
+                        <td class="mono muted">
+                          {{ size(column.compressed_size) }}
+                        </td>
+                      </template>
                     </tr>
                   </tbody>
                 </table>
@@ -611,9 +874,18 @@ onMounted(async () => {
                 JSON.stringify(preview.value ?? preview.rows, null, 2)
               }}</pre>
               <div v-else-if="preview.kind === 'image'" class="image-view">
+                <div class="image-tools">
+                  <button
+                    :aria-pressed="imageExpanded"
+                    @click="imageExpanded = !imageExpanded"
+                  >
+                    {{ imageExpanded ? "Fit image" : "Actual size" }}
+                  </button>
+                </div>
                 <img
-                  :src="`api/media?${new URLSearchParams({ url: location })}`"
+                  :src="mediaUrl"
                   :alt="filename"
+                  :class="{ expanded: imageExpanded }"
                 />
               </div>
               <PdfView
@@ -629,7 +901,7 @@ onMounted(async () => {
                   :is="preview.kind"
                   controls
                   preload="metadata"
-                  :src="`api/media?${new URLSearchParams({ url: location })}`"
+                  :src="mediaUrl"
                 />
               </div>
               <pre v-else class="source-view">{{ preview.text }}</pre>
@@ -664,6 +936,23 @@ onMounted(async () => {
               · click a row to inspect</span
             ><span v-else>Read-only preview · contents displayed as data</span>
             <div v-if="preview.kind === 'table'" class="pagination">
+              <form
+                v-if="preview.format === 'Parquet'"
+                class="row-jump"
+                @submit.prevent="goToRow"
+              >
+                <label for="jump-row">Row</label>
+                <input
+                  id="jump-row"
+                  v-model.number="rowNumber"
+                  type="number"
+                  min="1"
+                  :max="preview.total"
+                />
+                <button type="submit" :disabled="busy || !preview.total">
+                  Go
+                </button>
+              </form>
               <select
                 v-model="pageSize"
                 aria-label="Rows per page"

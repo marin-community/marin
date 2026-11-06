@@ -22,17 +22,20 @@ import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from marina.applets import AppletServices
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.paged_listing import is_child
 from rigging.fsutil.compression import uncompressed_name
 from rigging.fsutil.listing import entry_mtime, list_entries, parent_url, read_decompressed_preview
+from rigging.server_auth import get_verified_identity
+from sqlalchemy import Connection, text
 
 MAX_GROUP_BYTES = 32 * 1024 * 1024
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_MEDIA_BYTES = 10 * 1024 * 1024
 MAX_TEXT_ROWS = 10000
 MAX_ARCHIVE_MEMBERS = 5000
+MAX_THUMBNAIL_BYTES = 1024 * 1024
 MEDIA_TYPES = {
     "image/png": "image",
     "image/jpeg": "image",
@@ -47,6 +50,31 @@ MEDIA_TYPES = {
     "video/mp4": "video",
     "video/webm": "video",
 }
+
+
+class FavoriteRequest(BaseModel):
+    url: str
+
+
+def migrate(connection: Connection) -> None:
+    """Store favorites for each verified Marina user."""
+    connection.execute(
+        text(
+            """CREATE TABLE IF NOT EXISTS favorites (
+                user_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, url)
+            )"""
+        )
+    )
+
+
+def caller_id() -> str:
+    identity = get_verified_identity()
+    if identity is None:
+        raise HTTPException(401, "Marina login is required for favorites.")
+    return identity.user_id
 
 
 def checked_url(url: str) -> str:
@@ -87,7 +115,43 @@ def parquet_preview(url: str, offset: int, limit: int, columns: list[str] | None
         source.seek(0)
         parquet = pq.ParquetFile(source)
         metadata = parquet.metadata
-        schema = [{"name": field.name, "type": str(field.type)} for field in parquet.schema_arrow]
+        schema = []
+        for field in parquet.schema_arrow:
+            chunks = []
+            for group_index in range(metadata.num_row_groups):
+                group = metadata.row_group(group_index)
+                chunks.extend(
+                    group.column(index)
+                    for index in range(group.num_columns)
+                    if group.column(index).path_in_schema == field.name
+                )
+            stats = [chunk.statistics for chunk in chunks]
+            available_stats = [item for item in stats if item is not None]
+            complete_stats = len(available_stats) == metadata.num_row_groups
+            null_counts = [item.null_count for item in available_stats]
+            has_min_max = complete_stats and all(item.has_min_max for item in available_stats)
+            schema.append(
+                {
+                    "name": field.name,
+                    "type": str(field.type),
+                    "compressed_size": sum(chunk.total_compressed_size for chunk in chunks) if chunks else None,
+                    "null_count": (
+                        sum(count for count in null_counts if count is not None)
+                        if complete_stats and all(count is not None for count in null_counts)
+                        else None
+                    ),
+                    "min": (
+                        json_value(min(item.min for item in available_stats))
+                        if has_min_max and available_stats
+                        else None
+                    ),
+                    "max": (
+                        json_value(max(item.max for item in available_stats))
+                        if has_min_max and available_stats
+                        else None
+                    ),
+                }
+            )
         selected = columns if columns is not None else parquet.schema_arrow.names
         if set(selected) - set(parquet.schema_arrow.names):
             raise HTTPException(400, "Unknown column selection.")
@@ -131,7 +195,7 @@ def parquet_preview(url: str, offset: int, limit: int, columns: list[str] | None
             "rows": json_value(rows),
             "total": metadata.num_rows,
             "offset": offset,
-            "next_offset": offset + len(rows) if offset + len(rows) < metadata.num_rows else None,
+            "next_offset": offset + len(rows) if notice is None and offset + len(rows) < metadata.num_rows else None,
             "row_groups": metadata.num_row_groups,
             "notice": notice,
         }
@@ -197,8 +261,37 @@ def text_preview(url: str, offset: int, limit: int) -> dict:
     return result
 
 
-def create_api(_services: AppletServices) -> FastAPI:
+def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
+
+    @api.get("/favorites")
+    def favorites() -> dict:
+        with services.engine().connect() as connection:
+            rows = connection.execute(
+                text("SELECT url FROM favorites WHERE user_id = :user_id ORDER BY created_at DESC, url"),
+                {"user_id": caller_id()},
+            )
+            return {"urls": [row.url for row in rows]}
+
+    @api.post("/favorites")
+    def add_favorite(favorite: FavoriteRequest) -> dict:
+        checked_url(favorite.url)
+        with services.engine().begin() as connection:
+            connection.execute(
+                text("INSERT INTO favorites (user_id, url) VALUES (:user_id, :url) ON CONFLICT DO NOTHING"),
+                {"user_id": caller_id(), "url": favorite.url},
+            )
+        return {"url": favorite.url}
+
+    @api.delete("/favorites")
+    def remove_favorite(url: str) -> dict:
+        checked_url(url)
+        with services.engine().begin() as connection:
+            connection.execute(
+                text("DELETE FROM favorites WHERE user_id = :user_id AND url = :url"),
+                {"user_id": caller_id(), "url": url},
+            )
+        return {"url": url}
 
     @api.exception_handler(MissingCredentials)
     async def missing_credentials(_request, error):
@@ -327,6 +420,20 @@ def create_api(_services: AppletServices) -> FastAPI:
         data = fs.cat_file(path, start=0, end=MAX_MEDIA_BYTES + 1)
         if len(data) > MAX_MEDIA_BYTES:
             raise HTTPException(413, "Media exceeds the 10 MiB preview limit.")
+        return Response(data, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
+
+    @api.get("/thumbnail")
+    def thumbnail(url: str) -> Response:
+        checked_url(url)
+        mime = mimetypes.guess_type(url)[0]
+        if MEDIA_TYPES.get(mime) != "image":
+            raise HTTPException(400, "Thumbnails are available for images only.")
+        fs, path = filesystem_for(url)
+        if fs.size(path) > MAX_THUMBNAIL_BYTES:
+            raise HTTPException(413, "Image exceeds the 1 MiB thumbnail limit.")
+        data = fs.cat_file(path, start=0, end=MAX_THUMBNAIL_BYTES + 1)
+        if len(data) > MAX_THUMBNAIL_BYTES:
+            raise HTTPException(413, "Image exceeds the 1 MiB thumbnail limit.")
         return Response(data, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
 
     return api
