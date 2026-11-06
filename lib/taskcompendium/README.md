@@ -109,10 +109,17 @@ The URL probe declares its pages through a `fetch-v1` tool provider (`taskcompen
 serves `fetch_url` from the task's pages without network access. Every call gets a JSON observation,
 so an HTTP error, a network failure and an unknown URL reach the model as distinct results.
 
-The dumped SkyRL evaluation rows keep `score`, the parsed conversation under `messages` and the
-exact `response_token_ids`; classify failures from them offline. The
-[quick RL loop](../../docs/recipes/quick-rl-loop.md#train-and-evaluate) evaluates the probes as a
-second validation source.
+`experiments/post_training/inventory/protocol_probes_eval.py` evaluates the probes against a
+checkpoint on one 8xH100 node, with SkyRL's evaluation-only entrypoint and thinking off by default:
+
+```bash
+uv run python -m experiments.post_training.inventory.protocol_probes_eval \
+  --model snowball-v0.1 --version "$RUN_VERSION" --run
+```
+
+`--model datakit-sft` probes the quick RL loop's starting checkpoint. Under the run's
+`exports/dumped_evals/`, each `protocol-probes.jsonl` row keeps `score`, the parsed conversation
+under `messages` and the exact `response_token_ids`; classify failures from them offline.
 
 ## What can a task represent?
 

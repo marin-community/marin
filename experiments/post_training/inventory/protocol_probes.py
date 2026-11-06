@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish the agent protocol probes as a validation source for the quick RL loop.
+"""Publish the agent protocol probes as an evaluation dataset.
 
 The probes are the ``protocol-probes`` dataset of ``taskcompendium.examples.protocol_probes``. The
 answer file is graded in the worker from the verifyit lock of an environment with no extra packages.

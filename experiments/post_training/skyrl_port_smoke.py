@@ -22,7 +22,7 @@ from marin.rl.skyrl import (
     SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
-    _materialize_role_plan_config,
+    materialize_role_plan_config,
     skyrl_step,
 )
 
@@ -87,7 +87,7 @@ def build_smoke(version: str) -> Smoke:
             export=True,
             settings=(f"trainer.max_steps={max_steps}", "trainer.logger=console", "trainer.update_epochs_per_batch=1"),
         )
-        _materialize_role_plan_config(config, plan)
+        materialize_role_plan_config(config, plan)
         config["generator"]["gpu_memory_utilization"] = 0.4
         config["trajectory_runner"] = {
             "max_concurrent_tasks": 4,

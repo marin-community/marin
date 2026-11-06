@@ -29,8 +29,8 @@ from marin.rl.skyrl import (
     SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
-    _materialize_role_plan_config,
     _role_plan_config_values,
+    materialize_role_plan_config,
     run_skyrl,
     skyrl_step,
 )
@@ -306,7 +306,7 @@ def training_config(
         },
         "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
     }
-    _materialize_role_plan_config(config, plan)
+    materialize_role_plan_config(config, plan)
     if choice.chat_template_kwargs is not None:
         config["generator"]["chat_template_kwargs"] = dict(choice.chat_template_kwargs)
     for setting in settings:

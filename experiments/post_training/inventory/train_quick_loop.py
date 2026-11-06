@@ -25,10 +25,8 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
-from experiments.post_training.inventory.protocol_probes import PROBES_FILENAME, probe_tasks_step
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -45,19 +43,6 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
-TOOL_PARSER = "hermes"
-SHELLSIM_MACHINE = {
-    "backend": "shellsim",
-    "network": "deny",
-    "cpus": None,
-    "memory_mb": None,
-    "storage_mb": None,
-    "gpus": 0,
-    "user": None,
-    "startup_timeout": 60,
-    "cleanup_timeout": 60,
-}
-"""The file and tool probes' task machine, as a RolloutEngine ``MachineRuntimeSpec`` payload."""
 
 
 def training_recipe(steps: int) -> dict:
@@ -75,17 +60,11 @@ def training_recipe(steps: int) -> dict:
     config = training_config(preset)
     config["entrypoint"] = "taskcompendium"
     config["data"] = {"kind": "parquet", "shuffle": True}
-    # Tool-bearing requests need vLLM's tool-call parser; Datakit SFT and Qwen3 both use the Hermes format.
-    config["generator"]["engine_init_kwargs"].update(enable_auto_tools=True, tool_parser=TOOL_PARSER)
     config["environment"] = {
         "task_sessions": {
             "local": {},
             "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
-            "task_spec": {
-                "max_turns_by_dataset": {PROBE_DATASET: PROBE_TURNS},
-                "task_machine_by_dataset": {PROBE_DATASET: SHELLSIM_MACHINE},
-            },
         }
     }
     config["extra_env"].update(
@@ -125,6 +104,17 @@ def training_recipe(steps: int) -> dict:
     return config
 
 
+def sft_model() -> ArtifactHfModel:
+    """The pinned Datakit SFT weights that each quick-loop run starts from."""
+    model = ArtifactStep.adopt(
+        f"models/snowball-datakit-sft-{MODEL_REVISION}",
+        MODEL_VERSION,
+        MODEL_URI,
+        kind=LevanterCheckpoint,
+    )
+    return ArtifactHfModel(step=model, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
+
+
 def build_run(
     version: str,
     *,
@@ -133,29 +123,15 @@ def build_run(
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
-    model = ArtifactStep.adopt(
-        f"models/snowball-datakit-sft-{MODEL_REVISION}",
-        MODEL_VERSION,
-        MODEL_URI,
-        kind=LevanterCheckpoint,
-    )
     plan = SNOWBALL_RECIPE.role_plan
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
             config_yaml=yaml.safe_dump(training_recipe(steps), sort_keys=False),
-            model=ArtifactHfModel(
-                step=model,
-                tokenizer_uri=MODEL_ID,
-                tokenizer_revision=MODEL_REVISION,
-                relative_path="",
-            ),
+            model=sft_model(),
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
-            validation_data=(
-                ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),
-                ArtifactDataSource(probe_tasks_step(), relative_path=PROBES_FILENAME),
-            ),
+            validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
                 num_nodes=plan.num_nodes,
                 gpus_per_node=plan.policy_num_gpus_per_node,
