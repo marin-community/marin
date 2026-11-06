@@ -145,7 +145,7 @@ def score_hero(predictions: tuple[Prediction, ...], request: dict, config: GrugM
 def score_snowball(predictions: tuple[Prediction, ...], weights: str, revision: str, attention: str) -> np.ndarray:
     spec = ModelSpec(
         weights=weights,
-        revision=revision,
+        revision=None if "://" in weights else revision,
         tokenizer_revision=revision,
         api_model="snowball-reference",
         num_chips=jax.device_count(),
@@ -201,7 +201,9 @@ def main() -> None:
     else:
         assert args.weights and args.revision
         scores = score_snowball(predictions, args.weights, args.revision, args.attention)
-        weights = {"uri": args.weights, "revision": args.revision}
+        weights = {"uri": args.weights, "revision": None if "://" in args.weights else args.revision}
+        if "://" in args.weights:
+            weights["source_revision"] = args.revision
     assert np.isfinite(scores).all()
     if jax.process_index() == 0:
         args.output.mkdir(parents=True, exist_ok=False)
