@@ -4,8 +4,8 @@
 """Run one workpiece through its configured transition table; resume by replay."""
 
 import logging
+from collections.abc import Callable
 
-from forge import wiring
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import StageCompleted
@@ -34,7 +34,18 @@ def reasons(error: BaseException) -> tuple[str, ...]:
     return (" <- ".join(details),)
 
 
-async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: Resources, log: EventLog) -> Workpiece:
+STAGE_REPLAY_ATTEMPTS = 3
+"""Bound interrupted-stage reconstruction; effect executors alone own retries."""
+
+
+async def run_workpiece(
+    proposal: TaskProposal,
+    config: ForgeConfig,
+    resources: Resources,
+    log: EventLog,
+    *,
+    install: Callable[[Context, Resources], None],
+) -> Workpiece:
     ctx = Context(log=log)
     wp = Workpiece(proposal.header.id, proposal)
     stage = config.initial_stage
@@ -43,7 +54,7 @@ async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: 
     stage_attempts: dict[tuple[Stage, int], int] = {}
     try:
         async with ctx.scope("workpiece"):
-            wiring.install(ctx, resources)
+            install(ctx, resources)
             wp = wp.with_(id=await ctx.emit(NewId("workpiece")))
             while wp.terminal is None:
                 key = (stage, wp.round)
@@ -53,8 +64,15 @@ async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: 
                 try:
                     result = await STAGES[stage](ctx, wp, config, resources)
                 except* Restart as error:
-                    logging.warning("Stage %s round %d attempt %d of 3: %s", stage, wp.round, attempt, reasons(error))
-                    if attempt >= 3:
+                    logging.warning(
+                        "Stage %s round %d attempt %d of %d: %s",
+                        stage,
+                        wp.round,
+                        attempt,
+                        STAGE_REPLAY_ATTEMPTS,
+                        reasons(error),
+                    )
+                    if attempt >= STAGE_REPLAY_ATTEMPTS:
                         raise
                     stage_attempts[key] = attempt + 1
                     replay = True
@@ -69,8 +87,7 @@ async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: 
                 wp = adapt(wp, result)
                 if wp.round != previous_round:
                     await resources.close_round()
-                refs = {"round": str(wp.round), "terminal": wp.terminal or ""}
-                await ctx.emit(StageCompleted(stage, config_digest, type(result).__name__, refs))
+                await ctx.emit(StageCompleted(stage, config_digest, type(result).__name__, wp.round, wp.terminal))
                 following = target(wp) if callable(target) else target
                 if following is None and wp.terminal is None:
                     raise ValueError("Transition stopped without a terminal workpiece")
@@ -91,5 +108,5 @@ async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: 
         finally:
             await resources.close_round()
     if interrupted:
-        await log.record(StageCompleted(stage, config_digest, "Held", {"round": str(wp.round), "terminal": "held"}))
+        await log.record(StageCompleted(stage, config_digest, "Held", wp.round, Terminal.HELD))
     return wp

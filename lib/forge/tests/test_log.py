@@ -12,6 +12,8 @@ import pytest
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, Retrying, StageCompleted
 from forge.effects.issues import LogFailure
 from forge.effects.log import EventLog, JsonlSink, Record, Status, fold
+from forge.model.stage import Stage
+from forge.model.workpiece import Terminal
 
 from .effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
 
@@ -56,9 +58,9 @@ asyncio.run(main())
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    await resumed.record(StageCompleted("review", "cfg", "accept", {"round": "2", "terminal": "ACCEPTED"}))
+    await resumed.record(StageCompleted(Stage.REVIEW, "cfg", "accept", 2, Terminal.ACCEPTED))
     assert resumed.records[-1].sequence == 4
-    assert fold(tuple(record.event for record in resumed.records)) == Status("review", 2, "ACCEPTED")
+    assert fold(tuple(record.event for record in resumed.records)) == Status(Stage.REVIEW, 2, Terminal.ACCEPTED)
 
 
 async def test_replay_preserves_float_keys_after_numeric_coercion(tmp_path: Path) -> None:
@@ -147,3 +149,20 @@ async def test_unencodable_event_does_not_poison_later_persistence(tmp_path: Pat
     await log.record(Note("after"))
     assert tuple(record.event for record in await sink.read()) == (Note("before"), Note("after"))
     assert tuple(record.sequence for record in log.records) == (1, 2)
+
+
+async def test_legacy_progress_resumes_nonterminal_stages_and_distinguishes_held(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.jsonl"
+    path.write_text(
+        '{"sequence":1,"wall_time":1,"event":{"type":"forge.effects.events.StageCompleted",'
+        '"payload":{"stage":"author","config_digest":"cfg","exit":"draft",'
+        '"refs":{"round":"2","terminal":""}}}}\n'
+    )
+    sink = JsonlSink(str(path))
+    log = EventLog(sink=sink, replay_from=await sink.read())
+    assert fold(tuple(record.event for record in log.records)) == Status(Stage.AUTHOR, 2, None)
+    await log.record(StageCompleted(Stage.VALIDATE, "cfg", "Held", 2, Terminal.HELD))
+    status = fold(tuple(record.event for record in await sink.read()))
+    assert status.terminal is Terminal.HELD and not status.finished
+    await log.record(StageCompleted(Stage.REVIEW, "cfg", "Accept", 2, Terminal.ACCEPTED))
+    assert fold(tuple(record.event for record in await sink.read())).finished

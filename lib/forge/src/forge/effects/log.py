@@ -29,6 +29,8 @@ from forge.effects.events import (
     json_value,
 )
 from forge.effects.issues import LogFailure
+from forge.model.stage import Stage
+from forge.model.workpiece import Terminal
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +71,12 @@ def _restore(value: Any) -> Any:
 def _decode(data: Mapping[str, Any]) -> Event[object]:
     cls = EVENT_TYPES[data["type"]]
     payload = data["payload"]
+    if cls is StageCompleted and "refs" in payload:
+        refs = payload["refs"]
+        payload = {key: value for key, value in payload.items() if key != "refs"}
+        payload.update(round=int(refs.get("round", 0)), terminal=(refs.get("terminal") or "").lower() or None)
+        if payload["stage"] == "driver":
+            payload["stage"] = None
     if cls is Resolved:
         request = _decode(payload["request"])
         value = TypeAdapter(cast(Any, request.result_type)).validate_python(_restore(payload["value"]))
@@ -180,6 +188,7 @@ class EventLog:
         sink: Sink | None = None,
         replay_from: Sequence[Record] = (),
         attempts: int = 3,
+        replayable: Callable[[Resolved[object]], bool] = lambda _: True,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._sink = sink
@@ -189,7 +198,7 @@ class EventLog:
         self._index: dict[tuple[str, tuple[Fingerprint, ...]], object] = {
             (event_digest(record.event.request), record.event.fingerprints): record.event.value
             for record in replay_from
-            if isinstance(record.event, Resolved)
+            if isinstance(record.event, Resolved) and replayable(record.event)
         }
         self._attempts = attempts
         self._lock = asyncio.Lock()
@@ -234,17 +243,19 @@ class EventLog:
 
 @dataclass(frozen=True, slots=True)
 class Status:
-    stage: str | None = None
+    stage: Stage | None = None
     round: int = 0
-    terminal: str | None = None
+    terminal: Terminal | None = None
+
+    @property
+    def finished(self) -> bool:
+        return self.terminal is not None and self.terminal is not Terminal.HELD
 
 
 def fold(events: Sequence[Event[object]]) -> Status:
-    """Reconstruct progress from StageCompleted refs (round and terminal)."""
+    """Reconstruct the latest published progress."""
     status = Status()
     for event in events:
         if isinstance(event, StageCompleted):
-            status = Status(
-                event.stage, int(event.refs.get("round", str(status.round))), event.refs.get("terminal", status.terminal)
-            )
+            status = Status(event.stage, event.round, event.terminal)
     return status

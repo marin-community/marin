@@ -1,10 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar
 
 from forge.model.content_hash import (
@@ -19,6 +17,8 @@ from forge.model.content_hash import (
 from forge.model.content_hash import (
     json_value as json_value,
 )
+from forge.model.stage import Stage
+from forge.model.workpiece import Terminal
 
 
 class ReplayPolicy(StrEnum):
@@ -92,10 +92,8 @@ class ScopeExited(Event[None]):
 
 @dataclass(frozen=True, slots=True)
 class StageCompleted(Event[None]):
-    stage: str
+    stage: Stage | None
     config_digest: str
     exit: str
-    refs: Mapping[str, str]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "refs", MappingProxyType(dict(self.refs)))
+    round: int = 0
+    terminal: Terminal | None = None

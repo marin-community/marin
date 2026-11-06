@@ -77,3 +77,10 @@ async def grader_infra_unavailable(event: Resolved[object]) -> None:
     grade = value.grade if isinstance(value, GradedRollout) else value
     if isinstance(grade, GradeResult) and grade_cause(grade) is Cause.GRADER_INFRA:
         raise Hold(grade.error or "Grader infrastructure unavailable")
+
+
+def replayable_grade(event: Resolved[object]) -> bool:
+    """Resume successful evidence, but reevaluate unavailable infrastructure."""
+    value = event.value
+    grade = value.grade if isinstance(value, GradedRollout) else value
+    return not isinstance(grade, GradeResult) or grade_cause(grade) not in (Cause.GRADER_INFRA, Cause.NO_GRADE)

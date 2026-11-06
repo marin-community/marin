@@ -29,7 +29,8 @@ from forge.model.proposal import TASK_PROPOSAL, TaskProposal
 from forge.model.review import Incomplete
 from forge.model.workpiece import WORKPIECE, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
-from forge.wiring import endpoint_source, runtime
+from forge.stages.classify import replayable_grade
+from forge.wiring import endpoint_source, install, runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,15 +119,14 @@ async def one(args: argparse.Namespace) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
     destination = prefix_join(args.output, str(identity))
     restored = recover(workdir, destination)
-    if restored is not None and restored.terminal is not None:
-        terminal = Terminal(restored.terminal)
-        logging.info("SKIP %s: published terminal=%s", identity, terminal.value)
+    if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
+        logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
         return
     sink = JsonlSink(str(workdir / "events.jsonl"))
     previous = await sink.read() if Path(sink.path).exists() else ()
     wp = Workpiece(proposal.header.id, proposal)
     checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
-    log = EventLog(sink=checkpoints, replay_from=previous)
+    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
     try:
         async with checkpoints.running():
             source = endpoint_source(
@@ -136,11 +136,11 @@ async def one(args: argparse.Namespace) -> None:
                 policy.setting("author.model", str),
             )
             async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
-                wp = await run_workpiece(proposal, config, resources, log)
+                wp = await run_workpiece(proposal, config, resources, log, install=install)
     except Exception:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
-        await log.record(StageCompleted("driver", "", "bug", {"round": str(wp.round), "terminal": "held"}))
+        await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Forge workpiece %s failed", proposal.header.id)
         raise
     finally:
@@ -189,6 +189,8 @@ async def run(args: argparse.Namespace) -> None:
                     "--work-dir",
                     args.work_dir,
                 ]
+                if args.resume_held:
+                    command.append("--resume-held")
                 process = subprocess.Popen(command)
                 submitted += 1
                 active[asyncio.create_task(asyncio.to_thread(process.wait))] = (path, process)
@@ -220,6 +222,7 @@ def main() -> None:
         command.add_argument("--output", required=True)
         command.add_argument("--policy", required=True)
         command.add_argument("--work-dir", default="forge-work")
+        command.add_argument("--resume-held", action="store_true", help="Explicitly resume published held workpieces")
         if name == "run":
             command.add_argument("--concurrency", type=int, required=True)
             command.add_argument("--shard-index", type=int, default=0)

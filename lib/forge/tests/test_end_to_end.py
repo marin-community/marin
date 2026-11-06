@@ -43,7 +43,7 @@ from forge.resources.inference import FakeInference, InferenceRequest
 from forge.resources.rollouts import Engine, RolloutResource
 from forge.resources.verifier import RoundVerifier
 from forge.resources.web import FakeWeb
-from forge.wiring import build_config
+from forge.wiring import build_config, install
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)
 
@@ -127,7 +127,7 @@ def config(arm: str) -> ForgeConfig:
 @pytest.mark.parametrize("arm", ("S", "T"))
 async def test_both_arms_accept_and_record_stage_sequence(proposal: TaskProposal, arm: str) -> None:
     log = EventLog()
-    wp = await run_workpiece(proposal, config(arm), resources(Envs(), script(arm)), log)
+    wp = await run_workpiece(proposal, config(arm), resources(Envs(), script(arm)), log, install=install)
     assert wp.terminal == Terminal.ACCEPTED
     stages = [record.event.stage for record in log.records if isinstance(record.event, StageCompleted)]
     assert stages == (
@@ -140,12 +140,12 @@ async def test_crash_resume_replays_commands_without_repeating_inference(proposa
     sink = JsonlSink(str(tmp_path / "events.jsonl"))
     first = EventLog(sink=sink)
     broken = resources(Envs(fail=True), script("S"))
-    assert (await run_workpiece(proposal, config("S"), broken, first)).terminal == Terminal.HELD
+    assert (await run_workpiece(proposal, config("S"), broken, first, install=install)).terminal == Terminal.HELD
     assert isinstance(broken.inference, FakeInference)
     assert len(broken.inference.requests) == 2
     resumed = resources(Envs(), script("S")[2:])
     log = EventLog(replay_from=await sink.read(), sink=sink)
-    wp = await run_workpiece(proposal, config("S"), resumed, log)
+    wp = await run_workpiece(proposal, config("S"), resumed, log, install=install)
     assert wp.terminal == Terminal.ACCEPTED
     assert isinstance(resumed.inference, FakeInference)
     assert isinstance(resumed.envs, Envs)
@@ -172,7 +172,11 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
     pool = RoundPool()
     settings = replace(config("S"), review=needs_revision)
     wp = await run_workpiece(
-        proposal, settings, replace(resources(Envs(), (*script("S"), *script("S"))), verifiers=pool), EventLog()
+        proposal,
+        settings,
+        replace(resources(Envs(), (*script("S"), *script("S"))), verifiers=pool),
+        EventLog(),
+        install=install,
     )
     assert pool.closes == 2  # modification ends round zero; terminal abandonment ends round one
     assert wp.terminal == Terminal.ABANDONED
@@ -192,7 +196,7 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
     bundle = resources(Envs(), script("S"))
     bundle = replace(bundle, rollouts=replace(bundle.rollouts, engine=UngradedEngine()))
     log = EventLog()
-    wp = await run_workpiece(proposal, settings, bundle, log)
+    wp = await run_workpiece(proposal, settings, bundle, log, install=install)
     assert wp.terminal == Terminal.HELD
     assert len(wp.decisions) == settings.budget.max_validation_retries + 1
     stages = [r.event.stage for r in log.records if isinstance(r.event, StageCompleted)]
@@ -213,6 +217,7 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         arm="S",
         output=str(tmp_path / "out"),
         work_dir=str(tmp_path / "work"),
+        resume_held=False,
         concurrency=2,
         shard_index=0,
         shard_count=1,
@@ -318,7 +323,7 @@ async def test_stage_restart_replays_on_fresh_machine_without_repeating_inferenc
 
     envs = Recovers(fail=True)
     resource = resources(envs, script("S"))
-    result = await run_workpiece(proposal, config("S"), resource, EventLog())
+    result = await run_workpiece(proposal, config("S"), resource, EventLog(), install=install)
     assert result.terminal == Terminal.ACCEPTED
     assert len(envs.created) == 2
     assert [env.executed for env in envs.created] == [["inspect", "write-draft"], ["inspect", "write-draft"]]
@@ -331,7 +336,7 @@ async def test_stage_restart_stops_after_three_attempts_with_cause(
 ) -> None:
     envs = Envs(fail=True)
     resource = resources(envs, script("S"))
-    result = await run_workpiece(proposal, config("S"), resource, EventLog())
+    result = await run_workpiece(proposal, config("S"), resource, EventLog(), install=install)
     assert result.terminal == Terminal.HELD
     assert len(envs.created) == 3
     assert "fake machine died" in str(result.decisions[-1])
@@ -365,3 +370,37 @@ async def test_container_filter_skips_before_runtime_or_subprocess(
         assert "SUMMARY submitted=0 completed=0 failed=0 skipped=1" in output
     assert not (tmp_path / "work").exists()
     assert not (tmp_path / "out").exists()
+
+
+async def test_driver_only_resumes_held_on_request_and_reexecutes_ungraded_trials(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Unavailable(SolverEngine):
+        @override
+        async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+            return GradedRollout(Rollout(run_id or "trial", (), "stop"), GradeResult(Outcome.UNAVAILABLE, None))
+
+    first = resources(Envs(), script("S"))
+    first = replace(first, rollouts=replace(first.rollouts, engine=Unavailable(2)))
+    second = resources(Envs(), ())
+    attempts = iter((first, second))
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+        yield config(arm), next(attempts)
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    await driver.one(driver_args)
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.HELD
+    published = (destination / "events.jsonl").read_bytes()
+    driver_args.work_dir += "-skip"
+    await driver.one(driver_args)
+    assert (destination / "events.jsonl").read_bytes() == published
+    driver_args.resume_held = True
+    driver_args.work_dir += "-resume"
+    await driver.one(driver_args)
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.ACCEPTED
+    assert isinstance(second.inference, FakeInference) and not second.inference.requests

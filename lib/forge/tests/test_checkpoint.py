@@ -12,6 +12,7 @@ from forge import checkpoint
 from forge.checkpoint import CheckpointSink
 from forge.effects.events import StageCompleted
 from forge.effects.log import EventLog, JsonlSink
+from forge.model.stage import Stage
 
 
 @pytest.mark.parametrize("by_count", [True, False])
@@ -34,10 +35,10 @@ async def test_partial_checkpoint_on_event_count_or_timer(
     monkeypatch.setattr(sink, "_publish", record_upload)
     log = EventLog(sink=sink)
     async with sink.running():
-        await log.record(StageCompleted("author", "", "draft", {}))
+        await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
         if by_count:
             assert not (destination / "status.json").exists()
-            await log.record(StageCompleted("validate", "", "ready", {}))
+            await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
         assert await asyncio.to_thread(uploaded.wait, 2)
     status = json.loads((destination / "status.json").read_bytes())
     assert status == {"terminal": None, "upload_started_at": 123.0}
@@ -62,7 +63,7 @@ async def test_cancelled_checkpoint_drains_upload_before_final_publication(
 
     monkeypatch.setattr(sink, "_publish", held_upload)
     async with sink.running():
-        record = asyncio.create_task(EventLog(sink=sink).record(StageCompleted("author", "", "draft", {})))
+        record = asyncio.create_task(EventLog(sink=sink).record(StageCompleted(Stage.AUTHOR, "", "draft")))
         assert await asyncio.to_thread(entered.wait, 2)
         record.cancel()
         await asyncio.sleep(0)
