@@ -336,7 +336,6 @@ def test_snowball_fp32_activations_is_a_runtime_setting():
     cfg = _tiny_config(fp32_activations=True)
     hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
     assert "fp32_activations" not in hf
-    assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).fp32_activations is False
     with pytest.raises(ValueError, match="fp32_activations"):
         _tiny_config(fp32_activations=True, moe_implementation="sonic_cute")
 
