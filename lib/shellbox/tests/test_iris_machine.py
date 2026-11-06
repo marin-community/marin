@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import pwd
+import shlex
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +29,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import Command, ExitReason, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -179,7 +180,10 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("private_credentials", [False, True])
-def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
+@pytest.mark.parametrize("has_timeout", [False, True])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(
+    tmp_path, monkeypatch, caplog, private_credentials, has_timeout
+):
     task_id = JobName.from_wire("/fixture/sandbox/0")
     status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
     job = LocalJob()
@@ -197,7 +201,14 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     endpoint.credentials = None
     monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
     monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
-    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
+
+    class ProbeRpc(LocalRpc):
+        def exec_in_container(self, request, timeout_ms):
+            if request.command == ["sh", "-c", "command -v timeout"]:
+                return SimpleNamespace(exit_code=0 if has_timeout else 1, stdout="", stderr="", error="")
+            return super().exec_in_container(request, timeout_ms)
+
+    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: ProbeRpc())
     secret = "private-fixture-credential"
     monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
     factory = IrisMachineFactory(
@@ -209,6 +220,7 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     async def scenario():
         machine = await factory.create(spec)
         try:
+            assert machine._timeout_available is has_timeout
             assert secret not in json.dumps(asdict(machine.spec), default=str)
             result = await machine.run(Command(("sh", "-c", "printf ready")))
             assert result.stdout == b"ready"
@@ -443,3 +455,59 @@ def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> No
             await machine.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("exit_code", [124, 137])
+def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, exit_code):
+    machine, job = local_machine(tmp_path)
+    machine._timeout_available = True
+    scripts = []
+
+    async def script(text, timeout=None):
+        scripts.append(text)
+        return iris_backend.ExecOutput(exit_code if "timeout -k" in text else 0, "", "")
+
+    async def download(path, limit=None):
+        return (b"partial output" if path.endswith("-out") else b"diagnostic"), False
+
+    monkeypatch.setattr(machine, "_script", script)
+    monkeypatch.setattr(machine, "_download_bytes", download)
+
+    async def scenario():
+        command = Command(("sh", "-c", "printf 'partial output'; sleep 90"), timeout=30)
+        result = await machine.run(command)
+        assert result.reason == ExitReason.TIMED_OUT
+        assert result.exit_code == exit_code
+        assert result.stdout == b"partial output" and result.stderr == b"diagnostic"
+        assert not job.cancelled
+        assert (await machine.run(Command(("true",)))).reason == ExitReason.EXITED
+        assert not job.cancelled
+        timed = shlex.split(scripts[0].splitlines()[-1])
+        assert timed[:6] == ["timeout", "-k", "5", "30s", "sh", "-c"]
+        assert shlex.split(timed[6]) == list(command.argv)
+        await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("has_timeout", [False, True])
+def test_missing_timeout_or_rpc_backstop_closes_the_machine(tmp_path, monkeypatch, has_timeout):
+    machine, job = local_machine(tmp_path)
+    machine._timeout_available = has_timeout
+    monkeypatch.setattr(iris_backend, "RPC_PADDING_SECONDS", 0.01)
+    deadlines = []
+    wait_for = asyncio.wait_for
+
+    async def record_wait(awaitable, timeout):
+        deadlines.append(timeout)
+        return await wait_for(awaitable, timeout=timeout)
+
+    async def stuck_script(text, timeout=None):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "wait_for", record_wait)
+    monkeypatch.setattr(machine, "_script", stuck_script)
+    result = asyncio.run(machine.run(Command(("true",), timeout=0.01)))
+    assert result.reason == ExitReason.TIMED_OUT
+    assert job.cancelled
+    assert deadlines == [0.02 if has_timeout else 0.01]

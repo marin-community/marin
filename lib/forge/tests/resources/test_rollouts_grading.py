@@ -84,12 +84,18 @@ def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None
 @pytest.mark.parametrize("operation", tuple(RolloutOperation))
 async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutOperation) -> None:
     interrupted = RolloutInterrupted(Rollout("trial", (), "interrupted"), operation)
+    cause = RuntimeError("sandbox startup failed")
+    cause.__cause__ = RuntimeError("ImagePullBackOff: registry.example.com/" + "a" * 400)
+    interrupted.__cause__ = cause
     engine = FakeEngine((interrupted,))
     resource = RolloutResource(engine, twelve, "test-config")
     decision = Transient if operation == RolloutOperation.START else Restart
     with pytest.raises(decision) as failure:
         await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2))
     assert failure.value.__cause__ is interrupted
+    detail = (str(cause) + " <- " + str(cause.__cause__))[:300]
+    assert str(failure.value) == f"Rollout interrupted during {operation}: {detail}"
+    assert "ImagePullBackOff" in str(failure.value)
     assert engine.run_ids == ["arithmetic:4:2"]
 
 

@@ -27,9 +27,16 @@ class Engine(Protocol):
 
 def interruption(error: RolloutInterrupted) -> Transient | Restart:
     """Only startup is retryable without abandoning a partially executed trial."""
-    if error.operation == RolloutOperation.START:
-        return Transient(f"Rollout interrupted during {error.operation}")
-    return Restart(f"Rollout interrupted during {error.operation}")
+    causes: list[str] = []
+    seen = {id(error)}
+    cause = error.__cause__
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        causes.append(str(cause))
+        cause = cause.__cause__
+    detail = ": " + " <- ".join(causes)[:300] if causes else ""
+    message = f"Rollout interrupted during {error.operation}{detail}"
+    return Transient(message) if error.operation == RolloutOperation.START else Restart(message)
 
 
 @dataclass(frozen=True, slots=True)

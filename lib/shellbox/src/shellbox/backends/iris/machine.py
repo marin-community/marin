@@ -106,6 +106,7 @@ class IrisMachine:
         self.task = task
         self.spec = spec
         self._closed = False
+        self._timeout_available = False
         self._container_user: tuple[str, str] | None = None
         # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
         # check-then-send; it can only wait for attempts that already passed the check.
@@ -214,16 +215,26 @@ class IrisMachine:
         )
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
+        timed_command = command.timeout is not None and command.timeout > 0 and self._timeout_available
+        argv = shlex.join(command.argv)
+        if timed_command:
+            argv = f"timeout -k 5 {command.timeout}s sh -c {shlex.quote(argv)}"
         script = (
             f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+            f"{argv} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
-            response = await asyncio.wait_for(self._script(script), timeout=command.timeout)
+            backstop = command.timeout
+            if timed_command:
+                assert command.timeout is not None
+                backstop = command.timeout + RPC_PADDING_SECONDS
+            response = await asyncio.wait_for(self._script(script), timeout=backstop)
             stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
             stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            # GNU timeout returns 137 if its kill-after escalation was needed.
+            reason = ExitReason.TIMED_OUT if timed_command and response.exit_code in (124, 137) else ExitReason.EXITED
+            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
         except TimeoutError:
             await self.close()
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
@@ -358,6 +369,8 @@ class IrisMachineFactory:
                         created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                        probe = await machine._script("command -v timeout", timeout=RPC_PADDING_SECONDS)
+                        machine._timeout_available = probe.exit_code == 0
                         return machine
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
