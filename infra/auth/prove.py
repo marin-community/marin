@@ -11,6 +11,7 @@ import argparse
 import datetime
 import ipaddress
 import json
+import os
 import secrets
 import socket
 import subprocess
@@ -28,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from rigging.grant_auth import ACCESS_TOKEN_TYPE, JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
 from rigging.openbao import OpenBaoClient, OpenBaoTransitSigner
+from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.bootstrap import OperatorClient, configure
 from infra.auth.proof_fga import configure_proof, isolated_openfga
@@ -71,7 +73,7 @@ def _certificate(directory: Path) -> tuple[Path, Path]:
 
 
 @contextmanager
-def _openbao(executable: Path, directory: Path):
+def isolated_openbao(executable: Path, directory: Path, *, database_uri: str | None = None):
     certificate, key = _certificate(directory)
     api_port, cluster_port = _free_port(), _free_port()
     address = f"https://127.0.0.1:{api_port}"
@@ -90,10 +92,17 @@ def _openbao(executable: Path, directory: Path):
             }
         },
     }
+    env = dict(os.environ)
+    if database_uri is not None:
+        table = "openbao_" + directory.name.replace("-", "_")
+        configuration["storage"] = {"postgresql": {"ha_enabled": True, "table": table, "ha_table": table + "_ha"}}
+        env["BAO_PG_CONNECTION_URL"] = database_uri
     config_file = directory / "bao.json"
     config_file.write_text(json.dumps(configuration))
     with (directory / "bao.log").open("w") as log:
-        process = subprocess.Popen([str(executable), "server", "-config", str(config_file)], stdout=log, stderr=log)
+        process = subprocess.Popen(
+            [str(executable), "server", "-config", str(config_file)], env=env, stdout=log, stderr=log
+        )
         try:
             deadline = time.monotonic() + 30
             while True:
@@ -123,13 +132,18 @@ def _openbao(executable: Path, directory: Path):
                 timeout=10,
             )
             response.raise_for_status()
+            ExponentialBackoff(initial=0.1, maximum=1).wait_until_or_raise(
+                lambda: requests.get(address + "/v1/sys/health", verify=str(certificate), timeout=1).status_code == 200,
+                Duration.from_seconds(30),
+                "OpenBao did not become active after unsealing",
+            )
             yield OperatorClient(address, initialized["root_token"], str(certificate)), certificate
         finally:
             process.terminate()
             process.wait(timeout=15)
 
 
-def _identity(operator: OperatorClient, name: str, policy: str, directory: Path) -> tuple[str, Path]:
+def create_proof_identity(operator: OperatorClient, name: str, policy: str, directory: Path) -> tuple[str, Path]:
     password = secrets.token_urlsafe(32)
     operator.request("POST", f"auth/proof/users/{name}", {"password": password, "token_policies": [policy]})
     login = operator.request("POST", f"auth/proof/login/{name}", {"password": password})["auth"]
@@ -139,7 +153,7 @@ def _identity(operator: OperatorClient, name: str, policy: str, directory: Path)
     return login["entity_id"], token_file
 
 
-def _identity_jwt(operator: OperatorClient, token_file: Path, role: str, ca_file: Path) -> str:
+def proof_identity_token(operator: OperatorClient, token_file: Path, role: str, ca_file: Path) -> str:
     client = OperatorClient(operator.address, token_file.read_text(), str(ca_file))
     return client.request("GET", f"identity/oidc/token/{role}")["data"]["token"]
 
@@ -156,15 +170,19 @@ def prove(
     """Return evidence without exposing credentials or initialization secrets."""
     with tempfile.TemporaryDirectory(prefix="marin-auth-proof-") as scratch:
         directory = Path(scratch)
-        with _openbao(executable, directory) as (operator, certificate), ExitStack() as resources:
+        with isolated_openbao(executable, directory) as (operator, certificate), ExitStack() as resources:
             fga = resources.enter_context(isolated_openfga(openfga_executable, directory))
             fga_config = configure_proof(fga)
             issuer = operator.address + "/v1/identity/oidc"
             configure(operator, issuer)
             operator.request("POST", "sys/auth/proof", {"type": "userpass"})
-            subject, caller_file = _identity(operator, "launcher", "marin-auth-identity", directory)
-            other_subject, other_file = _identity(operator, "other-session", "marin-auth-identity", directory)
-            storage_subject, storage_file = _identity(operator, "storage", "marin-coreweave-identity", directory)
+            subject, caller_file = create_proof_identity(operator, "launcher", "marin-auth-identity", directory)
+            other_subject, other_file = create_proof_identity(
+                operator, "other-session", "marin-auth-identity", directory
+            )
+            storage_subject, storage_file = create_proof_identity(
+                operator, "storage", "marin-coreweave-identity", directory
+            )
             broker_token = operator.request(
                 "POST",
                 "auth/token/create",
@@ -228,8 +246,8 @@ def prove(
                 }
             )
             app, service = create_service(config)
-            caller = _identity_jwt(operator, caller_file, "marin-auth", certificate)
-            other = _identity_jwt(operator, other_file, "marin-auth", certificate)
+            caller = proof_identity_token(operator, caller_file, "marin-auth", certificate)
+            other = proof_identity_token(operator, other_file, "marin-auth", certificate)
             headers = {"Authorization": f"Bearer {caller}"}
             evidence = {
                 "openbao": "real TLS + Raft, non-dev",

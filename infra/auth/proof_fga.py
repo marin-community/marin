@@ -25,7 +25,7 @@ def free_port() -> int:
 
 
 @contextmanager
-def isolated_openfga(executable: Path, directory: Path):
+def isolated_openfga(executable: Path, directory: Path, *, database_uri: str | None = None):
     api_url = f"http://127.0.0.1:{free_port()}"
     token_file = directory / "openfga.token"
     token_file.touch(mode=0o600)
@@ -35,7 +35,7 @@ def isolated_openfga(executable: Path, directory: Path):
         str(executable),
         "run",
         "--datastore-engine",
-        "memory",
+        "postgres" if database_uri is not None else "memory",
         "--http-addr",
         api_url.removeprefix("http://"),
         "--grpc-addr",
@@ -44,13 +44,24 @@ def isolated_openfga(executable: Path, directory: Path):
         "--playground-enabled=false",
         "--authn-method=preshared",
     ]
+    if database_uri is not None:
+        env["OPENFGA_DATASTORE_URI"] = database_uri
+        with (directory / "openfga-migrate.log").open("w") as log:
+            subprocess.run(
+                [str(executable), "migrate", "--datastore-engine", "postgres"],
+                env=env,
+                stdout=log,
+                stderr=log,
+                check=True,
+                timeout=60,
+            )
     with (directory / "openfga.log").open("w") as log:
         process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 30
             while True:
                 if process.poll() is not None:
-                    raise RuntimeError(f"OpenFGA exited: {(directory / 'openfga.log').read_text()}")
+                    raise RuntimeError("OpenFGA exited before becoming ready; inspect the private proof log")
                 try:
                     if requests.get(api_url + "/healthz", timeout=1).status_code == 200:
                         break

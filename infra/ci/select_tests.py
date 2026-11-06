@@ -156,12 +156,21 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
             ".github/workflows/ops-loom-review.yaml",
             "infra/auth/__main__.py",
             "infra/auth/Pulumi*.yaml",
+            "infra/postgres/__main__.py",
+            "infra/postgres/Pulumi*.yaml",
             "infra/loom-cw/__main__.py",
             "infra/loom-cw/Pulumi*.yaml",
         }
     ),
     "auth": frozenset(
-        {"infra/auth/bootstrap.py", "infra/auth/service.py", "infra/auth/Dockerfile", "infra/auth/policy/*"}
+        {
+            "infra/auth/bootstrap.py",
+            "infra/auth/service.py",
+            "infra/auth/Dockerfile",
+            "infra/auth/policy/*",
+            "infra/postgres/prove.py",
+            "infra/postgres/Dockerfile",
+        }
     ),
 }
 

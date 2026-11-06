@@ -95,6 +95,11 @@ PVCs, verified TLS, pod anti-affinity, a disruption budget, and restricted
 service accounts. The public ingress exposes exactly the identity discovery and
 JWKS endpoints. The API remains a ClusterIP service.
 
+The separate [CloudNativePG prototype](../postgres/README.md) exercises CW
+PostgreSQL with OpenFGA and OpenBao, including synchronous replication and
+authorization during failover. It does not replicate the broker's SQLite grant
+ledger or qualify production storage, backups, or management isolation.
+
 This is a deployment program, not evidence that a staging service exists.
 `Pulumi.staging.yaml` records only the namespace, capacity and shared KMS secrets
 provider. An operator must supply the environment-specific inputs below before
