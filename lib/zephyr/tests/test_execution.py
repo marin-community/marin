@@ -39,6 +39,8 @@ from zephyr.coordinator import (
     WorkerState,
     ZephyrCoordinator,
     ZephyrExecutionResult,
+    _execution_result_path,
+    _read_coordinator_result,
 )
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
@@ -59,7 +61,7 @@ from zephyr.testing.coordinator import (
     start_test_stage,
 )
 from zephyr.worker import ZephyrWorker
-from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
+from zephyr.worker_context import CounterEntry, CounterKey, CounterSnapshot, zephyr_worker_ctx
 
 
 class _UnpicklableError(Exception):
@@ -436,12 +438,20 @@ def test_pull_task_rotates_between_executions(coordinator):
     assert execution_order == ["run-1", "run-2", "run-1", "run-2"]
 
 
-def test_duplicate_execution_id_joins_terminal_execution(coordinator):
+def test_duplicate_execution_id_joins_terminal_execution(coordinator, tmp_path):
     """A repeated execution ID returns the retained terminal result."""
+    result_path = _execution_result_path(str(tmp_path / "chunks"), "same-run")
+    expected = ZephyrExecutionResult(results=[], counters={}, execution_id="same-run")
+
     plan = compute_plan(Dataset.from_list([]))
     coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
-    coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
-    assert list(coordinator._executions) == ["same-run"]
+    assert _read_coordinator_result(result_path) == expected
+
+    # The repeat carries a non-empty plan. Joining returns the first run's stored
+    # result; running it again would wait for workers this coordinator never gets.
+    repeat_plan = compute_plan(Dataset.from_list([1, 2, 3]))
+    coordinator.run_pipeline(repeat_plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
+    assert _read_coordinator_result(result_path) == expected
 
 
 def test_write_jsonl(tmp_path, zephyr_ctx):
@@ -683,7 +693,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
 
     # Once a counter snapshot exists, the throughput segment reappears.
     coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
+        counters={CounterKey("map_only", ZEPHYR_STAGE_ITEM_COUNT_KEY): CounterEntry(7)}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
@@ -693,7 +703,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
 
     # Same when only the byte counter is present.
     coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
+        counters={CounterKey("map_only", ZEPHYR_STAGE_BYTES_PROCESSED_KEY): CounterEntry(1024)}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
@@ -1774,7 +1784,7 @@ def test_telemetry_includes_live_progress_without_recounting_completed_tasks(coo
             emitted[(attributes["run"], self.name)] = value
 
     monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
-    live = CounterSnapshot(counters={"review/completed": CounterEntry(7)}, generation=1)
+    live = CounterSnapshot(counters={CounterKey(None, "review/completed"): CounterEntry(7)}, generation=1)
     coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})
     coordinator._publish_telemetry()
     assert emitted[(TEST_EXECUTION_ID, "review_completed")] == 7
@@ -1785,7 +1795,7 @@ def test_telemetry_includes_live_progress_without_recounting_completed_tasks(coo
         0,
         0,
         TaskResult(shard=ListShard(refs=[])),
-        CounterSnapshot(counters={"review/completed": CounterEntry(10)}, generation=2),
+        CounterSnapshot(counters={CounterKey(None, "review/completed"): CounterEntry(10)}, generation=2),
         run.stage_generation,
     )
     coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})

@@ -1,5 +1,6 @@
 """Tests for BaseEnvironment.is_dir / is_file OS-aware command construction."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ class _RecordingEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -30,7 +31,9 @@ class _RecordingEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
