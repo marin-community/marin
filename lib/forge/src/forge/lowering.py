@@ -98,8 +98,7 @@ LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
 }
 """The host directories a local machine cannot write, by its factory's system-directory mode.
 
-A machine that must write under one of them keeps its image (``host_requirements``). Mirrors shellbox's
-Linux-only enum; ``tests/spec/test_draft.py`` checks they agree.
+A machine that must write under one of them keeps its image (``host_requirements``).
 """
 
 
@@ -500,13 +499,10 @@ def lower(
 ) -> TaskRolloutSpec:
     """The ``TaskRolloutSpec`` that runs ``task`` on ``host``'s ``factories`` under ``TOOL_HARNESS``.
 
-    Every Taskforge ``TaskRolloutSpec`` is built here. Each machine runs the requirements
-    ``host_requirements`` gives for ``factories``, the same rule for the task machine and the verifier
-    machine, on the backend ``machine_backend`` picks for them; the lowered task carries those
-    requirements and each machine's ``MachineRuntimeSpec.backend`` names its backend. A grader with an
-    environment (a script grader, or a verifyit grader that is neither in process nor a judge) takes a
-    verifier machine; no other grader does. The spec keeps the engine's default exact-token trace; a
-    caller can select ``TraceMode.MESSAGES`` when token evidence is unnecessary.
+    Supply a task machine exactly when the task offers shell tools, and a verifier machine exactly
+    when its grader declares an environment. Backend selection and software requirements are bound
+    to this host. Validation checks factory support without starting a machine. The spec keeps the
+    engine's exact-token trace; callers can select ``TraceMode.MESSAGES`` for text-only evidence.
 
     Raises:
         ValueError: A machine is given where the task has none or missing where it has one, or

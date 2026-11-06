@@ -130,13 +130,23 @@ def test_decision_round_trip_preserves_variant(decision: wire.Decision) -> None:
 
 
 def test_workpiece_replace_does_not_change_previous_round(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    saved_round = wire.WORKPIECE.dump_json(workpiece)
+    edited_task = workpiece.submission.task.model_copy(deep=True)
+    edited_task.labels["revision"] = "1"
     revised = workpiece.with_(
-        round=1, session=None, decisions=(*workpiece.decisions, Accept(BandOutcome.IN_BAND)), terminal=Terminal.ACCEPTED
+        round=1,
+        submission=Submission(edited_task, workpiece.submission.controls, "revised"),
+        session=None,
+        decisions=(*workpiece.decisions, Accept(BandOutcome.IN_BAND)),
+        terminal=Terminal.ACCEPTED,
     )
-    assert workpiece.round == 0 and workpiece.session is not None and workpiece.terminal is Terminal.HELD
-    assert len(workpiece.decisions) == 2
-    assert revised.round == 1 and revised.session is None and revised.terminal is Terminal.ACCEPTED
-    assert revised.submission == workpiece.submission
+    edited_task.labels["revision"] = "unsubmitted edit"
+    assert wire.WORKPIECE.dump_json(workpiece) == saved_round
+    assert revised.submission is not None
+    assert revised.submission.task.labels["revision"] == "1"
+    assert revised.submission.digest != workpiece.submission.digest
+    assert wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(revised)) == revised
 
 
 def test_submission_digest_tracks_task_and_controls_but_excludes_notes(workpiece: Workpiece) -> None:
@@ -220,3 +230,18 @@ def test_tool_schema_snapshot_survives_caller_mutation() -> None:
     assert wire.TOOL_SCHEMA.dump_json(schema) == saved
     restored = wire.TOOL_SCHEMA.validate_json(saved)
     assert restored == schema
+
+
+def test_submission_detaches_mutable_task_inputs_and_keeps_content_digest(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    original = workpiece.submission.task.model_copy(deep=True)
+    original.labels["owner"] = "author"
+    original.environment_requirements.environment_variables["MODE"] = "safe"
+    saved = Submission(original, workpiece.submission.controls, "snapshot")
+    content_digest = saved.digest
+    original.labels["owner"] = "changed"
+    original.environment_requirements.environment_variables["MODE"] = "changed"
+    assert saved.task.labels == {"owner": "author"}
+    assert saved.task.environment_requirements.environment_variables == {"MODE": "safe"}
+    assert saved.digest == content_digest
+    assert wire.SUBMISSION.validate_json(wire.SUBMISSION.dump_json(saved)) == saved

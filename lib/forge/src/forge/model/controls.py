@@ -6,7 +6,7 @@
 """Authored candidates and their expected rewards; reward checks copied from Taskforge."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -36,6 +36,11 @@ class RewardBand:
     reward_max: float | None = None
 
     def __post_init__(self) -> None:
+        # Match the typed JSON representation before a submission caches its digest.
+        if self.reward_min is not None:
+            object.__setattr__(self, "reward_min", float(self.reward_min))
+        if self.reward_max is not None:
+            object.__setattr__(self, "reward_max", float(self.reward_max))
         if self.status not in EXPECTED_STATUSES:
             raise ValueError(f"A control expects a graded result or a submission failure, not {self.status}")
         bounds = (self.reward_min, self.reward_max)
@@ -71,9 +76,15 @@ class Candidate:
     reply: str
     files: tuple[TaskResource, ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "files", tuple(file.model_copy(deep=True) for file in self.files))
+
 
 @dataclass(frozen=True, slots=True)
 class Control:
     candidate: Candidate
     expected: RewardBand
     kind: ControlKind
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "candidate", replace(self.candidate))

@@ -3,10 +3,11 @@
 
 """Immutable state carried between pipeline stages."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import TypedDict, Unpack
+from typing import Annotated, TypedDict, Unpack
 
+from pydantic import Field
 from taskcompendium.models import TaskSpec
 
 from forge.model.content_hash import digest
@@ -21,10 +22,12 @@ class Submission:
     task: TaskSpec
     controls: tuple[Control, ...]
     notes: str
+    digest: Annotated[str, Field(exclude=True)] = field(init=False, repr=False)
 
-    @property
-    def digest(self) -> str:
-        return digest((self.task, self.controls))
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task", self.task.model_copy(deep=True))
+        object.__setattr__(self, "controls", tuple(replace(control) for control in self.controls))
+        object.__setattr__(self, "digest", digest((self.task, self.controls)))
 
 
 @dataclass(frozen=True, slots=True)

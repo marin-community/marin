@@ -45,7 +45,7 @@ from forge.model.review import (
     ValidationResult,
 )
 from forge.model.source import PlannedSlot, ProposalBatch, SlotFailure, SlotProposal
-from forge.model.stage import Exit, Stage
+from forge.model.stage import Stage
 from forge.model.verdict import GraderCheck
 from forge.model.workpiece import Conversation, Submission, Terminal, Workpiece
 from forge.policy import Policy, Prompt
@@ -101,7 +101,6 @@ SLOT_PROPOSAL = TypeAdapter(SlotProposal)
 SLOT_FAILURE = TypeAdapter(SlotFailure)
 PROPOSAL_BATCH = TypeAdapter(ProposalBatch)
 STAGE = TypeAdapter(Stage)
-EXIT = TypeAdapter(Exit)
 GRADER_CHECK = TypeAdapter(GraderCheck)
 
 
