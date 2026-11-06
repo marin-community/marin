@@ -15,9 +15,17 @@ from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.datasets.lean.numina import NUMINA_CONTROLS
 from experiments.post_training.task_curation.datasets.lean.proofs import LEAN_GRADER_MEMORY_MB, LEAN_PROOF_CONTROLS
 from experiments.post_training.task_curation.tests.conversion import converted_task
-from experiments.post_training.task_curation.tests.lean_rows import PROOFNET, REAL_PROOFS, proofnet_row
+from experiments.post_training.task_curation.tests.lean_rows import (
+    NUMINA,
+    NUMINA_ROWS,
+    PROOFNET,
+    REAL_PROOFS,
+    prime_inputs,
+    proofnet_row,
+)
 from experiments.post_training.task_curation.tests.local_grader import grade, with_verifier_file
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(900)]
@@ -122,3 +130,11 @@ def test_the_negative_control_scores_zero_after_every_step(lean_kernel_machines)
     report = run_controls(task(ADD_ZERO), controls=LEAN_PROOF_CONTROLS, machines=lean_kernel_machines)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"negative": CheckStatus.PASS}, report
+
+
+@pytest.mark.parametrize("row", NUMINA_ROWS, ids=[row["uuid"][:8] for row in NUMINA_ROWS])
+def test_a_numina_human_proof_is_a_golden_control_that_scores_one(row, lean_kernel_machines, tmp_path):
+    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
+    report = run_controls(task, controls=NUMINA_CONTROLS, machines=lean_kernel_machines)
+    statuses = {check.check: check.status for check in report.checks}
+    assert statuses == {"golden": CheckStatus.PASS}, report

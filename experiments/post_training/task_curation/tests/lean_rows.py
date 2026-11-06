@@ -1,18 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProofNet-Verified fixture rows and the frozen contracts converted from them."""
+"""ProofNet-Verified and NuminaMath-LEAN fixture rows, and the frozen contracts converted from them."""
 
+import gzip
 import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.lean.proofs import sources
+from experiments.post_training.task_curation.datasets.lean import numina, proofs
 
-PROOFNET = sources()[0].config
+PROOFNET = proofs.sources()[0].config
+NUMINA = numina.sources()[0].config
+NUMINA_FIXTURE = Path(__file__).parent / "fixtures/lean/numina_rows.json"
+"""Rows copied from the pinned NuminaMath-LEAN payload whose human proofs check with the grader's toolchain."""
 PROOFS_FIXTURE = Path(__file__).parent / "fixtures/lean/proofnet_proofs.json"
 """Rows copied from the pinned ProofNet-Verified payload, each with a proof checked by the grader's toolchain."""
 
@@ -51,3 +57,35 @@ def real_proofs() -> dict[str, tuple[dict[str, Any], str]]:
 
 
 REAL_PROOFS = real_proofs()
+
+
+NUMINA_ROWS = json.loads(NUMINA_FIXTURE.read_text())
+
+
+def numina_row(**fields: Any) -> dict[str, Any]:
+    """A NuminaMath-LEAN row with a human statement and proof, with ``fields`` replacing its values."""
+    row = {
+        "uuid": "00000000-0000-5000-8000-000000000001",
+        "problem": "Show that adding zero to a natural number leaves it unchanged.",
+        "author": "human",
+        "ground_truth_type": "complete",
+        "formal_statement": "import Mathlib\n\n/- Adding zero. -/\ntheorem algebra_1 (n : Nat) : n + 0 = n := by",
+        "formal_ground_truth": "import Mathlib\n\ntheorem algebra_1 (n : Nat) : n + 0 = n := by\n  exact Nat.add_zero n",
+        "source": "olympiads",
+        "problem_type": "Algebra",
+        "question_type": "proof",
+        "exam": None,
+    }
+    return {**row, **fields}
+
+
+def prime_inputs(
+    directory: Path, *, unported: Iterable[str] = (), misformalized: Iterable[str] = ()
+) -> dict[str, StoragePath]:
+    """Prime Intellect's two NuminaMath-LEAN lists, staged as the source's inputs, holding the given uuids."""
+    staged = {}
+    for name, uuids in (("unported", unported), ("misformalized", misformalized)):
+        (directory / name).mkdir()
+        (directory / name / f"{name}.json.gz").write_bytes(gzip.compress(json.dumps(sorted(uuids)).encode()))
+        staged[name] = StoragePath(str(directory / name))
+    return staged

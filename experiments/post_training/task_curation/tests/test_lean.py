@@ -11,6 +11,8 @@ import pytest
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
 
+from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
+from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
     GraderFailure,
@@ -22,8 +24,21 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     verdict_line,
     without_comments,
 )
+from experiments.post_training.task_curation.datasets.lean.numina import (
+    EVAL_OVERLAP,
+    UNCOMPILABLE,
+    human_proof,
+    is_human_proof_row,
+)
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
-from experiments.post_training.task_curation.tests.lean_rows import PROOFNET, contract, proofnet_row
+from experiments.post_training.task_curation.tests.lean_rows import (
+    NUMINA,
+    PROOFNET,
+    contract,
+    numina_row,
+    prime_inputs,
+    proofnet_row,
+)
 
 ADD_ZERO = Contract(prefix="import Mathlib", statement="theorem t (n : Nat) : n + 0 = n :=", target="t")
 
@@ -232,3 +247,145 @@ def test_the_verdict_is_the_last_json_line_even_when_a_name_holds_a_line_separat
     output = "replaying\n" + json.dumps({"ok": True, "targets": [entry]}, ensure_ascii=False) + "\n"
     assert json.loads(verdict_line(output)) == {"ok": True, "targets": [entry]}
     assert verdict_line("no verdict\n") is None
+
+
+def test_a_numina_row_freezes_its_theorem_and_keeps_the_human_proof_for_the_golden_control(tmp_path):
+    row = numina_row()
+    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
+    assert contract(task) == {
+        "prefix": "import Mathlib",
+        "statement": "theorem algebra_1 (n : Nat) : n + 0 = n :=",
+        "target": "algebra_1",
+    }
+    prompt = task.context.events[0]
+    assert isinstance(prompt, TextMessage)
+    assert "Show that adding zero" in prompt.content
+    assert "Nat.add_zero" not in prompt.content
+    golden = human_proof(task).event
+    assert isinstance(golden, TextMessage)
+    assert proof_block(golden.content) == row["formal_ground_truth"]
+
+
+def test_the_golden_control_drops_the_human_proofs_comments_which_can_hold_code_fences(tmp_path):
+    proof = "import Mathlib\n\n/-! Example:\n```lean\nexample : True := trivial\n```\n-/\n"
+    proof += "theorem algebra_1 (n : Nat) : n + 0 = n := by\n  exact Nat.add_zero n"
+    task = converted_task(NUMINA, numina_row(formal_ground_truth=proof), inputs=prime_inputs(tmp_path))
+    golden = human_proof(task).event
+    assert isinstance(golden, TextMessage)
+    block = proof_block(golden.content)
+    assert block.startswith("import Mathlib") and block.endswith("exact Nat.add_zero n")
+    assert declares_target(block, "algebra_1")
+
+
+@pytest.mark.parametrize(
+    ("formal_statement", "prefix", "statement"),
+    [
+        (
+            "import Mathlib\nset_option maxHeartbeats 400000 in\ntheorem algebra_1 (n : Nat) : n + 0 = n := by",
+            "import Mathlib",
+            "set_option maxHeartbeats 400000 in\ntheorem algebra_1 (n : Nat) : n + 0 = n :=",
+        ),
+        (
+            "import Mathlib\nopen Nat\n\n/-- Adding zero. -/\n@[simp] theorem algebra_1 (n : Nat) : n + 0 = n := by",
+            "import Mathlib\nopen Nat",
+            "@[simp] theorem algebra_1 (n : Nat) : n + 0 = n :=",
+        ),
+        (
+            "import Mathlib\ndef f (n : Nat) : Nat := n + 0\ntheorem algebra_1 (n : Nat) : f n = n := by",
+            "import Mathlib\ndef f (n : Nat) : Nat := n + 0",
+            "theorem algebra_1 (n : Nat) : f n = n :=",
+        ),
+    ],
+    ids=["set_option_in", "open_docstring_attribute", "helper_definition"],
+)
+def test_a_numina_statement_freezes_its_last_theorem_after_its_prefix(formal_statement, prefix, statement, tmp_path):
+    row = numina_row(formal_statement=formal_statement)
+    frozen = contract(converted_task(NUMINA, row, inputs=prime_inputs(tmp_path)))
+    assert (frozen["prefix"], frozen["statement"].strip(), frozen["target"]) == (prefix, statement, "algebra_1")
+
+
+def test_eval_overlap_matches_statements_that_differ_only_in_binder_names_and_spacing():
+    ours = statement_key("theorem algebra_1 (a b : Nat) (h0 : a = b) : a ^ 2 = b^2 := by")
+    theirs = statement_key("theorem aime_1 (x y : Nat) (h1 : x = y) : x^2 = y ^ 2 := rfl")
+    assert ours is not None and ours == theirs
+    assert ours != statement_key("theorem aime_2 (x y : Nat) (h1 : x = y) : x ^ 3 = y ^ 3 := by")
+
+
+def test_only_rows_with_a_human_statement_and_proof_are_selected():
+    assert is_human_proof_row(numina_row(), None)
+    assert not is_human_proof_row(numina_row(author="autoformalizer", ground_truth_type=None), None)
+    assert not is_human_proof_row(numina_row(ground_truth_type="statement"), None)
+
+
+OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"
+
+
+@pytest.mark.parametrize(
+    ("fields", "reason"),
+    [
+        ({"uuid": "listed-unported"}, "prime_unported"),
+        ({"uuid": "listed-misformalized"}, "prime_misformalized"),
+        ({"uuid": min(EVAL_OVERLAP)}, "eval_overlap"),
+        ({"uuid": min(UNCOMPILABLE)}, "does_not_compile"),
+        ({"formal_statement": f"import Mathlib\n{OLD_SUM}"}, "old_big_operator_syntax"),
+        ({"formal_ground_truth": f"import Mathlib\n{OLD_SUM}\n  simp"}, "old_big_operator_syntax"),
+        (
+            {"formal_ground_truth": "import Mathlib\ntheorem algebra_1 (n : Nat) : n + 0 = n := by\n  native_decide"},
+            "unusable_proof",
+        ),
+        (
+            {"formal_ground_truth": "import Mathlib\ntheorem algebra_1 (n : Nat) : n + 0 = n := by\n  sorry"},
+            "unusable_proof",
+        ),
+        (
+            {"formal_ground_truth": "import Mathlib\n#eval 1\ntheorem algebra_1 (n : Nat) : n + 0 = n := by\n  simp"},
+            "unusable_proof",
+        ),
+        (
+            {
+                "formal_statement": (
+                    "import Mathlib\nlemma h : True := by sorry\ntheorem algebra_1 (n : Nat) : n + 0 = n := by"
+                )
+            },
+            "unproved_helper",
+        ),
+        (
+            {"formal_statement": "import Mathlib\nimport Aesop\ntheorem algebra_1 (n : Nat) : n + 0 = n := by"},
+            "non_mathlib_import",
+        ),
+    ],
+    ids=[
+        "prime_unported",
+        "prime_misformalized",
+        "eval_overlap",
+        "does_not_compile",
+        "old_sum_in_statement",
+        "old_sum_in_proof",
+        "native_decide_proof",
+        "sorry_proof",
+        "proof_runs_code",
+        "unproved_helper",
+        "non_mathlib_import",
+    ],
+)
+def test_a_numina_row_without_a_usable_statement_or_proof_is_rejected(fields, reason, tmp_path):
+    inputs = prime_inputs(tmp_path, unported=["listed-unported"], misformalized=["listed-misformalized"])
+    result = convert_row(NUMINA, numina_row(**fields), inputs=inputs)
+    assert isinstance(result, ImportRejection)
+    assert result.reason == reason
+
+
+@pytest.mark.parametrize(
+    ("source", "result", "unexpected"),
+    [
+        ("proofnet", {"row": 35, "status": "rejected", "reason": "no_sorry_proof"}, False),
+        ("proofnet", {"row": 36, "status": "rejected", "reason": "no_sorry_proof"}, True),
+        ("numina", {"row": "0:uuid", "status": "rejected", "reason": "eval_overlap"}, False),
+        ("numina", {"row": "0:uuid", "status": "fails"}, True),
+        ("numina", {"row": "0:uuid", "status": "timeout"}, True),
+        ("proofnet", {"row": 1, "status": "validates"}, False),
+    ],
+    ids=["expected_rejection", "other_rejection", "numina_rejection", "fails", "timeout", "validates"],
+)
+def test_the_statement_check_fails_on_a_reference_that_does_not_validate(source, result, unexpected):
+    assert failed_unexpectedly(source, result) is unexpected
