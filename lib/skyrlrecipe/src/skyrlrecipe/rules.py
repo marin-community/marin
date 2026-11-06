@@ -18,47 +18,52 @@ class RLEntrypoint(StrEnum):
     TERMINAL_BENCH_GENERATE = "terminal_bench_generate"
 
 
+# Source: skyrl_train/inference_engines/ray_wrapped_inference_engine.py
 SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
     {
-        "trust_remote_code",
-        "worker_extension_cls",
-        "data_parallel_backend",
-        "max_logprobs",
-        "distributed_executor_backend",
-        "enforce_eager",
-        "tensor_parallel_size",
-        "data_parallel_size",
-        "seed",
-        "enable_prefix_caching",
-        "dtype",
-        "gpu_memory_utilization",
-        "max_num_batched_tokens",
-        "max_num_seqs",
-        "enable_sleep_mode",
-        "vllm_v1_disable_multiproc",
-        "bundle_indices",
-        "num_gpus",
-        "noset_visible_devices",
-        "model_path",
-        "tp_size",
-        "mem_fraction_static",
-        "random_seed",
-        "disable_radix_cache",
-        "max_prefill_tokens",
-        "max_running_requests",
-        "mm_attention_backend",
-        "attention_backend",
-        "enable_memory_saver",
-        "tokenizer",
-        "custom_weight_loader",
-        "skip_tokenizer_init",
-        "speculative_config",
+        # Hardcoded values
+        "trust_remote_code",  # Always True
+        "worker_extension_cls",  # vLLM SkyRL extension path
+        "data_parallel_backend",  # Hardcoded "mp"
+        "max_logprobs",  # Hardcoded 1
+        # Calculated from config/environment
+        "distributed_executor_backend",  # Calculated from TP size ("uni" or "ray")
+        "enforce_eager",  # Set from generator.enforce_eager config
+        "tensor_parallel_size",  # Set from generator config
+        "data_parallel_size",  # Set from generator config
+        "seed",  # Set from config
+        "enable_prefix_caching",  # Set from generator config
+        "dtype",  # Set from generator.model_dtype
+        "gpu_memory_utilization",  # Set from generator config
+        "max_num_batched_tokens",  # Set from generator config
+        "max_num_seqs",  # Set from generator config
+        "enable_sleep_mode",  # Set from trainer.placement.colocate_all
+        "vllm_v1_disable_multiproc",  # Set from generator config
+        # Ray internal management
+        "bundle_indices",  # Calculated from parallelism config
+        "num_gpus",  # Ray resource allocation
+        "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
+        # SGLang-specific (if using SGLang backend)
+        "model_path",  # Set from trainer.policy.model.path
+        "tp_size",  # Alias for tensor_parallel_size
+        "mem_fraction_static",  # Alias for gpu_memory_utilization
+        "random_seed",  # Alias for seed
+        "disable_radix_cache",  # Inverse of enable_prefix_caching
+        "max_prefill_tokens",  # Alias for max_num_batched_tokens
+        "max_running_requests",  # Alias for max_num_seqs
+        "mm_attention_backend",  # Hardcoded "fa3"
+        "attention_backend",  # Hardcoded "fa3"
+        "enable_memory_saver",  # Set from inference_engine_enable_sleep
+        "tokenizer",  # Passed from external tokenizer
+        "custom_weight_loader",  # Hardcoded SkyRL path
+        "skip_tokenizer_init",  # Hardcoded True for SGLang
+        "speculative_config",  # Derived from generator.speculative_decoding
     }
 )
 
 
 def validate_engine_init_kwargs(engine_init_kwargs: Mapping[str, Any]) -> None:
-    """Reject engine keyword arguments supplied internally by SkyRL."""
+    """Reject internally supplied options that cause duplicate-keyword errors at engine startup."""
     forbidden = engine_init_kwargs.keys() & SKYRL_INTERNAL_ENGINE_KWARGS
     if forbidden:
         raise ValueError(
@@ -67,7 +72,7 @@ def validate_engine_init_kwargs(engine_init_kwargs: Mapping[str, Any]) -> None:
 
 
 def validate_tp_divides_heads(tensor_parallel_size: int, num_attention_heads: int | None) -> None:
-    """Require inference tensor parallelism to divide the declared attention-head count."""
+    """Require TP to divide the declared head count so vLLM does not stall at engine initialization."""
     if num_attention_heads and num_attention_heads % tensor_parallel_size:
         raise ValueError(
             f"generator.inference_engine_tensor_parallel_size={tensor_parallel_size} does not "

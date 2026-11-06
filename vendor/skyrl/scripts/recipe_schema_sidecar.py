@@ -1,33 +1,44 @@
 """Generation-only types, open mappings, code-default keys and public class names."""
 
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 
-from marinskyrl import runtime_options
-from marinskyrl.environment_contract import DebugMode
-from marinskyrl.resource_locator import RolloutModelLoading
-from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
+from skyrl_train.config.ftpo import FTPOBoundary
+from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
 from skyrl_train.curriculum import SamplingKind, WeightingKind
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
+from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSamplingType
 from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.group_admission import GroupAdvantageKind
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.rollouts.buffer import BatchPolicy
 from skyrl_train.trajectory_selection import TrajectorySelectorKind
-from skyrl_train.utils.trainer_utils import ResumeMode
-from marinskyrl.distillation import DistillationObjectiveKind, DistillationRewardMode
-from skyrl_train.config.ftpo import FTPOBoundary
-from skyrl_train.config.objective_spec import KLEstimator, LossReduction
-from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSamplingType
-from skyrl_train.group_admission import GroupAdvantageKind
 from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
+from skyrl_train.utils.trainer_utils import ResumeMode
+
+from marinskyrl import runtime_options
+from marinskyrl.distillation import DistillationObjectiveKind, DistillationRewardMode
+from marinskyrl.environment_contract import DebugMode
+from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.speculative_decoding import SpeculativeDecodingMethod
 
 
 def _literal(choices) -> str:
     return "Literal[" + ", ".join(repr(choice.value if isinstance(choice, Enum) else choice) for choice in choices) + "]"
 
+
+CORRECTION_PRESETS = tuple(
+    sorted(
+        path.stem
+        for path in (Path(__file__).resolve().parents[1] / "skyrl-train/skyrl_train/config/off_policy_correction").glob(
+            "*.yaml"
+        )
+    )
+)
 
 TYPES = MappingProxyType(
     {
@@ -47,11 +58,12 @@ TYPES = MappingProxyType(
         "trainer.policy.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
         "trainer.critic.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
         "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": (
-            'Literal["fully_reshardable", ' '"dp_reshardable"]'
+            'Literal["fully_reshardable", "dp_reshardable"]'
         ),
         "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": (
             'Literal["fully_reshardable", "dp_reshardable"]'
         ),
+        "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
         "trainer.hf_upload_mode": _literal(HFUploadMode),
         "checkpoint_export.hf_upload_mode": _literal(HFUploadMode),
@@ -62,9 +74,7 @@ TYPES = MappingProxyType(
         "trainer.algorithm.loss_reduction": _literal(LossReduction),
         "trainer.algorithm.kl_estimator_type": _literal(KLEstimator),
         "trainer.algorithm.kl_ctrl.type": 'Literal["fixed", "adaptive"]',
-        "trainer.algorithm.off_policy_correction": (
-            'Literal["none", "custom", "icepop", "outlier_mask", ' '"seq_mask_tis", "tis"] | None'
-        ),
+        "trainer.algorithm.off_policy_correction": _literal(("none", "custom", *CORRECTION_PRESETS)) + " | None",
         "trainer.algorithm.off_policy_correction_rules": "tuple[CorrectionRule, ...] | None",
         "trainer.algorithm.dynamic_sampling.type": _literal(DynamicSamplingType) + " | None",
         "trainer.algorithm.dynamic_sampling.informative_on": _literal(DynamicSamplingRewardSource),
@@ -141,9 +151,7 @@ TYPES = MappingProxyType(
         "generator.eval_sampling_params.logprobs": "NonNegativeInt | None",
         "generator.sampling_params.stop": "tuple[str, ...] | None",
         "generator.eval_sampling_params.stop": "tuple[str, ...] | None",
-        "data.sampling.kind": (
-            _literal(SamplingKind) + " | None"
-        ),
+        "data.sampling.kind": _literal(SamplingKind) + " | None",
         "data.sampling.weighting": _literal(WeightingKind),
         "data.sampling.domain_weights": "NumberMap",
         "data.sampling.seed": "NonNegativeInt | None",
@@ -204,7 +212,7 @@ OPEN = frozenset(
 
 UNDECLARED = MappingProxyType(
     {
-        "trainer.policy.megatron_config.optimizer_config_kwargs.store_param_remainders": ("bool", ...),
+        "trainer.policy.megatron_config.optimizer_config_kwargs.store_param_remainders": ("bool", Ellipsis),
         "teachers": ("SectionMap[Teacher]", Ellipsis),
         "teacher_routing": ("SectionMap[TeacherRouting]", Ellipsis),
         "data.kind": ('Literal["tasks", "parquet"]', "tasks"),
@@ -238,7 +246,7 @@ UNDECLARED = MappingProxyType(
         "generator.speculative_decoding.model.source_uri": ("str", Ellipsis),
         "generator.speculative_decoding.model.source_identity": ("str", Ellipsis),
         "generator.speculative_decoding.num_speculative_tokens": ("PositiveInt", Ellipsis),
-        "generator.speculative_decoding.training": ("Training | None", None),
+        "generator.speculative_decoding.training": ("SpeculatorTraining | None", None),
         "generator.speculative_decoding.training.interval_steps": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_tokens_per_update": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_window_tokens": ("PositiveInt", Ellipsis),
@@ -252,10 +260,7 @@ UNDECLARED = MappingProxyType(
         "generator.speculative_decoding.training.max_validation_loss_increase": ("int | float", Ellipsis),
         "generator.speculative_decoding.training.max_validation_agreement_decrease": ("int | float", Ellipsis),
         "generator.speculative_decoding.training.reserved_gpu_memory_gib": ("int | float", Ellipsis),
-        "trainer.algorithm.ftpo.boundary": (
-            _literal(FTPOBoundary),
-            Ellipsis,
-        ),
+        "trainer.algorithm.ftpo.boundary": (_literal(FTPOBoundary), Ellipsis),
         "trainer.algorithm.ftpo.repair_sft_weight": ("int | float | None", Ellipsis),
         "trainer.algorithm.ftpo.auxiliary_weight": ("int | float | None", Ellipsis),
     }
@@ -279,5 +284,6 @@ NAMES = MappingProxyType(
         "trainer.policy.megatron_config.optimizer_config_kwargs": "OptimizerConfigKwargs",
         "trainer.ref.megatron_config.optimizer_config_kwargs": "RefOptimizerConfigKwargs",
         "generator.speculative_decoding.model": "SpeculatorModel",
+        "generator.speculative_decoding.training": "SpeculatorTraining",
     }
 )
