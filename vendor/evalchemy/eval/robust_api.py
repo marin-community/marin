@@ -173,16 +173,22 @@ def apply_openai_payload_controls() -> bool:
         payload[token_key] = min(payload.get(token_key, context_output_cap), context_output_cap)
         return payload
 
-    def _caller_generation_payload(self, payload):
+    def _caller_generation_payload(self, payload, gen_kwargs):
         if isinstance(self, (OpenAICompletionsAPI, OpenAIChatCompletion)):
             return payload
         overrides = getattr(self, "_evalchemy_generation_overrides", None)
         if overrides is None:
             return payload
-        # Source and adapter defaults must not override the serving model's
-        # sampling policy. Explicit caller controls still cross the wire.
+        # lm-eval fills in temperature=0 and seed=1234 when a request leaves
+        # them unset; those adapter defaults must not override the serving
+        # model's sampling policy. Values the benchmark or caller requested
+        # still cross the wire.
         for key in ("temperature", "seed"):
-            payload.pop(key, None)
+            if key not in gen_kwargs:
+                payload.pop(key, None)
+        if overrides.get("do_sample") is True and "temperature" not in overrides:
+            # The caller asked to sample at the serving model's temperature.
+            payload.pop("temperature", None)
         for key, value in overrides.items():
             if key == "max_gen_toks":
                 token_key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
@@ -193,8 +199,8 @@ def apply_openai_payload_controls() -> bool:
             payload["temperature"] = 0
         return payload
 
-    def _finalize_generation_payload(self, payload, context_output_cap):
-        payload = _caller_generation_payload(self, payload)
+    def _finalize_generation_payload(self, payload, context_output_cap, gen_kwargs):
+        payload = _caller_generation_payload(self, payload, gen_kwargs)
         return _apply_context_output_cap(payload, context_output_cap)
 
     def _generation_kwargs_and_context_cap(gen_kwargs):
@@ -227,7 +233,7 @@ def apply_openai_payload_controls() -> bool:
         chat_template_kwargs = getattr(self, _CHAT_TEMPLATE_KWARGS_ATTR, None)
         if chat_template_kwargs is not None:
             payload["chat_template_kwargs"] = chat_template_kwargs
-        return _finalize_generation_payload(self, payload, context_output_cap)
+        return _finalize_generation_payload(self, payload, context_output_cap, gen_kwargs)
 
     def _create_completions_payload(
         self,
@@ -259,7 +265,7 @@ def apply_openai_payload_controls() -> bool:
             eos=None,
             **kwargs,
         )
-        return _finalize_generation_payload(self, payload, context_output_cap)
+        return _finalize_generation_payload(self, payload, context_output_cap, gen_kwargs)
 
     def _create_openai_payload(
         self,
@@ -289,7 +295,7 @@ def apply_openai_payload_controls() -> bool:
         else:
             payload["stop"] = selected_stops
             payload["temperature"] = temperature
-        return _finalize_generation_payload(self, payload, context_output_cap)
+        return _finalize_generation_payload(self, payload, context_output_cap, gen_kwargs)
 
     LocalCompletionsAPI._create_payload = _create_completions_payload
     LocalChatCompletion.__init__ = _local_chat_init
