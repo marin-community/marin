@@ -33,6 +33,8 @@ DEFAULT_PROFILES = ("gdoc",)
 IDLE_TAG = "idle"
 # Only a running session has an agent to take a message; an orphaned one keeps its `idle` tag after its agent is gone.
 RUNNING = "running"
+# The most characters of an error that a skip note keeps, so one failure cannot flood the round's record.
+NOTE_CHARS = 500
 
 
 def is_waiting(session: dict) -> bool:
@@ -65,7 +67,7 @@ def main(rnd: Round) -> None:
                 version = doc_version(api, watched.doc_id)
             except RuntimeError as error:
                 # One unreadable doc, such as one not shared with this account, must not stop the others.
-                rnd.would("skip", session=sid, doc=watched.doc_id, note=str(error)[:500])
+                rnd.would("skip", session=sid, doc=watched.doc_id, note=str(error)[:NOTE_CHARS])
                 next_state[sid] = watched.to_json()
                 continue
         watched, message = next_round(watched, version, now)
@@ -85,7 +87,7 @@ def main(rnd: Round) -> None:
             except WeaverError as error:
                 # The session stopped after the listing. Keep the change pending, and keep watching the others.
                 next_state[sid] = state[sid]
-                rnd.would("skip", session=sid, note=str(error)[:500])
+                rnd.would("skip", session=sid, note=str(error)[:NOTE_CHARS])
                 continue
             rnd.did("nudge", session=sid, text=message)
     rnd.set_state(next_state)
