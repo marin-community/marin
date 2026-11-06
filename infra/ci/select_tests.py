@@ -220,7 +220,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/ci/run_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
-    "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "iris-e2e-smoke": ("lib/iris/", ".github/workflows/unified-unit.yaml", *DEPENDENCY_MANIFESTS),
     "shellbox-unit": (
         "lib/shellbox/",
         "infra/ci/select_tests.py",

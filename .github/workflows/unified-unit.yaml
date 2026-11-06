@@ -520,9 +520,11 @@ jobs:
       - name: Install Playwright browsers
         # Always run: `playwright install` only downloads browsers it does not already
         # have, so a warm cache stays fast, while a partial or stale cache self-heals
-        # instead of leaving a missing browser binary. `--with-deps` reinstalls the system
-        # libraries that the browser cache cannot hold.
-        run: uv run --package marin-iris playwright install --with-deps chromium
+        # instead of leaving a missing browser binary. The tests launch Chromium
+        # headless, so only the headless shell is needed. No `--with-deps`: the runner
+        # image already has Chromium's libraries, and the flag also apt-installs
+        # Playwright's font packages, which some runners fetch at tens of kB/s.
+        run: uv run --package marin-iris playwright install --only-shell chromium
 
       - name: Run E2E smoke tests
         env:
