@@ -234,7 +234,8 @@ class ZephyrContext:
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
         name: Name prefix for actor groups.
         no_workers_timeout: Maximum wait for a live worker during one stage.
-        max_execution_retries: Maximum pool retries for a dedicated execute call.
+        max_execution_retries: Maximum pool retries for a dedicated execute call,
+            and maximum retries of a shared pool's start.
         stage_runner_factory: Factory for the worker stage runner.
         heartbeat_timeout: Maximum time between worker heartbeats.
         max_shard_failures: Maximum task failures for one shard.
