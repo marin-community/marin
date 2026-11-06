@@ -730,7 +730,10 @@ def _mesh_eval_hook(
             if eval_ema:
                 sources.append((step.eval_model, "/ema"))
             for source, suffix in sources:
-                # Release the resharded copy before the next evaluator or training step.
+                # `model` must stay a local. In a multi-process run the move copies each leaf, also
+                # when the leaf stays on its devices. The copy adds to the train-mesh params, and the
+                # train step needs almost the whole device budget for its temporary buffer, thus this
+                # copy must die before the next evaluator or training step.
                 model = source if mesh == train_mesh else _move_tree_to_eval_mesh(source, train_mesh)
                 metrics = eval_model(evaluator, model, prefix=prefix + suffix)
                 del model

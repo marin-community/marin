@@ -1,19 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import io
 import json
 import logging
+import tempfile
 from types import SimpleNamespace
 
 import jax
+import jax.numpy as jnp
 import jmp
 import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh
+from levanter.callbacks import ProgressEvent
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import write_levanter_cache
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
 from tokenizers import Tokenizer
@@ -22,34 +26,12 @@ from tokenizers.models import WordLevel
 from experiments.grug.moe_hero_ep import model, train
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.multidevice
 def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_mesh():
-    script = """
-        import io
-        import json
-        import logging
-        import tempfile
-        from types import SimpleNamespace
-
-        import jax
-        import jax.numpy as jnp
-        import jmp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh
-        from levanter.callbacks import ProgressEvent
-        from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-        from levanter.data.text.formats import TextLmDatasetFormat
-        from levanter.store.cache import write_levanter_cache
-        from levanter.tracker import current_tracker
-        from levanter.tracker.json_logger import JsonLoggerConfig
-        from tokenizers import Tokenizer
-        from tokenizers.models import WordLevel
-
-        from experiments.grug.moe_hero_ep import model, train
-
+    with use_test_devices(4):
         mesh = Mesh(
             np.asarray(jax.devices()).reshape(1, 1, 2, 2, 1),
-            ("replica_dcn", "data", "context", "expert", "model"),
+            ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         config = model.GrugModelConfig(
@@ -116,8 +98,6 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
         assert metrics["eval_dropless/loss"] == metrics["eval_dropless/seq_len_16/loss"]
         np.testing.assert_array_equal(after, before)
         assert events == [ProgressEvent.EVALUATION_STARTED, ProgressEvent.EVALUATION_FINISHED] * 4
-    """
-    run_on_cpu_devices(script, device_count=4)
 
 
 def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path, caplog):
@@ -131,7 +111,7 @@ def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path
     )
     mesh = Mesh(
         np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     config = model.GrugModelConfig(
