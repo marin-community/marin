@@ -159,6 +159,11 @@ SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
 MIN_FILES_PER_SHARD = 15
 
+# Each xdist worker collects and imports every file on its shard, which JUnit test-case
+# times leave out. A fit over two full CI runs in November 2026 put that cost at about
+# 2 s of recorded test time per file, so shard balancing charges it to every file.
+PER_FILE_SECONDS = 2.0
+
 # Native (maturin) packages, keyed by their owning scope. A change under a crate's
 # rust/ tree is invisible to the Python import graph, so classify force-selects the
 # owning scope and builds it from source. Its own tests cover the extension;
@@ -1017,9 +1022,10 @@ def load_test_seconds(path: Path) -> dict[str, float]:
 def shard_files(tests: list[str], count: int, test_seconds: Mapping[str, float]) -> list[list[str]]:
     """Split ``tests`` into ``count`` chunks with similar total test time.
 
-    ``test_seconds`` holds each file's summed test time from recent full CI runs. Files go
-    longest first to the chunk with the least time so far. A file with no recorded time,
-    usually a new one, counts as the median recorded time.
+    ``test_seconds`` holds each file's summed test time from recent full CI runs. Each file
+    costs its recorded time plus ``PER_FILE_SECONDS`` of collection; a file with no recorded
+    time, usually a new one, counts as the median. Files go most expensive first to the
+    chunk with the least cost so far.
 
     Without any recorded time, files are dealt round-robin instead. Expensive tests cluster
     by directory (``experiments/grug/``, ``tests/grug/``), so interleaving the sorted list
@@ -1030,12 +1036,13 @@ def shard_files(tests: list[str], count: int, test_seconds: Mapping[str, float])
         return [tests[index::count] for index in range(count)]
 
     fallback = statistics.median(recorded)
+    cost = {test: test_seconds.get(test, fallback) + PER_FILE_SECONDS for test in tests}
     chunks: list[list[str]] = [[] for _ in range(count)]
     loads = [0.0] * count
-    for test in sorted(tests, key=lambda test: (-test_seconds.get(test, fallback), test)):
+    for test in sorted(tests, key=lambda test: (-cost[test], test)):
         index = min(range(count), key=lambda index: (loads[index], index))
         chunks[index].append(test)
-        loads[index] += test_seconds.get(test, fallback)
+        loads[index] += cost[test]
     return [sorted(chunk) for chunk in chunks]
 
 

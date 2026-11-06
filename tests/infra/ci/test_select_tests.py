@@ -924,6 +924,15 @@ def test_shards_without_timings_spread_each_directory_across_runners() -> None:
     assert [sum(path in heavy for path in chunk) for chunk in chunks] == [2, 2, 2]
 
 
+def test_shards_charge_collection_cost_per_file() -> None:
+    """Many quick files cost collection time, so they do not all pile onto one shard."""
+    test_seconds = {"tests/test_slow.py": 40.0} | {f"tests/test_quick_{index:02}.py": 1.0 for index in range(40)}
+
+    chunks = shard_files(sorted(test_seconds), 2, test_seconds)
+
+    assert min(len(chunk) for chunk in chunks) > 10
+
+
 def test_shards_balance_recorded_test_time() -> None:
     """No shard carries more recorded time than the single most expensive file."""
     test_seconds = {"tests/test_moe.py": 300.0, "tests/test_train.py": 280.0, "tests/test_a.py": 10.0}
