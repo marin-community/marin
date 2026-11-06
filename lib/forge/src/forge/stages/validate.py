@@ -14,7 +14,7 @@ from forge.effects.events import Resolved
 from forge.effects.issues import Restart
 from forge.harness.protocol import Returned
 from forge.harness.tools.adversary import AdversaryReport
-from forge.lowering import SHELL_CAPABILITY, lower, lowering_settings, requirements
+from forge.lowering import lower_with_settings, lowering_settings, requirements
 from forge.model import serialization as wire
 from forge.model.controls import Control
 from forge.model.llm import Message
@@ -25,7 +25,6 @@ from forge.resources.bundle import Resources
 from forge.resources.env import WriteFile
 from forge.resources.grading import GradeCandidate
 from forge.resources.rollouts import SolverRollout
-from forge.resources.sandbox.factories import grading_environment
 from forge.stages.author import hydrate, install_env
 from forge.stages.classify import grade_cause, host_failure, restart_cause, trial_cause
 from forge.stages.exits import Validated
@@ -102,16 +101,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, reso
     settings = lowering_settings(config.policy)
     task = submission.task
     try:
-        spec = lower(
-            task,
-            host=settings.host,
-            task_machine=(
-                settings.task_machine if SHELL_CAPABILITY in task.environment_requirements.capabilities else None
-            ),
-            verifier_machine=settings.verifier_machine if grading_environment(task) is not None else None,
-            limits=settings.limits,
-            factories=resources.factories,
-        ).model_copy(update={"trace": TraceMode.MESSAGES})
+        spec = lower_with_settings(task, settings, resources.factories).model_copy(update={"trace": TraceMode.MESSAGES})
     except (ValueError, NotImplementedError) as error:
         return Validated(ValidationResult(submission.digest, (), (), (), lowering_error=str(error)))
     k = config.policy.setting("solver.k", int)
