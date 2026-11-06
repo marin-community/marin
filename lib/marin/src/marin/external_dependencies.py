@@ -63,31 +63,31 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 
 
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260924-01911be34fac",
-    source_commit="01911be34fac8715347962a8d791ca34a879e01e",
-    version="0.0.0.dev20260924+marin.01911be34fac.cu132",
+    release_tag="marin-vllm-gpu-20261106-5fa2e9bad66d",
+    source_commit="5fa2e9bad66dcc2b9836e657323214aefc179a7f",
+    version="0.0.0.dev20261106+marin.5fa2e9bad66d.cu132",
     torch_backend="cu132",
-    torch_version="2.13.0+cu132",
+    torch_version="2.14.1+cu132",
     wheels=(
         VllmGpuWheel(
             architecture="aarch64",
             sm_targets=("10.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260924-01911be34fac/vllm-0.0.0.dev20260924%2Bmarin.01911be34fac.cu132-"
+                "marin-vllm-gpu-20261106-5fa2e9bad66d/vllm-0.0.0.dev20261106%2Bmarin.5fa2e9bad66d.cu132-"
                 "cp38-abi3-manylinux_2_28_aarch64.whl"
             ),
-            sha256="55724f215fc85099047785098d5d8df4e46a9eb1baeb37c36471e78d15bdb813",
+            sha256="78225da21b0b6fb7b20af1fe2a51e635a6586ceeac4685a2cae0817d0bb78eee",
         ),
         VllmGpuWheel(
             architecture="x86_64",
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260924-01911be34fac/vllm-0.0.0.dev20260924%2Bmarin.01911be34fac.cu132-"
+                "marin-vllm-gpu-20261106-5fa2e9bad66d/vllm-0.0.0.dev20261106%2Bmarin.5fa2e9bad66d.cu132-"
                 "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="d04fa6af4a7161f8995154cbdbbc8dddc61b9a9ff198b3947985b2d998ef60e0",
+            sha256="7acf9799328bbbfe9735178f23d1ebea67e77453b855dd51f76e0e8ecf9ee378",
         ),
     ),
 )

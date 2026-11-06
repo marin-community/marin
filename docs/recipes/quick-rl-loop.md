@@ -16,18 +16,28 @@ and an 8,192-token response limit.
 
 ## Serving profile
 
-The checked-in inventory recipe enables batch-invariant arithmetic, fixes the
-evaluation seed to `20261020`, disables prefix caching, and limits each inference
-worker to one scheduled sequence. It retains DP8/EP8/TP1/PP1, chunked prefill
-with an 8,192-token scheduling budget, and CUDA graphs. The sequence cap also
-applies to training generation and reduces concurrency. Training throughput
-has not been measured.
+The inventory recipe enables prefix caching with TRITON_ATTN, fixes the evaluation
+seed to `20261020`, and limits each inference rank to one scheduled sequence.
+It retains DP8/EP8/TP1/PP1, chunked prefill with an 8,192-token scheduling budget,
+and native CUDA graph configuration. Task admission is bounded by the number of
+inference engines times data-parallel ranks times sequences per rank: eight
+concurrent tasks in this profile. Waiting tasks enter the trajectory runner only
+after admission. Task and grader deadlines are unchanged.
 
-The recipe retains vLLM `39e62869693c`. See the
-[serving reproducibility log](https://github.com/marin-community/marin/issues/11007)
-for fixed-panel results, concurrent-serving trials, source bindings and limits
-of the qualification. The concurrent candidate requires separate runtime
-integration and qualification before adoption.
+The runtime pins vLLM `5fa2e9bad66d` and Torch 2.14.1 with CUDA 13.2.2. Its
+Inductor configuration sets `deterministic=true`, `batch_invariant=false`,
+`combo_kernels=true` and `benchmark_combo_kernel=false`; the existing algorithm
+batch-invariance setting supplies `VLLM_BATCH_INVARIANT=1` to inference workers.
+The sequence cap also applies to training generation. Training throughput and
+weight-update behavior have not been qualified by the inference evaluations.
+
+Four fresh full-length passes independently graded the same 100-task panel.
+All 400 results were finite and verified, and all task-level generation, grading
+and recorded outcomes matched exactly across the four passes. A separate short
+panel measured cache hits and idle pause/clear/resume invalidation. This evidence
+covers the pinned SFT model and tested serving profile; it does not establish
+universal determinism or measure the actual graph runner. Keep detailed run
+history in the [serving reproducibility log](https://github.com/marin-community/marin/issues/11007).
 
 ## Make or update tasks
 
