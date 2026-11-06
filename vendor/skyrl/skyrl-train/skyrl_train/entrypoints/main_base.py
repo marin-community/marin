@@ -27,6 +27,7 @@ from loguru import logger
 import asyncio
 import multiprocessing as mp
 
+from skyrl_train.evaluation_profiles import parse_evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.inference_engines.vllm_source import verify_vllm_attention_source
 from skyrl_train.config.rollout_validation import (
@@ -185,8 +186,8 @@ def create_ray_wrapped_inference_engines_from_config(
     for callback in cfg.trainer.get("callbacks") or []:
         if callback.get("type") == "evaluation":
             requested_logprobs.extend(
-                (profile.get("sampling_params") or {}).get("logprobs")
-                for profile in (callback.get("additional_evaluations") or {}).values()
+                (profile.sampling_params or {}).get("logprobs")
+                for profile in parse_evaluation_profiles(callback.get("additional_evaluations")).values()
             )
     requested_logprobs = [
         value + 1
@@ -412,14 +413,15 @@ class BasePPOExp:
             **terminal_options,
         )
 
-    def get_eval_dataset(self):
+    def get_eval_dataset(self, data_files=None):
         """Load validation prompts for evaluation or new mismatch-probe generation."""
+        data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts) and self.cfg.data.val_data:
+        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts) and data_files:
             if EvaluationRunner(self.cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR:
-                return self.harbor_task_dataset(self.cfg.data.val_data)
-            return self.task_dataset(self.cfg.data.val_data)
+                return self.harbor_task_dataset(data_files)
+            return self.task_dataset(data_files)
         return None
 
     def harbor_task_dataset(self, data_files):

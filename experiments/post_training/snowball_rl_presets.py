@@ -66,8 +66,11 @@ MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
-DEFAULT_SELECTION_VERSION = "2026.11.04"
+DEFAULT_SELECTION_VERSION = "2026.11.04.1"
+DEFAULT_TEST_PANEL = "snowball-test-panel@2026.11.04.2"
 JUDGE_KEY = "TOGETHER_API_KEY"
+EVAL_REPLY_TOKENS = 8192
+VLLM_ATTENTION_HELPER_SHA256 = "08cdc141ebf05c4773b7328864549e93dd4600ba4e172a404c1b0de56ab2a940"
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 GRAFANA_SPEED_PANELS = (
     ("response_tokens", 3),
@@ -125,7 +128,11 @@ class Evaluation:
     local_only: bool = False
 
     def tasks(self, selection: ArtifactStep, default: ArtifactStep) -> ArtifactStep:
-        return default if self.source == "default" else selection
+        if self.source == "default":
+            return default
+        if self.source == "tasks":
+            return selection
+        return selection_artifact(self.source)
 
 
 @dataclass(frozen=True)
@@ -232,19 +239,20 @@ class PanelEvaluator:
                 tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], local_only=evaluation.local_only
             )
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
-        config["generator"].update(
-            eval_n_samples_per_prompt=evaluation.answers,
-            eval_sampling_params={
-                "temperature": 0.0 if evaluation.answers == 1 else 1.0,
-                "top_p": 1.0,
-                "logprobs": (
-                    None
-                    if evaluation.answers == 1 or config["trainer"]["algorithm"]["off_policy_correction"] == "tis"
-                    else 0
-                ),
-                "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
-            },
-        )
+        sampling = {
+            "temperature": 0.0 if evaluation.answers == 1 else 1.0,
+            "top_p": 1.0,
+            "logprobs": None,
+            "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
+        }
+        if evaluation.answers == 1:
+            sampling.update(
+                seed=config["trainer"]["seed"],
+                logprobs=None,
+                ignore_eos=False,
+                max_generate_length=EVAL_REPLY_TOKENS,
+            )
+        config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
         return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
@@ -262,6 +270,8 @@ EVALUATIONS = MappingProxyType(
         for evaluation in (
             Evaluation(name="panel-100", file=Path(VALIDATION_FILENAME).stem),
             Evaluation(name="panel-910", file=Path(FULL_VALIDATION_FILENAME).stem),
+            Evaluation(name="test_panel", file=Path(FULL_VALIDATION_FILENAME).stem, source=DEFAULT_TEST_PANEL),
+            Evaluation(name="fast_panel", file=Path(VALIDATION_FILENAME).stem, source=DEFAULT_TEST_PANEL),
             Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4, local_only=True),
             Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
@@ -360,17 +370,15 @@ _LEARNING = Recipe(
     staleness=0,
     estimator=_ESTIMATOR,
     optimizer=_OPTIMIZER,
-    engine_init_kwargs={"moe_backend": "triton"},
+    engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
 )
 _ASYNC_P40 = replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"})
 _GAPS = (
     Gap.AAII_COVERAGE,
-    Gap.REUSED_DEV_PANEL,
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
-    Gap.REMOTE_JUDGE,
 )
-_PANEL = EVALUATIONS["panel-100"]
+_PANEL = EVALUATIONS["fast_panel"]
 _TIMER_REPORTS = tuple(
     Metric(f"{phase}/{statistic}", False)
     for phase in sorted(TASK_TIMING_KEYS)
@@ -449,9 +457,9 @@ _LEARNING_MEDIUM = Preset(
     recipe=_LEARNING,
     updates=25,
     measured=range(21, 26),
-    evaluations=(EVALUATIONS["panel-910"],),
-    guards=(Metric("panel-910/family_mean", True),),
-    reported=(*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
+    evaluations=(replace(EVALUATIONS["test_panel"], at_start=True),),
+    guards=(Metric("test_panel/family_mean", True),),
+    reported=(*_TRAINING_REPORTS, Metric("test_panel/mean", True)),
     gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
 )
@@ -465,8 +473,8 @@ PRESETS = MappingProxyType(
                 recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
                 updates=0,
                 measured=range(1),
-                evaluations=(EVALUATIONS["speed-512x4"],),
-                guards=(Metric("generate/tokens_per_second_per_gpu", True),),
+                evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["test_panel"]),
+                guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("test_panel/family_mean", True)),
                 reported=(
                     *_TIMER_REPORTS,
                     Metric(GENERATE_WALL_SECONDS_METRIC, False),
@@ -475,7 +483,7 @@ PRESETS = MappingProxyType(
                     Metric("generate/vllm/peak_gpu_cache_usage_perc", False),
                 ),
                 gaps=_GAPS,
-                budget="9-12 min; 1.5 H100-h",
+                budget="14-17 min; 2 H100-h",
             ),
             Preset(
                 focus=Focus.DATA,
@@ -881,6 +889,12 @@ def run_command(*, help_text: str | None = None):
                 "the gain.",
             ),
             click.option(
+                "--keep-weights",
+                is_flag=True,
+                help="Save a learning/data candidate's final HF weights. "
+                "Learning controls and train-long save them automatically.",
+            ),
+            click.option(
                 "--resume-from",
                 "resume_name",
                 metavar="NAME[@VERSION]",
@@ -914,8 +928,8 @@ def run_command(*, help_text: str | None = None):
                 "--control",
                 is_flag=True,
                 help="Run the preset's control replicates from a clean checkout with only its pinned default "
-                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require and "
-                "data-medium, which uses learning-medium's controls.",
+                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require, "
+                "--keep-weights and data-medium, which uses learning-medium's controls.",
             ),
         )
         command = rl_build_options(function)

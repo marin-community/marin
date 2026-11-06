@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import yaml
 from omegaconf import OmegaConf
@@ -13,7 +16,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from cloud.iris import training_driver
+from cloud.iris import launch, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -368,7 +371,7 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path) -> None
     assert destination.read_bytes() == contents
 
 
-def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:
+def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path, monkeypatch) -> None:
     raw = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text())
     groups = {"eval/train/avg_score": ["eval/cat_count_n1/avg_score", "eval/cat_count_n2/avg_score"]}
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
@@ -382,6 +385,61 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
     assert config.trainer.callbacks[0].metric_groups == groups
     assert config.trainer.callbacks[0].additional_evaluations == profiles
+
+    document = _raw_config()
+    document["run"]["export_hf"] = False
+    document["skyrl"]["entrypoint"] = "generate"
+    document["skyrl"]["trainer"]["callbacks"] = raw["trainer"]["callbacks"]
+    sources = []
+    for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
+        directory = tmp_path / name
+        directory.mkdir()
+        pq.write_table(pa.table({"task_id": [identifier]}), directory / "rows.parquet")
+        sources.append(
+            {
+                "kind": "directory",
+                "uri": directory.as_uri(),
+                "identity": name,
+                "local_path": str(tmp_path / ("staged-" + name)),
+                "relative_path": "rows.parquet",
+            }
+        )
+    document["inputs"]["validation_data"] = sources[:1]
+    document["inputs"]["evaluation_data"] = {"sampled": sources[1:]}
+    path.write_text(yaml.safe_dump(document))
+    prepared = launch._prepare_config(load_launch_config(path))
+    task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)
+    runner = training_driver.LocalRLRunner(
+        training_driver.LocalRLConfig(
+            job_name="named-evaluation-data",
+            model_path=str(prepared.inputs.model.local_path),
+            model_source_uri=str(prepared.inputs.model.uri),
+            model_source_identity=str(prepared.inputs.model.identity),
+            val_data=list(prepared.inputs.validation_data),
+            launch_config=prepared,
+            resolved_config_uri=(tmp_path / "resolved.json").as_uri(),
+        )
+    )
+    observed = {}
+
+    def read_datasets(config):
+        profile = config.skyrl.trainer.callbacks[0].additional_evaluations.sampled
+        observed["primary"] = pq.read_table(config.skyrl.data.val_data[0])["task_id"].to_pylist()
+        observed["profile"] = pq.read_table(profile.data_files[0])["task_id"].to_pylist()
+        return 0
+
+    monkeypatch.setattr(runner, "_setup_environment", lambda: None)
+    monkeypatch.setattr(runner, "_run_skyrl", read_datasets)
+    assert runner.run() == 0
+    assert observed == {"primary": ["throughput-only"], "profile": ["panel-only"]}
+    record = json.loads((tmp_path / "resolved.json").read_text())
+    assert record["evaluation_data_sources"]["sampled"][0]["identity"] == "panel"
+    for bindings, parameters in (({"missing": sources[1:]}, {}), ({"sampled": sources[1:]}, {"data_files": ["other"]})):
+        document["inputs"]["evaluation_data"] = bindings
+        document["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["sampled"] = parameters
+        path.write_text(yaml.safe_dump(document))
+        with pytest.raises(ValueError, match="evaluation"):
+            load_launch_config(path)
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:

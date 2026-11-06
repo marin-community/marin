@@ -33,10 +33,11 @@ class TerminalBenchExp(BasePPOExp):
         )
         return prompts_dataset
 
-    def get_eval_dataset(self):
-        if self.cfg.trainer.eval_interval <= 0 or not self.cfg.data.val_data:
+    def get_eval_dataset(self, data_files=None):
+        data_files = self.cfg.data.val_data if data_files is None else data_files
+        if self.cfg.trainer.eval_interval <= 0 or not data_files:
             return None
-        return self._task_dataset(self.cfg.data.val_data)
+        return self._task_dataset(data_files)
 
 
 @ray.remote(num_cpus=1, max_retries=0)

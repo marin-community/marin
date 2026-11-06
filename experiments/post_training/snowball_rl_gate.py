@@ -10,7 +10,7 @@ with a new --require or --baseline, or to check calibration by scoring a control
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
-  --preset learning-medium --candidate RUN_NAME --require 'panel-910/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME --require 'test_panel/aaii_category/coding/mean>=control'
   --preset speed-medium --leave-out r0
   --preset learning-medium --candidate RUN_NAME --baseline EARLIER_RUN@2026.10.27
 """
@@ -31,11 +31,12 @@ from typing import TypeGuard
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
+from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_config, read_skyrl_launch_receipt
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
@@ -46,6 +47,7 @@ from taskcompendium.grading_result import Outcome
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
+from experiments.post_training.task_curation.inventory import TASK_SPEC_COLUMN
 
 GATE_REVISION = "2026.11.06"
 GATE_REPORT_FILENAME = "gate_report.json"
@@ -213,6 +215,7 @@ class RunMetadata(BaseModel):
     replicates: int
     requirements: tuple[str, ...]
     baselines: tuple[str, ...] = ()
+    panel: str | None = None
 
 
 class ControlMetadata(BaseModel):
@@ -220,6 +223,7 @@ class ControlMetadata(BaseModel):
     revision: str
     runs: int
     gate_revision: str = GATE_REVISION
+    panel: str | None = None
 
 
 class GateReport(Artifact):
@@ -298,7 +302,7 @@ def _verdict(
             None,
             "; ".join(
                 f"grader-error union is ambiguous: lower={row.lower_bound:.12g}, upper={row.upper_bound:.12g}, "
-                f"limit={row.limit}; recorded counts do not identify overlap"
+                f"limit={row.limit}; available counters do not determine the grader-error fraction"
                 for row in ambiguous
             ),
         )
@@ -348,16 +352,68 @@ def _gated(evaluation: presets.Evaluation, preset: presets.Preset) -> bool:
     return any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
 
 
+def _evaluation_ids(sources: Sequence[Mapping[str, str]]) -> frozenset[str]:
+    ids = []
+    try:
+        for source in sources:
+            if source["kind"] != "directory":
+                raise InvalidComparison("panel comparison requires recorded TaskSpec directory sources")
+            path = StoragePath(source["uri"]) / source["relative_path"]
+            fs, key = filesystem_for(str(path))
+            with fs.open(key, "rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(columns=[TASK_SPEC_COLUMN]):
+                    ids.extend(json.loads(row[TASK_SPEC_COLUMN])["id"] for row in batch.to_pylist())
+        if not ids or any(not isinstance(item, str) or not item for item in ids) or len(set(ids)) != len(ids):
+            raise InvalidComparison("recorded evaluation has empty, malformed or duplicate TaskSpec IDs")
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        raise InvalidComparison(f"cannot read recorded evaluation tasks: {error}") from error
+    return frozenset(ids)
+
+
+def _grader_errors(
+    rows: Sequence[Mapping[str, float]], prefix: str, name: str, *, answers: int | None = None
+) -> ErrorBoundInvariant:
+    recorded = all(prefix + outcome in row for row in rows for outcome in (*Outcome, "rollout_failure"))
+    counts = [row.get(prefix + outcome, 0) for row in rows for outcome in (*Outcome, "rollout_failure")]
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        or value != int(value)
+        for value in counts
+    ):
+        raise InvalidComparison(f"invalid outcome counts for {name}")
+
+    def count(*outcomes: str) -> float:
+        return math.fsum(row.get(prefix + outcome, 0) for row in rows for outcome in outcomes)
+
+    total = count(*Outcome)
+    bad = count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK)
+    failures = count("rollout_failure")
+    lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
+    if answers is not None and (not recorded or total != answers or failures > total):
+        lower, upper = 0.0, 1.0
+    return ErrorBoundInvariant(
+        name=name,
+        value=upper,
+        lower_bound=lower,
+        upper_bound=upper,
+        limit=GRADER_ERROR_LIMIT,
+        holds=upper <= GRADER_ERROR_LIMIT and recorded,
+    )
+
+
 def _session_invariants(
-    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset
+    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset, expected_ids: frozenset[str]
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["item"] for row in rows)
-    expected = presets.evaluation_answer_count(evaluation, presets.default_selection())
-    holds = len(counts) * evaluation.answers == expected and set(counts.values()) == {evaluation.answers}
+    expected = len(expected_ids) * evaluation.answers
+    holds = counts.keys() == expected_ids and set(counts.values()) == {evaluation.answers}
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, holds=holds)]
     if _gated(evaluation, preset):
-        coverage = len({row["item"] for row in rows if row["scored"]}) / (expected / evaluation.answers)
+        coverage = len(expected_ids.intersection(row["item"] for row in rows if row["scored"])) / len(expected_ids)
         result.append(
             Invariant(
                 name=f"{name}/panel_scored_fraction",
@@ -373,12 +429,43 @@ def _session_invariants(
 class RunData:
     path: str
     version: str
+    panel: str | None
     provenance: dict
     values: dict[str, float]
     panel_ids: dict[str, frozenset[str]]
     invariants: tuple[Invariant, ...]
     missing_tokens: bool
     slices: dict[str, tuple[int, float | None]]
+
+
+def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) -> str | None:
+    panels = [evaluation for evaluation in preset.evaluations if evaluation.harness == presets.EvalHarness.PANEL]
+    if not panels:
+        return None
+    evaluation = next((item for item in panels if item.file != scoring.TRAIN_STEM), panels[0])
+    default = presets.default_selection()
+    selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
+    selected = evaluation.tasks(selection, default)
+    panel = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
+    binding = selected
+    if evaluation.sample is not None:
+        binding = presets.sampled_tasks_step(
+            selected,
+            evaluation.file,
+            evaluation.sample,
+            launch["skyrl"]["trainer"]["seed"],
+            local_only=evaluation.local_only,
+        )
+    expected = f"{binding.name}@{binding.version}"
+    sources = launch["inputs"].get("evaluation_data", {}).get(evaluation.name, launch["inputs"]["validation_data"])
+    recorded = {source.get("identity", "").partition(":")[0] for source in sources}
+    if not recorded or "" in recorded or any("@" not in identity for identity in recorded):
+        raise InvalidComparison(f"recorded panel version is missing; expected {panel}")
+    if recorded != {expected}:
+        raise InvalidComparison(
+            f"recorded panel differs from preset: expected {panel} ({expected}); recorded {sorted(recorded)}"
+        )
+    return panel
 
 
 def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs: GateInputs = GateInputs()) -> RunData:
@@ -398,8 +485,15 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         Invariant(name="planned_updates", value=len(completed), limit=len(planned), holds=completed == planned)
     ]
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
+    launch = read_skyrl_launch_config(path) if preset.evaluations else {}
+    panel = _panel_identity(preset, launch, inputs)
+    named = launch.get("inputs", {}).get("evaluation_data", {})
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
+        quality = evaluation.file != scoring.TRAIN_STEM and _gated(evaluation, preset)
+        expected_ids = _evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
+        if rates is not None and quality and frozenset(rates["task_id"].to_pylist()) != expected_ids:
+            raise InvalidComparison("pass-rate panel task IDs differ from the run's recorded evaluation tasks")
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
@@ -408,11 +502,23 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         ids = frozenset(table["item"].to_pylist())
         if evaluation.file != scoring.TRAIN_STEM:
             panel_ids[evaluation.name] = ids
-        invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset))
+        sessions = [(evaluation.name, table, 0 if generating else preset.updates)]
         if inputs.init is not None:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final panel task IDs differ: {path}")
-            invariants.extend(_session_invariants(evaluation.name + "/initial", initial, evaluation, preset))
+            sessions.append((evaluation.name + "/initial", initial, 0))
+        prefix = f"eval/{evaluation.name}/all/outcome/" if evaluation.name in named else "eval/all/outcome/"
+        for session_name, session, metric_step in sessions:
+            invariants.extend(_session_invariants(session_name, session, evaluation, preset, expected_ids))
+            if quality:
+                invariants.append(
+                    _grader_errors(
+                        [metrics.get(metric_step, {})],
+                        prefix,
+                        session_name + "/grader_error_fraction",
+                        answers=session.num_rows,
+                    )
+                )
     if not generating:
         finite = all(
             "policy/raw_grad_norm" in row
@@ -422,27 +528,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         )
         invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
 
-    def count(*outcomes: str) -> float:
-        return math.fsum(row.get(OUTCOME_PREFIX + outcome, 0) for row in training for outcome in outcomes)
-
-    total, bad, failures = (
-        count(*Outcome),
-        count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK),
-        count("rollout_failure"),
-    )
-    lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
-    recorded = all(OUTCOME_PREFIX + outcome in row for row in training for outcome in (*Outcome, "rollout_failure"))
-    holds = upper <= GRADER_ERROR_LIMIT and recorded
-    invariants.append(
-        ErrorBoundInvariant(
-            name="grader_error_fraction",
-            value=upper,
-            lower_bound=lower,
-            upper_bound=upper,
-            limit=GRADER_ERROR_LIMIT,
-            holds=holds,
-        )
-    )
+    invariants.append(_grader_errors(training, OUTCOME_PREFIX, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens
     if fixed is not None:
         if generating:
@@ -488,6 +574,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     return RunData(
         path=path,
         version=presets.artifact_record(path).version,
+        panel=panel,
         provenance=terminal.result.provenance,
         values=values,
         panel_ids=panel_ids,
@@ -681,7 +768,9 @@ def _write_gate(
         runs = [_load_run(path, preset, rates, inputs) for path in run_paths]
         if runs:
             fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
-            metadata = metadata.model_copy(update={field: runs[0].provenance[key] for field, key in fields.items()})
+            metadata = metadata.model_copy(
+                update={"panel": runs[0].panel, **{field: runs[0].provenance[key] for field, key in fields.items()}}
+            )
         invariants = [
             row.model_copy(update={"replicate": index})
             for index, candidate in enumerate(runs)
@@ -694,6 +783,7 @@ def _write_gate(
         controls = [candidate for group in grouped.values() for candidate in group]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
+        control = control.model_copy(update={"panel": controls[0].panel})
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
@@ -775,10 +865,26 @@ def _control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
 
 
 def _pass_rates_path(preset: presets.Preset) -> str | None:
-    if not any(evaluation.source == "default" and _gated(evaluation, preset) for evaluation in preset.evaluations):
+    if preset.focus == presets.Focus.SPEED:
         return None
-    root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
-    return str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION)
+    for evaluation in preset.evaluations:
+        if not _gated(evaluation, preset) or evaluation.file == scoring.TRAIN_STEM:
+            continue
+        if evaluation.source == "default":
+            root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
+            return str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION)
+        default = presets.default_selection()
+        summary = presets.selection_summary(evaluation.tasks(default, default))
+        reference = summary["recipe"]["pass_rates"]
+        path = StoragePath(reference["uri"])
+        if (
+            reference["model_revision"] != presets.MODEL_REVISION
+            or reference["rows"] != summary["full_validation_rows"]
+            or path.name != scoring.PASS_RATES_FILENAME
+        ):
+            raise InvalidComparison("panel pass-rate reference differs from its initializer or declared cohort")
+        return str(path.parent)
+    return None
 
 
 def _gate_artifact(
