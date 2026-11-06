@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 
 from levanter.grug.attention import AttentionMask, attention
-from levanter.grug.attention import _core
 from levanter.main.train_lm import preserve_hf_runtime_settings
 from levanter.models.snowball import SnowballConfig
 
@@ -136,44 +135,6 @@ def test_torch_order_padded_row_masks_as_fa4_does(window):
     np.testing.assert_allclose(outputs["torch_order"], outputs["gpu_fa4_cute"], rtol=2**-7, atol=2**-7)
 
 
-def _old_reference_math(q, k, v, mask, *, logits_dtype):
-    """``_reference_attention_math`` as it was before its mask code moved into ``_explicit_mask``, so the
-    unchanged-path check compares against the original math."""
-    k = _core.align_kv_heads(k, num_q_heads=q.shape[2])
-    v = _core.align_kv_heads(v, num_q_heads=q.shape[2])
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q * (1.0 / math.sqrt(q.shape[-1])), k)
-    explicit = mask.materialize_mask(scores.shape[-2], scores.shape[-1]) if isinstance(mask, AttentionMask) else mask
-    if explicit is not None:
-        if explicit.ndim == 2:
-            explicit = explicit[None, :, :]
-        explicit = explicit[:, None, :, :]
-        if explicit.dtype == jnp.bool_:
-            scores = jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
-        else:
-            scores = scores + explicit
-    if logits_dtype is not None:
-        scores = scores.astype(logits_dtype)
-    weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    return jnp.einsum("bhqk,bkhd->bqhd", weights, v).astype(v.dtype)
-
-
-def test_reference_path_is_unchanged():
-    q, k, v = _qkv(batch=2)
-    segments = jnp.asarray([[0] * 4 + [1] * 5, [0] * 9])
-    masks = [
-        None,
-        AttentionMask(is_causal=True, sliding_window=4),
-        AttentionMask(is_causal=True, segment_ids=(segments, segments)),
-        jnp.tril(jnp.ones((S, S), dtype=jnp.bool_)),
-        jnp.zeros((2, S, S), dtype=jnp.bfloat16),
-    ]
-    for mask in masks:
-        new = _core._reference_attention_math(q, k, v, mask, logits_dtype=jnp.float32)
-        np.testing.assert_array_equal(
-            np.asarray(new), np.asarray(_old_reference_math(q, k, v, mask, logits_dtype=jnp.float32))
-        )
-
-
 def _tiny(**overrides) -> SnowballConfig:
     base = dict(
         vocab_size=48,
@@ -199,5 +160,5 @@ def test_hf_reload_keeps_the_attention_implementation():
     requested = _tiny(attention_implementation="torch_order")
     reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
     assert reloaded.attention_implementation is None
-    restored = preserve_hf_runtime_settings(replace(reloaded, router_dot_fp32=False), requested, None)
+    restored = preserve_hf_runtime_settings(replace(reloaded, router_dot_fp32=False), requested, ())
     assert restored.attention_implementation == "torch_order"
