@@ -721,71 +721,6 @@ index fbb69bb..6a32c9b 100644
    });
  
    it('has unique, well-formed slugs', () => {
-diff --git a/packages/app/src/lib/routing/tab-meta-zh.ts b/packages/app/src/lib/routing/tab-meta-zh.ts
-index 206b78b..bf80f11 100644
---- a/packages/app/src/lib/routing/tab-meta-zh.ts
-+++ b/packages/app/src/lib/routing/tab-meta-zh.ts
-@@ -1,6 +1,6 @@
- import type { Metadata } from 'next';
- 
--import { AUTHOR_NAME, SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
-+import { SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
- import { ZH_OG_LOCALE, zhAlternates, zhPath } from '@/lib/i18n/i18n';
- import type { ModelRoute, ModelRouteTab } from '@/lib/routing/model-routes';
- import {
-@@ -184,7 +184,6 @@ export const NAV_LABELS_ZH: Record<HeaderNavHref, string> = {
-   '/about': '关于',
- };
- 
--const TITLE_SUFFIX = `${SITE_NAME} by ${AUTHOR_NAME}`;
- 
- export const MODEL_TAB_META_ZH: Record<
-   ModelRouteTab,
-@@ -244,7 +243,7 @@ export function modelTabMetadataZh(
-       locale: ZH_OG_LOCALE,
-     },
-     twitter: {
--      title: `${title} | ${TITLE_SUFFIX}`,
-+      title: `${title} | ${SITE_NAME}`,
-       description,
-     },
-   };
-@@ -265,7 +264,7 @@ export function tabMetadataZh(tab: DashboardRouteKey): Metadata {
-       locale: ZH_OG_LOCALE,
-     },
-     twitter: {
--      title: `${meta.title} | ${TITLE_SUFFIX}`,
-+      title: `${meta.title} | ${SITE_NAME}`,
-       description: meta.description,
-     },
-   };
-diff --git a/packages/app/src/lib/routing/tab-meta.ts b/packages/app/src/lib/routing/tab-meta.ts
-index e8323be..8398717 100644
---- a/packages/app/src/lib/routing/tab-meta.ts
-+++ b/packages/app/src/lib/routing/tab-meta.ts
-@@ -1,6 +1,6 @@
- import type { Metadata } from 'next';
- 
--import { AUTHOR_NAME, SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
-+import { SITE_NAME, SITE_URL } from '@semianalysisai/inferencex-constants';
- import {
-   getDashboardRoute,
-   isDashboardRouteKey,
-@@ -117,13 +117,12 @@ export const TAB_META: Record<DashboardRouteKey, { title: string; description: s
-   },
- };
- 
--const TITLE_SUFFIX = `${SITE_NAME} by ${AUTHOR_NAME}`;
- 
- export const isValidTab = isDashboardRouteKey;
- 
- export function getTabTitle(tab: string): string {
-   const meta = isDashboardRouteKey(tab) ? TAB_META[tab] : undefined;
--  return meta ? `${meta.title} | ${TITLE_SUFFIX}` : TITLE_SUFFIX;
-+  return meta ? `${meta.title} | ${SITE_NAME}` : SITE_NAME;
- }
- 
- export const MODEL_TAB_META: Record<
 diff --git a/packages/constants/src/models.ts b/packages/constants/src/models.ts
 index 6d8b60f..74a9446 100644
 --- a/packages/constants/src/models.ts
@@ -810,10 +745,10 @@ index 6d8b60f..74a9446 100644
    // InferenceX benchmark — recorded so the "cannot predate its own weights"
    // invariant above is checkable by eye at review time.
 diff --git a/packages/constants/src/seo.ts b/packages/constants/src/seo.ts
-index c4088fb..1e0047a 100644
+index c4088fb..a20e754 100644
 --- a/packages/constants/src/seo.ts
 +++ b/packages/constants/src/seo.ts
-@@ -1,15 +1,15 @@
+@@ -1,5 +1,5 @@
 -export const SITE_NAME = 'InferenceX';
 -export const SITE_URL = 'https://inferencex.semianalysis.com';
 +export const SITE_NAME = 'Knotmeter';
@@ -821,18 +756,6 @@ index c4088fb..1e0047a 100644
  export const AUTHOR_NAME = 'SemiAnalysis';
  export const AUTHOR_URL = 'https://semianalysis.com';
  export const AUTHOR_HANDLE = '@SemiAnalysis_';
--export const SITE_TITLE = `${SITE_NAME} by ${AUTHOR_NAME} — Agentic Inference Benchmark`;
-+export const SITE_TITLE = `${SITE_NAME} — Marin inference performance`;
- export const DESCRIPTION =
-   'InferenceX is an open-source agentic inference benchmark. It compares the AgentX long-context, multi-turn coding scenario with fixed-sequence serving on NVIDIA, AMD, and other accelerators.';
- export const SUPPORTERS_LINE = 'Supported by OpenAI, Microsoft & the PyTorch Foundation.';
- export const OG_IMAGE = `${SITE_URL}/og-image.png`;
- 
--export const SITE_TITLE_ZH = `${SITE_NAME} by ${AUTHOR_NAME} — 智能体推理基准测试`;
-+export const SITE_TITLE_ZH = `${SITE_NAME} — Marin 推理性能`;
- export const DESCRIPTION_ZH =
-   'InferenceX 是开源智能体推理基准测试平台，对比 AgentX 长上下文多轮编码场景与固定序列服务在 NVIDIA、AMD 等加速器上的性能。';
- export const SUPPORTERS_LINE_ZH = '获得 OpenAI、Microsoft 与 PyTorch 基金会的支持。';
 diff --git a/packages/db/src/etl/benchmark-ingest-upsert.test.ts b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
 index 12c5a9d..d37e302 100644
 --- a/packages/db/src/etl/benchmark-ingest-upsert.test.ts

@@ -41,6 +41,7 @@ configuration or database connection implementation. Postgres.js already accepts
 hostless `postgresql:///` URL that lets those native settings take effect.
 `INFERENCEX_SOURCE_REPOS`, `@semianalysisai/inferencex-*`, AgentX artifact names,
 API headers and original source records retain their upstream protocol identities.
+Upstream author credits remain in shared page titles.
 
 ## Local build and data
 
