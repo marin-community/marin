@@ -25,7 +25,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
 from experiments.marin_tokenizer import marin_tokenizer
 
 LONG_CONTEXT_THRESHOLD = 65_536
-LONG_CONTEXT_SKEW = 8
+LONG_CONTEXT_SKEW = 4
 LONG_CONTEXT_TAG = f"harrier-long-context-skew-{LONG_CONTEXT_SKEW}"
 REPORTED_TRAINING_TOKENS = 200_000_000_000
 _COOLDOWN_WEIGHTS = {cell: weight for cell, weight in _SPEC.phase_weights[-1] if weight > 0}
