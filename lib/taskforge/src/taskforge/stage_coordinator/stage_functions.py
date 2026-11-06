@@ -10,17 +10,18 @@ as they are and may also call any stage directly::
     ------------  -----------  -------------------------------------------
     triage        Triage       ``stage20_triage.verdict.accept``
     author        Author       ``stage30_author.author.static_author(program)``
-    load_program  LoadProgram  ``stage30_author.loader.load_program_source``
+    load_program  LoadProgram  ``stage30_author.loader.load_program_source`` bound to an ``SdkExports``
     build         Build        ``stage40_build_with_program.run.run_build``
     validate      Validate     a caller's function
     review        Review       a caller's function
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
 parameter names. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with
-``proposal`` and ``revision`` in that order. The build stage calls ``load_program`` on the source
-the author returned, read back from ``authored/<k>/program.py``. The coordinator writes the summary returned by
-validate to ``validation.json`` and hands review the JSON read back from that file, so a resumed
-review receives the same value as a review in the first process.
+an ``AuthorContext`` for the workpiece and round, ``proposal`` and ``revision``, in that order. The
+build stage calls ``load_program`` on the source the author returned, read back from
+``authored/<k>/program.py``. The coordinator writes the summary returned by validate to
+``validation.json`` and hands review the JSON read back from that file, so a resumed review
+receives the same value as a review in the first process.
 """
 
 from dataclasses import dataclass
