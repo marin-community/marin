@@ -48,6 +48,7 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 import click
+import optax
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
@@ -94,6 +95,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SEQ_LEN,
@@ -147,6 +149,7 @@ def _hero_flops_baseline(
     return FlopsBaseline(context_phases[-1].end_step, flops_baseline_total)
 
 
+HERO_GATE_ROUTER_WEIGHT_DECAY = 0.02
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
 # rungs use `_small_model` with the same routing geometry.
@@ -193,6 +196,37 @@ def _ladder_model(size: str):
     )
 
 
+def _default_num_steps(model, dp_racks: int) -> int:
+    """Steps to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active parameter on ``dp_racks`` racks."""
+    return max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / (HERO_TOKENS_PER_RACK * dp_racks)))
+
+
+def _ladder_optimizer(model, *, num_steps: int, batch_size: int, decay: float) -> GrugMoeMuonHConfig:
+    """The rung's MuonH optimizer: LR/epsilon compute-scaled from the tokens per step, token budget, and width, with
+    ``decay`` as the gate/router weight decay."""
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=num_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=model.max_seq_len,
+    )
+    return dataclasses.replace(optimizer, gate_router_weight_decay=decay)
+
+
+def hero_optimizer() -> optax.GradientTransformation:
+    """The optimizer the d6144 hero trains with (``build_ladder_run`` defaults), whose state its checkpoints hold."""
+    model = _ladder_model("d6144")
+    dp_racks = LADDER_RACKS["d6144"]
+    num_steps = _default_num_steps(model, dp_racks)
+    config = _ladder_optimizer(
+        model,
+        num_steps=num_steps,
+        batch_size=hero_rack_batch_size(model.max_seq_len) * dp_racks,
+        decay=HERO_GATE_ROUTER_WEIGHT_DECAY,
+    )
+    return config.build(num_steps)
+
+
 def build_ladder_run(
     *,
     run_id: str,
@@ -202,7 +236,7 @@ def build_ladder_run(
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     eval_every: int | None = None,
-    gate_router_weight_decay: float = 0.02,
+    gate_router_weight_decay: float = HERO_GATE_ROUTER_WEIGHT_DECAY,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
     context_phases: Sequence[HarrierContextPhase] | None = None,
@@ -255,7 +289,6 @@ def build_ladder_run(
 
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
-    global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
     batch_size = hero_rack_batch_size(seq_len) * dp_racks
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
 
@@ -263,7 +296,7 @@ def build_ladder_run(
         # The prior phases' data stages are rebuilt from the schedule length, so it must stay the run's own.
         raise ValueError("A run with a context history keeps its schedule; do not pass num_steps")
     if num_steps is None:
-        num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
+        num_steps = _default_num_steps(model, dp_racks)
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     flops_per_example, _ = _compute_flops(model_config=model)
@@ -290,14 +323,7 @@ def build_ladder_run(
     if eval_every is not None:
         steps_per_eval = eval_every
 
-    # The optimizer's LR/epsilon are compute-scaled from the tokens per step, token budget, and width.
-    optimizer = MoeHeuristic().build_optimizer_config(
-        num_train_steps=num_steps,
-        batch_size=batch_size,
-        hidden_dim=model.hidden_dim,
-        seq_len=seq_len,
-    )
-    optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
+    optimizer = _ladder_optimizer(model, num_steps=num_steps, batch_size=batch_size, decay=gate_router_weight_decay)
 
     # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
     # offloaded to FP32 pinned host.

@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.tracker
 import numpy as np
+import optax
 from fray.cluster import ResourceConfig
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -30,7 +31,7 @@ from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import eval_model
 from levanter.grug.grug_moe import MoeImplementation
@@ -64,11 +65,13 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     validation_datasets,
     with_transport_remat_mode,
 )
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import hero_optimizer
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
     DEFAULT_DROPLESS_MOE_IMPLEMENTATION,
     GrugEvalConfig,
+    GrugTrainState,
     _apply_hero_ep_runtime_defaults,
     _to_dropless_local,
     build_tagged_evaluator,
@@ -86,6 +89,16 @@ HERO_16K_MODEL_CONFIG = with_transport_remat_mode(
 )
 HERO_EVAL_SEQ_LENS = (4096, 16384, 65536)
 CHECKPOINT_EVAL_MAX_RETRIES = 3
+
+
+@dataclass(frozen=True)
+class SavedMerge:
+    """A permanent training checkpoint at ``path`` holding the merged ``params`` and every other part of the training
+    state (``step``, ``opt_state``, ``pending_qb_betas``) from the checkpoint ``state_from``; ``metadata.json``
+    records the merge recipe."""
+
+    path: str
+    state_from: str
 
 
 class MergeSpace(StrEnum):
@@ -109,6 +122,8 @@ class EvalCheckpoint:
     label: str = ""
     """A name for the merge in logs (empty for a single checkpoint)."""
     space: MergeSpace = MergeSpace.LINEAR
+    save: "SavedMerge | None" = None
+    """Save the merge as a resumable training checkpoint; the eval then scores the parameters reloaded from it."""
 
     def __post_init__(self):
         if not self.sources:
@@ -225,6 +240,91 @@ def merged_params(
     return jax.tree.unflatten(treedef, merged), last_step, norm_metrics
 
 
+def saved_and_reloaded(
+    model_config: GrugModelConfig,
+    checkpoint: EvalCheckpoint,
+    params: Transformer,
+    norm_metrics: dict[str, float],
+    *,
+    optimizer: optax.GradientTransformation,
+    mesh: Mesh,
+    mp: jmp.Policy,
+) -> tuple[Transformer, int]:
+    """Saves merged ``params`` with ``checkpoint.save.state_from``'s rest of the training state, then returns the
+    parameters reloaded from the save and its step, so the eval scores exactly what downstream users load.
+
+    ``optimizer`` only shapes the template ``opt_state`` is read with. The reload checks the parameters bit for bit
+    and the optimizer state by per-leaf checksums.
+    """
+    save = checkpoint.save
+    assert save is not None
+    opt_template = restore_template_from(jax.jit(optimizer.init)(params))
+    replicated = jax.sharding.NamedSharding(mesh, P())
+    rest = load_checkpoint(
+        {
+            "step": jax.ShapeDtypeStruct((), jnp.int32, sharding=replicated),
+            "opt_state": opt_template,
+            "pending_qb_betas": jax.ShapeDtypeStruct(
+                (model_config.num_layers, model_config.num_experts), jnp.float32, sharding=replicated
+            ),
+        },
+        save.state_from,
+        axis_mapping=None,
+        mesh=mesh,
+    )
+    step = int(rest["step"])
+    state = GrugTrainState(
+        step=rest["step"],
+        params=params,
+        master_params=None,
+        opt_state=rest["opt_state"],
+        ema_params=None,
+        pending_qb_betas=rest["pending_qb_betas"],
+    )
+    del rest
+    expected_opt = _checksums(state.opt_state)
+    metadata = {
+        "merge_sources": [[path, weight] for path, weight in checkpoint.sources],
+        "merge_space": str(checkpoint.space),
+        "state_from": save.state_from,
+        **norm_metrics,
+    }
+    save_checkpoint(state, step=step, checkpoint_path=save.path, is_temporary=False, metadata=metadata)
+    template = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), state)
+    del state
+    reloaded = load_checkpoint(template, save.path, axis_mapping=None, mesh=mesh)
+    if int(reloaded.step) != step:
+        raise ValueError(f"{save.path} reloaded as step {int(reloaded.step)}, saved as step {step}")
+    if _checksums(reloaded.opt_state) != expected_opt:
+        raise ValueError(f"{save.path} reloaded an optimizer state that differs from {save.state_from}'s")
+    differing = [
+        path
+        for path, saved, merged in zip(
+            jax.tree.leaves(leaf_key_paths(params)),
+            jax.tree.leaves(reloaded.params),
+            jax.tree.leaves(params),
+            strict=True,
+        )
+        if not bool(jnp.array_equal(saved, merged))
+    ]
+    if differing:
+        raise ValueError(f"{save.path} reloaded parameters that differ from the merge: {differing}")
+    logger.info("Saved the merge with %s's training state to %s and verified the reload", save.state_from, save.path)
+    return reloaded.params, step
+
+
+def _checksums(tree) -> list[tuple[float, float]]:
+    """Per-leaf (sum, sum of squares) of a tree's floating leaves, and the value of each integer leaf."""
+    sums = []
+    for leaf in jax.tree.leaves(tree):
+        if _is_float(leaf):
+            x = leaf.astype(jnp.float32)
+            sums.append((float(jnp.sum(x)), float(jnp.sum(x * x))))
+        else:
+            sums.append((float(jnp.sum(leaf)), 0.0))
+    return sums
+
+
 def _sphere_norm(x, axes: tuple[int, ...]):
     """The float32 Frobenius norm of ``x`` over ``axes``, kept as size-1 dims."""
     return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
@@ -269,6 +369,10 @@ def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[s
         for checkpoint in config.checkpoints:
             model = dataclasses.replace(config.model, qk_mult=checkpoint.qk_mult)
             params, step, norm_metrics = merged_params(model, checkpoint, mesh=mesh, mp=config.trainer.mp)
+            if checkpoint.save is not None:
+                params, step = saved_and_reloaded(
+                    model, checkpoint, params, norm_metrics, optimizer=hero_optimizer(), mesh=mesh, mp=config.trainer.mp
+                )
             if results and step <= results[-1][0]:
                 raise ValueError(f"checkpoint steps must increase: {checkpoint.sources[-1][0]} is step {step}")
             what = f"merge {checkpoint.label}" if checkpoint.label else "parameters"
@@ -429,6 +533,13 @@ def build_checkpoint_eval(
     help="linear: average the raw parameters; hyperball: then rescale each MuonH/AdamH sphere to its sources' norm.",
 )
 @click.option(
+    "--save-merged",
+    type=(str, str),
+    default=None,
+    help="OUT STATE_FROM: save the merge as a resumable permanent checkpoint at OUT (a step-N directory) with "
+    "STATE_FROM's step, optimizer state and QB betas, and score the reloaded copy.",
+)
+@click.option(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=1.0,
@@ -451,17 +562,28 @@ def main(
     merge_sources: tuple[tuple[str, float], ...],
     merge_qk_mult: float | None,
     merge_space: str,
+    save_merged: tuple[str, str] | None,
     qk_mult_long_scale: float,
     seq_lens: tuple[int, ...],
 ) -> ArtifactStep[HeroThroughputResult]:
     if bool(checkpoints) == bool(merge_sources):
         raise click.UsageError("pass either --checkpoint or --merge-source")
+    if save_merged is not None and not merge_sources:
+        raise click.UsageError("--save-merged needs --merge-source")
     if merge_sources:
         if merge_qk_mult is None:
             raise click.UsageError("--merge-source needs --merge-qk-mult")
         total = sum(weight for _, weight in merge_sources)
         sources = tuple((path, weight / total) for path, weight in merge_sources)
-        evaluated = (EvalCheckpoint(sources, merge_qk_mult, label=run_id, space=MergeSpace(merge_space)),)
+        evaluated = (
+            EvalCheckpoint(
+                sources,
+                merge_qk_mult,
+                label=run_id,
+                space=MergeSpace(merge_space),
+                save=None if save_merged is None else SavedMerge(*save_merged),
+            ),
+        )
     else:
         evaluated = tuple(EvalCheckpoint.single(path, qk) for path, qk in checkpoints)
     return build_checkpoint_eval(

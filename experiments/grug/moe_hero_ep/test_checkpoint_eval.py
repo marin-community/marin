@@ -108,23 +108,25 @@ def test_checkpoint_eval_scores_each_checkpoint_at_each_length_with_its_own_qk_m
 
 
 @pytest.mark.timeout(240)
-def test_hyperball_merge_keeps_each_sphere_norm_and_linear_merge_shrinks_it():
+def test_hyperball_merge_keeps_each_sphere_norm_and_saves_a_resumable_training_state():
     script = """
+        import json
         import tempfile
 
         import jax
         import jax.numpy as jnp
         import jmp
         import numpy as np
-        from levanter.checkpoint import save_checkpoint
+        from levanter.checkpoint import load_checkpoint, save_checkpoint
         from levanter.grug.sharding import compact_grug_mesh
         from levanter.utils.jax_utils import leaf_key_paths
 
         from experiments.grug.moe_hero_ep import model
         from experiments.grug.moe_hero_ep.launch_checkpoint_eval import (
-            EvalCheckpoint, MergeSpace, hyperball_axes, merged_params,
+            EvalCheckpoint, MergeSpace, SavedMerge, hyperball_axes, merged_params, saved_and_reloaded,
         )
         from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+        from experiments.grug.moe_hero_ep.train import GrugTrainState
 
         config = model.GrugModelConfig(
             vocab_size=64, hidden_dim=32, intermediate_dim=16, shared_expert_intermediate_dim=16,
@@ -138,8 +140,17 @@ def test_hyperball_merge_keeps_each_sphere_norm_and_linear_merge_shrinks_it():
         with tempfile.TemporaryDirectory() as directory, jax.set_mesh(mesh):
             first = model.Transformer.init(config, key=jax.random.key(3))
             second = model.Transformer.init(config, key=jax.random.key(4))
-            for step, params in ((17, first), (23, second)):
-                state = {"step": jnp.array(step, dtype=jnp.int32), "params": params}
+            optimizer = GrugMoeMuonHConfig().build(10)
+            # The later checkpoint is a full training state with a nonzero optimizer state.
+            opt_state = jax.tree.map(
+                lambda x: x + 0.25 if jnp.issubdtype(x.dtype, jnp.floating) else x + 3, optimizer.init(second)
+            )
+            betas = jnp.full((config.num_layers, config.num_experts), 0.5)
+            states = {
+                17: {"step": jnp.array(17, dtype=jnp.int32), "params": first},
+                23: GrugTrainState(jnp.array(23, dtype=jnp.int32), second, None, opt_state, None, betas),
+            }
+            for step, state in states.items():
                 save_checkpoint(state, step=step, checkpoint_path=f"{directory}/step-{step}", is_temporary=False)
             sources = ((directory + "/step-17", 0.5), (directory + "/step-23", 0.5))
 
@@ -163,7 +174,28 @@ def test_hyperball_merge_keeps_each_sphere_norm_and_linear_merge_shrinks_it():
                 np.testing.assert_allclose(norm(hb), (norm(a) + norm(b)) / 2, rtol=1e-5)
                 # The same direction as the linear average, only rescaled.
                 np.testing.assert_allclose(np.asarray(hb) / norm(hb), np.asarray(lin) / norm(lin), atol=1e-6)
-        assert step == 23 and spheres > 0
+
+            out = directory + "/merged/step-23"
+            saved = EvalCheckpoint(sources, 1.0, space=MergeSpace.HYPERBALL, save=SavedMerge(out, sources[1][0]))
+            reloaded, saved_step = saved_and_reloaded(
+                config, saved, ball, metrics, optimizer=optimizer, mesh=mesh, mp=mp
+            )
+            for x, y in zip(jax.tree.leaves(ball), jax.tree.leaves(reloaded), strict=True):
+                np.testing.assert_array_equal(x, y)
+            with open(out + "/metadata.json") as f:
+                saved_metadata = json.load(f)
+            # The saved file is a full training state: the merge's weights with the later checkpoint's rest.
+            template = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), states[23])
+            full = load_checkpoint(template, out, axis_mapping=None, mesh=mesh)
+            np.testing.assert_array_equal(full.pending_qb_betas, betas)
+            for x, y in zip(jax.tree.leaves(full.opt_state), jax.tree.leaves(opt_state), strict=True):
+                np.testing.assert_array_equal(x, y)
+            for x, y in zip(jax.tree.leaves(full.params), jax.tree.leaves(ball), strict=True):
+                np.testing.assert_array_equal(x, y)
+        assert step == 23 and saved_step == 23 and int(full.step) == 23 and spheres > 0
         assert metrics["merge/norm_ratio_min"] < metrics["merge/norm_ratio_mean"] < 1.0
+        assert saved_metadata["step"] == 23 and saved_metadata["merge_space"] == "hyperball"
+        assert saved_metadata["state_from"] == sources[1][0]
+        assert saved_metadata["merge_sources"] == [list(source) for source in sources]
     """
     run_on_cpu_devices(script, device_count=1)
