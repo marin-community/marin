@@ -101,20 +101,43 @@ def audit() -> dict[str, Any]:
                     counts["malformed_but_json_candidate"] += 1
                     if exact:
                         counts["malformed_but_exact_reference"] += 1
+                matching_schema = [
+                    json.dumps(value, sort_keys=True)
+                    for value in candidates
+                    if isinstance(value, dict) and isinstance(expected, dict) and set(value) == set(expected)
+                ]
                 task_candidates[task_id].append(
                     {
                         "model": model.model,
                         "exact": exact,
                         "valid_submission": grade.get("status") == "graded",
                         "score": trial.get("correct"),
+                        "candidate_signature": matching_schema[-1] if matching_schema else None,
                     }
                 )
         per_model[model.model] = dict(sorted(counts.items()))
     priorities: list[dict[str, Any]] = []
+    consensus: list[dict[str, Any]] = []
     for task_id, candidates in task_candidates.items():
         exact = sum(item["exact"] for item in candidates)
         wrong = sum(not item["exact"] for item in candidates)
         recoverable = sum(item["exact"] and not item["valid_submission"] for item in candidates)
+        signatures = Counter(
+            item["candidate_signature"]
+            for item in candidates
+            if not item["exact"] and item["candidate_signature"] is not None
+        )
+        if signatures and signatures.most_common(1)[0][1] >= 3:
+            signature, n = signatures.most_common(1)[0]
+            consensus.append(
+                {
+                    "task_id": task_id,
+                    "same_nonreference_candidates": n,
+                    "valid_wrong_submissions": sum(
+                        item["candidate_signature"] == signature and item["valid_submission"] for item in candidates
+                    ),
+                }
+            )
         if recoverable or wrong >= 3:
             priorities.append(
                 {
@@ -125,11 +148,14 @@ def audit() -> dict[str, Any]:
                 }
             )
     priorities.sort(key=lambda item: (-item["exact_but_malformed"], -item["nonexact_candidates"], item["task_id"]))
+    consensus.sort(key=lambda item: (-item["same_nonreference_candidates"], item["task_id"]))
     return {
         "tasks": len(tasks),
         "model_counts": per_model,
         "candidate_diagnostics": priorities[:30],
         "candidate_diagnostic_total": len(priorities),
+        "nonreference_consensus": consensus[:30],
+        "nonreference_consensus_total": len(consensus),
     }
 
 
