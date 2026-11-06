@@ -74,7 +74,7 @@ def source_provenance(monkeypatch):
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
-def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path):
+def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch):
     paths = []
     launches = {}
     for name, preset in presets.PRESETS.items():
@@ -95,6 +95,14 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
     path = tmp_path / "off-boundary.yaml"
     _render(off_boundary, path)
     paths.append(str(path))
+    monkeypatch.setenv(presets.DAYTONA_EVAL_KEY, "fixture")
+    harbor = snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, evaluations=("harbor-smartie",)).runs[
+        0
+    ]
+    config = harbor.build_config(StepContext.for_fingerprint(harbor.runtime_args, harbor.deps))
+    path = tmp_path / "harbor.yaml"
+    path.write_text(config.launch_config_yaml)
+    paths.append(str(path))
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
         settings=tuple(
@@ -114,14 +122,37 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
     paths.append(str(path))
     rows = _native(
         """
-import asyncio, json, sys
+import json, sys
+from pathlib import Path
 from types import SimpleNamespace
-from cloud.iris.launch_config import load_launch_config
+import asyncio
 from omegaconf import OmegaConf
+from cloud.iris.launch_config import load_launch_config
+from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
+from skyrl_train.callbacks.builtin import create_callbacks_from_config
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 configs = [load_launch_config(path) for path in sys.argv[1:]]
+
+def selection_results(config):
+    if not any(entry.type == "harbor_evaluation" for entry in config.skyrl.trainer.callbacks):
+        return None
+    results = []
+    for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
+        directory = Path(sys.argv[1]).parent / f"coverage-{index}"
+        config.skyrl.trainer.ckpt_path = str(directory)
+        metrics = {"eval/all/num_attempted": 100, "eval/all/num_scored": native, "eval/all/avg_verifier_score": 0.5}
+        harbor = next(entry for entry in config.skyrl.trainer.callbacks if entry.type == "harbor_evaluation")
+        for cohort, scored in zip(harbor.cohorts, cohorts, strict=True):
+            prefix = f"eval/harbor/{cohort.name}/"
+            metrics.update({prefix+"num_attempted": 30, prefix+"num_scored": scored, prefix+"reward_sum": scored/2})
+        handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
+        state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
+        asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
+                                            trainer=SimpleNamespace(cfg=config.skyrl)))
+        results.append((directory / "best_checkpoint.json").exists())
+    return results
 
 async def check_panel_request(config):
     sampling = get_sampling_params_for_backend(
@@ -151,7 +182,7 @@ for config in configs:
     if config.inputs.validation_data:
         asyncio.run(check_panel_request(config))
 print(json.dumps([{
-    "name": config.run.id, "entrypoint": config.runtime.entrypoint,
+    "input": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
     "validation": bool(config.inputs.validation_data),
     "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
@@ -162,11 +193,12 @@ print(json.dumps([{
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
     "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
+    "endpoint": config.skyrl.generator.enable_http_endpoint, "selection": selection_results(config),
     "steps": config.skyrl.trainer.max_steps,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
-} for config in configs]))
+} for config, path in zip(configs, sys.argv[1:], strict=True)]))
 """,
         paths,
     )
@@ -181,6 +213,10 @@ print(json.dumps([{
             assert row["admission"] == expected, row
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
+        if Path(row["input"]).name == "harbor.yaml":
+            assert "harbor_evaluation" in row["callbacks"], row
+            assert row["endpoint"], row
+            assert row["selection"] == [True, False, False], row
         if row["fixed"]:
             assert not row["overlong_filtering"], row
         if row["training"] and row["validation"]:
