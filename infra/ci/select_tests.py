@@ -25,9 +25,11 @@ import argparse
 import ast
 import json
 import re
+import statistics
 import subprocess
 import tomllib
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
@@ -1007,14 +1009,34 @@ def experiment_asset_tests(areas: set[str], repo_root: Path) -> list[str]:
     ]
 
 
-def shard_files(tests: list[str], count: int) -> list[list[str]]:
-    """Deal ``tests`` round-robin into ``count`` chunks.
+def load_test_seconds(path: Path) -> dict[str, float]:
+    """Per-file test time written by ``infra/ci/test_timings.py``, keyed by repo-relative path."""
+    return {test: float(seconds) for test, seconds in json.loads(path.read_text()).items()}
 
-    Expensive tests cluster by directory (``experiments/grug/``, ``tests/grug/``), so
-    contiguous slices of the sorted list put a whole cluster on one runner. Interleaving
+
+def shard_files(tests: list[str], count: int, test_seconds: Mapping[str, float]) -> list[list[str]]:
+    """Split ``tests`` into ``count`` chunks with similar total test time.
+
+    ``test_seconds`` holds each file's summed test time from recent full CI runs. Files go
+    longest first to the chunk with the least time so far. A file with no recorded time,
+    usually a new one, counts as the median recorded time.
+
+    Without any recorded time, files are dealt round-robin instead. Expensive tests cluster
+    by directory (``experiments/grug/``, ``tests/grug/``), so interleaving the sorted list
     spreads each directory across every chunk.
     """
-    return [tests[index::count] for index in range(count)]
+    recorded = [test_seconds[test] for test in tests if test in test_seconds]
+    if not recorded:
+        return [tests[index::count] for index in range(count)]
+
+    fallback = statistics.median(recorded)
+    chunks: list[list[str]] = [[] for _ in range(count)]
+    loads = [0.0] * count
+    for test in sorted(tests, key=lambda test: (-test_seconds.get(test, fallback), test)):
+        index = min(range(count), key=lambda index: (loads[index], index))
+        chunks[index].append(test)
+        loads[index] += test_seconds.get(test, fallback)
+    return [sorted(chunk) for chunk in chunks]
 
 
 def scope_legs(
@@ -1022,14 +1044,15 @@ def scope_legs(
     tests: list[str] | None,
     repo_root: Path,
     *,
+    test_seconds: Mapping[str, float],
     source_build: bool = False,
 ) -> list[MatrixLeg]:
     """Matrix legs for one scope: one leg, or several when the scope is sharded.
 
     ``tests is None`` runs the full suite. A sharded scope expands that to its file list so
     full and diff-driven runs spread across the same runners; below MIN_FILES_PER_SHARD it
-    stays a single leg. ``source_build`` flags the legs whose native extension must be built
-    from source.
+    stays a single leg. ``test_seconds`` balances the shards (see ``shard_files``).
+    ``source_build`` flags the legs whose native extension must be built from source.
     """
     cap = SHARD_COUNT.get(scope, 1)
     files = tests if tests is not None else (all_test_files(scope, repo_root) if cap > 1 else None)
@@ -1042,7 +1065,7 @@ def scope_legs(
     count = min(cap, len(files) // MIN_FILES_PER_SHARD)
     if count <= 1:
         return [matrix_leg(scope, sorted(files), source_build=source_build)]
-    chunks = shard_files(sorted(files), count)
+    chunks = shard_files(sorted(files), count, test_seconds)
     return [
         matrix_leg(scope, chunk, shard=(index + 1, count), source_build=source_build)
         for index, chunk in enumerate(chunks)
@@ -1055,6 +1078,7 @@ def compute_matrix(
     forced_scopes: set[str],
     source_build_scopes: set[str],
     repo_root: Path,
+    test_seconds: Mapping[str, float],
 ) -> list[MatrixLeg]:
     """Compute the test matrix.
 
@@ -1076,7 +1100,7 @@ def compute_matrix(
     for scope in SCOPES:
         source_build = scope in source_build_scopes
         if scope in forced_scopes:
-            matrix.extend(scope_legs(scope, None, repo_root, source_build=source_build))
+            matrix.extend(scope_legs(scope, None, repo_root, test_seconds=test_seconds, source_build=source_build))
             continue
 
         selected = list(direct_tests.get(scope, []))
@@ -1086,16 +1110,20 @@ def compute_matrix(
                     selected.append(test_file)
 
         if selected:
-            matrix.extend(scope_legs(scope, sorted(selected), repo_root, source_build=source_build))
+            matrix.extend(
+                scope_legs(scope, sorted(selected), repo_root, test_seconds=test_seconds, source_build=source_build)
+            )
 
     return matrix
 
 
-def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[MatrixLeg]:
+def full_matrix(repo_root: Path, source_build_scopes: set[str], test_seconds: Mapping[str, float]) -> list[MatrixLeg]:
     """Every scope, each running its full suite (sharded where configured)."""
     legs: list[MatrixLeg] = []
     for scope in SCOPES:
-        legs.extend(scope_legs(scope, None, repo_root, source_build=scope in source_build_scopes))
+        legs.extend(
+            scope_legs(scope, None, repo_root, test_seconds=test_seconds, source_build=scope in source_build_scopes)
+        )
     return legs
 
 
@@ -1153,16 +1181,17 @@ def _select_changed_tests(
     repo_root: Path,
     broad_triggers: frozenset[str],
     *,
-    run_all_tests: bool = False,
-    base_ref: str | None = None,
+    run_all_tests: bool,
+    base_ref: str | None,
+    test_seconds: Mapping[str, float],
 ) -> SelectionResult:
     classification = classify(changed_files, repo_root, broad_triggers)
     source_build_scopes = set(classification.native_changed)
 
     if run_all_tests:
-        reason, matrix = RUN_ALL_REASON, full_matrix(repo_root, source_build_scopes)
+        reason, matrix = RUN_ALL_REASON, full_matrix(repo_root, source_build_scopes, test_seconds)
     elif classification.broad:
-        reason, matrix = BROAD_TRIGGER_REASON, full_matrix(repo_root, source_build_scopes)
+        reason, matrix = BROAD_TRIGGER_REASON, full_matrix(repo_root, source_build_scopes, test_seconds)
     else:
         reason = DIFF_DRIVEN_REASON
         matrix = compute_matrix(
@@ -1171,6 +1200,7 @@ def _select_changed_tests(
             classification.forced,
             source_build_scopes,
             repo_root,
+            test_seconds,
         )
 
     selected_lanes: set[str] = set()
@@ -1199,14 +1229,20 @@ def select_changed_tests(
     *,
     run_all_tests: bool = False,
     base_ref: str | None = None,
+    test_seconds: Mapping[str, float] | None = None,
 ) -> SelectionResult:
-    """Return the CI test plan for repo-relative changed paths."""
+    """Return the CI test plan for repo-relative changed paths.
+
+    ``test_seconds`` balances sharded scopes by recorded per-file test time; without it,
+    shards are dealt round-robin.
+    """
     return _select_changed_tests(
         changed_files,
         repo_root,
         BROAD_TRIGGERS,
         run_all_tests=run_all_tests,
         base_ref=base_ref,
+        test_seconds=test_seconds or {},
     )
 
 
@@ -1224,12 +1260,13 @@ def select_local_tests(
         LOCAL_BROAD_TRIGGERS,
         run_all_tests=run_all_tests,
         base_ref=base_ref,
+        test_seconds={},
     )
 
 
-def select_all_tests(repo_root: Path) -> SelectionResult:
+def select_all_tests(repo_root: Path, test_seconds: Mapping[str, float] | None = None) -> SelectionResult:
     """Return the scheduled/manual plan when no diff base is available."""
-    matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
+    matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR), test_seconds or {})
     suite_test_paths = accelerator_suite_test_paths(matrix, repo_root, {LEVANTER_TORCH_SUITE, LEVANTER_TPU_SUITE})
     return SelectionResult(
         reason=RUN_ALL_REASON,
@@ -1262,20 +1299,29 @@ def main() -> None:
         action="store_true",
         help="Run every package's full suite regardless of the diff",
     )
+    parser.add_argument(
+        "--test-seconds",
+        type=Path,
+        metavar="JSON",
+        help="Per-file test times from infra/ci/test_timings.py, used to balance shards",
+    )
     args = parser.parse_args()
     if not (args.base_ref or args.run_all_tests):
         parser.error("pass --base-ref, --run-all-tests, or both")
 
     repo_root = Path(__file__).parent.parent.parent
+    test_seconds = load_test_seconds(args.test_seconds) if args.test_seconds else {}
 
     # Without a base ref there is no diff to inspect, so conservatively build every native
     # extension from source and run the out-of-band suites too.
     if args.base_ref is None:
-        print(json.dumps(selection_payload(select_all_tests(repo_root)), indent=2))
+        print(json.dumps(selection_payload(select_all_tests(repo_root, test_seconds)), indent=2))
         return
 
     changed = git_changed_files(args.base_ref, repo_root)
-    selection = select_changed_tests(changed, repo_root, run_all_tests=args.run_all_tests, base_ref=args.base_ref)
+    selection = select_changed_tests(
+        changed, repo_root, run_all_tests=args.run_all_tests, base_ref=args.base_ref, test_seconds=test_seconds
+    )
     print(json.dumps(selection_payload(selection), indent=2))
 
 

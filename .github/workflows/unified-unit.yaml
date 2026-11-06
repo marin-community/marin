@@ -32,6 +32,16 @@ jobs:
           # since the branch point, which is not what this pull request changed.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      # Per-file test times saved by the latest full run's unit_timings job. The key never
+      # exists, so the prefix restores the newest timings; pull requests can read caches
+      # saved on main. Without a hit, the selector shards round-robin.
+      - name: Restore unit test timings
+        uses: actions/cache/restore@v6
+        with:
+          path: test_seconds.json
+          key: unit-test-seconds-latest
+          restore-keys: unit-test-seconds-
+
       - id: analyze
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -46,6 +56,9 @@ jobs:
             ARGS+=(--base-ref "$BASE_SHA")
           elif [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
             ARGS+=(--run-all-tests)
+          fi
+          if [ -f test_seconds.json ]; then
+            ARGS+=(--test-seconds test_seconds.json)
           fi
           result=$(python3 infra/ci/select_tests.py "${ARGS[@]}")
           echo "$result"
@@ -114,9 +127,54 @@ jobs:
             ${{ matrix.extras }} \
             --group test \
             pytest ${{ matrix.pytest_args }} \
+            --junitxml="$RUNNER_TEMP/junit/${{ matrix.package }}.xml" -o junit_family=xunit1 \
             ${{ matrix.test_paths }} || status=$?
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
+
+      # Full runs feed per-file test times to unit_timings, which balances later shards.
+      - name: Upload JUnit report
+        if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-junit-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  unit_timings:
+    name: unit-timings
+    needs: unit
+    if: >-
+      ${{ always()
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && (needs.unit.result == 'success' || needs.unit.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: unit-junit-*
+          path: ${{ runner.temp }}/junit
+
+      - name: Restore previous timings
+        uses: actions/cache/restore@v6
+        with:
+          path: test_seconds.json
+          key: unit-test-seconds-latest
+          restore-keys: unit-test-seconds-
+
+      # Files a failed or partial run did not time keep their previous value.
+      - name: Sum per-file test times
+        run: python3 -m infra.ci.test_timings --reports "$RUNNER_TEMP/junit" --previous test_seconds.json --output test_seconds.json
+
+      - name: Save timings
+        uses: actions/cache/save@v6
+        with:
+          path: test_seconds.json
+          key: unit-test-seconds-${{ github.run_id }}-${{ github.run_attempt }}
 
   slow:
     if: ${{ github.event_name == 'schedule' }}
