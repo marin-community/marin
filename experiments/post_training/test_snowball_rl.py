@@ -154,7 +154,8 @@ print(json.dumps([{
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
     "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
     "quality_wire": quality_request(config),
-    "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
+                 if entry.type == "evaluation"],
     "engine_profile": [config.skyrl.trainer.algorithm.batch_invariant,
                        config.skyrl.generator.vllm_attention_backend,
                        config.skyrl.generator.enable_prefix_caching],
@@ -255,11 +256,11 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": "1fab449a",
-        "data-short": "cfe765a7",
-        "speed-medium": "d7a652e3",
-        "learning-medium": "4c9fe674",
-        "speed-long": "87810c2e",
+        "speed-short": "770b2ac4",
+        "data-short": "f2cb9dae",
+        "speed-medium": "f8e77acd",
+        "learning-medium": "796fdf74",
+        "speed-long": "5a20d9a8",
     }
     paths = []
     for name in expected:
