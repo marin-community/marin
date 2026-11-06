@@ -118,7 +118,8 @@ def collate_score_centering(
     """Pad full response heads, mask loss holes and validate behavior probabilities.
 
     Rows share response order and shape [response, top_k]. Returned learner
-    fields use invalid-ID/NaN padding. Sampled scores must agree where the
+    fields ``score_topk_indices`` and ``score_behavior_logprobs`` have shape
+    [batch, response, top_k] and invalid-ID/NaN padding. Sampled scores must agree where the
     chosen token is in the head. Callers own evidence provenance.
     """
     size = len(response_token_ids)
