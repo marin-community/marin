@@ -27,9 +27,7 @@
       "family": "scientific_reasoning",
       "license": "unspecified by pinned card",
       "name": "evalchemy-math500",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:math500",
       "rows": 500,
       "format": "evaluation"
@@ -40,9 +38,7 @@
       "family": "scientific_reasoning",
       "license": "unspecified by pinned data",
       "name": "evalchemy-aime24",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:aime24",
       "rows": 30,
       "format": "evaluation"
@@ -53,9 +49,7 @@
       "family": "competitive_coding",
       "license": "Apache-2.0",
       "name": "evalchemy-humanevalplus",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:humanevalplus",
       "rows": 164,
       "format": "evaluation"
@@ -66,9 +60,7 @@
       "family": "competitive_coding",
       "license": "Apache-2.0",
       "name": "evalchemy-mbppplus",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:mbppplus",
       "rows": 378,
       "format": "evaluation"
@@ -79,9 +71,7 @@
       "family": "general",
       "license": "MIT",
       "name": "evalchemy-mmlu-pro",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:mmlu-pro",
       "rows": 12032,
       "format": "evaluation"
@@ -92,9 +82,7 @@
       "family": "general",
       "license": "CC-BY-4.0",
       "name": "evalchemy-gpqa-diamond",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:gpqa-diamond",
       "rows": 198,
       "format": "evaluation"
@@ -105,10 +93,7 @@
       "family": "agents",
       "license": "CC-BY-4.0",
       "name": "nemo-predicted-action",
-      "required_tags": [
-        "eval",
-        "tool-call-proxy"
-      ],
+      "required_tags": ["eval", "tool-call-proxy"],
       "source_id": "NeMo:predicted-action",
       "rows": 65559,
       "format": "normalized"
@@ -119,9 +104,7 @@
       "family": "structural",
       "license": "Apache-2.0",
       "name": "evalchemy-ifeval",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:ifeval",
       "rows": 541,
       "format": "evaluation"
@@ -132,9 +115,7 @@
       "family": "structural",
       "license": "unspecified by pinned card",
       "name": "evalchemy-ifbench",
-      "required_tags": [
-        "eval"
-      ],
+      "required_tags": ["eval"],
       "source_id": "Evalchemy:ifbench",
       "rows": 300,
       "format": "evaluation"
