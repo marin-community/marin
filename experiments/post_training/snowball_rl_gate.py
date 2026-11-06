@@ -135,8 +135,6 @@ def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, c
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
     pins = _pins(preset.name)
-    if not pins:
-        return  # gate_step names the missing control pin.
     rates_path = _pass_rates_path(preset)
     rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
     reference = _load_run(_control_path(preset, pins[0], 0), preset, rates)
@@ -709,7 +707,17 @@ def _write_gate(
 
 
 def _pins(preset: str) -> tuple[ControlPin, ...]:
-    return tuple(pin for pin in CONTROLS[preset] if pin.revision == presets.PRESET_REVISION)
+    known = CONTROLS.get(preset, ())
+    pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
+    if not pins:
+        name, replicas = (known[0].preset, known[0].runs) if known else (preset, 4)
+        revisions = sorted({pin.revision for pin in known})
+        raise InvalidComparison(
+            f"no control pin for {preset} at {presets.PRESET_REVISION}; recorded control revisions={revisions}; "
+            f"collect with python -m experiments.post_training.snowball_rl --preset {name} "
+            f"--version {presets.PRESET_REVISION} --control --replicates {replicas} --run"
+        )
+    return pins
 
 
 def _control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
@@ -756,12 +764,6 @@ def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
     pins = _pins(preset.name)
-    if not pins:
-        raise click.BadParameter(
-            f"no control pin for {preset.name} at {presets.PRESET_REVISION}; collect with "
-            f"python -m experiments.post_training.snowball_rl --preset {CONTROLS[preset.name][0].preset} "
-            f"--version {presets.PRESET_REVISION} --control --replicates {CONTROLS[preset.name][0].runs} --run"
-        )
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
     return _gate_artifact(name, preset, runs, inputs)
 
@@ -816,7 +818,10 @@ def recorded_inputs(path: str) -> GateInputs:
 def main(preset_name: str, candidate_name: str | None, leave_out: str | None, requirements: tuple[str, ...]) -> None:
     if (candidate_name is None) == (leave_out is None):
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
-    preset, pins = presets.PRESETS[preset_name], _pins(preset_name)
+    try:
+        preset, pins = presets.PRESETS[preset_name], _pins(preset_name)
+    except InvalidComparison as error:
+        raise click.BadParameter(str(error)) from error
     index = None
     if leave_out is not None:
         if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:
