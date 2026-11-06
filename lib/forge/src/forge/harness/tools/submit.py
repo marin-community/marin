@@ -6,11 +6,10 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import override
 
-from pydantic import ValidationError
-
 from forge.effects.context import Context
 from forge.harness.protocol import SubmitRequest, ToolResult
 from forge.harness.tools.base import ValidatedTool
+from forge.lowering import check_candidates
 from forge.model.serialization import CONTROLS, TASK_SPEC
 from forge.model.workpiece import Submission
 from forge.resources.env import Env, ReadFile
@@ -24,7 +23,8 @@ async def read_submission(
     try:
         task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(task_path))))
         controls = CONTROLS.validate_json(await ctx.emit(ReadFile(PurePosixPath(controls_path))))
-    except (ValidationError, FileNotFoundError, KeyError) as error:
+        check_candidates(task, tuple(control.candidate for control in controls))
+    except (ValueError, FileNotFoundError, KeyError) as error:
         return ToolResult(f"Invalid draft: {error}")
     submission = Submission(task, controls, notes)
     findings = gate(submission)

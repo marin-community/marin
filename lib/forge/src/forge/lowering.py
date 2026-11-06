@@ -68,6 +68,7 @@ from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
 from verifyit.spec import Spec, mode_of
 
+from forge.model.controls import Candidate
 from forge.model.verdict import VERDICT_REWARD
 from forge.policy import Policy
 from forge.resources.sandbox.factories import (
@@ -680,3 +681,11 @@ def lower_with_settings(
         limits=settings.limits,
         factories=factories,
     )
+
+
+def check_candidates(task: TaskSpec, candidates: Sequence[Candidate]) -> None:
+    """Reject authored files when lowering would provide no solver task machine."""
+    if SHELL_CAPABILITY not in task.environment_requirements.capabilities and any(
+        candidate.files for candidate in candidates
+    ):
+        raise ValueError("Candidate files require a task machine")

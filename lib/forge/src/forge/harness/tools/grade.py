@@ -14,7 +14,7 @@ from taskcompendium.runtime.resources import inline_resource
 from forge.effects.context import Context
 from forge.harness.protocol import ToolResult
 from forge.harness.tools.base import ValidatedTool
-from forge.lowering import LoweringSettings, lower_with_settings
+from forge.lowering import LoweringSettings, check_candidates, lower_with_settings
 from forge.model.content_hash import pretty_json
 from forge.model.controls import Candidate
 from forge.model.serialization import TASK_SPEC
@@ -53,6 +53,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
         try:
             task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
             candidate = await read_candidate(ctx, args)
+            check_candidates(task, (candidate,))
             spec = lower_with_settings(task, self.settings, self.factories)
         except (ValidationError, ValueError, NotImplementedError, FileNotFoundError, KeyError) as error:
             return ToolResult(f"Cannot grade draft: {error}")

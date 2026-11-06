@@ -9,8 +9,9 @@ import httpx
 import pytest
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import StdoutReward
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
@@ -19,7 +20,16 @@ from forge.effects.log import EventLog, JsonlSink
 from forge.harness.classify import host_failure
 from forge.harness.events import ToolReturned
 from forge.harness.loop import AgenticHarness
-from forge.harness.protocol import Returned, ReturnRequest, Stopped, StopReason, Submitted, Tool, ToolResult
+from forge.harness.protocol import (
+    Returned,
+    ReturnRequest,
+    Stopped,
+    StopReason,
+    SubmitRequest,
+    Submitted,
+    Tool,
+    ToolResult,
+)
 from forge.harness.tools.adversary import AdversaryReport, ReportTool
 from forge.harness.tools.files import ReadFileTool, WriteFileTool
 from forge.harness.tools.finish import FinishTool
@@ -30,8 +40,9 @@ from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.tools.web import WebFetchTool, WebSearchTool
 from forge.harness.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
 from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine, script_grader
+from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
-from forge.model.serialization import TASK_SPEC
+from forge.model.serialization import CONTROLS, TASK_SPEC
 from forge.model.workpiece import Conversation, Submission
 from forge.policy.defaults import DEFAULT_POLICY
 from forge.resources.env import (
@@ -362,3 +373,49 @@ async def test_invalid_grader_image_is_feedback_before_any_grading_effect() -> N
     result = await GradeTool("/workspace/task.json", {}, settings)(ctx, {"reply": "12"}, env)
     await ctx.drain()
     assert isinstance(result, ToolResult) and "grader image must be" in result.content and image in result.content
+
+
+@pytest.mark.parametrize("name", ["grade", "submit", "validate"])
+async def test_candidate_files_without_task_machine_return_feedback(name: str) -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    await ctx.emit(RunCommand("task", 30))
+    candidate = Candidate("12", (inline_resource("workspace/answer", b"12"),))
+    controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/controls.json"), CONTROLS.dump_json(controls)))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"12"))
+    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    tools: dict[str, Tool[object]] = {
+        "grade": GradeTool("/workspace/task.json", {}, settings),
+        "submit": SubmitTool(accept),
+        "validate": ValidateTool(accept),
+    }
+    args: dict[str, dict[str, object]] = {
+        "grade": {"reply": "12", "files": ["/workspace/answer"]},
+        "submit": {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"},
+        "validate": {},
+    }
+    # No grading executor: malformed author data must never reach the executor backstop.
+    result = await tools[name](ctx, args[name], env)
+    await ctx.drain()
+    assert isinstance(result, ToolResult) and "Candidate files require a task machine" in result.content
+
+
+@pytest.mark.parametrize("name", ["submit", "validate"])
+async def test_repaired_task_machine_allows_file_controls_to_leave_the_tool(name: str) -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    task = arithmetic_task(environment_requirements=requirements(image=None))
+    candidate = Candidate("12", (inline_resource("workspace/answer", b"12"),))
+    controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(task)))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/controls.json"), CONTROLS.dump_json(controls)))
+    tool: Tool[object] = SubmitTool(accept) if name == "submit" else ValidateTool(accept)
+    args = {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"} if name == "submit" else {}
+    result = await tool(ctx, args, env)
+    await ctx.drain()
+    if name == "submit":
+        assert isinstance(result, SubmitRequest) and result.submission.controls == controls
+    else:
+        assert isinstance(result, ReturnRequest) and isinstance(result.payload, ValidateRequest)
+        assert result.payload.submission.controls == controls
