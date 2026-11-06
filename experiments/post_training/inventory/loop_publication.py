@@ -246,7 +246,7 @@ def publication_step(
         native = _native_identity(training.path())
         record = presets.artifact_record(gate.path())
         identity = record.name, record.version, record.fingerprint
-        summary = apply(
+        source = apply(
             f"{gate.name}/result-{fingerprint_hash(canonical_json((native, identity)))}",
             _retain_snowball_summary,
             version=gate.version,
@@ -257,32 +257,22 @@ def publication_step(
             output=OUT,
         )
 
-        def summary_config(ctx: StepContext) -> PublicationConfig:
-            return PublicationConfig(
-                summary_uri=prefix_join(ctx.artifact_path(summary), RESULT_FILENAME),
-                receipt_uri=prefix_join(ctx.output_path, "publication.json"),
-            )
-
-        return ArtifactStep(
-            name=f"{summary.name}-report",
-            version=summary.version,
-            artifact_type=LoopPublication,
-            run=publish_summary,
-            build_config=summary_config,
-            deps=(summary,),
-        )
+        relative_path = RESULT_FILENAME
+    else:
+        source = training
+        relative_path = f"exports/{RESULT_FILENAME}"
 
     def build_config(ctx: StepContext) -> PublicationConfig:
         return PublicationConfig(
-            summary_uri=prefix_join(ctx.artifact_path(training), f"exports/{RESULT_FILENAME}"),
+            summary_uri=prefix_join(ctx.artifact_path(source), relative_path),
             receipt_uri=prefix_join(ctx.output_path, "publication.json"),
         )
 
     return ArtifactStep(
-        name=f"{training.name}-report",
-        version=training.version,
+        name=f"{source.name}-report",
+        version=source.version,
         artifact_type=LoopPublication,
         run=publish_summary,
         build_config=build_config,
-        deps=(training,),
+        deps=(source,),
     )
