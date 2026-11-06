@@ -8,8 +8,9 @@ with a Welch t interval over the seeds of both arms. Each group gets a call:
 
 * ``better``: the interval lies wholly below 0.
 * ``worse``: the interval lies wholly above the group's harm limit.
-* ``neutral``: the interval lies within plus or minus the harm limit.
-* ``unresolved``: anything else; more seeds narrow the interval.
+* ``neutral``: the interval reaches neither below 0 wholly nor up to the harm limit: no gain shown, and no harm
+  beyond the limit.
+* ``unresolved``: the interval reaches the harm limit but does not lie above it; more seeds narrow it.
 
 The verdict is ``hurts`` when some group is worse, ``helps`` when some group is better and every other group is
 better or neutral, ``neutral`` when every group is neutral, and ``inconclusive`` otherwise.
@@ -76,7 +77,7 @@ class GroupDelta:
             return GroupCall.BETTER
         if self.low > self.harm_limit:
             return GroupCall.WORSE
-        if -self.harm_limit < self.low and self.high < self.harm_limit:
+        if self.high < self.harm_limit:
             return GroupCall.NEUTRAL
         return GroupCall.UNRESOLVED
 
