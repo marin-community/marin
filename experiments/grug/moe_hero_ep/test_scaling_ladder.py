@@ -439,3 +439,11 @@ def test_permanent_checkpoints_continue_through_the_extension():
     steps = range(HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + _EXTENSION_STEPS + 1)
     # The final step comes from the forced final checkpoint.
     assert _permanent_steps(keep, steps) == [390_500, 391_000]
+
+
+def test_hero_stop_step_is_not_a_periodic_eval_step():
+    # A periodic eval due at the stop step runs before the final save, so an eval failure there would lose
+    # the run's last steps. The forced eval after the final save still covers the stop step.
+    config = _hero_config()
+
+    assert config.stop_step % config.eval.steps_per_eval != 0
