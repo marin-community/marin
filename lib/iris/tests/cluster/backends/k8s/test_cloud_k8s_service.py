@@ -11,7 +11,7 @@ import pytest
 import urllib3
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
-from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
+from iris.cluster.platforms.k8s.types import ExecSetupError, ExecStatusError, K8sResource, KubectlError
 
 
 class _FakeExecStream:
@@ -259,7 +259,7 @@ def test_exec_preserves_websocket_construction_failure_reason(monkeypatch):
     svc = CloudK8sService(namespace="iris")
     monkeypatch.setattr(svc, "create_api_client", k8s_service.kubernetes.client.ApiClient)
     with pytest.raises(
-        RuntimeError, match=r"Websocket setup failed \(status 0\): synthetic websocket handshake failure"
+        ExecSetupError, match=r"Websocket setup failed \(status 0\): synthetic websocket handshake failure"
     ) as raised:
         svc.exec("task-pod", ["true"], container="task")
     assert isinstance(raised.value.__cause__, k8s_service.ApiException)
@@ -285,11 +285,18 @@ def test_exec_does_not_reclassify_unrelated_attribute_errors(monkeypatch, status
     assert raised.value is error
 
 
-def test_exec_noninteger_status_is_reported_as_exec_failure(monkeypatch):
+@pytest.mark.parametrize(
+    "detail,missing",
+    [
+        ("error executing command in container", False),
+        ('container not found ("output-uploader")', True),
+    ],
+)
+def test_exec_noninteger_status_is_reported_as_exec_failure(monkeypatch, detail, missing):
     class BadStatus(_FakeExecStream):
         @property
         def returncode(self):
-            raise ValueError("invalid literal for int(): Internal error occurred: error executing command in container")
+            raise ValueError(f"invalid literal for int(): Internal error occurred: {detail}")
 
         @returncode.setter
         def returncode(self, value):
@@ -297,6 +304,7 @@ def test_exec_noninteger_status_is_reported_as_exec_failure(monkeypatch):
 
     stream = BadStatus(returncode=0)
     svc = _service_with_exec_stream(monkeypatch, stream)
-    with pytest.raises(RuntimeError, match="Non-integer exec status"):
+    with pytest.raises(ExecStatusError, match="Non-integer exec status") as raised:
         svc.exec("task-pod", ["true"])
     assert stream.closed
+    assert raised.value.container_missing is missing

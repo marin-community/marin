@@ -42,6 +42,8 @@ from rigging.timing import Deadline, ExponentialBackoff
 
 from iris.cluster.platforms.k8s.types import (
     ExecResult,
+    ExecSetupError,
+    ExecStatusError,
     K8sResource,
     KubectlError,
     KubectlLogLine,
@@ -758,7 +760,7 @@ class CloudK8sService:
                             or cause.body is not None
                         ):
                             raise
-                        raise RuntimeError(f"Websocket setup failed (status 0): {cause.reason}") from cause
+                        raise ExecSetupError(f"Websocket setup failed (status 0): {cause.reason}") from cause
                     try:
                         resp.run_forever(timeout=effective_timeout)
                         stdout = resp.read_stdout(timeout=0) or ""
@@ -773,7 +775,9 @@ class CloudK8sService:
                         try:
                             returncode = resp.returncode
                         except ValueError as error:
-                            raise RuntimeError(f"Non-integer exec status: {error}") from error
+                            raise ExecStatusError(
+                                str(error), container_missing="container not found" in str(error).lower()
+                            ) from error
                         return ExecResult(returncode=returncode, stdout=stdout, stderr=stderr)
                     finally:
                         resp.close()
