@@ -2238,14 +2238,14 @@ class RayPPOTrainer:
             if rollout_logprobs_tensor is None:
                 raise ValueError("score centering requires sampled behavior log probabilities on every batch")
             with Timer("score_centering_collation", self.all_timings, log_events=False):
-                ids, scores = collate_score_centering(
-                    trajectory_batch,
+                score_tensors = collate_score_centering(
+                    trajectory_batch["student_topk_indices"],
+                    trajectory_batch["behavior_topk_logprobs"],
                     response_ids,
-                    response_masks_tensor,
+                    loss_masks,
                     self.cfg.trainer.algorithm.score_centering_top_k,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
-            score_tensors = {"score_topk_indices": ids, "score_behavior_logprobs": scores}
         # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
         policy_steps = None
         if rollout_staleness is None:

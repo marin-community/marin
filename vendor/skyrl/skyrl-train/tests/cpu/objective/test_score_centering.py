@@ -14,9 +14,15 @@ def test_score_evidence_survives_collation_serialization_and_microbatching(tmp_p
         "behavior_topk_logprobs": [np.array([[-0.8, -1.8], [-0.9, -1.9]]), np.array([[-1.0, -2.0]])],
     }
     mask = torch.tensor([[1, 1], [1, 0]], dtype=torch.float32)
-    ids, behavior = collate_score_centering(
-        trajectory, [[3, 5], [7]], mask, 2, sampled_logprobs=torch.tensor([[-0.8, -0.9], [-1.0, 0]])
+    collated = collate_score_centering(
+        trajectory["student_topk_indices"],
+        trajectory["behavior_topk_logprobs"],
+        [[3, 5], [7]],
+        trajectory["loss_masks"],
+        2,
+        sampled_logprobs=torch.tensor([[-0.8, -0.9], [-1.0, 0]]),
     )
+    ids, behavior = collated["score_topk_indices"], collated["score_behavior_logprobs"]
     torch.testing.assert_close(ids[mask.bool()], torch.from_numpy(np.vstack(trajectory["student_topk_indices"])))
     torch.testing.assert_close(
         behavior[mask.bool()],
