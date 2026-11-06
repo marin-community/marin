@@ -1,18 +1,28 @@
 """Harbor agent access to a machine owned by the rollout engine."""
 
+import asyncio
 from pathlib import Path
 
-from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
-from shellbox.machine import HARBOR_EXEC_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine
+from shellbox.machine import Command, ExitReason, Machine
 
 
 class BorrowedMachineEnvironment(BaseEnvironment):
     """Expose commands and transfers without owning container creation or deletion."""
 
-    def __init__(self, machine: Machine, trial_dir: Path, session_id: str, task_env_config: EnvironmentConfig):
+    def __init__(
+        self,
+        machine: Machine,
+        trial_dir: Path,
+        session_id: str,
+        task_env_config: EnvironmentConfig,
+        *,
+        host_capabilities: HostCapabilities,
+    ):
         self.machine = machine
         super().__init__(
             environment_dir=trial_dir / "environment",
@@ -20,6 +30,8 @@ class BorrowedMachineEnvironment(BaseEnvironment):
             session_id=session_id,
             trial_paths=TrialPaths(trial_dir),
             task_env_config=task_env_config,
+            host_capabilities=host_capabilities,
+            guest_environment={},
         )
 
     @staticmethod
@@ -35,7 +47,7 @@ class BorrowedMachineEnvironment(BaseEnvironment):
         # The engine validates and creates the machine before constructing this view.
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(self, force_build: bool, *, service_tasks: asyncio.TaskGroup) -> None:
         raise RuntimeError("The rollout engine owns machine startup")
 
     async def stop(self, delete: bool) -> None:
@@ -56,7 +68,7 @@ class BorrowedMachineEnvironment(BaseEnvironment):
                 cwd=cwd,
                 env=self._merge_env(env) or {},
                 timeout=timeout_sec,
-                output_limit_bytes=HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
+                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
                 user=None if selected_user is None else str(selected_user),
             )
         )

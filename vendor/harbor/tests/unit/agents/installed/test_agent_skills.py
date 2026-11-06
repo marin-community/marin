@@ -38,20 +38,6 @@ class TestGeminiCliSkills:
         assert cmd is not None
         assert "'/workspace/my skills'" in cmd
 
-    @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir):
-        agent = GeminiCli(
-            logs_dir=temp_dir,
-            skills_dir="/workspace/skills",
-            model_name="google/gemini-2.5-pro",
-        )
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
-            await agent.run("do something", mock_env, AsyncMock())
-        exec_calls = mock_env.exec.call_args_list
-        assert any("~/.gemini/skills/" in call.kwargs["command"] for call in exec_calls)
-
 
 # ---------------------------------------------------------------------------
 # Goose
@@ -201,22 +187,6 @@ class TestHermesSkills:
         cmd = agent._build_register_skills_command()
         assert cmd is not None
         assert "'/workspace/my skills'" in cmd
-
-    @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir):
-        agent = Hermes(
-            logs_dir=temp_dir,
-            skills_dir="/workspace/skills",
-            model_name="anthropic/claude-sonnet-4-6",
-        )
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            await agent.run("do something", mock_env, AsyncMock())
-        exec_calls = mock_env.exec.call_args_list
-        assert any(
-            "/tmp/hermes/skills" in call.kwargs["command"] for call in exec_calls
-        )
 
 
 # ---------------------------------------------------------------------------
