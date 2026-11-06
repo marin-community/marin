@@ -19,7 +19,6 @@ from forge.resources.inference import InferenceClient
 class StopReason(StrEnum):
     FINISHED = "finished"
     CONTEXT_LIMIT = "context_limit"
-    TURN_LIMIT = "turn_limit"
 
 
 @dataclass(frozen=True, slots=True)

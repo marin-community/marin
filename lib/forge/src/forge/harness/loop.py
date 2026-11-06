@@ -32,14 +32,8 @@ from forge.resources.inference import InferenceClient, InferenceRequest, complet
 
 
 @dataclass(frozen=True, slots=True)
-class Limits:
-    max_turns: int | None
-    max_prompt_tokens: int | None
-
-
-@dataclass(frozen=True, slots=True)
 class AgenticHarness(Harness):
-    limits: Limits
+    max_prompt_tokens: int
     sampling: Sampling
     nudge: str
     output_chars: int
@@ -52,7 +46,7 @@ class AgenticHarness(Harness):
     async def run(
         self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
-        turns, prompt_tokens, nudged = 0, 0, False
+        prompt_tokens, empty_completions = 0, 0
         schemas = tuple(tool.schema for tool in tools.values())
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
@@ -60,12 +54,9 @@ class AgenticHarness(Harness):
             ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
             while True:
                 await ctx.check(Hold)
-                if self.limits.max_turns is not None and turns >= self.limits.max_turns:
-                    return Stopped(StopReason.TURN_LIMIT, session)
-                if self.limits.max_prompt_tokens is not None and prompt_tokens >= self.limits.max_prompt_tokens:
+                if prompt_tokens >= self.max_prompt_tokens:
                     return Stopped(StopReason.CONTEXT_LIMIT, session)
                 result = await ctx.emit(InferenceRequest(session.messages, schemas, self.sampling))
-                turns += 1
                 # Provider prompt_tokens already includes the cached portion.
                 prompt_tokens = result.usage.prompt_tokens
                 session = Conversation(
@@ -75,6 +66,9 @@ class AgenticHarness(Harness):
                     ),
                     schemas,
                 )
+                empty_completions = empty_completions + 1 if not result.content and not result.tool_calls else 0
+                if empty_completions == 3:
+                    raise Hold("provider returned 3 empty completions")
                 for call in result.tool_calls:
                     await ctx.emit(ToolInvoked(call.id, call.name, call.arguments))
                     try:
@@ -101,7 +95,4 @@ class AgenticHarness(Harness):
                     await ctx.emit(ToolReturned(call.id, call.name, content))
                     session = Conversation((*session.messages, Message("tool", content, tool_call_id=call.id)), schemas)
                 if not result.tool_calls and result.finish_reason == FinishReason.STOP:
-                    if nudged:
-                        return Stopped(StopReason.FINISHED, session)
-                    nudged = True
                     session = Conversation((*session.messages, Message("user", self.nudge)), schemas)

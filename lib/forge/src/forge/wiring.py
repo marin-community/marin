@@ -29,7 +29,7 @@ from taskforge.llm.rollout_model import model_turn
 from forge.arms import transitions
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
-from forge.harness.loop import AgenticHarness, Limits
+from forge.harness.loop import AgenticHarness
 from forge.harness.tools import adversary_tools, standard_tools
 from forge.harness.tools.validate import ValidateTool
 from forge.harness.web import ParallelWeb, WebClient, WebFetch, WebSearch, fetch, search
@@ -177,14 +177,14 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         {key.removeprefix("sampling."): value for key, value in policy.entries.items() if key.startswith("sampling.")}
     )
     author = AgenticHarness(
-        Limits(policy.setting("author.max_turns", int), prompt_limit(policy)),
+        prompt_limit(policy),
         sampling,
         policy.prompt("author.nudge").template,
         policy.setting("tools.output_chars", int),
     )
     adversaries = {
         name: AgenticHarness(
-            Limits(policy.setting("adversary.max_turns", int), prompt_limit(policy)),
+            prompt_limit(policy),
             sampling,
             "Finish your audit.",
             policy.setting("tools.output_chars", int),

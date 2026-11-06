@@ -669,6 +669,9 @@ def lower_with_settings(
     task: TaskSpec, settings: LoweringSettings, factories: Mapping[str, MachineFactory]
 ) -> TaskRolloutSpec:
     """Lower with shared budgets and only the machines the task requires."""
+    grader = grading_environment(task)
+    if "local" not in factories and grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
+        raise ValueError(f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}")
     return lower(
         task,
         host=settings.host,
