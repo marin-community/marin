@@ -235,7 +235,10 @@ def main() -> None:
         existing = _read_completed(output, rest, model, panel_sha)
         if existing is None:
             _budget(model, len(rest))
-            _run(rest, model, panel_sha, output, args.max_workers)
+            workers = (
+                min(args.max_workers, 2) if model.model == "nvidia/nemotron-3-ultra-550b-a55b" else args.max_workers
+            )
+            _run(rest, model, panel_sha, output, workers)
             existing = _read_completed(output, rest, model, panel_sha)
             if existing is None:
                 raise RuntimeError(f"Model output missing: {model.model}")
