@@ -71,6 +71,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
+from experiments.grug.moe_hero_ep.device_memory_probe import log_device_memory_breakdown
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -518,7 +519,8 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
+        # DIAGNOSTIC: the buffered batches live in device memory, so this sets their footprint and churn.
+        max_buffered_batches=int(os.environ.get("MEMGROW_LOADER_BUFFER", _TRAIN_LOADER_BUFFER_SIZE)),
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
         fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
@@ -1400,6 +1402,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
+        state_callbacks.add_hook(
+            lambda step_info: log_device_memory_breakdown(f"after_step:{int(step_info.step)}"), every=4
+        )
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_hooks: list[Callable[..., None]] = []
