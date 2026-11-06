@@ -75,18 +75,17 @@ class GenomeQABenchmark(BaseBenchmark):
         groups={tag: "{group}/{metric}" for tag in ("cell", "subtask", "format")},
         trial_metric=None,
     )
-    CELLS = CELL_COUNTS
 
     def __init__(self, logger=None):
         super().__init__(logger=logger)
         self.prompt_sha256 = None
 
     def benchmark_size(self):
-        return sum(self.CELLS.values())
+        return sum(CELL_COUNTS.values())
 
     def iter_specs(self, options: SourceOptions):
         if options.limit is not None:
-            raise ValueError("GenomeQA requires a complete population; use GenomeQAMotifMCQ for the 100-item check")
+            raise ValueError("GenomeQA requires a complete population")
         if options.num_samples != 1:
             raise ValueError("GenomeQA requires exactly one response per question")
         if options.system_instruction:
@@ -136,8 +135,6 @@ class GenomeQABenchmark(BaseBenchmark):
         counts = Counter()
         seen = set()
         for format in FORMATS:
-            if not any(cell.endswith(f"/{format}") for cell in self.CELLS):
-                continue
             path = fetch_hf(
                 DATASET, f"{format}/train-00000-of-00001.parquet", revision=REVISION, cache_prefix=self.dataset_cache
             )
@@ -151,8 +148,6 @@ class GenomeQABenchmark(BaseBenchmark):
                         cell = f"{row['subtask']}/{format}"
                         if cell not in CELL_COUNTS:
                             raise ValueError(f"Unknown GenomeQA cell: {cell}")
-                        if cell not in self.CELLS:
-                            continue
                         key = (format, row["subtask"], row["id"])
                         if key in seen:
                             raise ValueError(f"Duplicate GenomeQA identity: {key}")
@@ -165,7 +160,7 @@ class GenomeQABenchmark(BaseBenchmark):
                             raise ValueError(f"Inconsistent GenomeQA answer: {key}")
                         counts[cell] += 1
                         yield {**row, "format": format}
-        if counts != self.CELLS:
+        if counts != CELL_COUNTS:
             raise ValueError(f"GenomeQA population differs from pinned counts: {counts}")
 
     def evaluation_metadata(self):

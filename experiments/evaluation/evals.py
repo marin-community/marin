@@ -58,7 +58,6 @@ _EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "mrcr": ("openaipublic.blob.core.windows.net",),
         "genomeqa": ("raw.githubusercontent.com",),
-        "genomeqa-motif-mcq": ("raw.githubusercontent.com",),
     }
 )
 
@@ -366,7 +365,6 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "mrcr",
     "graphwalks",
     "genomeqa",
-    "genomeqa-motif-mcq",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {

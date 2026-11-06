@@ -1,14 +1,12 @@
 """GenomeQA protocol checks using synthetic questions and completed responses."""
 
 import hashlib
-from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from eval.chat_benchmarks.GenomeQA import eval_instruct as genomeqa_source
-from eval.chat_benchmarks.GenomeQAMotifMCQ.eval_instruct import GenomeQAMotifMCQBenchmark
 from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
 from eval.contracts.eval_spec import EvalSpec, GraderSpec
 from eval.execution.engine import ItemResult
@@ -115,10 +113,6 @@ def test_source_preserves_full_population_and_request_identity(synthetic_files):
     assert specs[0].source_id != specs[2600].source_id
     assert specs[0].requests[0].generation["max_gen_toks"] == 16384
     assert "metadata" not in str(specs[0].requests[0].prompt)
-    motif = GenomeQAMotifMCQBenchmark()
-    selected = list(motif.iter_specs(replace(options, task="GenomeQAMotifMCQ")))
-    assert len(selected) == 100
-    assert all(spec.tags["cell"] == "6_motif/mcq" for spec in selected)
 
 
 @pytest.mark.parametrize(

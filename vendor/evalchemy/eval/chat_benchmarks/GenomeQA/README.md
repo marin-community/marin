@@ -6,10 +6,9 @@ This adapter evaluates the original 5,200 questions from
 protocol choices and alternatives. Registry availability does not admit the
 benchmark into Marin's official evaluation policy.
 
-`GenomeQA` loads the pinned HF `binary` and `mcq` files. `GenomeQAMotifMCQ`
-uses the same implementation for all 100 motif MCQs, the agreed first-pass
-comparison. Neither task runs tools, retrieves context, shuffles options, or
-optimizes prompts. Question identities include format, subtask, and original ID.
+`GenomeQA` loads the pinned HF `binary` and `mcq` files.
+It does not run tools, retrieve context, shuffle options, or
+optimize prompts. Question identities include format, subtask, and original ID.
 
 The source verifies file checksums and preserves question text and option order.
 It reads `SIMPLE_SYSTEM_PROMPT` as a literal from the pinned original runner;
@@ -38,7 +37,7 @@ tagged groups emit `{subtask}/genomeqa_macro`, `{format}/genomeqa_macro`,
 `{subtask}/{format}/accuracy`, and `count_{group}` metrics. The macro is declared
 continuous so it does not receive a pooled-binomial uncertainty interval.
 
-Both tasks select their complete population and reject arbitrary `--limit`
+The task selects the complete population and rejects arbitrary `--limit`
 subsets. Execution uses Evalchemy's existing failure and checkpoint behavior:
 mostly-empty runs fail, empty responses can be retried on resume, and transport
 drops can leave aggregates over fewer graded questions. Inspect expected,
@@ -55,7 +54,6 @@ runtime does not settle their use terms. No upstream code, prompt, or questions
 are redistributed here; tests use synthetic questions. Raw artifacts belong in
 controlled storage. Do not publish question text or question text echoed by model outputs.
 
-No live parity result is included. Before the 100-question Maverick comparison,
-pin the OpenRouter provider and actual limits and state cost and duration bounds.
-Compare correct/100 with the paper's 65% motif-MCQ result, retaining failures and
-coverage; matching that number is not a release gate.
+Issue #10981 records the completed full-benchmark Maverick validation and the
+historical 100-question motif-MCQ check. Before another live evaluation, pin
+the provider and effective settings and state cost and duration bounds.
