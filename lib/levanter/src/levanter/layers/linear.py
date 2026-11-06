@@ -9,8 +9,6 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec, reshard
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from levanter.layers.dropout import DropoutLayout
-
 INITIALIZER_TRUNCATION_BOUND = 3.0
 
 
@@ -47,10 +45,7 @@ class Linear(eqx.Module):
         x: Float[Array, "... In"],
         *,
         out_sharding: PartitionSpec,
-        key: PRNGKeyArray | None = None,
-        dropout_layout: DropoutLayout | None = None,
     ) -> Float[Array, "... Out"]:
-        del key, dropout_layout
         weight = reshard(self.weight, self.compute_spec)
         output = jnp.einsum("...i,oi->...o", x, weight, out_sharding=out_sharding)
         if self.bias is not None:

@@ -19,7 +19,10 @@ from levanter.models.llama_native_lm import NativeLlamaLmConfig
 from levanter.models.llama_native import NativeLlamaSharding
 from levanter.checkpoint import CheckpointerConfig, discover_latest_checkpoint
 from levanter.data.dataset import ListAsyncDataset
+from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.eval import TaggedEvaluator
+from levanter.inference.jit_scheduler import SequenceTable
+from levanter.inference.page_table import PageTable
 from levanter.model_loading import load_levanter_checkpoint
 from levanter.models.loss import next_token_ids
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
@@ -43,6 +46,121 @@ def test_native_gqa_checkpointed_scan_matches_named_loss_and_all_gradients():
 def test_native_gqa_full_named_checkpoint_policy_matches_loss_and_all_gradients():
     policy = ScanCheckpointPolicy(save_carries=False, save_inputs=True, prevent_cse=True, nested=2)
     _assert_named_native_loss_and_gradients(2, gradient_checkpointing=policy)
+
+
+def test_native_keyed_rematerialized_gqa_raw_and_public_match_named_values_and_gradients():
+    config = LlamaConfig(
+        hidden_dim=24,
+        intermediate_dim=40,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        max_seq_len=6,
+        attn_backend=AttentionBackend.VANILLA,
+        scan_layers=True,
+        gradient_checkpointing=True,
+    )
+    native_config = NativeLlamaLmConfig(
+        **{field.name: getattr(config, field.name) for field in dataclasses.fields(config)}
+    )
+    Vocab, Batch, Pos = hax.Axis("vocab", 48), hax.Axis("batch", 2), config.max_Pos
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh), hax.axis_mapping({}):
+        tokens = jnp.array([[3, 13, 27, 6, 1, 19], [4, 1, 9, 25, 3, 17]], dtype=jnp.int32)
+        raw_example = jax.vmap(lambda row: GrugLmExample.causal(row, eos_id=1))(tokens)
+        example = named_lm_example_from_grug(raw_example, Pos, batch_axis=Batch)
+        named = LlamaLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(127))
+        source = named.to_state_dict()
+        native = native_config.build(Vocab, key=jax.random.PRNGKey(131)).from_state_dict(source)
+        for name, value in native.to_state_dict().items():
+            np.testing.assert_array_equal(value, source[name].reshape(value.shape))
+        forward_key = jax.random.PRNGKey(137)
+        named_logits = eqx.filter_jit(lambda model: model(example.tokens, example.attn_mask, key=forward_key))(named)
+        native_logits = eqx.filter_jit(lambda model: model(example.tokens, example.attn_mask, key=forward_key))(native)
+        raw_logits = eqx.filter_jit(lambda model: model(tokens, raw_example.attn_mask, key=forward_key))(native.native)
+        np.testing.assert_allclose(native_logits.array, named_logits.array, atol=1e-5, rtol=1e-4)
+        np.testing.assert_allclose(raw_logits, named_logits.array, atol=1e-5, rtol=1e-4)
+
+        def public_loss(model):
+            return model.compute_next_token_loss(example, key=forward_key, logsumexp_weight=0.0).scalar()
+
+        def raw_loss(model):
+            return model.next_token_loss(
+                tokens,
+                raw_example.loss_weight,
+                mask=raw_example.attn_mask,
+                key=forward_key,
+                logsumexp_weight=0.0,
+            )
+
+        reference_loss, reference_grad = eqx.filter_jit(eqx.filter_value_and_grad(public_loss))(named)
+        reference_gradients = reference_grad.to_state_dict()
+        for model, loss_fn in ((native, public_loss), (native.native, raw_loss)):
+            loss, gradient = eqx.filter_jit(eqx.filter_value_and_grad(loss_fn))(model)
+            np.testing.assert_allclose(loss, reference_loss, atol=1e-5, rtol=1e-4)
+            gradients = gradient.to_state_dict()
+            assert gradients.keys() == reference_gradients.keys()
+            for name, value in gradients.items():
+                np.testing.assert_allclose(
+                    value, reference_gradients[name].reshape(value.shape), atol=1e-5, rtol=1e-4, err_msg=name
+                )
+
+
+def test_native_keyed_paged_prefill_and_next_decode_match_dense_and_preserve_cache():
+    config = LlamaConfig(
+        hidden_dim=32,
+        intermediate_dim=48,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        max_seq_len=6,
+        attn_backend=AttentionBackend.VANILLA,
+        scan_layers=True,
+        gradient_checkpointing=True,
+    )
+    native_config = NativeLlamaLmConfig(
+        **{field.name: getattr(config, field.name) for field in dataclasses.fields(config)}
+    )
+    Vocab = hax.Axis("vocab", 48)
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh), hax.axis_mapping({}):
+        named = LlamaLMHeadModel.init(Vocab, config, key=jax.random.PRNGKey(211))
+        native = native_config.build(Vocab, key=jax.random.PRNGKey(223)).from_state_dict(named.to_state_dict())
+        tokens = hax.named(jnp.array([5, 17, 29, 11, 7], dtype=jnp.int32), hax.Axis("position", 5))
+        forward_key = jax.random.PRNGKey(227)
+        dense = eqx.filter_jit(lambda model: model(tokens, AttentionMask.causal(), key=forward_key))(named)
+        native_dense = eqx.filter_jit(lambda model: model(tokens, AttentionMask.causal(), key=forward_key))(native)
+        np.testing.assert_allclose(native_dense.array, dense.array, atol=1e-5, rtol=1e-4)
+        table = PageTable.init(max_pages=4, max_seqs=1, page_size=2, max_pages_per_seq=3)
+        sequences = SequenceTable.init(table.max_seqs, table.pages_per_seq, table.page_size)
+        sequences, slot = sequences.reserve_slot()
+        native_cache = native.initial_cache(table.spec(), dtype=jnp.float32)
+        named_cache = named.initial_cache(table.spec(), dtype=jnp.float32)
+        prefix_pages = None
+        prefix_snapshots = None
+        for start, size in ((0, 4), (4, 1)):
+            chunk = tokens["position", hax.dslice(start, size)]
+            positions = hax.named(jnp.arange(start, start + size, dtype=jnp.int32), chunk.axes)
+            slots = hax.full(chunk.axes, slot, dtype=jnp.int32)
+            sequences, table, info = sequences.allocate_for_seq(table, slots, positions)
+            native_out, native_cache = eqx.filter_jit(
+                lambda model, cache: model.decode(chunk, cache, info, positions, key=forward_key)
+            )(native, native_cache)
+            named_out, named_cache = eqx.filter_jit(
+                lambda model, cache: model.decode(chunk, cache, info, positions, key=forward_key)
+            )(named, named_cache)
+            expected = dense["position", hax.dslice(start, size)].array
+            np.testing.assert_allclose(native_out.array, expected, atol=1e-5, rtol=1e-4)
+            np.testing.assert_allclose(named_out.array, expected, atol=1e-5, rtol=1e-4)
+            for actual, reference in zip(native_cache, named_cache, strict=True):
+                np.testing.assert_allclose(actual.kv_pages.array, reference.kv_pages.array, atol=1e-5, rtol=1e-4)
+            if start == 0:
+                prefix_pages = np.asarray(info.page_indices.array[0, :2])
+                prefix_snapshots = [np.asarray(cache.kv_pages.array[prefix_pages]).copy() for cache in native_cache]
+            else:
+                assert prefix_pages is not None and prefix_snapshots is not None
+                for cache, previous in zip(native_cache, prefix_snapshots, strict=True):
+                    np.testing.assert_array_equal(cache.kv_pages.array[prefix_pages], previous)
 
 
 def _assert_named_native_loss_and_gradients(kv_heads, *, gradient_checkpointing):
