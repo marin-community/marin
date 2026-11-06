@@ -245,3 +245,19 @@ def test_submission_detaches_mutable_task_inputs_and_keeps_content_digest(workpi
     assert saved.task.environment_requirements.environment_variables == {"MODE": "safe"}
     assert saved.digest == content_digest
     assert wire.SUBMISSION.validate_json(wire.SUBMISSION.dump_json(saved)) == saved
+
+
+def test_validation_evidence_detaches_grade_payloads(workpiece: Workpiece) -> None:
+    grade = GradeResult(Outcome.GRADED, 1.0, detail={"checks": ["passed"]}, diagnostics={"attempt": {"id": 1}})
+    trial = TrialResult(0, grade)
+    control = ControlResult(0, grade, True)
+    adversary = AdversaryResult("shortcut", True, (), (grade,))
+    evidence = ValidationResult("task", (trial,), (control,), (adversary,))
+    saved_round = workpiece.with_(evidence=(evidence,))
+    saved = wire.WORKPIECE.dump_json(saved_round)
+    for produced in (grade, trial.grade, control.grade, adversary.grades[0]):
+        assert produced is not None and produced.detail is not None
+        produced.detail["checks"].append("changed")
+        produced.diagnostics["attempt"]["id"] = 2
+    assert wire.WORKPIECE.dump_json(saved_round) == saved
+    assert wire.WORKPIECE.validate_json(saved) == saved_round

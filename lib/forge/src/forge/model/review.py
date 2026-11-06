@@ -5,7 +5,8 @@
 
 """Completed validation evidence and the decisions made from it."""
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from taskcompendium.grading_result import GradeResult
@@ -147,6 +148,9 @@ class TrialResult:
     grade: GradeResult | None
     cause: Cause | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "grade", deepcopy(self.grade))
+
 
 @dataclass(frozen=True, slots=True)
 class ControlResult:
@@ -154,6 +158,9 @@ class ControlResult:
     grade: GradeResult | None
     met: bool
     cause: Cause | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "grade", deepcopy(self.grade))
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +170,9 @@ class AdversaryResult:
     findings: tuple[str, ...]
     grades: tuple[GradeResult, ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "grades", deepcopy(self.grades))
+
 
 @dataclass(frozen=True, slots=True)
 class ValidationResult:
@@ -171,6 +181,11 @@ class ValidationResult:
     controls: tuple[ControlResult, ...]
     adversary: tuple[AdversaryResult, ...]
     lowering_error: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "solver", tuple(replace(result) for result in self.solver))
+        object.__setattr__(self, "controls", tuple(replace(result) for result in self.controls))
+        object.__setattr__(self, "adversary", tuple(replace(result) for result in self.adversary))
 
 
 @dataclass(frozen=True, slots=True)
