@@ -12,6 +12,7 @@ from pdbthink.generators import get_generator
 from pdbthink.scoring.scorers import SCORING_VERSION
 from pdbthink.validate import validate_dataset
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import prefix_join
 
 from eval.chat_benchmarks.PDBThink.data import BUNDLE_PATH, PDBTHINK_REVISION, manifest
 
@@ -90,7 +91,7 @@ def main() -> None:
     payload, description = prepare_bundle(args.dataset)
     if description != manifest():
         raise ValueError("Dataset differs from the frozen PDBThink manifest; do not publish it under this version")
-    destination = f"{args.cache_prefix.rstrip('/')}/{BUNDLE_PATH}"
+    destination = prefix_join(args.cache_prefix, BUNDLE_PATH)
     with open_url(destination, "wb") as stream:
         stream.write(payload)
     with open_url(destination, "rb") as stream:

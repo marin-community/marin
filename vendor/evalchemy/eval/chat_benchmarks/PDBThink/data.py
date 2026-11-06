@@ -7,6 +7,7 @@ from functools import cache
 from pathlib import Path
 
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import prefix_join
 
 PDBTHINK_REVISION = "94b65a918140e44ca6b6e94032a0ee0a7441b1dd"
 BUNDLE_PATH = f"Open-Athena/pdbthink/{PDBTHINK_REVISION}/evaluation.json.gz"
@@ -20,7 +21,7 @@ def manifest() -> dict:
 
 def load_bundle(cache_prefix: str) -> dict:
     """Verify the prepared bundle before returning evaluator-only records."""
-    path = f"{cache_prefix.rstrip('/')}/{BUNDLE_PATH}"
+    path = prefix_join(cache_prefix, BUNDLE_PATH)
     try:
         with open_url(path, "rb") as stream:
             compressed = stream.read()

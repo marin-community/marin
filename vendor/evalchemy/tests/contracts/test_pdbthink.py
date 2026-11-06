@@ -8,6 +8,7 @@ import pytest
 from eval.chat_benchmarks.PDBThink.data import BUNDLE_PATH
 from eval.chat_benchmarks.PDBThink.eval_instruct import PDBThinkBenchmark
 from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
+from eval.limits import ContextWindowExceededError
 from eval.sources.common import SourceOptions
 from tests.contracts.pdbthink_records import record
 from tests.contracts.source_harness import FixedEndpoint, MemoryCheckpoints, evaluate_source
@@ -63,7 +64,7 @@ def test_upstream_parser_and_provider_signals_determine_score(pdbthink_bundle, s
 def test_context_failure_prevents_partial_cohort_execution(pdbthink_bundle):
     source, options = source_and_options(pdbthink_bundle([record("short"), record("long " * 1000)]))
     endpoint = FixedEndpoint("FINAL: 2")
-    with pytest.raises(ValueError, match="does not fit context"):
+    with pytest.raises(ContextWindowExceededError):
         evaluate_source(source, options, endpoint)
     assert endpoint.requests == []
     metrics, _ = evaluate_source(source, replace(options, limit=1), endpoint)

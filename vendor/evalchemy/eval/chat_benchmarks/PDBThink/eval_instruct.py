@@ -6,7 +6,7 @@ from typing import Any
 from eval.chat_benchmarks.PDBThink.data import PDBTHINK_REVISION, load_bundle, manifest
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
 from eval.execution.generation import canonical_generation_kwargs
-from eval.limits import DEFAULT_CONTEXT_SAFETY_TOKENS, require_context_length
+from eval.limits import ContextWindowExceededError, require_context_length, safe_generation_cap
 from eval.sources.common import SourceOptions, text_specs
 from eval.task import BaseBenchmark
 
@@ -70,13 +70,15 @@ class PDBThinkBenchmark(BaseBenchmark):
             render_id = spec.source_id
             if render_id not in budgets:
                 tokens = options.prompt_token_count(spec.requests[0].prompt)
-                available = context - tokens - DEFAULT_CONTEXT_SAFETY_TOKENS
-                if available <= 0:
-                    raise ValueError(
-                        f"PDBThink render {render_id} needs {tokens} prompt tokens, "
-                        f"which does not fit context {context} with generation headroom"
+                try:
+                    cap = safe_generation_cap(
+                        context_length=context,
+                        prompt_tokens=tokens,
+                        requested_max_tokens=context if requested_cap is None else int(requested_cap),
                     )
-                cap = available if requested_cap is None else min(available, int(requested_cap))
+                except ContextWindowExceededError as error:
+                    error.add_note(f"PDBThink render {render_id}")
+                    raise
                 budgets[render_id] = {"render_id": render_id, "input_tokens": tokens, "output_tokens": cap}
             budget = budgets[render_id]
             request = replace(
