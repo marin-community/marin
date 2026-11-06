@@ -850,6 +850,10 @@ class LmDataConfig:
     If False, full causal attention is allowed across packed documents.
     """
 
+    validation_remainder: Literal["drop", "pad"] = "drop"
+    """A continuous-text validation stream's final partial sequence: drop it, or keep it with masked right
+    padding. Dropping loses every subset shorter than one sequence."""
+
     components: dict[str, DatasetComponentBase] = field(default_factory=dict)
     train_weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None = None
 
@@ -992,7 +996,7 @@ class LmDataConfig:
                         cache,
                         eos_id=self.the_tokenizer.eos_token_id,
                         block_cross_document_attention=self.block_cross_document_attention,
-                        remainder="pad" if split == "validation" else "drop",
+                        remainder=self.validation_remainder if split == "validation" else "drop",
                     )
                 if child_datasets:
                     datasets[name] = ConcatDataset(child_datasets)
@@ -1039,7 +1043,7 @@ class LmDataConfig:
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
-                remainder="pad" if split == "validation" else "drop",
+                remainder=self.validation_remainder if split == "validation" else "drop",
             )
 
         return datasets
@@ -1543,7 +1547,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
-            remainder="pad",
+            remainder=config.validation_remainder,
         )
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())
 

@@ -70,6 +70,7 @@ def test_continuous_validation_retains_partial_sequences_without_changing_traini
         components={"tiny": DatasetComponent(format=TextLmDatasetFormat(), pack=False)},
         tokenizer="passthrough",
         vocab_size=32,
+        validation_remainder="pad",
     )
     Pos = hax.Axis("position", 8)
     train = config.build_token_datasets({"tiny": cache}, Pos, split="train")["tiny"].as_sync_dataset()
@@ -123,6 +124,7 @@ def test_validation_corpus_stats_count_padded_sequences(tmp_path, local_gpt2_tok
     config = LmDataConfig(
         components={"tiny": DatasetComponent(cache_dir=str(tmp_path), format=TextLmDatasetFormat(), pack=False)},
         tokenizer=local_gpt2_tokenizer_path,
+        validation_remainder="pad",
     )
 
     stats = count_corpus_sizes(config, seq_len=8)

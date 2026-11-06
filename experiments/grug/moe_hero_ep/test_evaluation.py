@@ -71,6 +71,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             data = LmDataConfig(
                 components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
                 tokenizer=directory,
+                validation_remainder="pad",
             )
             transformer = model.Transformer.init(config, key=jax.random.key(0))
             tokens = jnp.asarray(np.tile([1, 2, 3, 4], (2, 4)).astype(np.int32))
@@ -130,6 +131,7 @@ def test_multilength_evaluation_logs_current_and_ema_metrics_separately(tmp_path
     data = LmDataConfig(
         components={"paloma/tiny": DatasetComponent(cache_dir=cache_path, format=TextLmDatasetFormat())},
         tokenizer=str(tmp_path),
+        validation_remainder="pad",
     )
     mesh = Mesh(
         np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
