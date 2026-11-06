@@ -19,17 +19,20 @@ def test_knotmeter_reuses_viewers_and_separates_reader_and_writer_access() -> No
     original = marina.iam_grants(project, principals).cloud_run_iap[0].iap_grants
     ingest = f"serviceAccount:github-iris@{project}.iam.gserviceaccount.com"
     runtime = f"serviceAccount:marin-knotmeter@{project}.iam.gserviceaccount.com"
-    marina_automation = {
-        f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com",
-        f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com",
-        f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+    actual = {member for grant in viewers for member in grant.members}
+    expected_humans = {
+        member for grant in original for member in grant.members if isinstance(member, GcpEncryptedMember)
     }
-    expected = [(g.role, tuple(m for m in g.members if m not in marina_automation)) for g in original]
-    assert [(g.role, g.members[:-1]) for g in viewers] == expected
+    assert {member for member in actual if isinstance(member, GcpEncryptedMember)} == expected_humans
+    assert {member for member in actual if isinstance(member, str)} == {
+        "domain:openathena.ai",
+        "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
+        ingest,
+    }
+    assert {grant.role for grant in viewers} == {"roles/iap.httpsResourceAccessor"}
     assert grants.cloud_run_iap[0].service_grants[0].members == (
         "serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com",
     )
-    assert all(g.members[-1] == ingest for g in viewers)
     secrets = {s.secret: {m for g in s.grants for m in g.members} for s in grants.secrets}
     assert secrets["cloudsql-knotmeter-reader-password"] == {runtime}
     assert secrets["cloudsql-knotmeter-writer-password"] == {ingest}
