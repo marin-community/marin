@@ -193,12 +193,24 @@ def _sample_indices(
 ) -> list[int]:
     # The pinned task passes eval_doc when both fewshot_split and test_split
     # are None (validation-only tasks), so its sampler draws one extra.
-    exclude = (
-        template.name in {"hellaswag", "winogrande", "triviaqa", "nq_open", "drop", "boolq", "piqa", "truthfulqa_mc2"}
-        and template.num_fewshot > 0
+    excluded_document = (
+        doc
+        if template.name in {"hellaswag", "winogrande", "triviaqa", "nq_open", "drop", "boolq", "piqa", "truthfulqa_mc2"}
+        else None
     )
-    indices = random.sample(range(len(pool)), template.num_fewshot + int(exclude))
-    return [index for index in indices if pool[index] != doc][: template.num_fewshot] if exclude else indices
+    return sample_indices(random, pool, template.num_fewshot, excluded_document)
+
+
+def sample_indices(
+    random: Random,
+    pool: Sequence[Mapping[str, Any]],
+    shots: int,
+    excluded_document: Mapping[str, Any] | None,
+) -> list[int]:
+    """Preserve the extra source-sampler draw when excluding the current document."""
+    exclude = excluded_document is not None and shots > 0
+    indices = random.sample(range(len(pool)), shots + int(exclude))
+    return [index for index in indices if pool[index] != excluded_document][:shots] if exclude else indices
 
 
 def parquet_documents(path: StoragePath) -> Iterator[dict[str, Any]]:

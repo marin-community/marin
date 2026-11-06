@@ -1119,17 +1119,19 @@ def test_resolve_eval_keys_validates_programmatic_selections() -> None:
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    first = replace(
-        EVALS["math500"],
-        judge=EVALS["financebench"].judge,
-        judge_endpoint=EVALS["financebench"].judge_endpoint,
-        judge_api_key=("env:FIRST_EVAL_TOKEN",),
+    first = EVALS["math500"].model_copy(
+        update={
+            "judge": EVALS["financebench"].judge,
+            "judge_endpoint": EVALS["financebench"].judge_endpoint,
+            "judge_api_key": ("env:FIRST_EVAL_TOKEN",),
+        }
     )
-    second = replace(
-        EVALS["math500"],
-        judge=EVALS["financebench"].judge,
-        judge_endpoint=EVALS["financebench"].judge_endpoint,
-        judge_api_key=("env:SECOND_EVAL_TOKEN",),
+    second = EVALS["math500"].model_copy(
+        update={
+            "judge": EVALS["financebench"].judge,
+            "judge_endpoint": EVALS["financebench"].judge_endpoint,
+            "judge_api_key": ("env:SECOND_EVAL_TOKEN",),
+        }
     )
     monkeypatch.setitem(EVALS, "secret-first", first)
     monkeypatch.setitem(EVALS, "secret-second", second)
