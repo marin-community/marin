@@ -524,7 +524,8 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
+        # DIAGNOSTIC: the buffered batches live in device memory, so this sets their footprint and churn.
+        max_buffered_batches=int(os.environ.get("MEMGROW_LOADER_BUFFER", _TRAIN_LOADER_BUFFER_SIZE)),
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
         fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
