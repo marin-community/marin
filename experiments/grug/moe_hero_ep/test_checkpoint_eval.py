@@ -68,7 +68,9 @@ def test_checkpoint_eval_scores_each_checkpoint_at_each_length_with_its_own_qk_m
                 trainer=TrainerConfig(mp=jmp.get_policy("float32")),
                 resources=ResourceConfig.with_cpu(),
                 checkpoints=(
-                    EvalCheckpoint(directory + "/step-17", 1.0), EvalCheckpoint(directory + "/step-23", 1.5),
+                    EvalCheckpoint.single(directory + "/step-17", 1.0),
+                    # A 50/50 merge of two saves of the same weights is those weights.
+                    EvalCheckpoint(((directory + "/step-17", 0.5), (directory + "/step-23", 0.5)), 1.5, label="m"),
                 ),
                 seq_lens=(8, 16),
                 eval_tokens_per_batch=64,

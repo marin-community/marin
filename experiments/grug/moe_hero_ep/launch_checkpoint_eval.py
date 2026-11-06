@@ -86,10 +86,24 @@ CHECKPOINT_EVAL_MAX_RETRIES = 3
 
 @dataclass(frozen=True)
 class EvalCheckpoint:
-    """A checkpoint directory (``step-N``) and the ``qk_mult`` its model trained with."""
+    """The model to score: one checkpoint directory (``step-N``), or a weighted average of several (a weight merge),
+    and the ``qk_mult`` its model trained with. ``sources`` pairs each directory with its weight; the weights sum to 1.
+    """
 
-    path: str
+    sources: tuple[tuple[str, float], ...]
     qk_mult: float
+    label: str = ""
+    """A name for the merge in logs (empty for a single checkpoint)."""
+
+    def __post_init__(self):
+        if not self.sources:
+            raise ValueError("an eval checkpoint needs at least one source")
+        if abs(sum(weight for _, weight in self.sources) - 1.0) > 1e-6 or any(w <= 0 for _, w in self.sources):
+            raise ValueError(f"merge weights must be positive and sum to 1, got {[w for _, w in self.sources]}")
+
+    @classmethod
+    def single(cls, path: str, qk_mult: float) -> "EvalCheckpoint":
+        return cls(((path, 1.0),), qk_mult)
 
 
 @dataclass(frozen=True)
@@ -133,6 +147,35 @@ def load_checkpoint_params(
     return loaded["params"], int(loaded["step"])
 
 
+def merged_params(
+    model_config: GrugModelConfig, checkpoint: EvalCheckpoint, *, mesh: Mesh, mp: jmp.Policy
+) -> tuple[Transformer, int]:
+    """The weighted average of ``checkpoint.sources``' parameters, and the latest source's step. Sources load one at a
+    time into a float32 running sum, so at most two copies of the parameters are held; floating leaves are cast back
+    to their dtype, and any other leaf is taken from the last source."""
+    total, last_step, dtypes = None, 0, None
+    for path, weight in checkpoint.sources:
+        params, step = load_checkpoint_params(model_config, path, mesh=mesh, mp=mp)
+        logger.info("Loaded step %d from %s (merge weight %g)", step, path, weight)
+        last_step = max(last_step, step)
+        if dtypes is None:
+            dtypes = jax.tree.map(lambda x: x.dtype, params)
+            total = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.float32) if _is_float(x) else x, params)
+        total = jax.tree.map(functools.partial(_weighted_sum, weight=weight), total, params)
+        del params  # free this source before loading the next
+    merged = jax.tree.map(lambda t, dtype: t.astype(dtype) if jnp.issubdtype(dtype, jnp.floating) else t, total, dtypes)
+    return merged, last_step
+
+
+def _weighted_sum(total, x, *, weight: float):
+    """``total + weight * x`` in float32 for floating leaves; ``x`` itself for any other leaf."""
+    return total.astype(jnp.float32) + weight * x.astype(jnp.float32) if _is_float(x) else x
+
+
+def _is_float(x) -> bool:
+    return jnp.issubdtype(x.dtype, jnp.floating)
+
+
 def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[str, float]]]:
     """Each checkpoint's step and dropless metrics at every eval length, in ``config.checkpoints`` order (logged at
     each step, which must therefore increase)."""
@@ -162,10 +205,11 @@ def evaluate_checkpoints(config: CheckpointEvalConfig) -> list[tuple[int, dict[s
                 raise ValueError("The data config has no validation sets")
         for checkpoint in config.checkpoints:
             model = dataclasses.replace(config.model, qk_mult=checkpoint.qk_mult)
-            params, step = load_checkpoint_params(model, checkpoint.path, mesh=mesh, mp=config.trainer.mp)
+            params, step = merged_params(model, checkpoint, mesh=mesh, mp=config.trainer.mp)
             if results and step <= results[-1][0]:
-                raise ValueError(f"checkpoint steps must increase: {checkpoint.path} is step {step}")
-            logger.info("Loaded parameters of step %d (qk_mult %g) from %s", step, checkpoint.qk_mult, checkpoint.path)
+                raise ValueError(f"checkpoint steps must increase: {checkpoint.sources[-1][0]} is step {step}")
+            what = f"merge {checkpoint.label}" if checkpoint.label else "parameters"
+            logger.info("Scoring %s of step %d (qk_mult %g)", what, step, checkpoint.qk_mult)
             metrics: dict[str, float] = {}
             for seq_len, evaluator in evaluators.items():
                 with jax_config.enable_pgle(False):
@@ -298,8 +342,21 @@ def build_checkpoint_eval(
     "checkpoints",
     type=(str, click.FloatRange(min=0, min_open=True)),
     multiple=True,
-    required=True,
     help="A checkpoint directory (step-N) and its Q multiplier for all layers; repeat, in increasing step order.",
+)
+@click.option(
+    "--merge-source",
+    "merge_sources",
+    type=(str, click.FloatRange(min=0, min_open=True)),
+    multiple=True,
+    help="Instead of --checkpoint: score one weight merge. A checkpoint directory and its relative weight; repeat "
+    "(weights are normalized to sum to 1).",
+)
+@click.option(
+    "--merge-qk-mult",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="The Q multiplier for the merged model (required with --merge-source).",
 )
 @click.option(
     "--qk-mult-long-scale",
@@ -319,11 +376,26 @@ def build_checkpoint_eval(
 )
 @build_options
 def main(
-    run_id: str, checkpoints: tuple[tuple[str, float], ...], qk_mult_long_scale: float, seq_lens: tuple[int, ...]
+    run_id: str,
+    checkpoints: tuple[tuple[str, float], ...],
+    merge_sources: tuple[tuple[str, float], ...],
+    merge_qk_mult: float | None,
+    qk_mult_long_scale: float,
+    seq_lens: tuple[int, ...],
 ) -> ArtifactStep[HeroThroughputResult]:
+    if bool(checkpoints) == bool(merge_sources):
+        raise click.UsageError("pass either --checkpoint or --merge-source")
+    if merge_sources:
+        if merge_qk_mult is None:
+            raise click.UsageError("--merge-source needs --merge-qk-mult")
+        total = sum(weight for _, weight in merge_sources)
+        sources = tuple((path, weight / total) for path, weight in merge_sources)
+        evaluated = (EvalCheckpoint(sources, merge_qk_mult, label=run_id),)
+    else:
+        evaluated = tuple(EvalCheckpoint.single(path, qk) for path, qk in checkpoints)
     return build_checkpoint_eval(
         run_id=run_id,
-        checkpoints=tuple(EvalCheckpoint(path, qk) for path, qk in checkpoints),
+        checkpoints=evaluated,
         qk_mult_long_scale=qk_mult_long_scale,
         seq_lens=tuple(seq_lens),
     )
