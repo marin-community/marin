@@ -12,7 +12,7 @@
   {
     "user": "group:marin-research#member",
     "relation": "accessor",
-    "object": "scope:iris/job.submit//analysis/"
+    "object": "scope:iris/job.submit//clusters/research-cluster/jobs/analysis/"
   },
   {
     "user": "group:marin-research#member",

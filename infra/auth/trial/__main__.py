@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the actual OpenFGA/OpenBao/Loom proof on CW with synthetic identities."""
+"""Run the service authorization proof on CW with synthetic identities."""
 
 import pulumi
 import pulumi_kubernetes as k8s

@@ -43,8 +43,10 @@ require the sandbox container profile, which withholds native Iris task
 credentials. Shared callers cannot submit a job handed off from another cluster.
 Removing a grant stops
 subsequent operations, but does not itself terminate an already submitted job.
-An operator can still cancel that job using native authority. Shared submission
-of ordinary task profiles needs grant-bound task credentials before it is safe.
+An operator can still cancel that job using native authority. The initial Iris
+adapter does not persist the grant ID on the job or bind task
+credentials to it. Shared submission of ordinary task profiles and delegation
+from a running Loom session need that lifecycle integration before rollout.
 
 Marina resolves named routes to stable app UUIDs and filters its app directory
 through the same checks. Release grants can update a specified UUID, including
@@ -414,17 +416,18 @@ For example, these relationships give a researcher transitive Iris access:
 ```text
 principal:example-researcher member group:marin-team
 group:marin-team#member member group:marin-research
-group:marin-research#member accessor scope:iris/job.submit//analysis/
+group:marin-research#member accessor scope:iris/job.submit//clusters/research-cluster/jobs/analysis/
 ```
 
 A scope object contains the service, action, and canonical resource path. Thus
-`scope:iris/job.submit//analysis/` and `scope:loom/session.create//analysis/`
+`scope:iris/job.submit//clusters/research-cluster/jobs/analysis/` and `scope:loom/session.create//diagnostics/`
 are different objects. The double slash separates the action from an absolute
 resource path. The adapter's action space is `loom.session.create`,
-`iris.job.submit`, `finelog.logs.query`, `finelog.logs.ingest`,
+`iris.job.submit`, `iris.job.read`, `iris.job.cancel`, `finelog.logs.query`, `finelog.logs.ingest`,
 `marina.app.read`, `marina.app.release`, and `cw_s3.credentials.issue`.
-Unknown actions and malformed resources deny access. These declarations do not
-migrate Iris, Finelog, or Marina handlers; Loom is the first integrated service.
+Unknown actions and malformed resources deny access. The application adapter
+table above lists the handlers currently protected by
+shared grants. Other actions remain unavailable to shared callers.
 
 The adapter derives resource parents from canonical server-selected paths and
 supplies only those parent edges as contextual tuples. Callers cannot provide
@@ -453,13 +456,13 @@ permissions:
     resource: /diagnostics/
   - service: iris
     actions: [job.submit]
-    resource: /analysis/
+    resource: /clusters/research-cluster/jobs/analysis/
   - service: cw_s3
     actions: [s3:GetObject]
     resource: s3://example-diagnostics/incidents/
 ```
 
-The trailing slash is part of a bound: `/analysis/` excludes `/analysis-other/`.
+The trailing slash is part of a bound: `/jobs/analysis/` excludes `/jobs/analysis-other/`.
 Encoded paths, traversal, wildcard actions and ambiguous paths are rejected.
 The same `Permission` type describes runtime ceilings and the CoreWeave policy
 compiler's input. It is a capability description, not a second standing-policy

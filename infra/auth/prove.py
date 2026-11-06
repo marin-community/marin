@@ -180,7 +180,7 @@ def prove(
             }
             permissions = [
                 {"service": "loom", "actions": ["session.create"], "resource": "/auth-proof/"},
-                {"service": "iris", "actions": ["job.submit"], "resource": "/proof/"},
+                {"service": "iris", "actions": ["job.submit"], "resource": "/clusters/isolated-proof/jobs/proof/"},
                 storage_permission,
             ]
             auth_port = _free_port()
@@ -299,13 +299,17 @@ def prove(
                 decision = client.post(
                     "/v1/authorize",
                     headers={"Authorization": f"Bearer {iris}"},
-                    json={"audience": "iris", "action": "job.submit", "resource": "/proof/job"},
+                    json={
+                        "audience": "iris",
+                        "action": "job.submit",
+                        "resource": "/clusters/isolated-proof/jobs/proof/job/",
+                    },
                 )
                 assert decision.status_code == 200 and decision.json()["grant_id"] == grant_id
                 for audience, action, resource in [
                     ("loom", "session.create", "/auth-proof/"),
-                    ("iris", "job.submit", "/other/job"),
-                    ("iris", "job.submit", "/proof/private/job"),
+                    ("iris", "job.submit", "/clusters/isolated-proof/jobs/other/job/"),
+                    ("iris", "job.submit", "/clusters/isolated-proof/jobs/proof/private/job/"),
                 ]:
                     assert (
                         client.post(
@@ -324,7 +328,11 @@ def prove(
                     client.post(
                         "/v1/authorize",
                         headers={"Authorization": f"Bearer {iris}"},
-                        json={"audience": "iris", "action": "job.submit", "resource": "/proof/job"},
+                        json={
+                            "audience": "iris",
+                            "action": "job.submit",
+                            "resource": "/clusters/isolated-proof/jobs/proof/job/",
+                        },
                     ).status_code
                     == 403
                 )
@@ -333,7 +341,11 @@ def prove(
                     client.post(
                         "/v1/authorize",
                         headers={"Authorization": f"Bearer {iris}"},
-                        json={"audience": "iris", "action": "job.submit", "resource": "/proof/job"},
+                        json={
+                            "audience": "iris",
+                            "action": "job.submit",
+                            "resource": "/clusters/isolated-proof/jobs/proof/job/",
+                        },
                     ).status_code
                     == 200
                 )
@@ -402,9 +414,13 @@ def prove(
                     ttl_seconds=60,
                 )
                 assert jwt.get_unverified_header(rotated)["kid"] != jwt.get_unverified_header(iris)["kid"]
-                service.authorize(rotated, audience="iris", action="job.submit", resource="/proof/job")
+                service.authorize(
+                    rotated, audience="iris", action="job.submit", resource="/clusters/isolated-proof/jobs/proof/job/"
+                )
                 evidence["checks"].append("Transit signing-key rotation with retained old token verification")
-                service.authorize(iris, audience="iris", action="job.submit", resource="/proof/job")
+                service.authorize(
+                    iris, audience="iris", action="job.submit", resource="/clusters/isolated-proof/jobs/proof/job/"
+                )
                 if loom is not None:
                     evidence["loom"] = run_loom_proof(
                         loom,

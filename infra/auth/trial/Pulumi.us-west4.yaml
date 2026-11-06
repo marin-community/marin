@@ -2,4 +2,4 @@ secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings
 encryptedkey: CiQAKk3j6WsfoElnlSE0kDsSFqGwhAbYb4inkPKSORitwMVCCX0SSQCdtF6iQzLbYIu6n8rE+IyWmwJVlRMElljIvnJAcmj3k+TAvfB149prRH+U6dAmqNFz2f76Un5iiu8QMuKxuPTIrgJ/MSeSIIk=
 config:
   marin-auth-trial:kubernetes_context: marin_US-WEST-04A
-  marin-auth-trial:image: ghcr.io/marin-community/iris-worker@sha256:a1a3a30a5406fcc9ee3a521e338a60f5fa2fd9828b23effe3465f0211cc43ead
+  marin-auth-trial:image: ghcr.io/marin-community/iris-worker@sha256:80703c8bcf75bc300389b6a2407b246dee1b97a7c3e0e30438d3b7eda67ef96b

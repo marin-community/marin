@@ -5,4 +5,4 @@ runtime:
   name: python
   options:
     virtualenv: ../../../.venv
-description: Bounded OpenFGA, OpenBao and native Loom proof with synthetic identities on CW.
+description: Isolated shared-auth proof across Loom, Iris, Marina, Finelog and Grafana on CW.

@@ -79,9 +79,6 @@ def configure_proof(operator: OpenFGAOperator) -> dict:
             }
             for service, action, resource in [
                 ("loom", "session.create", "/auth-proof/"),
-                ("iris", "job.submit", "/proof/"),
-                ("iris", "job.read", "/proof/"),
-                ("iris", "job.cancel", "/proof/"),
                 ("iris", "job.submit", "/clusters/isolated-proof/jobs/proof/"),
                 ("iris", "job.read", "/clusters/isolated-proof/jobs/proof/"),
                 ("iris", "job.cancel", "/clusters/isolated-proof/jobs/proof/"),
@@ -91,11 +88,6 @@ def configure_proof(operator: OpenFGAOperator) -> dict:
                 ("cw_s3", "credentials.issue", "diagnostics"),
             ]
         ),
-        {
-            "user": "group:marin-research#member",
-            "relation": "blocked",
-            "object": scope_object("iris", "job.submit", "/proof/private/"),
-        },
         {
             "user": "group:marin-research#member",
             "relation": "blocked",
