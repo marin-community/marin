@@ -1491,7 +1491,11 @@ async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
         ])),
         vec![
             Arc::new(StringArray::from(vec!["", SOURCE_CLUSTER, ""])),
-            Arc::new(StringArray::from(vec!["/u/empty-1", "/u/set", "/u/empty-2"])),
+            Arc::new(StringArray::from(vec![
+                "/u/empty-1",
+                "/u/set",
+                "/u/empty-2",
+            ])),
         ],
     )
     .unwrap();
@@ -1507,7 +1511,10 @@ async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
 
     assert_eq!(
         hub_column(fx.target_store(), namespace, "root_job_id").await,
-        vec![Some("/u/empty-1".to_string()), Some("/u/empty-2".to_string())],
+        vec![
+            Some("/u/empty-1".to_string()),
+            Some("/u/empty-2".to_string())
+        ],
         "the row written with cluster set never reaches the hub"
     );
     assert_eq!(
