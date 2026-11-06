@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded GB200 diagnostics for the production EP64 MoE hero recipe."""
+"""Bounded GB200 diagnostics for the production MoE hero recipe."""
 
 import dataclasses
 import os
@@ -112,7 +112,7 @@ def build_diagnostic_run(
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build a bounded diagnostic run for the production EP64 hero recipe.
+    """Build a bounded diagnostic run for the production hero recipe.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
@@ -585,7 +585,7 @@ def build_diagnostic_run(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to the hero configuration.",
 )
 @click.option(
     "--log-scaling-n-floor",

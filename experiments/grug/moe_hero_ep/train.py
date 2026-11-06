@@ -462,7 +462,8 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
+# Queued batches live in device memory, 4 MiB per device each at 262K. At 29 s/step, 64 batches is 31 minutes of data.
+_TRAIN_LOADER_BUFFER_SIZE = 64
 # On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
 _TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
@@ -1398,10 +1399,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.add_hook(hook, every=interval)
 
             # Baseline point at the start of the loss curve. The periodic cadence first fires at
-            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # `steps_per_eval` (step 500 on the hero), thus a fresh run gets no early point.
             # These run after the first optimization step, not before it: the first train step
             # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # step 2 instead of first at step 500. `every=1` is the only interval that covers
             # the first step, and `_first_step_only` makes the hook fire once. A resumed run
             # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
             # is 0 there, so the point lands at step 0 on the curve.
