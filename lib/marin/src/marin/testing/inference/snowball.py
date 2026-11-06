@@ -3,6 +3,7 @@
 
 """Snowball model identity and representative inference goldens."""
 
+import dataclasses
 import hashlib
 import json
 from dataclasses import dataclass
@@ -183,6 +184,39 @@ def _prompt_batches(cases: tuple[RepresentativeCase, ...]) -> tuple[PromptBatch,
 
     if remaining_cases:
         raise ValueError(f"Prompts exceed {PROMPT_BUCKET_MAX_TOKENS[-1]} tokens")
+    return tuple(batches)
+
+
+@dataclass(frozen=True)
+class ScoringBatch:
+    """A full ``BATCH_SIZE`` batch whose first ``num_real`` rows are distinct cases; the rest repeat one as filler."""
+
+    batch: PromptBatch
+    num_real: int
+
+    @property
+    def real_cases(self) -> tuple[RepresentativeCase, ...]:
+        return self.batch.cases[: self.num_real]
+
+
+def scoring_batches(
+    cases: tuple[RepresentativeCase, ...], *, max_tokens: int | None, buckets: tuple[int, ...]
+) -> tuple[ScoringBatch, ...]:
+    """Crop each case to its first ``max_tokens`` tokens (``None`` keeps it whole), sort by length, and group into
+    batches padded to the smallest bucket that fits; a short last batch repeats its first case."""
+    cropped = sorted(
+        (dataclasses.replace(case, prompt_token_ids=case.prompt_token_ids[:max_tokens]) for case in cases),
+        key=lambda case: (len(case.prompt_token_ids), case.id),
+    )
+    batches = []
+    for start in range(0, len(cropped), BATCH_SIZE):
+        real = tuple(cropped[start : start + BATCH_SIZE])
+        longest = max(len(case.prompt_token_ids) for case in real)
+        padded = next((bucket for bucket in sorted(buckets) if bucket >= longest), None)
+        if padded is None:
+            raise ValueError(f"No bucket in {buckets} fits a {longest}-token prompt")
+        filler = (real[0],) * (BATCH_SIZE - len(real))
+        batches.append(ScoringBatch(PromptBatch(max_tokens=padded, cases=real + filler), num_real=len(real)))
     return tuple(batches)
 
 

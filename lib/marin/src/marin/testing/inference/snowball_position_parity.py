@@ -15,6 +15,7 @@ positions ran under. The gate bounds each group's p99 and max absolute differenc
 target tokens. Top-1 agreement (the backend's best of vLLM's top-k against vLLM's top-1) is reported, not gated.
 """
 
+import dataclasses
 import hashlib
 import math
 from collections import defaultdict
@@ -226,6 +227,29 @@ def check_reference_matches_prompts(reference: PositionReference, prompts: Mappi
         case = by_id[case_id]
         if case.token_ids_sha256 != token_ids_sha256(token_ids) or case.num_entries != len(token_ids) - 1:
             raise ValueError(f"{case_id}: reference token ids differ from the prompt")
+
+
+def crop_reference(reference: PositionReference, prompts: Mapping[str, Sequence[int]]) -> PositionReference:
+    """The reference for these (possibly cropped) prompts. The model is causal, so a prompt's first ``n`` tokens keep
+    their reference entries ``0..n-2`` unchanged; cases not in ``prompts`` are dropped."""
+    cases = []
+    for case in reference.cases:
+        if case.id not in prompts:
+            continue
+        token_ids = prompts[case.id]
+        entries = len(token_ids) - 1
+        if entries > case.num_entries:
+            raise ValueError(f"{case.id}: {len(token_ids)} tokens exceed the reference")
+        cases.append(
+            dataclasses.replace(
+                case,
+                token_ids_sha256=token_ids_sha256(token_ids),
+                target_logprobs=case.target_logprobs[:entries],
+                top_token_ids=case.top_token_ids[:entries],
+                top_logprobs=case.top_logprobs[:entries],
+            )
+        )
+    return dataclasses.replace(reference, cases=tuple(cases))
 
 
 def reference_id_grid(case: CasePositionReference, width: int = REFERENCE_TOP_K) -> np.ndarray:

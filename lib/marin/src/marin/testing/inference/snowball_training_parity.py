@@ -10,14 +10,19 @@ the model ``train_lm`` builds, at every position of the same 64 representative p
   the Snowball export, ``use_hf_model_config``, ``FrozenParameterAdaptorConfig(("router_bias",))``,
   ``p=f32,c=bf16`` and ``fp32_fields=("router_bias",)``, on the recipe's expert-parallel mesh shrunk to one
   H100x8 host (data 2 x expert 4);
-- ``build_training_state`` repeats ``train_lm.main``'s inline HF-config block (``preserve_hf_runtime_settings``),
-  then calls ``train_lm``'s own ``_load_lm_model_from_configured_source`` and ``Trainer.initial_state``;
+- ``build_training_state`` calls ``train_lm``'s own ``hf_initialization``, ``_load_lm_model_from_configured_source``
+  and ``Trainer.initial_state``;
 - the forward runs on the view the trainer's loss sees, ``trainer.mp.cast_to_compute(state.model)`` under the
   compute mapping (``WrappedLossFunction``'s cast), through ``activations_with_stats`` with every token valid,
   which dispatches exactly as the loss's ``activations`` and also counts MoE drops;
 - log-probs come from the training loss itself: ``maybe_fused_next_token_loss`` unreduced, as
   ``compute_next_token_loss`` calls it (``loss_dtype=float32``, no z-loss), once for the actual next token and once
   per vLLM top-k rank with that rank's ids as the targets.
+
+Every prompt is scored on its first ``training_sequence_length`` tokens (the recipe's 8192) with the recipe's
+attention, ``torch_order``, and these positions are gated. The model is causal, so the cropped prompt's reference is
+the first entries of the stored one. Prompts longer than that are also scored whole with FA4, in ``_fa4_full``
+groups that are reported, not gated.
 
 Forward only: no update and no export. ``TrainingForwardSettings`` holds the recipe's precision fixes; only the
 all-on defaults are gated, and any other setting reports its results for an ablation.
@@ -41,7 +46,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from levanter.adaptor import FrozenParameterAdaptorConfig
 from levanter.data.text.datasets import LmDataConfig
-from levanter.main.train_lm import TrainLmConfig, _load_lm_model_from_configured_source, preserve_hf_runtime_settings
+from levanter.main.train_lm import TrainLmConfig, _load_lm_model_from_configured_source, hf_initialization
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.tracker import NoopConfig
@@ -51,18 +56,22 @@ from levanter.utils.mesh import MeshConfig
 
 from marin.testing.inference.snowball import (
     BATCH_SIZE,
+    PROMPT_BUCKET_MAX_TOKENS,
     SNOWBALL,
-    PromptBatch,
+    ScoringBatch,
     pad_prompt_batch,
     read_prompt_fixture,
     read_representative_goldens,
     read_vllm_position_reference,
+    scoring_batches,
 )
 from marin.testing.inference.snowball_backend_parity_jobs import GPU_COUNT, with_attention_implementation
 from marin.testing.inference.snowball_position_parity import (
+    GroupStats,
     ScoredPositions,
     check_reference_matches_prompts,
     compare_positions,
+    crop_reference,
     dispatch_failures,
     expected_groups,
     logprob_failures,
@@ -79,13 +88,14 @@ FP32_FIELDS = ("router_bias",)
 FROZEN_FIELDS = ("router_bias",)
 TRAINING_PRECISION = "p=f32,c=bfloat16,o=f32"
 RECIPE_ATTENTION = "torch_order"
+"""The attention the recipe trains with at its full length: ``sft.py`` takes it as an explicit argument, and the
+reviewed runtime receipt (``runtime_recipe.py``; lr0-r8's ``runtime-recipe-receipt.json``) sets ``torch_order``."""
 RECIPE_TRAINING_SEQUENCE_LENGTH = 8192
-"""The identity SFT's training length. ``torch_order`` materializes S x S FP32 scores (20 heads); the default
-``TORCH_ORDER_MAX_TOKENS`` of 4096 does not reach it."""
-TORCH_ORDER_MAX_TOKENS = 4096
-"""Prompt buckets above this run ``LONG_CONTEXT_ATTENTION``: a 16K row's torch-order scores are about 21 GB per
-layer. The prompt buckets are 256, 1K, 4K, 16K and 32K tokens, so no bucket sits at the recipe's 8192."""
-LONG_CONTEXT_ATTENTION = "gpu_fa4_cute"
+"""``SEQUENCE_LENGTH`` in ``sft.py``. ``torch_order`` materializes S x S FP32 scores for each of Snowball's 20 query
+heads: at 8192 with one row per device that is 20 x 8192^2 x 4 B = 5.4 GB per layer, plus its BF16 weights (2.7 GB),
+for the one layer the forward holds at a time (an estimate, not measured)."""
+FULL_LENGTH_ATTENTION = "gpu_fa4_cute"
+FULL_LENGTH_SUFFIX = "_fa4_full"
 PAD_ID = 128001
 """Snowball's EOS/PAD. Padding is causally invisible to real positions and its scores are discarded."""
 SEED = 0
@@ -95,8 +105,9 @@ SEED = 0
 class TrainingForwardSettings:
     """The recipe's precision fixes, each switchable for the threshold ablation. Defaults are the recipe.
 
-    ``train_lm`` refuses ``router_dot_fp32`` without the FP32 router bias, so the ``fp32_router_bias=False`` arm
-    also needs ``router_dot_fp32=False``.
+    The ablation arms, named by ``arm``: ``capacity off`` (``moe_capacity_factor=1.0``), ``dot off``, ``combine off``,
+    ``activations off``, ``attention <name>``, and ``bias+dot off``: ``train_lm`` refuses ``router_dot_fp32``
+    without the FP32 router bias, so turning off ``fp32_router_bias`` also needs ``router_dot_fp32=False``.
     """
 
     moe_capacity_factor: float = float(EXPERT_AXIS)
@@ -105,11 +116,29 @@ class TrainingForwardSettings:
     router_combine_fp32: bool = True
     fp32_activations: bool = True
     attention_implementation: str = RECIPE_ATTENTION
-    torch_order_max_tokens: int = TORCH_ORDER_MAX_TOKENS
+    training_sequence_length: int = RECIPE_TRAINING_SEQUENCE_LENGTH
 
     @property
     def gated(self) -> bool:
         return self == TrainingForwardSettings()
+
+    @property
+    def arm(self) -> str:
+        """``recipe`` for the defaults, an ablation arm's name when one fix differs, else ``custom``."""
+        recipe = TrainingForwardSettings()
+        changed = {
+            field.name for field in dataclasses.fields(self) if getattr(self, field.name) != getattr(recipe, field.name)
+        }
+        names = {
+            frozenset(): "recipe",
+            frozenset({"moe_capacity_factor"}): "capacity off",
+            frozenset({"router_dot_fp32"}): "dot off",
+            frozenset({"fp32_router_bias", "router_dot_fp32"}): "bias+dot off",
+            frozenset({"router_combine_fp32"}): "combine off",
+            frozenset({"fp32_activations"}): "activations off",
+            frozenset({"attention_implementation"}): f"attention {self.attention_implementation}",
+        }
+        return names.get(frozenset(changed), "custom")
 
 
 def training_mesh() -> MeshConfig:
@@ -160,23 +189,14 @@ def _router_biases(model: SnowballLMHeadModel) -> list[jax.Array]:
 
 
 def build_training_state(config: TrainLmConfig, trainer: Trainer) -> TrainerState:
-    """``train_lm.main``'s model setup, inside ``trainer``'s context.
+    """``train_lm.main``'s model setup, inside ``trainer``'s context, with ``train_lm``'s own functions.
 
-    The HF-config block is inline in ``main`` and repeated here; the load and the trainer state are ``train_lm``'s
-    own functions. The optimizer is ``optax.identity()``: the recipe's Adam state (two FP32 copies of 67B
-    parameters) does not fit one node, and a forward does not read it.
+    The trainer's optimizer is ``optax.identity()``: the recipe's Adam state (two FP32 copies of 67B parameters)
+    does not fit one node, and a forward does not read it.
     """
     tokenizer = config.data.the_tokenizer
-    assert isinstance(config.model, SnowballConfig) and isinstance(config.initialize_from_hf, str)
-    converter = config.model.hf_checkpoint_converter()
-    converter.warn_if_tokenizer_mismatch(tokenizer)
-    converter = converter.replaced(reference_checkpoint=config.initialize_from_hf, tokenizer=tokenizer)
-    config = dataclasses.replace(
-        config,
-        model=preserve_hf_runtime_settings(
-            converter.config_from_hf_config(converter.default_hf_config), config.model, config.trainer.fp32_fields
-        ),
-    )
+    converter, model_config = hf_initialization(config, tokenizer)
+    config = dataclasses.replace(config, model=model_config)
     _, _, model_key, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 4)
     Vocab = round_axis_for_partitioning(Axis("vocab", len(tokenizer)), trainer.parameter_axis_mapping)
     model = _load_lm_model_from_configured_source(
@@ -245,15 +265,16 @@ def _scores(model: SnowballLMHeadModel, tokens: jax.Array, rank_ids: jax.Array):
 def _score_batch(
     scores,
     model: SnowballLMHeadModel,
-    batch: PromptBatch,
+    scoring_batch: ScoringBatch,
     reference_grids: dict[str, np.ndarray],
 ) -> tuple[dict[str, ScoredPositions], np.ndarray, np.ndarray]:
+    batch = scoring_batch.batch
     token_ids, _ = pad_prompt_batch(batch, PAD_ID)
     width = next(iter(reference_grids.values())).shape[1]
     reference = np.full((BATCH_SIZE, batch.max_tokens, width), -1, dtype=np.int32)
     for row, case in enumerate(batch.cases):
         # Grid position p predicts token p + 1: reference entry p.
-        reference[row, : len(case.prompt_token_ids) - 1] = reference_grids[case.id]
+        reference[row, : len(case.prompt_token_ids) - 1] = reference_grids[case.id][: len(case.prompt_token_ids) - 1]
     # next_token_ids shifts targets left by one, so the id scored at position p sits at p + 1. Missing ids score
     # token 0 and are masked back to NaN below.
     rank_ids = np.zeros((width, BATCH_SIZE, batch.max_tokens), dtype=np.int32)
@@ -268,9 +289,39 @@ def _score_batch(
             target_logprobs=target[row, : len(case.prompt_token_ids) - 1],
             reference_logprobs=ranks[row, : len(case.prompt_token_ids) - 1],
         )
-        for row, case in enumerate(batch.cases)
+        for row, case in enumerate(scoring_batch.real_cases)
     }
     return scored, sender, receiver
+
+
+def _score_pass(
+    scores,
+    model: SnowballLMHeadModel,
+    batches: tuple[ScoringBatch, ...],
+    reference_grids: dict[str, np.ndarray],
+    label: str,
+    started: float,
+) -> tuple[dict[str, ScoredPositions], np.ndarray, np.ndarray]:
+    scored: dict[str, ScoredPositions] = {}
+    sender = receiver = np.zeros(model.config.num_layers, dtype=np.int64)
+    for index, scoring_batch in enumerate(batches):
+        batch_scores, batch_sender, batch_receiver = _score_batch(scores, model, scoring_batch, reference_grids)
+        scored |= batch_scores
+        sender, receiver = sender + batch_sender, receiver + batch_receiver
+        logger.info(
+            "%s batch %d/%d: max_tokens=%d attention=%s (%.0fs)",
+            label,
+            index + 1,
+            len(batches),
+            scoring_batch.batch.max_tokens,
+            model.config.attention_implementation,
+            time.time() - started,
+        )
+    return scored, sender, receiver
+
+
+def _suffixed(stats: dict[str, GroupStats], suffix: str) -> dict[str, GroupStats]:
+    return {f"{group}{suffix}": group_stats for group, group_stats in stats.items()}
 
 
 def score_training_forward_against_vllm_positions(settings: TrainingForwardSettings = TrainingForwardSettings()) -> dict:
@@ -287,60 +338,72 @@ def score_training_forward_against_vllm_positions(settings: TrainingForwardSetti
     check_reference_matches_prompts(reference, {case.id: case.prompt_token_ids for case in prompt_fixture.cases})
     reference_grids = {case.id: reference_id_grid(case, reference.metadata.top_k) for case in reference.cases}
 
+    length = settings.training_sequence_length
+    cropped_batches = scoring_batches(
+        prompt_fixture.cases,
+        max_tokens=length,
+        buckets=(*(bucket for bucket in PROMPT_BUCKET_MAX_TOKENS if bucket < length), length),
+    )
+    long_cases = tuple(case for case in prompt_fixture.cases if len(case.prompt_token_ids) > length)
+    full_batches = scoring_batches(long_cases, max_tokens=None, buckets=PROMPT_BUCKET_MAX_TOKENS) if long_cases else ()
+
     config = training_lm_config(settings)
     assert config.trainer.data_axis_size == BATCH_SIZE, config.trainer.data_axis_size
     started = time.time()
+    logger.info("Training-forward arm %r: %s", settings.arm, dataclasses.asdict(settings))
 
     def loss_function(model, example, *, key=None):
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
-    attention_by_case: dict[str, str] = {}
-    scored: dict[str, ScoredPositions] = {}
-    sender = receiver = None
     with Trainer(config.trainer, optax.identity(), loss_function, add_default_hooks=False) as trainer:
         state = build_training_state(config, trainer)
         view = training_compute_view(trainer, state)
         # Forward only: the FP32 master copy is not read again.
         del state
-        long_view = with_attention_implementation(view, LONG_CONTEXT_ATTENTION)
         logger.info("Built the training compute view in %.0fs: %s", time.time() - started, view.config)
         with hax.axis_mapping(trainer.compute_axis_mapping):
             scores = jax.jit(_scores)
-            for index, batch in enumerate(prompt_fixture.batches):
-                model = view if batch.max_tokens <= settings.torch_order_max_tokens else long_view
-                batch_scores, batch_sender, batch_receiver = _score_batch(scores, model, batch, reference_grids)
-                scored |= batch_scores
-                attention = str(model.config.attention_implementation)
-                attention_by_case |= {case.id: attention for case in batch.cases}
-                sender = batch_sender if sender is None else sender + batch_sender
-                receiver = batch_receiver if receiver is None else receiver + batch_receiver
-                logger.info(
-                    "Training forward batch %d/%d: max_tokens=%d attention=%s (%.0fs)",
-                    index + 1,
-                    len(prompt_fixture.batches),
-                    batch.max_tokens,
-                    attention,
-                    time.time() - started,
-                )
-    assert sender is not None and receiver is not None
+            cropped, sender, receiver = _score_pass(
+                scores, view, cropped_batches, reference_grids, f"cropped to {length}", started
+            )
+            full_view = with_attention_implementation(view, FULL_LENGTH_ATTENTION)
+            full, full_sender, full_receiver = _score_pass(
+                scores, full_view, full_batches, reference_grids, "full length", started
+            )
 
-    stats = compare_positions(reference, scored, attention_by_case)
+    cropped_reference = crop_reference(
+        reference, {case.id: case.prompt_token_ids for batch in cropped_batches for case in batch.real_cases}
+    )
+    stats = compare_positions(
+        cropped_reference, cropped, dict.fromkeys(cropped, str(view.config.attention_implementation))
+    )
+    if full:
+        full_reference = crop_reference(reference, {case.id: case.prompt_token_ids for case in long_cases})
+        stats |= _suffixed(
+            compare_positions(full_reference, full, dict.fromkeys(full, FULL_LENGTH_ATTENTION)), FULL_LENGTH_SUFFIX
+        )
     # TODO: layer-0 expert-route agreement with vLLM needs vLLM's per-position routes, which the reference does not
     # hold; add them to the reference format before gating routes here.
     failures = [
-        f"logprobs: {failure}" for failure in logprob_failures(stats, expected_groups=expected_groups(reference))
+        f"logprobs: {failure}" for failure in logprob_failures(stats, expected_groups=expected_groups(cropped_reference))
     ]
     failures += [f"dispatch: {failure}" for failure in dispatch_failures(sender.tolist(), receiver.tolist())]
     report = {
+        "arm": settings.arm,
         "settings": dataclasses.asdict(settings),
         "gated": settings.gated,
-        "recipe_training_sequence_length": RECIPE_TRAINING_SEQUENCE_LENGTH,
         "reference": dataclasses.asdict(reference.metadata),
         "groups": {group: dataclasses.asdict(group_stats) for group, group_stats in stats.items()},
         "dispatch": {"sender_dropped": sender.tolist(), "receiver_dropped": receiver.tolist()},
+        f"dispatch{FULL_LENGTH_SUFFIX}": {
+            "sender_dropped": full_sender.tolist(),
+            "receiver_dropped": full_receiver.tolist(),
+        },
         "failures": failures,
     }
-    logger.info("Snowball training-forward parity report: %s", report)
+    logger.info("Snowball training-forward parity report, arm %r: %s", settings.arm, report)
     if settings.gated:
         assert not failures, "Snowball training forward differs from vLLM:\n" + "\n".join(failures)
+    else:
+        logger.info("Arm %r is an ablation; %d failures reported, not gated", settings.arm, len(failures))
     return report

@@ -76,5 +76,8 @@ Notes:
 - The test skips until `VLLM_POSITION_REFERENCE_SHA256` in `lib/marin/src/marin/testing/inference/snowball.py`
   names a staged reference. `vllm/generate_snowball_position_reference.py --output <uri> --run` writes one and
   logs its sha256 and URL.
-- Prompt buckets above 4,096 tokens run FA4 instead of `torch_order`; each group reports its attention.
-- `TrainingForwardSettings` switches each precision fix for threshold ablations; only the defaults are gated.
+- The gate scores every prompt cropped to its first 8,192 tokens, the SFT training length, under `torch_order`,
+  the recipe's attention. Prompts longer than that are also scored whole under FA4 and reported as `_fa4_full`
+  groups, not gated.
+- `TrainingForwardSettings` switches each precision fix for threshold ablations (arms such as `bias+dot off`);
+  only the defaults are gated.

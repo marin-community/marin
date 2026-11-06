@@ -19,12 +19,14 @@ from marin.testing.inference.snowball_position_parity import (
     case_reference_from_prompt_logprobs,
     check_reference_matches_prompts,
     compare_positions,
+    crop_reference,
     dispatch_failures,
     expected_groups,
     logprob_failures,
     parse_position_reference,
     position_reference_payload,
     reference_id_grid,
+    token_ids_sha256,
 )
 
 METADATA = ReferenceMetadata(
@@ -202,6 +204,50 @@ def test_top1_disagreement_inside_a_near_tie_is_counted_separately():
 
     stats = compare_positions(reference, scored, _attention(reference))["math"]
     assert (stats.top1_agree, stats.top1_near_tie, stats.top1_disagree) == (0, 1, 0)
+
+
+def test_crop_reference_keeps_the_prefix_entries_of_each_cropped_prompt():
+    reference = _reference({"code-humaneval-01": [1, 7, 8, 9, 7], "long-longbench-01": [1, 8, 9]})
+
+    cropped = crop_reference(reference, {"code-humaneval-01": [1, 7, 8]})
+
+    (case,) = cropped.cases
+    (full,) = (c for c in reference.cases if c.id == "code-humaneval-01")
+    assert cropped.metadata == reference.metadata
+    assert case.num_entries == 2
+    assert case.target_logprobs == full.target_logprobs[:2]
+    assert case.top_token_ids == full.top_token_ids[:2]
+    assert case.top_logprobs == full.top_logprobs[:2]
+    assert case.token_ids_sha256 == token_ids_sha256([1, 7, 8])
+    check_reference_matches_prompts(cropped, {"code-humaneval-01": [1, 7, 8]})
+    with pytest.raises(ValueError, match="exceed the reference"):
+        crop_reference(reference, {"long-longbench-01": [1, 8, 9, 7]})
+
+
+def _case(case_id: str, length: int) -> snowball.RepresentativeCase:
+    return snowball.RepresentativeCase(id=case_id, prompt_token_ids=tuple(range(length)), top_logprobs=())
+
+
+def test_scoring_batches_crop_sort_and_pad_to_the_smallest_bucket():
+    cases = tuple(_case(f"case-{i:02d}", length) for i, length in enumerate([30, 5, 12, 100, 7, 9, 8, 6, 11, 70]))
+
+    batches = snowball.scoring_batches(cases, max_tokens=64, buckets=(16, 64))
+
+    assert [b.num_real for b in batches] == [snowball.BATCH_SIZE, 2]
+    assert [b.batch.max_tokens for b in batches] == [64, 64]
+    first, last = batches
+    assert [len(c.prompt_token_ids) for c in first.real_cases] == [5, 6, 7, 8, 9, 11, 12, 30]
+    # Both long cases are cropped to their first 64 tokens; a tie in length sorts by id.
+    assert [c.id for c in last.real_cases] == ["case-03", "case-09"]
+    assert all(c.prompt_token_ids == tuple(range(64)) for c in last.real_cases)
+    # Filler rows repeat the first real case and are not reported as real.
+    assert len(last.batch.cases) == snowball.BATCH_SIZE
+    assert set(last.batch.cases[2:]) == {last.real_cases[0]}
+
+    (short,) = snowball.scoring_batches(cases[1:3], max_tokens=None, buckets=(16, 64))
+    assert short.batch.max_tokens == 16 and short.num_real == 2
+    with pytest.raises(ValueError, match="No bucket"):
+        snowball.scoring_batches(cases, max_tokens=None, buckets=(16, 64))
 
 
 def test_dispatch_failures_report_every_dropping_layer():
