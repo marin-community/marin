@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+# A failed verifier reset raises MachineTerminated and discards the lease. Rollout
+# interruption then selects Transient at startup or Restart during grading, never a score.
+
 # Lowering rejects image-free Linux process requirements with ValueError: an unsupported
 # task contract needs repair, not a retry on the same Iris host.
 

@@ -65,7 +65,10 @@ async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: 
                 if edge is None:
                     raise ValueError(f"No transition for {stage}/{type(result).__name__}")
                 target, adapt = edge
+                previous_round = wp.round
                 wp = adapt(wp, result)
+                if wp.round != previous_round:
+                    await resources.close_round()
                 refs = {"round": str(wp.round), "terminal": wp.terminal or ""}
                 await ctx.emit(StageCompleted(stage, config_digest, type(result).__name__, refs))
                 following = target(wp) if callable(target) else target
@@ -83,7 +86,10 @@ async def run_workpiece(proposal: TaskProposal, config: ForgeConfig, resources: 
             decisions=(*wp.decisions, Incomplete(tuple(f"restart: {reason}" for reason in reasons(error)))),
         )
     finally:
-        await ctx.drain()
+        try:
+            await ctx.drain()
+        finally:
+            await resources.close_round()
     if interrupted:
         await log.record(StageCompleted(stage, config_digest, "Held", {"round": str(wp.round), "terminal": "held"}))
     return wp

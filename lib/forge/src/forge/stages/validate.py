@@ -69,6 +69,8 @@ def failure_reasons(error: BaseException) -> tuple[str, ...]:
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
     try:
         grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
+        if grade_cause(grade, spec.task) is None and claim.expected.met_by(grade):
+            grade = await ctx.emit(GradeCandidate(spec, claim.candidate, fresh_verifier=True))
     except Restart as error:
         return AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False, restart_cause(error))
     cause = grade_cause(grade, spec.task)

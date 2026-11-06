@@ -16,6 +16,7 @@ from forge.resources.grading import GradingResource
 from forge.resources.ids import Ids
 from forge.resources.inference import InferenceClient
 from forge.resources.rollouts import RolloutResource
+from forge.resources.verifier import VerifierPool
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,12 @@ class Resources:
     factories: Mapping[str, MachineFactory]
     web: WebClient
     role_inference: Mapping[str, InferenceClient] = field(default_factory=dict)
+
+    verifiers: VerifierPool | None = None
+
+    async def close_round(self) -> None:
+        if self.verifiers is not None:
+            await self.verifiers.close()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "factories", MappingProxyType(dict(self.factories)))

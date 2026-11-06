@@ -40,6 +40,7 @@ from forge.resources.grading import GradingResource
 from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference, InferenceRequest
 from forge.resources.rollouts import Engine, RolloutResource
+from forge.resources.verifier import VerifierPool
 from forge.wiring import build_config
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)
@@ -172,8 +173,22 @@ def needs_revision(result: ValidationResult, band: BandRules) -> Decision:
 
 
 async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
+    class RoundPool(VerifierPool):
+        def __init__(self) -> None:
+            super().__init__(5)
+            self.closes = 0
+
+        @override
+        async def close(self) -> None:
+            self.closes += 1
+            await super().close()
+
+    pool = RoundPool()
     settings = replace(config("S"), review=needs_revision)
-    wp = await run_workpiece(proposal, settings, resources(Envs(), (*script("S"), *script("S"))), EventLog())
+    wp = await run_workpiece(
+        proposal, settings, replace(resources(Envs(), (*script("S"), *script("S"))), verifiers=pool), EventLog()
+    )
+    assert pool.closes == 2  # modification ends round zero; terminal abandonment ends round one
     assert wp.terminal == Terminal.ABANDONED
     assert wp.round == 1
     assert len(wp.decisions) == 2

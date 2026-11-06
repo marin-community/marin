@@ -28,6 +28,7 @@ class GradeCandidate(Event[GradeResult]):
     result_type: ClassVar[object] = GradeResult
     spec: TaskRolloutSpec
     candidate: Candidate
+    fresh_verifier: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,7 @@ def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mappin
 class GradingResource:
     engine: Engine
     config_digest: str
+    fresh_engine: Engine | None = None
 
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("grading", self.config_digest, ReplayPolicy.CACHE)
@@ -98,9 +100,10 @@ class GradingResource:
         spec = spec.model_copy(
             update={"trace": TraceMode.MESSAGES, "limits": spec.limits.model_copy(update={"max_turns": len(turns)})}
         )
+        engine = self.fresh_engine if event.fresh_verifier and self.fresh_engine is not None else self.engine
         for attempt in range(2):
             try:
-                result = await self.engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
+                result = await engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
             except RolloutInterrupted as error:
                 raise interruption(error) from error
             if result.grade.failure != GradingFailure.TIMEOUT or attempt == 1:

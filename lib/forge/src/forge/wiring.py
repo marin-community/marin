@@ -58,6 +58,7 @@ from forge.resources.sandbox.factories import (
     MachineHost,
     shellsim_factory,
 )
+from forge.resources.verifier import VerifierEngine, VerifierFactory, VerifierPool
 from forge.stages.rules import default_review
 
 
@@ -136,7 +137,10 @@ def build_resources(
 ) -> Resources:
     settings = lowering_settings(policy)
     command_timeout = policy.setting("solver.command_timeout", float)
-    engine = rollout_engine(factories, command_timeout=command_timeout)
+    verifiers = VerifierPool(settings.limits.cleanup_timeout)
+    grading_factories = {f"verifier:{key}": VerifierFactory(verifiers, factory) for key, factory in factories.items()}
+    base_engine = rollout_engine({**factories, **grading_factories}, command_timeout=command_timeout)
+    engine = VerifierEngine(base_engine)
     execution = digest((settings, command_timeout))
     provider = {key: value for key, value in policy.entries.items() if key.startswith("provider.")}
     sampling = TypeAdapter(LLMPolicy).validate_python(
@@ -154,12 +158,13 @@ def build_resources(
             partial(solver_turn, clients["solver"], sampling),
             digest((provider, clients["solver"].model, sampling, execution)),
         ),
-        GradingResource(engine, execution),
+        GradingResource(engine, execution, VerifierEngine(base_engine, fresh=True)),
         Clock(),
         Ids(),
         factories,
         web,
         inference,
+        verifiers,
     )
 
 
