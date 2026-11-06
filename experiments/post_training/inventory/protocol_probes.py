@@ -3,7 +3,7 @@
 
 """Evaluate the agent protocol probes against a checkpoint served by vLLM on one 8xH100 node.
 
-The probes are the ``protocol-probes`` dataset of ``taskcompendium.examples.protocol_probes``, published
+The probes are the ``protocol-probes`` dataset of ``task_curation.datasets.protocol_probes``, published
 as canonical TaskSpec rows whose answer file is graded from the verifyit lock of an environment with no
 extra packages. The run starts from the quick RL loop's recipe and switches SkyRL to its
 evaluation-only entrypoint: it serves the model and runs the probes through ShellSim task machines, the
@@ -40,11 +40,6 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.machine import Backend, NetworkPolicy
-from taskcompendium.examples.protocol_probes import (
-    PROBE_DATASET,
-    ProtocolCheck,
-    probe_tasks,
-)
 from taskcompendium.models import SCHEMA_VERSION, CommandSemantics, EnvironmentRequirements
 from taskcompendium.runtime.local import LOCK_FILE
 from zephyr.writers import write_parquet_file
@@ -58,6 +53,11 @@ from experiments.post_training.inventory.train_quick_loop import (
     MODEL_URI,
     MODEL_VERSION,
     training_recipe,
+)
+from experiments.post_training.task_curation.datasets.protocol_probes import (
+    PROBE_DATASET,
+    ProtocolCheck,
+    probe_tasks,
 )
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import environment_artifact
