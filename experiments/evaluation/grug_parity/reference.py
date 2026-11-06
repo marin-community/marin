@@ -9,7 +9,7 @@ import inspect
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import draccus
@@ -125,8 +125,18 @@ def snowball_logprobs(model: SnowballLMHeadModel, tokens: hax.NamedArray, positi
     return jax.nn.log_softmax(logits.astype(jnp.float32), axis=-1)
 
 
-def score_hero(predictions: tuple[Prediction, ...], request: dict, config: GrugModelConfig) -> np.ndarray:
-    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+@eqx.filter_jit
+def hero_logits_and_overflow(model: Transformer, tokens: jax.Array, positions: jax.Array):
+    hidden, stats = model(tokens)
+    last = hidden.at[jnp.arange(tokens.shape[0]), positions].get(out_sharding=P())
+    logits = jnp.einsum("bh,hv->bv", last, model.output_proj, preferred_element_type=jnp.float32)
+    return jax.sharding.reshard(logits, P()), stats["capacity_overflow_per_layer"]
+
+
+def score_hero(
+    predictions: tuple[Prediction, ...], request: dict, config: GrugModelConfig, expert_parallel_size: int = 1
+) -> np.ndarray:
+    mesh = compact_grug_mesh(expert_axis_size=expert_parallel_size, replica_axis_size=1)
     batch_size = jax.device_count()
     rows = []
     with jax.set_mesh(mesh):
@@ -137,7 +147,11 @@ def score_hero(predictions: tuple[Prediction, ...], request: dict, config: GrugM
             tokens, positions = padded_batch(batch, batch_size)
             ids = jax.make_array_from_callback(tokens.shape, sharding, lambda index, value=tokens: value[index])
             last = jax.make_array_from_callback(positions.shape, sharding, lambda index, value=positions: value[index])
-            logits = next_logits(model, ids, last)
+            if expert_parallel_size > 1:
+                logits, overflow = hero_logits_and_overflow(model, ids, last)
+                assert not np.any(np.asarray(overflow)), "Reference dropped MoE assignments"
+            else:
+                logits = next_logits(model, ids, last)
             rows.append(np.asarray(jax.nn.log_softmax(logits.astype(jnp.float32), axis=-1))[: len(batch)])
     return np.concatenate(rows)
 
@@ -184,6 +198,7 @@ def main() -> None:
     parser.add_argument("--revision")
     parser.add_argument("--attention", required=True)
     parser.add_argument("--moe", default="sonic")
+    parser.add_argument("--expert-parallel-size", type=int, default=1)
     parser.add_argument("--single-host", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -196,7 +211,14 @@ def main() -> None:
         assert args.export_manifest is not None
         request = json.loads(args.export_manifest.read_text())["request"]
         config = hero_config(request, args.attention, args.moe)
-        scores = score_hero(predictions, request, config)
+        if args.expert_parallel_size > 1:
+            # A reference must evaluate every selected expert, as the local path does.
+            config = replace(
+                config,
+                capacity_factor=max(config.capacity_factor, float(args.expert_parallel_size)),
+                report_capacity_overflow=True,
+            )
+        scores = score_hero(predictions, request, config, args.expert_parallel_size)
         weights = request["checkpoint"]
     else:
         assert args.weights and args.revision
@@ -216,6 +238,7 @@ def main() -> None:
             "node": os.environ.get("IRIS_NODE_NAME"),
             "bundle_id": os.environ.get("IRIS_BUNDLE_ID"),
             "process_count": jax.process_count(),
+            "expert_parallel_size": args.expert_parallel_size if args.model == "hero" else None,
             "precision": {
                 "weights": "bfloat16",
                 "hidden": "bfloat16",
