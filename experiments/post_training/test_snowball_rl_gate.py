@@ -1498,6 +1498,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         resumed_status = status(preset_name, ["--layout", "p40", "--resume-from", f"{step.name}@{step.version}"])
         assert resumed_status["runs"][0]["state"] == "succeeded"
         assert "rl_progress_url" not in resumed_status["runs"][0]
+        # A cached receipt for the original source belongs to its earlier native attempt.
+        step.run(replace(config, attempt_id="another-native-attempt"))
+        stale_link = status(preset_name, ["--layout", "p40"])
+        assert stale_link["runs"][0]["state"] == "succeeded"
+        assert "rl_progress_url" not in stale_link["runs"][0]
     if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0

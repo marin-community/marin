@@ -378,7 +378,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
             write_json(root / "terminal.json", {"config": launch, "result": result})
         if not missing_receipt:
             write_json(root / "resolved-launch.yaml", {"config": launch})
-        native_run = replace(result_run, tokenizer_uri="tokenizer", tokenizer_revision="revision")
+        native_run = result_run.model_copy(update={"tokenizer_uri": "tokenizer", "tokenizer_revision": "revision"})
         config = SkyRLRunConfig(
             launch_config_yaml=yaml.safe_dump(launch),
             run_id=launch["run"].get("id", name),
