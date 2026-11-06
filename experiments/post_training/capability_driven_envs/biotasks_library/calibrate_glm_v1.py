@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Self
 
 import fsspec
+import httpx
 import openai
 from fray.types import ResourceConfig
 from iris.client.client import iris_ctx
@@ -80,6 +81,10 @@ class CalibrationConfig:
     api_key_env: str = GLM_BULK_TOKEN_ENV
     model: str = GLM_MODEL
     max_retries: int = 1
+    provider_tag: str | None = None
+    provider_name: str | None = None
+    context_window: int = 262144
+    campaign_id: str = "biotasks/combined/v1/calibration/glm-5.3-openai-shellsim-v2"
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,18 @@ def _resolve_base_url(config: CalibrationConfig) -> str:
         raise RuntimeError("the GLM relay has no registered token-routed endpoint")
     base_url = endpoints[0].url.rstrip("/")
     return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+
+
+async def _generation_metadata(client: httpx.AsyncClient, response_id: str) -> dict[str, object]:
+    """Fetch eventually consistent OpenRouter provider/cost metadata for a completion."""
+    for delay in (1, 2, 4, 8, 16):
+        await asyncio.sleep(delay)
+        response = await client.get("/generation", params={"id": response_id})
+        if response.status_code == 404:
+            continue
+        response.raise_for_status()
+        return response.json()["data"]
+    raise RuntimeError(f"OpenRouter generation metadata unavailable for response {response_id}")
 
 
 def _execution_task(task: TaskSpec) -> TaskSpec:
@@ -185,6 +202,11 @@ async def _calibrate(task: TaskSpec, config: CalibrationConfig, root: Path) -> d
     )
     base_url = _resolve_base_url(config)
     started = time.monotonic()
+    routing = (
+        {"provider": {"order": [config.provider_tag], "allow_fallbacks": False, "require_parameters": True}}
+        if config.provider_tag is not None
+        else {}
+    )
     async with openai.AsyncOpenAI(
         base_url=base_url,
         api_key=api_key,
@@ -192,12 +214,40 @@ async def _calibrate(task: TaskSpec, config: CalibrationConfig, root: Path) -> d
         max_retries=3,
     ) as client:
         model = OpenAIEndpointRolloutModel(
-            ChatModel(client, config.model, MAX_TOKENS, context_window=262144),
+            ChatModel(client, config.model, MAX_TOKENS, extra_body=routing, context_window=config.context_window),
             temperature=TEMPERATURE,
             top_p=TOP_P,
         )
         outcomes = await run_trials(lowered.spec, plan, settings, model)
     elapsed_seconds = time.monotonic() - started
+    provider_evidence: list[dict[str, object]] = []
+    if config.provider_tag is not None:
+        if config.provider_name is None:
+            raise ValueError("pinned provider requires its expected provider_name")
+        async with httpx.AsyncClient(
+            base_url=base_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30
+        ) as metadata_client:
+            for outcome in outcomes:
+                rollout = getattr(outcome, "rollout", None)
+                if rollout is None:
+                    continue
+                for step in rollout_steps(rollout):
+                    response_id = step.turn.metadata.get("response_id")
+                    if not isinstance(response_id, str):
+                        raise RuntimeError("OpenRouter response lacks a generation ID")
+                    metadata = await _generation_metadata(metadata_client, response_id)
+                    provider_evidence.append(
+                        {
+                            "response_id": response_id,
+                            "request_id": metadata.get("request_id"),
+                            "served_model": metadata.get("model"),
+                            "provider_name": metadata.get("provider_name"),
+                            "total_cost": metadata.get("total_cost"),
+                            "tokens_prompt": metadata.get("tokens_prompt"),
+                            "tokens_completion": metadata.get("tokens_completion"),
+                            "route_matches": metadata.get("provider_name") == config.provider_name,
+                        }
+                    )
 
     attempts = [json.loads(path.read_text()) for path in sorted((root / str(TrialKind.SOLVER)).rglob("attempt-*.json"))]
     ledger_path = ledger.path_for(task.id)
@@ -212,7 +262,7 @@ async def _calibrate(task: TaskSpec, config: CalibrationConfig, root: Path) -> d
     }
     return {
         "campaign_format": "biotasks-openai-calibration-v1",
-        "campaign_id": "biotasks/combined/v1/calibration/glm-5.3-openai-shellsim-v2",
+        "campaign_id": config.campaign_id,
         "trial_type": "ordinary_solver",
         "task_id": task.id,
         "frozen_task_digest": frozen_task_digest,
@@ -225,6 +275,11 @@ async def _calibrate(task: TaskSpec, config: CalibrationConfig, root: Path) -> d
         "relay_job": config.relay_job,
         "relay_service": config.relay_service,
         "explicit_base_url": config.base_url,
+        "requested_provider_tag": config.provider_tag,
+        "expected_provider_name": config.provider_name,
+        "provider_evidence": provider_evidence,
+        "route_verified": config.provider_tag is None
+        or (bool(provider_evidence) and all(row["route_matches"] for row in provider_evidence)),
         "policy": policy,
         "policy_digest": digest(policy),
         "limits": LIMITS.model_dump(mode="json"),
