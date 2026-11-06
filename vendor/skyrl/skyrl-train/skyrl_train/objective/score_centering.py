@@ -25,7 +25,7 @@ PROBABILITY_MASS_TOLERANCE = 1e-4
 
 
 class ScoreCenteringTerms(NamedTuple):
-    """Additive loss and detached head coefficients before advantage scaling."""
+    """Advantage-scaled additive loss and detached, unscaled head coefficients."""
 
     loss: torch.Tensor
     head_coefficients: torch.Tensor
@@ -42,7 +42,7 @@ def ppo_tis_score_centering_correction(
     eps_clip_low: float,
     eps_clip_high: float,
 ) -> ScoreCenteringTerms:
-    """Return the per-token loss and detached head coefficients before advantages.
+    """Return the advantage-scaled loss and detached, unscaled head coefficients.
 
     On loss-eligible positions, the loss derivative with respect to head logprobs
     is ``advantages[..., None] * head_coefficients``. Coefficients already
