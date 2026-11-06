@@ -11,13 +11,14 @@ EDITED_AGAIN = DocVersion("rev-3", "comments-1")
 COMMENTED = DocVersion("rev-1", "comments-2")
 
 
-def looks(timeline: list[tuple[float, DocVersion | None]]) -> tuple[Watched, list[str | None]]:
-    """The state after each look at (seconds, doc) and each look's message, with the state carried through JSON as
-    the watch engine carries it. A doc of None is a look while the session works."""
+def looks(timeline: list[tuple]) -> tuple[Watched, list[str | None]]:
+    """The state after each look at (seconds, doc) or (seconds, doc, completed turns) and each look's message, with
+    the state carried through JSON as the watch engine carries it. A doc of None is a look while the session works;
+    the turns default to 1."""
     state = Watched("doc").to_json()
     messages = []
-    for now, version in timeline:
-        watched, message = next_round(Watched.from_json(json.loads(json.dumps(state))), version, now)
+    for now, version, *turns in timeline:
+        watched, message = next_round(Watched.from_json(json.loads(json.dumps(state))), version, now, *(turns or [1]))
         state = watched.to_json()
         messages.append(message)
     return Watched.from_json(state), messages
@@ -36,6 +37,16 @@ def test_edits_made_while_the_session_works_are_not_sent():
     _, messages = looks([(0, BASE), (5, None), (10, None), (15, EDITED), (20, EDITED), (60, EDITED)])
 
     assert messages == [None] * 6
+
+
+def test_a_turn_that_no_look_saw_starts_a_new_wait():
+    # Regression: a turn that started and ended between two looks left the baseline from before it, so the agent's
+    # own edits in that turn were reported as a person's change.
+    _, messages = looks([(0, BASE, 1), (30, EDITED, 2), (40, EDITED, 2), (60, EDITED, 2)])
+    assert messages == [None] * 4
+
+    _, messages = looks([(0, BASE, 1), (30, EDITED, 2), (35, EDITED_AGAIN, 2), (45, EDITED_AGAIN, 2)])
+    assert messages[3] is not None
 
 
 def test_a_change_in_progress_is_sent_when_it_stops():
@@ -74,4 +85,5 @@ def test_the_doc_id_is_the_first_google_doc_that_the_goal_links():
     )
 
     assert goal_doc_id(goal) == "15VKTbBk0FCezs7O5IpZrvJ-aoF2zYKN8sqJdNon00qY"
+    assert goal_doc_id("See https://docs.google.com/document/u/0/d/account-link/edit") == "account-link"
     assert goal_doc_id("Fix the flaky test.") is None

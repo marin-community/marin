@@ -3,8 +3,10 @@
 """Tell a waiting gdoc session that a person changed its doc.
 
 Loom does not see a Google Doc, so the `gdoc-changes` watch (`infra/loom/watches/gdoc_changes.py`) polls the doc of
-each waiting session and sends the session a message when the doc or its comments change. The first idle round records
-the comparison baseline. Edits before that round are not reported.
+each waiting session and sends the session a message when the doc or its comments change. The first idle round after
+a turn records the comparison baseline, so the agent's own edits during the turn are not reported. The session's count
+of completed turns shows that a turn ended even when no round saw the session working. A person's edits between the
+agent's last read of the doc and that first idle round are not reported either.
 
 The watch reads a doc every `FAST_CHECK` seconds after the first idle round or an observed change, and half as
 often for each `DECAY_STEP` without a change, down to every `SLOW_CHECK` seconds. It sends the message once the doc
@@ -19,7 +21,8 @@ from typing import NamedTuple
 from infra.loom.gdoc.cli import doc_comments
 from infra.loom.gdoc.google_api import DOCS_API, GoogleApi
 
-DOC_URL = re.compile(r"https://docs\.google\.com/document/d/([A-Za-z0-9_-]+)")
+# An account-qualified link has `/u/<n>` before `/d/`.
+DOC_URL = re.compile(r"https://docs\.google\.com/document/(?:u/\d+/)?d/([A-Za-z0-9_-]+)")
 CHANGED_MESSAGE = "The doc changed: a person changed {what}. Read the doc and its open comments, and act on the change."
 FAST_CHECK = 5
 SLOW_CHECK = 30
@@ -39,12 +42,14 @@ class Watched(NamedTuple):
     """What the watch remembers about one session between rounds."""
 
     doc_id: str
-    # The doc at the first observed idle round, or None while the session works.
+    # The doc at the first idle round after the session's last turn, or None while the session works.
     waiting_version: DocVersion | None = None
     # The doc at the previous look, to tell a change that holds from one still in progress.
     last_version: DocVersion | None = None
     # When, in seconds since the epoch, the first idle look or last doc change was observed.
     changed_at: float | None = None
+    # The session's completed turns when it began to wait.
+    turns: int | None = None
 
     def to_json(self) -> dict:
         return {
@@ -52,6 +57,7 @@ class Watched(NamedTuple):
             "waiting": self.waiting_version,
             "last": self.last_version,
             "changed_at": self.changed_at,
+            "turns": self.turns,
         }
 
     @classmethod
@@ -59,7 +65,9 @@ class Watched(NamedTuple):
         def version(raw: list | None) -> DocVersion | None:
             return DocVersion(*raw) if raw else None
 
-        return cls(value["doc_id"], version(value["waiting"]), version(value["last"]), value["changed_at"])
+        return cls(
+            value["doc_id"], version(value["waiting"]), version(value["last"]), value["changed_at"], value["turns"]
+        )
 
 
 def goal_doc_id(goal: str) -> str | None:
@@ -86,15 +94,16 @@ def changed_message(before: DocVersion, after: DocVersion) -> str:
     return CHANGED_MESSAGE.format(what=" and ".join(parts))
 
 
-def next_round(watched: Watched, version: DocVersion | None, now: float) -> tuple[Watched, str | None]:
+def next_round(watched: Watched, version: DocVersion | None, now: float, turns: int) -> tuple[Watched, str | None]:
     """The session's state after a look at its doc at time `now`, and the message to send it now, if any.
 
-    version is the doc now while the session waits, or None while it works.
+    version is the doc now while the session waits, or None while it works. turns is the session's completed turns.
     """
     if version is None:
         return Watched(watched.doc_id), None
-    if watched.waiting_version is None:
-        return Watched(watched.doc_id, version, version, now), None
+    if watched.waiting_version is None or turns != watched.turns:
+        # A new wait: the first look after a turn, including a turn that started and ended between two looks.
+        return Watched(watched.doc_id, version, version, now, turns), None
     if version != watched.last_version:
         return watched._replace(last_version=version, changed_at=now), None
     if version == watched.waiting_version or now - watched.changed_at < QUIET:

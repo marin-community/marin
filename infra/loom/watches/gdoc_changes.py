@@ -70,7 +70,7 @@ def main(rnd: Round) -> None:
                 rnd.would("skip", session=sid, doc=watched.doc_id, note=str(error)[:NOTE_CHARS])
                 next_state[sid] = watched.to_json()
                 continue
-        watched, message = next_round(watched, version, now)
+        watched, message = next_round(watched, version, now, session["turn_count"])
         next_state[sid] = watched.to_json()
         check = next_check(watched, now)
         if check is not None:
