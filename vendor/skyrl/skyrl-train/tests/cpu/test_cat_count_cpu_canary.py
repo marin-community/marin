@@ -305,8 +305,16 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
     tmp_path, cat_count_policy, cat_count_session, forkserver_context, step_wise
 ):
     root = tmp_path / "rloo-n"
+    directory = root / "exports/metrics"
+    directory.mkdir(parents=True)
+    for step in (0, 8):
+        (directory / f"step-{step:06d}.json").write_text(
+            json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
+        )
+    preserved = None
     for steps, resume in ((2, False), (4, True)):
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
+        OmegaConf.update(cfg, "runtime", {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}"}, force_add=True)
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
         cfg.trainer.step_wise_training = step_wise
         cfg.trainer.algorithm.group_advantage_min_size = 2
@@ -323,6 +331,14 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             with path.open("a") as handle:
                 handle.write(json.dumps(row) + "\n")
         records = run_process(forkserver_context, root, cfg)
+        assert [row["step"] for row in records] == list(range(steps + 1))
+        assert all("prior_attempt_only" not in row for row in records)
+        assert records[-1]["attempt_id"] == f"attempt-{steps}"
+        if preserved is not None:
+            assert (directory / "step-000001.json").read_bytes() == preserved
+            assert records[1]["attempt_id"] == "attempt-2"
+        else:
+            assert all(row["attempt_id"] == "attempt-2" for row in records)
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
@@ -332,6 +348,12 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
+        if not resume:
+            preserved = (directory / "step-000001.json").read_bytes()
+            for step in (3, 8):
+                (directory / f"step-{step:06d}.json").write_text(
+                    json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
+                )
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
