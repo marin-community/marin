@@ -101,8 +101,7 @@ def training_recipe(steps: int) -> dict:
         scheduler="constant_with_warmup",
         num_warmup_steps=0,
     )
-    authored = SkyRLRecipe.from_document(config)
-    return authored.to_skyrl()
+    return SkyRLRecipe.from_document(config).to_skyrl()
 
 
 def build_run(

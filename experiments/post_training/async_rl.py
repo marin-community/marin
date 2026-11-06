@@ -51,20 +51,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.provenance import username_segment
-from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe
-from skyrlrecipe.sections import (
-    Algorithm,
-    ExpertBlockSync,
-    Generator,
-    Placement,
-    Policy,
-    PolicyOptimizerConfig,
-    Ref,
-    RolloutBuffer,
-    SamplingParams,
-    Trainer,
-    WeightSyncPause,
-)
+from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
 
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.launch import (
@@ -245,7 +232,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Single-turn math ends after one answer; each of the prompt's four answers is its own rollout.
         max_turns=1,
     ).to_skyrl()
-    config["trainer"] = Trainer(
+    config["trainer"] = sections.Trainer(
         strategy="megatron",
         # Keep Transformer Engine's attention backend; true forces the flash-attn package
         # (NVTE_FUSED_ATTN=0).
@@ -276,7 +263,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         training_metrics=preset.telemetry,
         rollout_spans=preset.telemetry,
         policy_train_spans=preset.telemetry,
-        algorithm=Algorithm(
+        algorithm=sections.Algorithm(
             # Group-relative advantages over each prompt's answers.
             advantage_estimator="grpo",
             # The plain clipped loss: every sampled token contributes, with no off-policy mask or
@@ -293,8 +280,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             eps_clip_low=0.2,
             eps_clip_high=0.2,
         ),
-        policy=Policy(
-            optimizer_config=PolicyOptimizerConfig(
+        policy=sections.Policy(
+            optimizer_config=sections.PolicyOptimizerConfig(
                 optimizer="AdamW",
                 lr=recipe.learning_rate,
                 weight_decay=recipe.weight_decay,
@@ -303,8 +290,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             megatron_config=asdict(recipe.megatron),
         ),
         # The reference model shares the policy's geometry so it can share the policy's GPUs.
-        ref=Ref(megatron_config=asdict(recipe.megatron)),
-        placement=Placement(
+        ref=sections.Ref(megatron_config=asdict(recipe.megatron)),
+        placement=sections.Placement(
             colocate_all=plan.colocate_all,
             # The reference model lives on the policy's nodes; only the engine has its own node.
             colocate_policy_ref=True,
@@ -314,7 +301,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             ref_num_gpus_per_node=plan.policy_num_gpus_per_node,
         ),
         # Leases bound untrained groups to max_staleness_steps + 1 batches.
-        rollout_buffer=RolloutBuffer(
+        rollout_buffer=sections.RolloutBuffer(
             max_staleness_steps=preset.max_staleness_steps,
             batch_policy=preset.batch_policy,
             # MarinSkyRL's launch derives the cap on prompt groups generating at once.
@@ -322,7 +309,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             object_store_root=None,
         ),
     ).to_skyrl()
-    config["generator"] = Generator(
+    config["generator"] = sections.Generator(
         backend="vllm",
         model_dtype="bfloat16",
         vllm_attention_backend="FLASH_ATTN",
@@ -330,12 +317,12 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         run_engines_locally=True,
         # Weights reach the engine over NCCL from the policy ranks at each sync.
         weight_sync_backend="nccl",
-        weight_sync_pause=WeightSyncPause(mode=PAUSE_MODE, clear_cache=preset.clear_kv_cache_on_weight_sync),
+        weight_sync_pause=sections.WeightSyncPause(mode=PAUSE_MODE, clear_cache=preset.clear_kv_cache_on_weight_sync),
         # Each expert matrix goes from a Megatron rank that holds it straight to the vLLM workers that
         # serve it; the recipe meets its requirements (TP=1, ETP=1, local vLLM engines at TP=1 with
         # EP=DP=8, and the Triton MoE backend).
         weight_sync_transport="expert_block",
-        expert_block_sync=ExpertBlockSync(timeout_seconds=600, verify=False),
+        expert_block_sync=sections.ExpertBlockSync(timeout_seconds=600, verify=False),
         num_inference_engines=plan.num_inference_engines,
         inference_engine_tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
         inference_engine_pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
@@ -360,7 +347,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         chat_template=None,
         engine_init_kwargs=dict(recipe.engine_init_kwargs),
         # Return the sampled token's logprob so the ratio diagnostics can compare it with the learner's.
-        sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+        sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
     ).to_skyrl()
     # Let the allocator grow segments instead of fragmenting at the memory ceiling.
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
@@ -395,8 +382,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     budget = config["context_budget"]
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
-    authored = SkyRLRecipe.from_document(config)
-    return authored.to_skyrl()
+    return SkyRLRecipe.from_document(config).to_skyrl()
 
 
 @dataclass(frozen=True)
