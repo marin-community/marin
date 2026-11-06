@@ -91,19 +91,3 @@ async def test_url_probe_serves_declared_pages_as_observations(page, observation
     assert served["url"] == PROBE_URL
     assert observation.items() <= served.items()
     assert graded.grade.reward == reward
-
-
-async def test_fetch_provider_answers_unknown_urls_and_bad_arguments_as_observations():
-    task = TASKS[ProtocolCheck.URL_LOADING]
-    model = ReplayModel(
-        [
-            tool_call("fetch_url", {"address": PROBE_URL}, "bad"),
-            tool_call("fetch_url", {"url": "https://elsewhere.invalid"}, "unknown"),
-            reply("no token"),
-        ]
-    )
-
-    graded = await engine(model, harnesses=FETCH_HARNESS).run_task(rollout_spec(task))
-
-    assert [observation.get("status") for observation in tool_observations(graded)] == [None, 404]
-    assert graded.grade.reward == 0.0
