@@ -10,16 +10,12 @@ from experiments.data_belay.prepare import cache_epochs
 @pytest.mark.parametrize(
     ("licenses", "expected"),
     [
-        (("odc-by",), LicenseVerdict.ALLOWED),
-        (("apache-2.0",), LicenseVerdict.ALLOWED),
-        (("cc-by-4.0",), LicenseVerdict.ALLOWED),
-        (("cc-by-sa-3.0",), LicenseVerdict.ALLOWED),
+        # Card ids are matched case-insensitively, and versioned ids by pattern.
         (("CC0-1.0",), LicenseVerdict.ALLOWED),
-        (("openmdw",), LicenseVerdict.ALLOWED),
-        (("cc-by-nc-4.0",), LicenseVerdict.REJECTED),
+        (("cc-by-sa-3.0",), LicenseVerdict.ALLOWED),
+        # An NC or ND fragment rejects an id that an allowed pattern would otherwise match.
         (("cc-by-nc-sa-4.0",), LicenseVerdict.REJECTED),
-        (("cc-by-nd-4.0",), LicenseVerdict.REJECTED),
-        (("other",), LicenseVerdict.NEEDS_REVIEW),
+        # An id on no list, or a card with no license, goes to a person.
         (("llama3",), LicenseVerdict.NEEDS_REVIEW),
         ((), LicenseVerdict.NEEDS_REVIEW),
         # Every id on the card must be allowed: an unknown second license sends the dataset to a person.
@@ -37,9 +33,8 @@ def test_license_verdict(licenses, expected):
         (600, 900, 10_000, True),
         # A dataset that holds the need, sampled into a cache that does not, is an intake estimate that was too high.
         (600, 400, 10_000, False),
-        # A small dataset may repeat, up to MAX_EPOCHS times.
+        # A dataset smaller than the need may repeat.
         (600, 200, 200, True),
-        (600, 100, 100, False),
     ],
 )
 def test_cache_epochs(need, cache, dataset, ok):

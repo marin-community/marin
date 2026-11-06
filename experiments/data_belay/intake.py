@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Intake checks for a Data Belay candidate: immutable revision, license, text field and size.
+"""Intake checks for a Data Belay candidate: pinned revision, license, text field and size.
 
-A candidate is a Hugging Face dataset at one revision. The check pins the revision, reads the license from the
+A candidate is a Hugging Face dataset at its head commit. The check pins that commit, reads the license from the
 dataset card, and estimates the dataset's tokens under the fast-track tokenizer from a streamed sample, so that the
 report can say how many epochs each ladder rung would read at the requested share.
 """
@@ -62,7 +62,6 @@ class DatasetRequest:
     """The dataset a person asks the Data Belay to test."""
 
     repo: str
-    revision: str | None
     config: str | None
     split: str
     text_field: str
@@ -209,13 +208,11 @@ def sample_stats(rows: Iterable[Mapping[str, Any]], text_field: str, tokenizer: 
 def run_intake(
     request: DatasetRequest, share: float, rung_tokens: dict[str, int], tokenizer: MarinTokenizer
 ) -> IntakeReport:
-    """Pin the revision, classify the license and estimate the size of ``request``."""
-    api = HfApi()
-    info = api.dataset_info(request.repo, revision=request.revision)
-    head = api.dataset_info(request.repo).sha
-    if info.sha != head:
-        # The datasets-server row count describes the head commit only.
-        raise ValueError(f"{request.repo}@{info.sha} is not the head commit {head}; intake can only size the head")
+    """Pin the head commit, classify the license and estimate the size of ``request``.
+
+    The head only, because the row count comes from the datasets-server, which sizes the head.
+    """
+    info = HfApi().dataset_info(request.repo)
     licenses = _card_licenses(info)
     # One config name for the sample, the row count and the cache plan: with no config given, the builder's default.
     # The size endpoint lists every config, so counting rows without a name would sum all of them.

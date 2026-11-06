@@ -14,11 +14,12 @@ import json
 import logging
 import math
 import random
+import typing
 
 from datasets import load_dataset_builder
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.processing.tokenize._core import FileEntry, drop_sidecars, glob_with_sizes
-from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
+from marin.processing.tokenize.cache_stats import TokenizedCacheStats, read_tokenized_cache_stats
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -40,7 +41,7 @@ class CachePlan:
     cache_path: str
     files: tuple[str, ...]
     max_rows: int
-    """Documents per tokenize shard: ``FILE_MARGIN`` times the rows that hold the need, by the intake estimate."""
+    """Documents per tokenize shard: ``FILE_MARGIN`` times the rows that intake estimates for ``need_tokens``."""
     estimated_tokens: int
     need_tokens: int
 
@@ -91,11 +92,10 @@ def plan_cache(
 
 
 def cache_epochs(need_tokens: int, cache_tokens: int, dataset_tokens: int) -> float:
-    """Epochs of the built cache that the largest rung reads; raises when the cache is too small for the need.
+    """Epochs of the built cache that the largest rung reads.
 
-    A dataset that holds the need must give a cache that holds it too, so it is read at most once. A smaller dataset
-    repeats, but at most ``MAX_EPOCHS`` times: intake estimates its epochs over the whole dataset, and this checks
-    them on the tokens that training actually reads.
+    Raises above ``MAX_EPOCHS``, and above 1 when the whole dataset holds the need: then the sampled files held fewer
+    tokens than intake estimated.
     """
     epochs = need_tokens / cache_tokens
     if epochs > MAX_EPOCHS:
@@ -108,10 +108,59 @@ def cache_epochs(need_tokens: int, cache_tokens: int, dataset_tokens: int) -> fl
     return epochs
 
 
-def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
+@dataclasses.dataclass(frozen=True)
+class CacheManifest:
+    """What ``prepare`` wrote beside the cache: the intake it passed, the plan, and the built cache's size."""
+
+    intake: IntakeReport
+    plan: CachePlan
+    stats: TokenizedCacheStats
+    epochs_at_need: float
+
+    def to_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self), indent=2)
+
+
+@dataclasses.dataclass(frozen=True)
+class PreparedCache:
+    """A cache that ``prepare`` built, as ``train`` reads it from the cache's manifest."""
+
+    root: str
+    """The cache path that ``prepare`` printed: it holds the manifest and the ``train`` split."""
+    repo: str
+    config: str
+    share: float
+    """The share that the cache was sized for and its epochs were checked at."""
+
+    @property
+    def train_cache(self) -> str:
+        return prefix_join(self.root, "train")
+
+    @property
+    def candidate(self) -> str:
+        """The run-name label: the dataset, its config and share, and a hash of the path, unique to this cache."""
+        name = self.repo.split("/")[-1]
+        if self.config.startswith(name):
+            name = self.config
+        elif self.config != "default":
+            name = f"{name}-{self.config}"
+        tag = hashlib.sha256(self.root.encode()).hexdigest()[:6]
+        return f"{name}-p{round(self.share * 100)}-{tag}".lower()
+
+    @classmethod
+    def read(cls, root: str) -> typing.Self:
+        root = root.rstrip("/")
+        manifest = StoragePath(prefix_join(root, MANIFEST_NAME))
+        if not manifest.exists():
+            raise ValueError(f"no {MANIFEST_NAME} in {root}: pass the cache path that prepare printed")
+        intake = json.loads(manifest.read_text())["intake"]
+        return cls(root, intake["repo"], intake["config"], float(intake["share"]))
+
+
+def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> CacheManifest:
     """Tokenize the plan's files (skipped when the cache exists), check its epochs, then write the cache manifest.
 
-    ``train`` reads its share from the manifest, so a cache without one cannot be trained on.
+    ``train`` reads the share and the run name from the manifest, so a cache without one cannot be trained on.
     """
     config = TokenizeConfig(
         train_paths=list(plan.files),
@@ -123,20 +172,9 @@ def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
     )
     tokenize(config)
     stats = read_tokenized_cache_stats(plan.cache_path, "train")
-    epochs = cache_epochs(plan.need_tokens, stats.total_tokens, report.estimated_tokens)
-    manifest = {
-        "intake": json.loads(report.to_json()),
-        "plan": dataclasses.asdict(plan),
-        "stats": dataclasses.asdict(stats),
-        "epochs_at_need": epochs,
-    }
-    StoragePath(prefix_join(plan.cache_path, MANIFEST_NAME)).write_text(json.dumps(manifest, indent=2))
-    logger.info("cache %s: %s", plan.train_cache, stats)
+    manifest = CacheManifest(
+        report, plan, stats, cache_epochs(plan.need_tokens, stats.total_tokens, report.estimated_tokens)
+    )
+    StoragePath(prefix_join(plan.cache_path, MANIFEST_NAME)).write_text(manifest.to_json())
+    logger.info("cache %s: %s", plan.cache_path, stats)
     return manifest
-
-
-def cache_share(train_cache: str) -> float:
-    """The share that ``train_cache`` was prepared for and its epochs were checked at, from its manifest."""
-    cache_path = train_cache.rstrip("/").removesuffix("/train")
-    manifest = json.loads(StoragePath(prefix_join(cache_path, MANIFEST_NAME)).read_text())
-    return float(manifest["intake"]["share"])

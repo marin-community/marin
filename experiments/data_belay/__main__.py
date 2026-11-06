@@ -17,18 +17,29 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.belay.config import H100_CLUSTER
+from experiments.belay.config import TRACKS, Track
+from experiments.belay.submit import track_command
 from experiments.data_belay.answer_bpb import ANSWER_BPB_PATH, build_answer_bpb
 from experiments.data_belay.answer_bpb import MANIFEST_NAME as ANSWER_BPB_MANIFEST
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
 from experiments.data_belay.judge import HARM_LIMITS, judge
-from experiments.data_belay.prepare import CACHE_PATH, build_cache, cache_share, plan_cache
-from experiments.data_belay.results import CONTROL_SEEDS, arm_metrics, control_run_id, treatment_run_id
-from experiments.data_belay.rungs import DATA_BELAY_RUNGS, ladder_tokens
+from experiments.data_belay.prepare import CACHE_PATH, PreparedCache, build_cache, plan_cache
+from experiments.data_belay.results import CONTROL_SEEDS, arm_metrics, control_run_id, run_exists, treatment_run_id
 from experiments.grug.fast_track import belay_tracks
-from experiments.grug.fast_track.launch import V16384_TOKENIZER
+from experiments.grug.fast_track.launch import SEQ_LEN, V16384_TOKENIZER, h100_ladder_rung
 
-PRIORITY = "batch"
+# The Belay `vanilla` Track at each rung. d512 screens a candidate; d768 and d1024 confirm a d512 result.
+VANILLA_TRACKS = {"d512": Track.VANILLA_D512, "d768": Track.VANILLA_D768, "d1024": Track.VANILLA_D1024}
+DATA_BELAY_RUNGS = tuple(VANILLA_TRACKS)
+# The Track's cluster and Iris band. prepare's tokenize job runs there too, beside the caches it writes.
+CLUSTER = TRACKS[Track.VANILLA_D512].cluster
+BAND = TRACKS[Track.VANILLA_D512].band
+
+
+def rung_tokens(rung: str) -> int:
+    """Training tokens of the `vanilla` Track at ``rung``: its steps times its batch of 4,096-token sequences."""
+    _, vanilla_steps, _ = belay_tracks.RUNGS[rung]
+    return vanilla_steps * h100_ladder_rung(rung).baseline_batch * SEQ_LEN
 
 
 def _submit_cpu_job(job_name: str, cpu: int, memory: str) -> None:
@@ -37,7 +48,7 @@ def _submit_cpu_job(job_name: str, cpu: int, memory: str) -> None:
     env = ["-e", "HF_TOKEN", os.environ["HF_TOKEN"]] if os.environ.get("HF_TOKEN") else []
     cmd = [
         *("uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources"),
-        *("--target-cluster", H100_CLUSTER, "--priority", PRIORITY, "--cpu", str(cpu), "--memory", memory),
+        *("--target-cluster", CLUSTER, "--priority", BAND, "--cpu", str(cpu), "--memory", memory),
         *("--disk", "32GB", "--job-name", job_name, *env),
         *("--", "python", "-m", "experiments.data_belay", *args),
     ]
@@ -50,7 +61,6 @@ def _dataset_options(command):
     for option in reversed(
         [
             click.option("--dataset", "repo", required=True, help="Hugging Face dataset id."),
-            click.option("--revision", default=None, help="Commit, tag or branch; it must resolve to the head commit."),
             click.option("--config", "config_name", default=None, help="Dataset config (subset)."),
             click.option("--split", default="train", show_default=True),
             click.option("--text-field", default="text", show_default=True),
@@ -63,17 +73,18 @@ def _dataset_options(command):
 
 def _training_prefix() -> str:
     """``MARIN_PREFIX`` that the training cluster sets for its tasks: the caches and evals that its runs read."""
-    config = load_config(resolve_cluster_config(H100_CLUSTER, dirs=IRIS_CLUSTER_CONFIG_DIRS))
+    config = load_config(resolve_cluster_config(CLUSTER, dirs=IRIS_CLUSTER_CONFIG_DIRS))
     prefix = config.defaults.task_env.get("MARIN_PREFIX")
     if prefix is None:
-        raise click.ClickException(f"cluster {H100_CLUSTER} sets no MARIN_PREFIX in its task_env")
+        raise click.ClickException(f"cluster {CLUSTER} sets no MARIN_PREFIX in its task_env")
     return prefix
 
 
-def _intake(repo, revision, config_name, split, text_field, share) -> IntakeReport:
+def _intake(repo, config_name, split, text_field, share) -> IntakeReport:
     configure_coreweave_s3()
     tokenizer = load_tokenizer(V16384_TOKENIZER)
-    return run_intake(DatasetRequest(repo, revision, config_name, split, text_field), share, ladder_tokens(), tokenizer)
+    needs = {rung: rung_tokens(rung) for rung in DATA_BELAY_RUNGS}
+    return run_intake(DatasetRequest(repo, config_name, split, text_field), share, needs, tokenizer)
 
 
 @click.group()
@@ -86,15 +97,14 @@ def cli() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Print the report as JSON.")
 def check(
     repo: str,
-    revision: str | None,
     config_name: str | None,
     split: str,
     text_field: str,
     share: float,
     as_json: bool,
 ) -> None:
-    """Pin the revision, check the license and estimate the dataset's size at each rung."""
-    report = _intake(repo, revision, config_name, split, text_field, share)
+    """Pin the head commit, check the license and estimate the dataset's size at each rung."""
+    report = _intake(repo, config_name, split, text_field, share)
     if as_json:
         click.echo(report.to_json())
     else:
@@ -122,10 +132,9 @@ def check(
 
 @cli.command()
 @_dataset_options
-@click.option("--submit", is_flag=True, help=f"Run as an Iris CPU job on {H100_CLUSTER}.")
+@click.option("--submit", is_flag=True, help=f"Run as an Iris CPU job on {CLUSTER}.")
 def prepare(
     repo: str,
-    revision: str | None,
     config_name: str | None,
     split: str,
     text_field: str,
@@ -137,14 +146,15 @@ def prepare(
         name = "-".join(part for part in (repo.replace("/", "-"), config_name, f"p{round(share * 100)}") if part)
         _submit_cpu_job(f"data-belay-prepare-{name.lower()}", cpu=4, memory="16GB")
     logging.basicConfig(level=logging.INFO)
-    report = _intake(repo, revision, config_name, split, text_field, share)
+    report = _intake(repo, config_name, split, text_field, share)
     if not report.passed:
         raise click.ClickException(f"intake did not pass: license {report.license_verdict}, needs {report.needs}")
     need_tokens = max(need.new_tokens for need in report.needs)
     plan = plan_cache(report, need_tokens, V16384_TOKENIZER, prefix_join(_training_prefix(), CACHE_PATH))
-    click.echo(f"plan: {len(plan.files)} files, about {plan.estimated_tokens:,} tokens -> {plan.train_cache}")
+    click.echo(f"plan: {len(plan.files)} files, about {plan.estimated_tokens:,} tokens -> {plan.cache_path}")
     manifest = build_cache(report, plan, V16384_TOKENIZER)
-    click.echo(f"cache: {plan.train_cache} {manifest['stats']}")
+    cache = PreparedCache.read(plan.cache_path)
+    click.echo(f"cache: {cache.root} ({manifest.stats.total_tokens:,} tokens), runs named {cache.candidate}")
 
 
 @cli.command("build-answer-bpb")
@@ -164,42 +174,38 @@ def build_answer_bpb_command() -> None:
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
 @click.option("--seed", type=int, required=True)
 @click.option(
-    "--candidate", default=None, help="Candidate name for the run id, e.g. finemath-p20; omit for the control."
+    "--mix-cache",
+    default=None,
+    help="The cache path that `prepare` printed; omit for the control. It names the runs and sets the share.",
 )
-@click.option("--mix-cache", default=None, help="The candidate's flat train cache, from `prepare`; it sets the share.")
 @click.option("--num-steps", type=int, default=None, help="Smoke run of this many steps; the run id gets -smoke<N>.")
-@click.option("--submit", is_flag=True, help=f"Submit to {H100_CLUSTER}; without it, print the plan.")
-def train(
-    rung: str,
-    seed: int,
-    candidate: str | None,
-    mix_cache: str | None,
-    num_steps: int | None,
-    submit: bool,
-) -> None:
-    """Train one arm on the Belay `vanilla` Track: the control, or the base cache mixed with a candidate's cache."""
-    if (candidate is None) != (mix_cache is None):
-        raise click.UsageError("a candidate needs --candidate and --mix-cache; the control takes neither")
-    # The share of --mix-cache, and the eval manifest in the plan printed without --submit, are read from S3.
+@click.option("--submit", is_flag=True, help=f"Submit to {CLUSTER}; without it, print the command.")
+def train(rung: str, seed: int, mix_cache: str | None, num_steps: int | None, submit: bool) -> None:
+    """Train one arm on the Belay `vanilla` Track: the control, or the base cache mixed with a prepared cache."""
     configure_coreweave_s3()
-    run_id = control_run_id(rung, seed) if candidate is None else treatment_run_id(rung, candidate, seed)
+    flags = ["--eval-manifest", prefix_join(_training_prefix(), f"{ANSWER_BPB_PATH}/{ANSWER_BPB_MANIFEST}")]
+    if mix_cache is None:
+        run_id = control_run_id(rung, seed)
+    else:
+        cache = PreparedCache.read(mix_cache)
+        run_id = treatment_run_id(rung, cache.candidate, seed)
+        flags += ["--mix-cache", cache.train_cache, "--mix-share", str(cache.share)]
     if num_steps is not None:
         run_id += f"-smoke{num_steps}"
-    args = ["--track", "vanilla", "--size", rung, "--run-id", run_id, "--seed", str(seed)]
-    args += ["--eval-manifest", prefix_join(_training_prefix(), f"{ANSWER_BPB_PATH}/{ANSWER_BPB_MANIFEST}")]
-    if mix_cache is not None:
-        # The share that prepare sized the cache for and checked its epochs at, on the built cache.
-        args += ["--mix-cache", mix_cache, "--mix-share", str(cache_share(mix_cache))]
-    if num_steps is not None:
-        args += ["--num-steps", str(num_steps)]
-    if submit:
-        args += ["--submit", "--target-cluster", H100_CLUSTER, "--priority", PRIORITY]
-    belay_tracks.main(args)
+        flags += ["--num-steps", str(num_steps)]
+    command = track_command(VANILLA_TRACKS[rung], run_id, tuple(flags), seed=seed)
+    if not submit:
+        click.echo(shlex.join(command))
+        return
+    if run_exists(run_id):
+        raise click.ClickException(f"{run_id} is already in W&B, and report reads runs by id; a rerun needs a new id")
+    click.echo(f"submitting {run_id}", err=True)
+    os.execvp(command[0], command)
 
 
 @cli.command()
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
-@click.option("--candidate", required=True, help="Candidate name in the treatment run ids, e.g. finemath-p20.")
+@click.option("--candidate", required=True, help="The candidate's run-name label, as `prepare` prints it.")
 @click.option("--seeds", default="0,1,2", show_default=True, help="Treatment seeds.")
 @click.option(
     "--against",

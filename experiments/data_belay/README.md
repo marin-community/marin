@@ -18,26 +18,30 @@ in its Iris config, so they sit beside the Track's base cache. Commands that loa
 (`check`, `build-answer-bpb`, `prepare` without `--submit`) also need `MARIN_PREFIX` set to that prefix.
 
 ```bash
-# 1. Intake: pin the revision, check the license, estimate the size and epochs at each rung.
+# 1. Intake: pin the head commit, check the license, estimate the size and epochs at each rung.
 uv run data-belay check --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2
 
-# 2. Tokenize a seeded sample of the dataset's files into a cache (an Iris CPU job). The job prints the cache path.
+# 2. Tokenize a seeded sample of the dataset's files into a cache (an Iris CPU job). The job prints the cache path
+#    and the candidate's label, for example finemath-finemath-4plus-p20-<hash>.
 uv run data-belay prepare --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2 --submit
 
-# 3. Train each seed of the treatment; the run id is dbelay-<rung>-<candidate>-s<seed>. --mix-cache is the token
-#    cache that prepare wrote, not the Hugging Face dataset, and the share is the one the cache was prepared for.
-#    The control (no --candidate) runs once per rung and seed, for the seeds in results.CONTROL_SEEDS.
-uv run data-belay train --rung d512 --seed 0 --candidate finemath-p20 \
-    --mix-cache s3://marin-us-east-02a/marin/data_belay/caches/<...>/train --submit
+# 3. Train each seed of the treatment. --mix-cache is the cache path that prepare printed, not the Hugging Face
+#    dataset. The run id is dbelay-<rung>-<label>-s<seed>, and the share is the one the cache was prepared for.
+#    The control (no --mix-cache) runs once per rung and seed, for the seeds in results.CONTROL_SEEDS.
+uv run data-belay train --rung d512 --seed 0 \
+    --mix-cache s3://marin-us-east-02a/marin/data_belay/caches/<...> --submit
 
 # 4. Verdict against the shared control, or against another candidate at the same seeds.
-uv run data-belay report --rung d512 --candidate finemath-p20 --seeds 0,1,2
-uv run data-belay report --rung d512 --candidate fineweb-edu-p50 --against fineweb-p50 --seeds 0,1,2,3,4,5
+uv run data-belay report --rung d512 --candidate <label> --seeds 0,1,2
+uv run data-belay report --rung d512 --candidate <filtered label> --against <unfiltered label> --seeds 0,1,2
 ```
 
+`train` launches with the Belay Track's own command (`experiments.belay.submit.track_command`), so runs write under
+the Belay's 30-day TTL root, and it refuses a run id that W&B already has.
+
 `check` refuses a license that is not on the allowlist (NC and ND licenses, `other`, a missing license, or a second
-license that is not on the list), a share that reads the dataset more than 4 times at the largest rung, and a revision
-other than the head commit, because the row count comes from the datasets-server, which sizes the head only.
+license that is not on the list) and a share that reads the dataset more than 4 times at the largest rung. It sizes
+the head commit only, because the row count comes from the datasets-server, which sizes the head.
 `prepare` checks the epochs again on the cache it built, and writes the manifest that `train` reads only when they
 pass.
 

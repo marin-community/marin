@@ -74,7 +74,7 @@ MOE_TPP = 60
 # These pin the reference budget so a candidate architecture's own param count cannot move the
 # baseline it is compared against (data-match holds these tokens; compute-match holds 6*N*tokens).
 # They are NOT recomputed from the candidate model on purpose. Regenerate deliberately only when the
-# baseline recipe itself changes, via `_active_params(_h100_ladder_model(_h100_ladder_rung(size), dense=dense))`.
+# baseline recipe itself changes, via `_active_params(_h100_ladder_model(h100_ladder_rung(size), dense=dense))`.
 _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
     ("d512", False): 20_840_448,
     ("d512", True): 18_087_936,
@@ -91,7 +91,7 @@ _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
 # pin the compute-match budget so it holds the baseline's *true* FLOPs, not an active-param proxy, and
 # so a candidate architecture cannot move the budget it is compared against. NOT recomputed from the
 # candidate. Regenerate deliberately only when the baseline recipe changes, via
-# `_compute_match_flops(model_config=_h100_ladder_model(_h100_ladder_rung(size), dense=dense))`.
+# `_compute_match_flops(model_config=_h100_ladder_model(h100_ladder_rung(size), dense=dense))`.
 _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
     ("d512", False): 1_133_066_059_776,
     ("d512", True): 1_065_420_324_864,
@@ -214,7 +214,7 @@ class H100LadderRung:
         return self.gpus_per_task * self.nodes
 
 
-def _h100_ladder_rung(size: str) -> H100LadderRung:
+def h100_ladder_rung(size: str) -> H100LadderRung:
     if size == "d512":
         return H100LadderRung(
             SmallShape(512, 6, 4, 1, 1),
@@ -323,19 +323,41 @@ class TrainMix:
             raise ValueError(f"mix share must be in (0, 1], got {self.share}")
 
 
-def _manifest_validation_components(manifest_path: str) -> dict[str, DatasetComponent]:
-    """Validation components from a prebuilt-cache manifest (the Data Belay's Eval Policy answer-BPB tasks).
+@dataclasses.dataclass(frozen=True)
+class PrebuiltEvalComponent:
+    name: str
+    cache_dir: str
+    """Component root; the cache is its ``validation`` split."""
 
-    The manifest names each component, its root (the cache is its ``validation`` split) and the cache's token and
-    loss-weight fields.
-    """
-    manifest = json.loads(StoragePath(manifest_path).read_text())
-    if manifest["seq_len"] != SEQ_LEN:
-        raise ValueError(f"{manifest_path} packs {manifest['seq_len']}-token rows; the ladder trains on {SEQ_LEN}")
-    fmt = PrebuiltLmDatasetFormat(input_ids_key=manifest["input_ids_key"], loss_weights_key=manifest["loss_weights_key"])
+
+@dataclasses.dataclass(frozen=True)
+class PrebuiltEvalManifest:
+    """Prebuilt validation caches for ``--eval-manifest``: rows of ``seq_len`` tokens with per-token loss weights."""
+
+    seq_len: int
+    input_ids_key: str
+    loss_weights_key: str
+    components: tuple[PrebuiltEvalComponent, ...]
+
+    def to_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self), indent=2)
+
+    @classmethod
+    def from_json(cls, text: str) -> typing.Self:
+        data = json.loads(text)
+        components = tuple(PrebuiltEvalComponent(c["name"], c["cache_dir"]) for c in data["components"])
+        return cls(data["seq_len"], data["input_ids_key"], data["loss_weights_key"], components)
+
+
+def _manifest_validation_components(manifest_path: str) -> dict[str, DatasetComponent]:
+    """Validation components from a :class:`PrebuiltEvalManifest` at ``manifest_path``."""
+    manifest = PrebuiltEvalManifest.from_json(StoragePath(manifest_path).read_text())
+    if manifest.seq_len != SEQ_LEN:
+        raise ValueError(f"{manifest_path} packs {manifest.seq_len}-token rows; the ladder trains on {SEQ_LEN}")
+    fmt = PrebuiltLmDatasetFormat(input_ids_key=manifest.input_ids_key, loss_weights_key=manifest.loss_weights_key)
     return {
-        entry["name"]: DatasetComponent(source=None, cache_dir=entry["cache_dir"], format=fmt, tags=[entry["name"]])
-        for entry in manifest["components"]
+        c.name: DatasetComponent(source=None, cache_dir=c.cache_dir, format=fmt, tags=[c.name])
+        for c in manifest.components
     }
 
 
@@ -451,7 +473,7 @@ def build_h100_ladder_run(
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
 
-    rung = _h100_ladder_rung(size)
+    rung = h100_ladder_rung(size)
     if nodes is not None:
         rung = dataclasses.replace(rung, nodes=nodes)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
@@ -887,7 +909,7 @@ def _layer_skip_rule(
 @click.option(
     "--mix-cache",
     default=None,
-    help="Second flat train cache that gets --mix-share of the training tokens (the Data Belay's new data).",
+    help="Second flat train cache that gets --mix-share of the training tokens.",
 )
 @click.option(
     "--mix-share",
@@ -898,7 +920,7 @@ def _layer_skip_rule(
 @click.option(
     "--eval-manifest",
     default=None,
-    help="Manifest of extra prebuilt validation caches (the Data Belay's Eval Policy answer-BPB tasks).",
+    help="JSON PrebuiltEvalManifest of extra validation caches, scored with their per-token loss weights.",
 )
 @click.option(
     "--expert-axis-size",

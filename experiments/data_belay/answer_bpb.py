@@ -14,7 +14,6 @@ GPQA is left out: its dataset is gated, and the cluster's Hugging Face token has
 
 import ast
 import dataclasses
-import json
 import logging
 import random
 import re
@@ -29,7 +28,7 @@ from levanter.tokenizers import MarinTokenizer
 from marin.processing.tokenize.store_builder import write_stats_json
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.fast_track.launch import SEQ_LEN
+from experiments.grug.fast_track.launch import SEQ_LEN, PrebuiltEvalComponent, PrebuiltEvalManifest
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +284,7 @@ def pack_examples(
 
 @dataclasses.dataclass(frozen=True)
 class TaskCache:
-    """One task's validation cache, as the launcher's ``--eval-manifest`` reads it."""
+    """One task's validation cache and its size."""
 
     name: str
     """Component name, from ``task_component_name``."""
@@ -314,12 +313,7 @@ def build_task_cache(task: AnswerTask, tokenizer: MarinTokenizer, root: str) -> 
 def build_answer_bpb(tokenizer: MarinTokenizer, root: str) -> list[TaskCache]:
     """Write every task's cache under ``root`` and a manifest that the launcher reads."""
     caches = [build_task_cache(task, tokenizer, root) for task in TASKS]
-    manifest = {
-        "version": ANSWER_BPB_VERSION,
-        "seq_len": SEQ_LEN,
-        "input_ids_key": INPUT_IDS_KEY,
-        "loss_weights_key": LOSS_WEIGHTS_KEY,
-        "components": [dataclasses.asdict(c) for c in caches],
-    }
-    StoragePath(prefix_join(root, MANIFEST_NAME)).write_text(json.dumps(manifest, indent=2))
+    components = tuple(PrebuiltEvalComponent(c.name, c.cache_dir) for c in caches)
+    manifest = PrebuiltEvalManifest(SEQ_LEN, INPUT_IDS_KEY, LOSS_WEIGHTS_KEY, components)
+    StoragePath(prefix_join(root, MANIFEST_NAME)).write_text(manifest.to_json())
     return caches

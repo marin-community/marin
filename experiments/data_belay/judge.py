@@ -6,17 +6,16 @@
 For each metric group, ``Δ`` is the treatment's mean BPB over the control's mean BPB, minus 1 (negative is better),
 with a Welch t interval over the seeds of both arms. Each group gets a call:
 
-* ``better``: the interval lies wholly below 0.
-* ``worse``: the interval lies wholly above the group's harm limit.
-* ``neutral``: the interval reaches neither below 0 wholly nor up to the harm limit: no gain shown, and no harm
-  beyond the limit.
-* ``unresolved``: the interval reaches the harm limit but does not lie above it; more seeds narrow it.
+* ``better``: the interval's upper end is below 0.
+* ``worse``: the interval's lower end is above the group's harm limit.
+* ``neutral``: not better, and the upper end is below the harm limit.
+* ``unresolved``: not better or worse, and the upper end is at or above the harm limit; more seeds narrow it.
 
 The verdict:
 
 * ``hurts``: some group is worse.
 * ``helps``: some group is better, and every other group is better or neutral.
-* ``trade-off``: some group is better, and some other group is unresolved: it may be harmed beyond its limit.
+* ``trade-off``: some group is better, and some other group is unresolved.
 * ``no gain``: no group is better and none is worse.
 """
 

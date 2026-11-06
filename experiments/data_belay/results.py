@@ -20,6 +20,10 @@ def treatment_run_id(rung: str, candidate: str, seed: int) -> str:
     return f"dbelay-{rung}-{candidate}-s{seed}"
 
 
+def run_exists(run_id: str) -> bool:
+    return len(wandb.Api().runs(CONFIG.wandb_project, filters={"name": run_id})) > 0
+
+
 def run_metrics(run_id: str) -> dict[str, float]:
     """Each group's macro BPB from a finished run; raises if the run did not finish or lacks a group."""
     run = wandb.Api().run(f"{CONFIG.wandb_project}/{run_id}")
