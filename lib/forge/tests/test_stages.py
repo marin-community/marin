@@ -1,15 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
 
 import pytest
+from jsonschema import Draft202012Validator, ValidationError
 from lib.forge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import TaskResource
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.runtime.resources import inline_resource
 
 from forge.config import ForgeConfig, WorkspaceHydration
@@ -19,7 +21,7 @@ from forge.effects.log import EventLog
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.adversary import AdversaryReport
 from forge.harness.web import FakeWeb
-from forge.lowering import requirements
+from forge.lowering import machine_backend, requirements
 from forge.model import serialization as wire
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, Message
@@ -59,6 +61,8 @@ from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference, InferenceRequest, complete
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
+from forge.resources.sandbox.factories import MachineHost
+from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.stages.author import author
 from forge.stages.exits import Decided, Triaged, TriageRejected
 from forge.stages.review import review
@@ -170,6 +174,32 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     )
     assert harness.files[PurePosixPath("/workspace/notes")] == b"sum"
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+
+
+@pytest.mark.asyncio
+async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    ctx = Context(log=EventLog())
+    await author(ctx, workpiece, config(harness), resources(ctx))
+    await ctx.drain()
+    assert harness.session is not None and workpiece.submission is not None
+    system = harness.session.messages[0].content
+    environments, schemas = (json.loads(block.split("```", 1)[0]) for block in system.split("```json\n")[1:])
+    task = json.loads(workpiece.submission.task.model_dump_json())
+    task_schema = Draft202012Validator(schemas["TaskSpec"])
+    task_schema.validate(task)
+    task["context"]["events"][0]["type"] = "invalid_event_type"
+    with pytest.raises(ValidationError):
+        task_schema.validate(task)
+    control = json.loads(wire.CONTROL.dump_json(workpiece.submission.controls[0]))
+    control_schema = Draft202012Validator(schemas["Control"])
+    control_schema.validate(control)
+    del control["candidate"]
+    with pytest.raises(ValidationError):
+        control_schema.validate(control)
+    resolved = tuple(EnvironmentRequirements.model_validate(value) for value in environments)
+    assert resolved[0].docker_image == GRADER_BASE_IMAGE and resolved[1].docker_image is None
+    assert tuple(machine_backend(value, MachineHost.IRIS).value for value in resolved) == ("gvisor", "shellsim")
 
 
 @pytest.mark.asyncio
