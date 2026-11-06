@@ -48,10 +48,12 @@ def system_prompt(policy: Policy) -> str:
         reference=reference,
         environment=environment,
         author_image=image or "none (ShellSim)",
-        grader_base_image=GRADER_BASE_IMAGE,
         workdir=policy.setting("author.workdir", str),
         output_chars=policy.setting("tools.output_chars", int),
         grader_environments=json.dumps(environments, sort_keys=True),
+        task_environments=json.dumps(
+            tuple(dict(value, capabilities=["shell"]) for value in environments), sort_keys=True
+        ),
     )
 
 

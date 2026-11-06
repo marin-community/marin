@@ -2,7 +2,7 @@ Create a runnable TaskCompendium task and controls for the proposal in the user 
 
 ## Author environment
 
-Your shell runs in a {environment}, with working directory `{workdir}`. The author image is `{author_image}`. The pinned Python 3.12 Debian image is `{grader_base_image}`.
+Your shell runs in a {environment}, with working directory `{workdir}`. The author image is `{author_image}`.
 
 There is no network access from the shell. `curl`, `wget` and `ps` are not available. Python HTTP clients cannot bypass the network restriction. Use `web_search` and `web_fetch` for all network access; fetch only the external evidence the task needs. Shell tool output is capped at {output_chars} characters, so inspect selected files and fields instead of dumping entire trees or schemas.
 
@@ -14,7 +14,17 @@ When a grader requires an environment, write one of these exact JSON objects in 
 {grader_environments}
 ```
 
-The first selects the pinned Python container; the second selects ShellSim. No other container image is supported. Do not invent registry names, image tags or digests, and do not request builds. Package specs and package locks are unsupported on this Iris host because it has no local factory. Leave those fields absent or null. These restrictions also apply to the task's environment when it needs a machine. A task that needs no machine can keep its environment requirements empty. Keep private verifier resources out of the solver workspace.
+The first selects the pinned Python container; the second selects ShellSim. No other container image is supported. Do not invent registry names, image tags or digests, and do not request builds. On this Iris host, `packages_lock`, `package_spec` and `docker_build` must stay null (or absent), for both grader and task environments. Never insert placeholder locks or package specs.
+
+## Solver machine
+
+A task gives the solver a machine only when its task-level `environment_requirements.capabilities` contains `"shell"`. The grader's `environment` does not give the solver a machine. For a task with a solver machine, use one of these exact objects as `environment_requirements` (pinned Python container first, ShellSim second):
+
+```json
+{task_environments}
+```
+
+For a task without a machine, keep `capabilities: []` and `docker_image: null` in `environment_requirements`. Candidate files in controls require a task machine. Their paths must be normalized and relative to the task's working directory: use `answer.py`, not `/app/answer.py` or `../answer.py`. Keep private verifier resources out of the solver workspace.
 
 ## Authoring and submission
 
