@@ -42,7 +42,11 @@ and nine had submission-format failures; some latter trials ended at a budget
 limit. **Do not infer overall model ability or bank difficulty from one item.**
 The fact that many capable models could not return a compliant answer suggests
 we should inspect the prompt/submit contract and tool traces before scaling,
-not simply treat all failures as inability to solve biology.
+not simply treat all failures as inability to solve biology. In particular,
+Sonnet's malformed final response **contains an exact matching JSON object**,
+but is not a bare JSON submission; its frozen score remains zero. The other
+eight submission failures do not contain a JSON candidate matching the
+reference. These observations are diagnostic and do not modify scores.
 
 Next: review the 12 raw trajectories and format contract; separately validate
 more frozen references; then decide whether to extend the same 12 provider-pinned
