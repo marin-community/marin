@@ -24,8 +24,9 @@ from here; ``LogStack`` resolves every table from this catalog.
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
 - ``iris.job`` / ``iris.job_config`` / ``iris.task_attempt`` — durable copies of
-  the controller's job, job request and attempt rows, one row per state change,
-  written by the controller that executes the work (producer:
+  the controller's job, job request and attempt rows: one ``iris.job_config`` row
+  per job, at submit, and one job or attempt row per state change, written by the
+  controller that executes the work (producer:
   ``iris.cluster.controller.controller_rows``).
 """
 
