@@ -188,6 +188,46 @@ reworks how RolloutEngine passes recorded turns to grading and removes tests.
 - Validation: the launcher imports and builds 24 probe rows with thinking off;
   no run launched.
 
+### 2026-11-06 22:30 UTC - Pretrained Snowball on one 8xH100 node
+
+- Question: how much of Snowball v0.1's protocol behavior comes from
+  post-training? The baseline is the pretrained checkpoint the SFT stages start
+  from.
+- Model: the June pretrain cooldown export
+  `s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/`
+  (`--model snowball-base`). It is served with Snowball v0.1's tokenizer and
+  chat template, so it sees the same tool prompts. The vocabularies match by
+  id; v0.1 only names reserved tokens 128005 and 128011 `<tool_call>` and
+  `</tool_call>`. The branch includes the #11050 end-of-turn fix (eb858b6060).
+- Command, from 3c51814b51:
+  `uv run python -m experiments.post_training.inventory.protocol_probes --model snowball-base --version probes-base1-dev --run`.
+  Coordinator
+  `/dml/users-dml-checkpoints-protocol-probes-eval-snowball-base-probes-base1-dev-coordinator-3d0b7893`
+  on `cw-us-east-02a`. It waited over an hour in the Kueue queue for a free
+  node, then ran in minutes.
+- Dump:
+  `s3://marin-us-east-02a/marin/users/dml/checkpoints/protocol-probes-eval/snowball-base/probes-base1-dev/exports/dumped_evals/eval_only/protocol-probes.jsonl`.
+- Result (24 rows, thinking off): average score 0.00, no tool messages, no
+  reasoning tokens.
+
+  | Check | Snowball v0.1 (2026-11-04) | Pretrained base |
+  | --- | --- | --- |
+  | tool executed | 7 of 8 | 0 of 8 |
+  | page retrieved | 8 of 8 | 0 of 8 |
+  | answer file submitted | 2 of 8 | 0 of 8 |
+
+  The first turns, up to `<|eot_id|>`, show why. File probes narrate the call
+  ("I'll use the shell tool to write the file.") without making it. Tool probes
+  echo the template's system tools header. Seven of eight URL probes start with
+  an empty turn. No reply contains `<tool_call>`.
+- Caveat: all 24 replies hit the 1024-token length stop. The base export's
+  generation config ends sequences only at `<|end_of_text|>`, so vLLM did not
+  stop at `<|eot_id|>`, and each reply continued with invented chat turns.
+  The first turns already contain no tool call, so stopping at `<|eot_id|>`
+  would not change the rates.
+- Conclusion: the pretrained model follows none of the three protocols. The
+  tool and URL behavior of Snowball v0.1 comes from post-training.
+
 ## Final decision
 
 - Selected approach: evaluate the probes against checkpoints with the launcher
