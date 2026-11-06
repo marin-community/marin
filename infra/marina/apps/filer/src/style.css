@@ -495,6 +495,10 @@ tbody tr:hover {
 .data-table tbody tr {
   cursor: pointer;
 }
+.files tbody tr.chosen,
+.file-card.chosen {
+  background: #edf3fc;
+}
 .file-link {
   padding: 0;
   border: 0;
@@ -567,6 +571,69 @@ tbody tr:hover {
 .card-meta {
   color: #8a96a7;
   font-size: 10px;
+}
+.listing-area {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+}
+.listing-main {
+  flex: 1;
+  min-width: 0;
+}
+.file-preview {
+  flex: 0 0 42%;
+  min-width: 330px;
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #dce4ef;
+  background: white;
+}
+.file-preview-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid #e7ecf3;
+}
+.file-preview-header > div {
+  min-width: 0;
+}
+.file-preview-header h2 {
+  font-size: 15px;
+  font-weight: 550;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+.file-preview-header button {
+  align-self: flex-start;
+  border: 0;
+  font-size: 22px;
+  padding: 0 4px;
+}
+.file-preview-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e7ecf3;
+}
+.file-preview-actions button {
+  font-size: 10px;
+  padding: 6px 8px;
+}
+.file-preview-message {
+  margin: 0;
+  padding: 16px;
+  font-size: 11px;
+}
+.file-preview .source-view {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  border: 0;
+  padding: 16px;
 }
 .folder-icon {
   color: #668bb5;
@@ -877,6 +944,14 @@ tbody tr:hover {
   }
   .data-area.inspecting {
     flex-direction: column;
+  }
+  .listing-area.with-preview {
+    flex-direction: column;
+  }
+  .file-preview {
+    width: 100%;
+    min-width: 0;
+    max-height: 50vh;
   }
   .inspector {
     width: 100%;

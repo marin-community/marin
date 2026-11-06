@@ -20,6 +20,10 @@ available across browsers.
 The listing has list and grid views. Images at or below 1 MiB show lazy-loaded
 thumbnails; larger files show an icon and can be opened for a preview within the
 10 MiB media limit. The image viewer can switch between fitted and actual size.
+Selecting a file with a recognized text extension opens its source in a pane
+beside the listing, so the surrounding folder stays visible. The pane can copy
+either link or open the full file view. On narrow screens, it appears below the
+listing. It uses the same bounded text read as the full view.
 
 | File | Views |
 | --- | --- |

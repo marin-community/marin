@@ -4,6 +4,7 @@ import {
   computed,
   onMounted,
   onUnmounted,
+  nextTick,
   defineAsyncComponent,
 } from "vue";
 import { marked } from "marked";
@@ -29,6 +30,11 @@ const favorites = ref([]),
   viewMode = ref("list"),
   imageExpanded = ref(false),
   rowNumber = ref(1);
+const sideEntry = ref(null),
+  sidePreview = ref(null),
+  sideBusy = ref(false),
+  sideError = ref(""),
+  sidePane = ref(null);
 const nextToken = ref(null),
   selected = ref(null),
   visibleColumns = ref([]),
@@ -38,6 +44,7 @@ const sortKey = ref("name"),
   pageSize = ref(50),
   duration = ref(0);
 let generation = 0;
+let sideGeneration = 0;
 let requestedUrl = "";
 const recent = ref(JSON.parse(localStorage.getItem("filer.recent") || "[]"));
 const isFavorite = computed(() => favorites.value.includes(location.value));
@@ -156,6 +163,47 @@ function hasThumbnail(entry) {
 function thumbnailUrl(entry) {
   return `api/thumbnail?${new URLSearchParams({ url: entry.url })}`;
 }
+function isTextEntry(entry) {
+  return /\.(txt|log|md|markdown|json|jsonl|ndjson|ya?ml|csv|tsv|xml|html?|svg|py|js|jsx|ts|tsx|css|sql|sh|toml|ini|cfg|conf|ipynb|rst|r|java|go|rs|c|h|cpp|hpp)(\.(gz|bz2|xz|lzma))?$/i.test(
+    entry.name,
+  );
+}
+function closeSidePreview() {
+  ++sideGeneration;
+  sideEntry.value = null;
+  sidePreview.value = null;
+  sideBusy.value = false;
+  sideError.value = "";
+}
+async function chooseEntry(entry) {
+  if (entry.is_dir || !isTextEntry(entry)) {
+    await open(entryUrl(entry), entry.is_dir ? "directory" : "auto");
+    return;
+  }
+  const id = ++sideGeneration;
+  sideEntry.value = entry;
+  sidePreview.value = null;
+  sideError.value = "";
+  sideBusy.value = true;
+  try {
+    const result = await api("inspect", {
+      url: entry.url,
+      limit: pageSize.value,
+    });
+    if (id === sideGeneration) sidePreview.value = result;
+  } catch (error) {
+    if (id === sideGeneration) sideError.value = error.message;
+  } finally {
+    if (id === sideGeneration) {
+      sideBusy.value = false;
+      if (window.matchMedia("(max-width: 1000px)").matches) {
+        await nextTick();
+        if (id === sideGeneration)
+          sidePane.value?.scrollIntoView({ block: "start" });
+      }
+    }
+  }
+}
 function filerLink(url) {
   const base = ["localhost", "127.0.0.1"].includes(window.location.hostname)
     ? window.location.href.split("#")[0]
@@ -210,6 +258,7 @@ async function open(
 ) {
   const id = ++generation,
     start = performance.now();
+  closeSidePreview();
   requestedUrl = url;
   busy.value = true;
   error.value = "";
@@ -593,121 +642,177 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
-          <div v-if="viewMode === 'list'" class="table-wrap">
-            <table class="files">
-              <thead>
-                <tr>
-                  <th><button @click="sort('name')">Name ↕</button></th>
-                  <th><button @click="sort('size')">Size ↕</button></th>
-                  <th>Type</th>
-                  <th><button @click="sort('mtime')">Modified ↕</button></th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
+          <div class="listing-area" :class="{ 'with-preview': sideEntry }">
+            <div class="listing-main">
+              <div v-if="viewMode === 'list'" class="table-wrap">
+                <table class="files">
+                  <thead>
+                    <tr>
+                      <th><button @click="sort('name')">Name ↕</button></th>
+                      <th><button @click="sort('size')">Size ↕</button></th>
+                      <th>Type</th>
+                      <th>
+                        <button @click="sort('mtime')">Modified ↕</button>
+                      </th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="entry in shownEntries"
+                      :key="entry.url"
+                      :class="{ chosen: sideEntry?.url === entry.url }"
+                      @click="chooseEntry(entry)"
+                    >
+                      <td>
+                        <button
+                          class="file-link"
+                          @click.stop="chooseEntry(entry)"
+                        >
+                          <img
+                            v-if="hasThumbnail(entry)"
+                            class="file-thumbnail"
+                            :src="thumbnailUrl(entry)"
+                            :alt="`${entry.name} thumbnail`"
+                            loading="lazy"
+                          />
+                          <span
+                            v-else
+                            :class="entry.is_dir ? 'folder-icon' : 'file-icon'"
+                            >{{ entry.is_dir ? "▱" : "▤" }}</span
+                          ><span>{{ entry.name }}</span>
+                        </button>
+                      </td>
+                      <td class="mono muted">{{ size(entry.size) }}</td>
+                      <td class="muted">
+                        {{
+                          entry.is_dir
+                            ? "Folder"
+                            : entry.name.split(".").pop().toUpperCase()
+                        }}
+                      </td>
+                      <td class="muted">
+                        {{
+                          entry.mtime
+                            ? new Date(entry.mtime).toLocaleString()
+                            : "—"
+                        }}
+                      </td>
+                      <td class="row-actions">
+                        <button
+                          :aria-label="`Copy Filer link for ${entry.name}`"
+                          title="Copy Filer link"
+                          @click.stop="
+                            copy(filerLink(entryUrl(entry)), 'Filer link')
+                          "
+                        >
+                          ↗</button
+                        ><span>→</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-if="!shownEntries.length && !busy" class="empty">
+                  {{
+                    filter
+                      ? "No matching names in this page."
+                      : "This location is empty."
+                  }}
+                </div>
+              </div>
+              <div v-else class="file-grid">
+                <button
                   v-for="entry in shownEntries"
                   :key="entry.url"
-                  @click="
-                    open(entryUrl(entry), entry.is_dir ? 'directory' : 'auto')
-                  "
+                  class="file-card"
+                  :class="{ chosen: sideEntry?.url === entry.url }"
+                  @click="chooseEntry(entry)"
                 >
-                  <td>
-                    <button class="file-link">
-                      <img
-                        v-if="hasThumbnail(entry)"
-                        class="file-thumbnail"
-                        :src="thumbnailUrl(entry)"
-                        :alt="`${entry.name} thumbnail`"
-                        loading="lazy"
-                      />
-                      <span
-                        v-else
-                        :class="entry.is_dir ? 'folder-icon' : 'file-icon'"
-                        >{{ entry.is_dir ? "▱" : "▤" }}</span
-                      ><span>{{ entry.name }}</span>
-                    </button>
-                  </td>
-                  <td class="mono muted">{{ size(entry.size) }}</td>
-                  <td class="muted">
-                    {{
-                      entry.is_dir
-                        ? "Folder"
-                        : entry.name.split(".").pop().toUpperCase()
-                    }}
-                  </td>
-                  <td class="muted">
-                    {{
-                      entry.mtime ? new Date(entry.mtime).toLocaleString() : "—"
-                    }}
-                  </td>
-                  <td class="row-actions">
-                    <button
-                      :aria-label="`Copy Filer link for ${entry.name}`"
-                      title="Copy Filer link"
-                      @click.stop="
-                        copy(filerLink(entryUrl(entry)), 'Filer link')
-                      "
+                  <span class="card-preview">
+                    <img
+                      v-if="hasThumbnail(entry)"
+                      :src="thumbnailUrl(entry)"
+                      :alt="`${entry.name} thumbnail`"
+                      loading="lazy"
+                    />
+                    <span
+                      v-else
+                      :class="entry.is_dir ? 'folder-icon' : 'file-icon'"
+                      >{{ entry.is_dir ? "▱" : "▤" }}</span
                     >
-                      ↗</button
-                    ><span>→</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="!shownEntries.length && !busy" class="empty">
-              {{
-                filter
-                  ? "No matching names in this page."
-                  : "This location is empty."
-              }}
-            </div>
-          </div>
-          <div v-else class="file-grid">
-            <button
-              v-for="entry in shownEntries"
-              :key="entry.url"
-              class="file-card"
-              @click="
-                open(entryUrl(entry), entry.is_dir ? 'directory' : 'auto')
-              "
-            >
-              <span class="card-preview">
-                <img
-                  v-if="hasThumbnail(entry)"
-                  :src="thumbnailUrl(entry)"
-                  :alt="`${entry.name} thumbnail`"
-                  loading="lazy"
-                />
+                  </span>
+                  <span class="card-name" :title="entry.name">{{
+                    entry.name
+                  }}</span>
+                  <span class="card-meta">{{
+                    entry.is_dir ? "Folder" : size(entry.size)
+                  }}</span>
+                </button>
+                <div v-if="!shownEntries.length && !busy" class="empty">
+                  {{
+                    filter
+                      ? "No matching names in this page."
+                      : "This location is empty."
+                  }}
+                </div>
+              </div>
+              <footer class="listing-footer">
                 <span
-                  v-else
-                  :class="entry.is_dir ? 'folder-icon' : 'file-icon'"
-                  >{{ entry.is_dir ? "▱" : "▤" }}</span
-                >
-              </span>
-              <span class="card-name" :title="entry.name">{{
-                entry.name
-              }}</span>
-              <span class="card-meta">{{
-                entry.is_dir ? "Folder" : size(entry.size)
-              }}</span>
-            </button>
-            <div v-if="!shownEntries.length && !busy" class="empty">
-              {{
-                filter
-                  ? "No matching names in this page."
-                  : "This location is empty."
-              }}
+                  >{{ shownEntries.length }} shown · one folder level · metadata
+                  only</span
+                ><button v-if="nextToken" :disabled="busy" @click="more">
+                  Load next listing page
+                </button>
+              </footer>
             </div>
+            <aside
+              v-if="sideEntry"
+              ref="sidePane"
+              class="file-preview"
+              aria-label="File preview"
+            >
+              <div class="file-preview-header">
+                <div>
+                  <span class="eyebrow">FILE PREVIEW</span>
+                  <h2 :title="sideEntry.name">{{ sideEntry.name }}</h2>
+                  <span class="muted">{{ size(sideEntry.size) }}</span>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close file preview"
+                  @click="closeSidePreview"
+                >
+                  ×
+                </button>
+              </div>
+              <div class="file-preview-actions">
+                <button @click="open(sideEntry.url)">Open full view</button>
+                <button @click="copy(filerLink(sideEntry.url), 'Filer link')">
+                  Copy Filer link
+                </button>
+                <button @click="copy(sideEntry.url, 'Storage URL')">
+                  Copy storage URL
+                </button>
+              </div>
+              <p v-if="sideBusy" class="file-preview-message">Reading file…</p>
+              <p
+                v-else-if="sideError"
+                class="file-preview-message error"
+                role="alert"
+              >
+                {{ sideError }}
+              </p>
+              <template v-else-if="sidePreview">
+                <p
+                  v-if="sidePreview.truncated"
+                  class="file-preview-message notice"
+                >
+                  Bounded preview: more text is available in the file.
+                </p>
+                <pre class="source-view">{{ sidePreview.text }}</pre>
+              </template>
+            </aside>
           </div>
-          <footer class="listing-footer">
-            <span
-              >{{ shownEntries.length }} shown · one folder level · metadata
-              only</span
-            ><button v-if="nextToken" :disabled="busy" @click="more">
-              Load next listing page
-            </button>
-          </footer>
         </template>
         <template v-else>
           <div v-if="preview.notice" class="notice">{{ preview.notice }}</div>
