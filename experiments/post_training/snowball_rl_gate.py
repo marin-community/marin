@@ -1132,7 +1132,8 @@ def gate_step(
 def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     try:
         receipt = read_skyrl_launch_receipt(path)
-    except SkyRLReceiptLookupError:
+    except SkyRLReceiptLookupError as error:
+        logging.warning("Could not recover recorded command options for %s: %s", path, error)
         return None, GateInputs()
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
     command = presets.run_command()(lambda **kwargs: ())

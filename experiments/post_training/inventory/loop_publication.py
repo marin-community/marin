@@ -52,7 +52,7 @@ def publish_summary(config: PublicationConfig) -> LoopPublication:
 
 
 def run_recorded_loop(config: LoopRunConfig) -> SkyRLRun:
-    """Publish failed attempts too, while preserving the training failure."""
+    """Publish the failed-attempt record before propagating a training error."""
     try:
         return run_loop(config)
     except Exception as training_error:
@@ -88,7 +88,14 @@ def _snowball_record(path: str, native: tuple[str, str]) -> dict | None:
     return record
 
 
-def _native_interval(job_id: str) -> tuple[str, str, float]:
+@dataclass(frozen=True)
+class _NativeInterval:
+    started_at: str
+    completed_at: str
+    elapsed_seconds: float
+
+
+def _native_interval(job_id: str) -> _NativeInterval:
     with ExitStack() as stack:
         info = get_job_info()
         client = stack.enter_context(
@@ -102,7 +109,7 @@ def _native_interval(job_id: str) -> tuple[str, str, float]:
     start, finish = job.started_at.epoch_seconds(), job.finished_at.epoch_seconds()
     if finish < start:
         raise ValueError(f"Native completion precedes its start: {job_id}")
-    return (
+    return _NativeInterval(
         datetime.fromtimestamp(start, UTC).isoformat(),
         datetime.fromtimestamp(finish, UTC).isoformat(),
         finish - start,
@@ -215,7 +222,7 @@ def _retain_snowball_summary(
             phases.append(None)
             evidence.append(f"Evaluation step {step}: {error}")
     baseline, final = phases
-    started, completed_at, elapsed = _native_interval(receipt.result.iris_job_id)
+    interval = _native_interval(receipt.result.iris_job_id)
     provenance = receipt.result.provenance or {}
     if metadata is None:
         record = presets.artifact_record(training_path)
@@ -231,11 +238,11 @@ def _retain_snowball_summary(
             native[1] + "-gate-" + fingerprint_hash(canonical_json(gate_identity)) if gate_identity else native[1]
         ),
         "label": preset.name,
-        "run_date": started,
+        "run_date": interval.started_at,
         "date_basis": "launch_started",
-        "started_at": started,
-        "completed_at": completed_at,
-        "elapsed_seconds": elapsed,
+        "started_at": interval.started_at,
+        "completed_at": interval.completed_at,
+        "elapsed_seconds": interval.elapsed_seconds,
         "timing_scope": "native_job_start_to_finish",
         "status": "succeeded" if receipt.result.state == "succeeded" else "failed",
         "verdict": report["verdict"] if report is not None else None,

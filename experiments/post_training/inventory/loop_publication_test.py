@@ -18,13 +18,9 @@ from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training.inventory import loop_publication
 from experiments.post_training.inventory.publication_test_support import result_record
+from experiments.post_training.inventory.publication_test_support import write_json as _json
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
-
-
-def _json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value))
 
 
 def _gate_result(output, verdict, interpretation):

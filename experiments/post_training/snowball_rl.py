@@ -436,7 +436,7 @@ def _recorded_step(
     return replace(step, run=launch)
 
 
-def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
+def _control_panel_runs(preset: presets.Preset, panel: str, wandb_entity: str) -> SnowballRun:
     evaluation_preset = presets.rescore_preset(preset, panel)
     selection = presets.selection_artifact(panel)
     evaluation = evaluation_preset.evaluations[0]
@@ -496,7 +496,7 @@ def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
                 export_hf=False,
                 retention=2,
                 validation_data=(ArtifactDataSource(selection, relative_path=f"{evaluation.file}.parquet"),),
-                wandb_entity=os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY,
+                wandb_entity=wandb_entity,
             )
             steps.append(_recorded_step(step, preset, presets.E8))
             protocols.append(protocol)
@@ -522,6 +522,7 @@ def build_run(
     rescore_panel: str | None = None,
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
+    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
     if rescore_panel is not None:
         if not control or any(
             (settings, tasks, init, layout, resume_from, evaluations, requirements, baselines, keep_weights)
@@ -530,7 +531,7 @@ def build_run(
         if replicates != 1:
             raise click.BadParameter("--rescore-panel scores every pinned control; omit --replicates")
         _provenance(control=True)
-        return _control_panel_runs(preset, rescore_panel)
+        return _control_panel_runs(preset, rescore_panel, wandb_entity)
     snowball_rl_gate.validate_candidate(preset, requirements, control=control)
     learning = (
         preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA) and not preset.recipe.layout.role_plan.generate_only
@@ -641,7 +642,6 @@ def build_run(
         "keep_weights": keep_weights,
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
-    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
