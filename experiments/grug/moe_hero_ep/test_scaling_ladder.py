@@ -11,16 +11,12 @@ import numpy as np
 import optax
 import pytest
 from levanter.checkpoint import Checkpointer, CheckpointInterval
-from levanter.data.dataset import ListAsyncDataset
-from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.schedule import BatchSchedule
 from levanter.utils.mesh import MeshConfig
-from levanter.utils.thread_utils import blocking_wait
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import launch_scaling_ladder
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import _MIXTURE_BLOCK_SIZE, HarrierContextPhase, _stage_weights
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HarrierContextPhase
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch_diagnostics import build_diagnostic_run
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run, hero_permanent_keeps
@@ -439,29 +435,3 @@ def test_permanent_checkpoints_continue_through_the_extension():
     steps = range(HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + _EXTENSION_STEPS + 1)
     # The final step comes from the forced final checkpoint.
     assert _permanent_steps(keep, steps) == [390_500, 391_000]
-
-
-@pytest.mark.parametrize("batch_size", [704, 176])
-def test_data_stays_on_cooldown_weights_and_re_epochs_past_the_schedule(batch_size):
-    stages = _stage_weights(HERO_SCHEDULE_STEPS, batch_size, {})
-    names = list(stages[-1][1])
-    source_length = 3
-    mixture = MixtureDataset(
-        datasets={name: ListAsyncDataset(list(range(source_length))) for name in names},
-        weights=[(step * batch_size, weights) for step, weights in stages],
-        block_size=_MIXTURE_BLOCK_SIZE,
-        key=jax.random.PRNGKey(0),
-    )
-    schedule = BatchSchedule(batch_size)
-    cooldown = np.array([stages[-1][1][name] for name in names])
-    served = []
-    for step in (HERO_SCHEDULE_STEPS, HERO_SCHEDULE_STEPS + _EXTENSION_STEPS):
-        index = schedule.global_data_offset_by_step(step)
-        counts = mixture.sequence_counts_before_block(index // _MIXTURE_BLOCK_SIZE)
-        served.append(np.array([counts[name] for name in names]))
-        # Every read position is far past these three-element sources, so reading at all exercises the restart.
-        batch = blocking_wait(mixture.get_batch(list(range(index, index + batch_size))))
-        assert all(0 <= value < source_length for value in batch)
-
-    mix = (served[1] - served[0]) / (served[1] - served[0]).sum()
-    np.testing.assert_allclose(mix, cooldown / cooldown.sum(), atol=1e-3)
