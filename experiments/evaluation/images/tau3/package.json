@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.80.5",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "@earendil-works/pi-ai": "0.80.5",
     "pi-acp": "0.0.33",
     "acpx": "0.12.0",
