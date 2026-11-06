@@ -57,13 +57,18 @@ class ReturnRequest[P]:
     payload: P
 
 
+@dataclass(frozen=True, slots=True)
+class FinishRequest:
+    reason: str
+
+
 class Tool[P](Protocol):
     @property
     def schema(self) -> ToolSchema: ...
 
     async def __call__(
         self, ctx: Context, args: Mapping[str, object], env: Env
-    ) -> ToolResult | SubmitRequest | ReturnRequest[P]: ...
+    ) -> ToolResult | SubmitRequest | ReturnRequest[P] | FinishRequest: ...
 
 
 class Harness(Protocol):

@@ -31,7 +31,7 @@ class WorkspaceHydration:
     rendered: Callable[[Workpiece, Policy], tuple[TaskResource, ...]]
 
 
-type Edge = tuple[Stage, Callable[[Workpiece, Exit], Workpiece]]
+type Edge = tuple[Stage | Callable[[Workpiece], Stage | None], Callable[[Workpiece, Exit], Workpiece]]
 type Transitions = Mapping[tuple[Stage, type[Exit]], Edge]
 
 
@@ -47,6 +47,7 @@ class ForgeConfig:
     band: BandRules
     budget: Budget
     transitions: Transitions
+    initial_stage: Stage = Stage.AUTHOR
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adversaries", MappingProxyType(dict(self.adversaries)))
