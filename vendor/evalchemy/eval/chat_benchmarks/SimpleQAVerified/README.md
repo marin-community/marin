@@ -31,7 +31,10 @@ reference notebook:
   The notebook uses provider defaults.
 - The judge runs at `temperature: 0`. A response other than exactly `A`, `B`,
   or `C` is an unscored judge failure; the notebook searches the reply for a
-  letter and defaults unparseable replies to not attempted.
+  letter and defaults unparseable replies to not attempted. Its search takes
+  the first capital `A`, `B`, or `C` anywhere in the reply, so it grades the
+  word `NOT_ATTEMPTED` as correct and both `CORRECT` and `INCORRECT` as not
+  attempted.
 - The judge model is whatever `JUDGE_MODEL` names; the leaderboard uses
   `gpt-4.1-2025-04-14`.
 
