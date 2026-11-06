@@ -271,8 +271,9 @@ class IrisJob:
     error: str | None
     num_tasks: int
     ts: datetime
-    # Reserved for submit-time job tags as a JSON object, e.g. {"project": ...,
-    # "category": ...}. Always NULL until Iris accepts job tags at submit.
+    # The job's JobTags as a JSON object without empty fields, e.g.
+    # {"project": ..., "category": ...}; a child without its own has its
+    # parent's. NULL when untagged.
     tags: str | None = None
 
 

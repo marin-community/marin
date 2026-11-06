@@ -50,6 +50,8 @@ from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
+    MAX_JOB_DESCRIPTION_CHARS,
+    SUGGESTED_JOB_CATEGORIES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -605,6 +607,7 @@ def run_iris_job(
     extra_bundle_includes: Sequence[str] = (),
     secrets: dict[str, str] | None = None,
     secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
+    tags: job_pb2.JobTags | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -734,6 +737,7 @@ def run_iris_job(
         task_image=task_image,
         bundle_exclude=bundle_exclude,
         extra_bundle_includes=extra_bundle_includes,
+        tags=tags,
     )
 
 
@@ -767,6 +771,7 @@ def _submit_and_wait_job(
     extra_bundle_includes: Sequence[str] = (),
     secrets: dict[str, str] | None = None,
     secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
+    tags: job_pb2.JobTags | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -808,6 +813,7 @@ def _submit_and_wait_job(
         egress_allow=egress_allow,
         submit_argv=submit_argv,
         task_image=task_image,
+        tags=tags,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -1058,6 +1064,28 @@ Examples:
     ),
 )
 @click.option(
+    "--project",
+    type=str,
+    default=None,
+    help="Job tag: the effort this job belongs to, for compute accounting. Child jobs inherit it.",
+)
+@click.option(
+    "--category",
+    type=str,
+    default=None,
+    help=(
+        "Job tag: the kind of work, for compute accounting. Child jobs inherit it. Suggested: "
+        + ", ".join(SUGGESTED_JOB_CATEGORIES)
+        + "."
+    ),
+)
+@click.option(
+    "--description",
+    type=str,
+    default=None,
+    help=f"Job tag: free-form text on what the job does, up to {MAX_JOB_DESCRIPTION_CHARS} characters.",
+)
+@click.option(
     "--cancel-on-exit/--no-cancel-on-exit",
     default=True,
     help="Cancel the Job on Ctrl+C. Tunnel failures leave it running.",
@@ -1115,6 +1143,9 @@ def run(
     container_profile: str | None,
     egress_policy: str | None,
     egress_allow: tuple[str, ...],
+    project: str | None,
+    category: str | None,
+    description: str | None,
     cancel_on_exit: bool,
     include: tuple[str, ...],
     exclude: tuple[str, ...],
@@ -1189,6 +1220,11 @@ def run(
             dashboard_url=dashboard_url or None,
             bundle_exclude=bundle_exclude,
             extra_bundle_includes=include,
+            tags=(
+                job_pb2.JobTags(project=project, category=category, description=description)
+                if project or category or description
+                else None
+            ),
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

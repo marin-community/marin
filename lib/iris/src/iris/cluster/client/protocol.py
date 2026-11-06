@@ -44,6 +44,7 @@ class ClusterClient(Protocol):
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
         egress_allow: Sequence[job_pb2.EgressRule] = (),
         submit_argv: list[str] | None = None,
+        tags: job_pb2.JobTags | None = None,
     ) -> JobName: ...
 
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus: ...
