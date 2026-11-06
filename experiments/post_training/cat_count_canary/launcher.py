@@ -142,7 +142,6 @@ PROTECTED_SETTINGS = ROLE_SETTINGS | frozenset(
         "trainer.eval_before_train",
         "trainer.ckpt_interval",
         "trainer.callbacks",
-        "generator.eval_sampling_params.max_generate_length",
         "generator.chat_template",
         "generator.chat_template_kwargs",
         "generator.run_engines_locally",
