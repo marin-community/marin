@@ -163,6 +163,14 @@ def hydration(_wp: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
     return ()
 
 
+def prompt_limit(policy: Policy) -> int:
+    """Reserve the configured output allowance within the served model context."""
+    limit = policy.setting("provider.context_tokens", int) - policy.setting("sampling.max_tokens", int)
+    if limit <= 0:
+        raise ValueError("The model context must exceed the sampling output allowance")
+    return limit
+
+
 def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactory]) -> ForgeConfig:
     settings = lowering_settings(policy)
     sampling = TypeAdapter(Sampling).validate_python(
@@ -171,20 +179,17 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
     author = AgenticHarness(
         Limits(
             policy.setting("author.max_turns", int),
-            policy.setting("author.max_prompt_tokens", int),
-            policy.setting("author.soft_prompt_tokens", int),
+            prompt_limit(policy),
         ),
         sampling,
         policy.prompt("author.nudge").template,
-        policy.prompt("author.wrap_up").template,
         policy.setting("tools.output_chars", int),
     )
     adversaries = {
         name: AgenticHarness(
-            Limits(policy.setting("adversary.max_turns", int), None),
+            Limits(policy.setting("adversary.max_turns", int), prompt_limit(policy)),
             sampling,
             "Finish your audit.",
-            "Summarize your findings and report now.",
             policy.setting("tools.output_chars", int),
         )
         for name in policy.setting("adversary.roster", tuple)
@@ -227,7 +232,8 @@ async def runtime(
     policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
 ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
     provider = TypeAdapter(LLMProviderConfig).validate_python(
-        {key.removeprefix("provider."): value for key, value in policy.entries.items() if key.startswith("provider.")}
+        {key.removeprefix("provider."): value for key, value in policy.entries.items()
+         if key.startswith("provider.") and key != "provider.context_tokens"}
     )
     print(f"GLM {type(source).__name__} resolved {source.current().base_url}", flush=True)
     host = MachineHost(policy.setting("runtime.host", str))

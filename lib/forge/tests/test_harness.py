@@ -32,6 +32,8 @@ from forge.lowering import GRADING_MACHINE, LoweringSettings, rollout_engine
 from forge.model.llm import Completion, Message, Sampling, ToolCall, Usage
 from forge.model.serialization import TASK_SPEC
 from forge.model.workpiece import Conversation, Submission
+from forge.policy.defaults import DEFAULT_POLICY
+from forge.wiring import build_config
 from forge.resources.env import (
     CommandResult,
     FakeCommand,
@@ -89,7 +91,7 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     sink = JsonlSink(str(tmp_path / "session.jsonl"))
     ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
-    harness = AgenticHarness(Limits(5, None), Sampling(), "continue", "wrap up", 20000)
+    harness = AgenticHarness(Limits(5, None), Sampling(), "continue", 20000)
     tools = {"shell": ShellTool(), "submit": SubmitTool(accept)}
     initial = Conversation((Message("user", "build"),), ())
     result = await harness.run(ctx, initial, env, FakeInference(script), tools)
@@ -127,7 +129,7 @@ async def test_nudge_and_limits_preserve_completed_conversation(
 ) -> None:
     ctx = Context(log=EventLog())
     client = FakeInference(script)
-    result = await AgenticHarness(limits, Sampling(), "use tools", "wrap up", 20000).run(
+    result = await AgenticHarness(limits, Sampling(), "use tools", 20000).run(
         ctx, Conversation((), ()), environment(ctx), client, {}
     )
     await ctx.drain()
@@ -145,7 +147,7 @@ async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() 
     )
     ctx = Context(log=EventLog())
     client = FakeInference(script)
-    result = await AgenticHarness(Limits(3, None), Sampling(), "continue", "wrap up", 20000).run(
+    result = await AgenticHarness(Limits(3, None), Sampling(), "continue", 20000).run(
         ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool(), "finish": FinishTool()}
     )
     await ctx.drain()
@@ -178,7 +180,7 @@ async def test_submit_gate_feedback_and_validate_capture_current_draft() -> None
     result = await tool(ctx, {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"}, env)
     assert isinstance(result, ToolResult) and result.content == "Missing negative controls"
     client = FakeInference((call("validate", {}, "validate-1"),))
-    outcome = await AgenticHarness(Limits(2, None), Sampling(), "continue", "wrap up", 20000).run(
+    outcome = await AgenticHarness(Limits(2, None), Sampling(), "continue", 20000).run(
         ctx, Conversation((), ()), env, client, {"validate": ValidateTool(accept)}
     )
     await ctx.drain()
@@ -256,47 +258,20 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert resource_bytes(report.payload.candidates[0].files[0]) == b"candidate"
 
 
-async def test_cached_prompt_count_and_single_wrap_up_allow_submission() -> None:
+async def test_cached_prompt_tokens_are_not_counted_twice() -> None:
     ctx = Context(log=EventLog())
     env = environment(ctx)
-    script = (
-        Completion(
-            "", call("shell", {"command": "task"}, "1").tool_calls, usage=Usage(prompt_tokens=61242, cached_tokens=60096)
-        ),
-        Completion(
-            "",
-            call("shell", {"command": "controls"}, "2").tool_calls,
-            usage=Usage(prompt_tokens=130001, cached_tokens=129000),
-        ),
-        Completion("", call("shell", {"command": "controls"}, "3").tool_calls, usage=Usage(prompt_tokens=140000)),
-        call("submit", {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"}, "4"),
-    )
-    client = FakeInference(script)
-    harness = AgenticHarness(Limits(None, 160000, 130000), Sampling(), "continue", "submit now", 20000)
-    result = await harness.run(
-        ctx, Conversation((), ()), env, client, {"shell": ShellTool(), "submit": SubmitTool(accept)}
-    )
+    client = FakeInference((
+        Completion("", call("shell", {"command": "task"}, "1").tool_calls, usage=Usage(prompt_tokens=61242, cached_tokens=60096)),
+        call("shell", {"command": "controls"}, "2"),
+        call("submit", {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"}, "3"),
+    ))
+    result = await AgenticHarness(Limits(None, 100000), Sampling(), "continue", 20000).run(
+        ctx, Conversation((), ()), env, client, {"shell": ShellTool(), "submit": SubmitTool(accept)})
     await ctx.drain()
     assert isinstance(result, Submitted)
-    assert Message("user", "submit now") not in client.requests[1].messages
-    assert client.requests[2].messages[-1] == Message("user", "submit now")
-    assert client.requests[3].messages.count(Message("user", "submit now")) == 1
-
-
-async def test_hard_context_limit_stops_after_the_wrap_up_turn() -> None:
-    ctx = Context(log=EventLog())
-    script = tuple(
-        Completion("", call("shell", {"command": "task"}, str(tokens)).tool_calls, usage=Usage(prompt_tokens=tokens))
-        for tokens in (130000, 160000)
-    )
-    client = FakeInference(script)
-    result = await AgenticHarness(Limits(None, 160000, 130000), Sampling(), "continue", "wrap up", 20000).run(
-        ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool()}
-    )
-    await ctx.drain()
-    assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
-    assert client.requests[-1].messages[-1] == Message("user", "wrap up")
-    assert len(client.requests) == 2
+    assert len(client.requests) == 3
+    assert not any(message.role == "user" for message in result.session.messages)
 
 
 async def test_web_and_error_results_are_capped_before_the_next_inference() -> None:
@@ -312,7 +287,7 @@ async def test_web_and_error_results_are_capped_before_the_next_inference() -> N
         call("unknown" * 100, {}, "3").tool_calls[0],
     )
     client = FakeInference((Completion("", calls), call("finish", {"reason": "done"}, "4")))
-    result = await AgenticHarness(Limits(3, None), Sampling(), "continue", "wrap up", 80).run(
+    result = await AgenticHarness(Limits(3, None), Sampling(), "continue", 80).run(
         ctx,
         Conversation((), ()),
         environment(ctx),
@@ -359,3 +334,21 @@ async def test_missing_paths_are_tool_feedback(kind: str) -> None:
     result = await tools[kind](ctx, arguments[kind], env)
     await ctx.drain()
     assert isinstance(result, ToolResult) and missing in result.content
+
+
+@pytest.mark.parametrize("output_tokens", [131072, 8192])
+async def test_model_window_and_output_allowance_determine_context_exit(output_tokens: int) -> None:
+    policy = DEFAULT_POLICY.overlaid({"sampling.max_tokens": output_tokens})
+    harness = build_config(policy, "S", {}).author
+    budget = 262144 - output_tokens
+    client = FakeInference(tuple(
+        Completion("", call("shell", {"command": "task"}, str(tokens)).tool_calls,
+                   usage=Usage(prompt_tokens=tokens, cached_tokens=tokens - 1000))
+        for tokens in (budget - 1, budget)
+    ))
+    ctx = Context(log=EventLog())
+    result = await harness.run(ctx, Conversation((), ()), environment(ctx), client, {"shell": ShellTool()})
+    await ctx.drain()
+    assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
+    assert len(client.requests) == 2
+    assert not any(message.role == "user" for message in result.session.messages)

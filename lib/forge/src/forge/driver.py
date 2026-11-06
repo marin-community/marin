@@ -27,7 +27,7 @@ from forge.model.review import Incomplete
 from forge.model.serialization import TASK_PROPOSAL, WORKPIECE
 from forge.model.workpiece import Terminal, Workpiece
 from forge.policy import load_policy, parse_overlay, resolution_lines
-from forge.wiring import endpoint_source, runtime
+from forge.wiring import endpoint_source, prompt_limit, runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +89,11 @@ async def one(args: argparse.Namespace) -> None:
         with open_url(args.policy, "rt") as source:
             policy = declared.overlaid(parse_overlay(source.read()))
         print("\n".join(resolution_lines(declared, policy)), flush=True)
+        print(
+            f"POLICY max_prompt_tokens provider.context_tokens={policy.setting('provider.context_tokens', int)} "
+            f"sampling.max_tokens={policy.setting('sampling.max_tokens', int)} resolved={prompt_limit(policy)}",
+            flush=True,
+        )
         source = endpoint_source(
             os.environ.get("GLM_BASE_URL"),
             os.environ.get("GLM_RELAY_JOB"),

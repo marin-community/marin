@@ -8,7 +8,6 @@
   "budget.max_validation_retries": 2,
   "budget.max_modify_rounds": 2,
   "author.max_turns": 100,
-  "author.max_prompt_tokens": 160000,
   "tools.output_chars": 20000,
   "runtime.host": "iris",
   "author.image": "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1",
@@ -34,5 +33,5 @@
   "sampling.reasoning_effort": "high",
   "sampling.max_continuations": 0,
   "sampling.max_tokens": 131072,
-  "author.soft_prompt_tokens": 130000
+  "provider.context_tokens": 262144
 }
