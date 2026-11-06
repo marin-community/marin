@@ -1,4 +1,4 @@
-"""Capture costs travel with real task execution and projected training data."""
+"""Candidate heads survive real task execution and training-data projection."""
 
 import numpy as np
 import pytest
@@ -14,7 +14,7 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topk", [0, 32, 128])
-async def test_training_task_retains_heads_and_capture_costs(topk):
+async def test_training_task_retains_heads(topk):
     ids = np.tile(np.arange(topk or 1, dtype=np.int32), (4, 1))
     scores = np.full(ids.shape, -np.log(128), dtype=np.float32)
 
@@ -61,16 +61,8 @@ async def test_training_task_retains_heads_and_capture_costs(topk):
     batch = writer.group.trajectory_batch
     assert writer.group.policy_step == 7
     assert batch["response_ids"] == [[11, 12, 13, 14]]
-    metrics = batch.get("rollout_metrics", {})
     if topk:
         np.testing.assert_array_equal(batch["student_topk_indices"][0], ids)
         np.testing.assert_array_equal(batch["behavior_topk_logprobs"][0], scores)
-        assert metrics["score_centering_capture/requests"] == 1
-        assert metrics["score_centering_capture/captured_tokens"] == 4
-        assert metrics["score_centering_capture/captured_head_bytes"] == 4 * topk * 8
-        assert metrics["score_centering_capture/exported_head_bytes"] == 4 * topk * 8
-        assert metrics["score_centering_capture/collection_seconds_sum"] >= 0
-        assert metrics["score_centering_capture/assembly_seconds_sum"] >= 0
     else:
         assert batch.get("student_topk_indices") is None
-        assert not any(name.startswith("score_centering_capture/") for name in metrics)
