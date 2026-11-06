@@ -15,7 +15,7 @@ from finestore.reader import ReadView
 from marin.evaluation.curated import CuratedExecutor
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import EvalRef, RunStatus
+from marin.evaluation.records import EvalRef, JudgeIdentity, RunStatus
 from marin.evaluation.runner import (
     EvalExecutor,
     EvaluationError,
@@ -26,7 +26,6 @@ from marin.evaluation.runner import (
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.types import InferenceBackendState
-from marin.rollouts.evaluation import JudgeIdentity
 from marin.rollouts.evaluation_results import evaluation_coverage
 
 POLICY = "marin-10197"
@@ -89,7 +88,9 @@ class PolicyJudge:
                     models={self.model.location: self.model.revision},
                     default_model=self.model.location,
                 )
-                executor = replace(self.source, settings=replace(self.source.settings, judge=configuration))
+                executor = replace(
+                    self.source, settings=self.source.settings.model_copy(update={"judge": configuration})
+                )
 
                 def dependencies() -> InferenceBackendState:
                     check_inference_backend(policy_judge.backend_state())
@@ -144,18 +145,19 @@ def policy_executor(
         assert config.judge.revision is not None
         source = replace(
             source,
-            settings=replace(
-                source.settings,
-                judge=JudgeIdentity(
-                    deployment=config.judge.location,
-                    models={config.judge.location: config.judge.revision},
-                    default_model=config.judge.location,
-                ),
+            settings=source.settings.model_copy(
+                update={
+                    "judge": JudgeIdentity(
+                        deployment=config.judge.location,
+                        models={config.judge.location: config.judge.revision},
+                        default_model=config.judge.location,
+                    )
+                }
             ),
         )
         assert reference.curated is not None
         reference = reference.model_copy(
-            update={"curated": reference.curated.model_copy(update={"settings_json": source.settings.record_json()})}
+            update={"curated": reference.curated.model_copy(update={"settings": source.settings})}
         )
         executor = PolicyJudge(
             source,

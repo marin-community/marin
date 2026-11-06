@@ -18,11 +18,11 @@ from iris.cluster.client import remote_client
 from iris.cluster.types import ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
+from marin.evaluation.records import JudgeIdentity
 from marin.rollouts.evaluation import (
     ATTEMPTS_TABLE,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
-    JudgeIdentity,
     ModelIdentity,
 )
 from rolloutengine.models import RolloutLimits

@@ -13,11 +13,14 @@ import re
 import socket
 import subprocess
 import uuid
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
 
+from fray.current_client import current_client
+from fray.types import ResourceConfig
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config
@@ -44,6 +47,7 @@ from marin.evaluation.records import (
     ModelRef,
     RunStatus,
     list_records,
+    scoring_settings,
 )
 from marin.evaluation.runner import (
     EndpointRoute,
@@ -67,8 +71,9 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from zephyr.context import ZephyrContext
 
-from experiments.evaluation.curated import pinned_model, prepare_corpora
+from experiments.evaluation.curated import corpus_steps, pinned_model
 from experiments.evaluation.evals import (
     EVALS,
     CuratedDefinition,
@@ -83,6 +88,7 @@ from experiments.evaluation.policy_finalization import (
     PolicyJudge,
     policy_executor,
 )
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -112,9 +118,7 @@ def _evaluation_identity(evaluation: EvalRef) -> dict:
         excluded.update({"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS})
     identity = evaluation.model_dump(mode="json", exclude=excluded)
     if evaluation.curated is not None:
-        config = json.loads(evaluation.curated.settings_json)
-        config.pop("concurrency")
-        identity["curated"]["settings_json"] = json.dumps(config, sort_keys=True)
+        identity["curated"]["settings"] = scoring_settings(evaluation.curated.settings.model_dump(mode="json"))
     return identity
 
 
@@ -614,31 +618,53 @@ def _bind_corpora(executor: EvalExecutor, roots: dict[str, str]) -> EvalExecutor
     return replace(executor, source=bound) if isinstance(executor, PolicyJudge) else bound
 
 
-def run_evaluation_group(batch: EvaluationBatch) -> None:
-    """Run the group's evaluation steps under one shared-inference ownership lock."""
-    configure_coreweave_s3()
+def evaluation_group_step(batch: EvaluationBatch, runtime: CampaignRuntime) -> StepSpec:
+    """Bind complete corpus dependencies before the evaluation receives resolved roots."""
     names = tuple(
-        name
-        for evaluation in batch.evaluations
-        if (source := _curated_executor(evaluation.executor)) is not None
-        for name in source.datasets
-    )
-    if names:
-        roots = prepare_corpora(names, prefix_join(batch.records_prefix, f"groups/{batch.group_id}/curation"))
-        batch = replace(
-            batch,
-            evaluations=tuple(
-                replace(evaluation, executor=_bind_corpora(evaluation.executor, roots))
-                for evaluation in batch.evaluations
-            ),
+        dict.fromkeys(
+            name
+            for evaluation in batch.evaluations
+            if (source := _curated_executor(evaluation.executor)) is not None
+            for name in source.datasets
         )
-    step = StepSpec(
+    )
+    dependencies = [step.lower() for step in corpus_steps(names, runtime)]
+    roots = {name: step.output_path for name, step in zip(names, dependencies, strict=True)}
+    bound = replace(
+        batch,
+        evaluations=tuple(
+            replace(evaluation, executor=_bind_corpora(evaluation.executor, roots)) for evaluation in batch.evaluations
+        ),
+    )
+    return StepSpec(
         name=f"eval-group/{batch.model.name}",
         output_path_prefix=prefix_join(batch.records_prefix, f"groups/{batch.group_id}"),
-        fn=partial(run_evaluation_steps, batch, partial(build_evaluation_steps, batch)),
+        fn=partial(run_evaluation_steps, bound, partial(build_evaluation_steps, bound)),
+        deps=dependencies,
         hash_attrs={"run_ids": tuple(evaluation.identity.run_id for evaluation in batch.evaluations)},
     )
-    StepRunner().run((step,), max_concurrent=1)
+
+
+def run_evaluation_group(batch: EvaluationBatch) -> None:
+    """Materialize artifact dependencies, then execute against their pinned corpus roots."""
+    configure_coreweave_s3()
+    runtime = CampaignRuntime()
+    step = evaluation_group_step(batch, runtime)
+    with ExitStack() as stack:
+        if step.deps:
+            context = stack.enter_context(
+                ZephyrContext(
+                    client=current_client(),
+                    max_workers=4,
+                    resources=ResourceConfig(cpu=2, ram="8g"),
+                    coordinator_resources=ResourceConfig(cpu=2, ram="8g"),
+                    chunk_storage_prefix=prefix_join(batch.records_prefix, f"groups/{batch.group_id}/chunks"),
+                    max_concurrent_pipelines=2,
+                    name="evaluation-corpora",
+                )
+            )
+            stack.enter_context(runtime.activate(context))
+        StepRunner().run((step,), max_concurrent=1)
 
 
 def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:

@@ -89,6 +89,8 @@ identity in `judge`, its URL in `judge_endpoint`, and ordered secret references 
 Curated evaluations run through `marin.rollouts.evaluation`, using complete corpora
 from the task-curation catalog. Named menus select exact protocol variants, including
 shots and raw/chat transport. Missing corpus dependencies build before inference.
+The artifact graph binds their completed roots into execution; an evaluation launch
+does not publish a catalog snapshot. Catalog publication uses the curation workflow.
 The standalone `task_driver` also accepts already published corpus roots.
 
 `--curated-config` files name catalog sources, optional chat variants, source limits,

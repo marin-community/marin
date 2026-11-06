@@ -12,12 +12,13 @@ This module is import-light on purpose -- the filesystem layer plus Pydantic, wi
 marin/levanter/iris imports -- so it can be vendored into the dashboard image that reads records back.
 """
 
+import json
 import logging
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -40,6 +41,7 @@ DEFAULT_SCAN_PREFIXES = (
 )
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
+DEFAULT_EVALUATION_CONCURRENCY = 64
 EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
 
 
@@ -341,13 +343,47 @@ class HarborRef(BaseModel):
     )
 
 
+class JudgeIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    deployment: str = Field(min_length=1)
+    models: dict[str, str]
+    default_model: str | None = None
+
+
+class CuratedSettings(BaseModel):
+    """Recorded selection and execution settings shared by launch and dashboard readers."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    max_tokens: int | None = Field(default=None, gt=0)
+    source_limit: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+
+
+def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate request scheduling from settings that govern saved observations."""
+    return {key: value for key, value in settings.items() if key != "concurrency"}
+
+
 class CuratedRef(BaseModel):
-    """Immutable corpus locations and the normalized TaskSpec driver settings."""
+    """Pinned corpus selection and typed TaskSpec driver settings."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     datasets: tuple[str, ...]
-    settings_json: str
+    settings: CuratedSettings
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_initial_native_records(cls, value: Any) -> Any:
+        # Initial native smoke records encoded the settings as JSON inside record.json.
+        if isinstance(value, dict) and "settings_json" in value:
+            value = dict(value)
+            value["settings"] = json.loads(value.pop("settings_json"))
+        return value
 
 
 class EvalRef(BaseModel):

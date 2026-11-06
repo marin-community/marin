@@ -5,18 +5,37 @@
 
 from functools import partial
 
-from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.evaluation.spec import (
+    EvaluationProtocol,
+    LikelihoodMetric,
+    LikelihoodNormalization,
+    Metrics,
+    OperationKind,
+    Sampling,
+    SummaryKind,
+    TrialPolicy,
+)
 from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evalchemy.reasoning import (
     MMLU_VALIDATION_FILE,
+    agieval_template,
+    bbh_cot_template,
+    bbh_likelihood_template,
     convert_gpqa,
     convert_mmlu,
+    gpqa_likelihood_template,
+    mmlu_pro_likelihood_template,
     reasoning_item,
 )
+from taskcompendium.importers.fewshot import pinned_prompts
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Converter, IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
+from experiments.post_training.task_curation.datasets.evalchemy.protocols import (
+    checkpoint_choice_source,
+    fewshot_generation_source,
+)
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -24,6 +43,92 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 GPQA_REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
 MMLU_PRO_REVISION = "b189ec765aa7ed75c8acfea42df31fdae71f97be"
 MMLU_TEST_FILE = "data/test-00000-of-00001.parquet"
+BBH_REVISION = "b5306be6f827cfafbb545ff5a51f96916029b0fd"
+
+
+def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+    raw = LikelihoodMetric(name="acc,none", normalization=LikelihoodNormalization.RAW)
+    normalized = LikelihoodMetric(name="acc_norm,none", normalization=LikelihoodNormalization.CHARACTERS)
+    result = [
+        checkpoint_choice_source(
+            "agieval_lsat_ar",
+            "agieval_lsat_ar",
+            HfSource(
+                "hails/agieval-lsat-ar",
+                "052cc636b612f5563329dd182fb6c2cad56681c8",
+                ("data/test-00000-of-00001.parquet",),
+                SourceFormat.PARQUET,
+            ),
+            230,
+            agieval_template(),
+            (raw, normalized),
+        ),
+        checkpoint_choice_source(
+            "leaderboard_mmlu_pro",
+            "leaderboard_mmlu_pro",
+            HfSource("TIGER-Lab/MMLU-Pro", MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET),
+            12032,
+            mmlu_pro_likelihood_template(MMLU_VALIDATION_FILE),
+            (raw,),
+        ),
+    ]
+    for subject, population in (("diamond", 198), ("main", 448), ("extended", 546)):
+        result.append(
+            checkpoint_choice_source(
+                "leaderboard_gpqa-" + subject,
+                "leaderboard_gpqa",
+                HfSource("Idavidrein/gpqa", GPQA_REVISION, ("gpqa_" + subject + ".csv",), SourceFormat.CSV),
+                population,
+                gpqa_likelihood_template(),
+                (normalized,),
+                subject=subject,
+            )
+        )
+    for key in pinned_prompts():
+        if not key.startswith(("bbh/", "bbh_cot/")):
+            continue
+        variant, subject = key.split("/", 1)
+        population = {"causal_judgement": 187, "penguins_in_a_table": 146, "snarks": 178}.get(subject, 250)
+        source = HfSource(
+            "SaylorTwift/bbh",
+            BBH_REVISION,
+            (subject + "/test-00000-of-00001.parquet",),
+            SourceFormat.PARQUET,
+        )
+        if variant == "bbh":
+            result.append(
+                checkpoint_choice_source(
+                    "leaderboard_bbh-" + subject,
+                    "leaderboard_bbh",
+                    source,
+                    population,
+                    bbh_likelihood_template(subject),
+                    (normalized,),
+                    subject=subject,
+                )
+            )
+            continue
+        result.append(
+            fewshot_generation_source(
+                "bbh_cot_fewshot-" + subject,
+                "bbh_cot_fewshot",
+                source,
+                population,
+                bbh_cot_template(subject),
+                ("exact_match,get-answer",),
+                Sampling(
+                    temperature=0,
+                    top_p=None,
+                    top_k=None,
+                    max_tokens=1024,
+                    stop=("</s>", "Q", "\n\n"),
+                    chat_template_kwargs={},
+                ),
+                "bbh_cot",
+                BASIC_GRADER,
+            )
+        )
+    return result
 
 
 def choice_dataset(

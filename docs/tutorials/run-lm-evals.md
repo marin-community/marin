@@ -176,11 +176,12 @@ Reports contain durable run references; Evaldash owns score computation.
 
 ## Audit a curated run before its record appears
 
-Use Iris to inspect the orchestrator and its children. Check the curation campaign
-report at `{records_prefix}/groups/{group_id}/curation/campaign.json`
-before investigating serving: no GPU is acquired until the source graphs
-finish. Once evaluation starts, inspect the raw selection and attempt tables at the
-run's FineStore root. A started row without a finished row is incomplete work.
+Use Iris to inspect the orchestrator and its children. Inspect the corpus
+dependencies and their recorded status in the artifact graph before investigating
+serving: no GPU is acquired until those dependencies finish. Catalog publication
+remains a separate curation operation. Once evaluation starts, inspect the raw
+selection and attempt tables at the run's FineStore root. A started row without a
+finished row is incomplete work.
 Repeat the standalone [task driver](../references/evaluation-tasks.md#curate-and-run)
 with the identical output and run configuration to resume raw attempts.
 

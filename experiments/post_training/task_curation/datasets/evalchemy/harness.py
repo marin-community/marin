@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
     BASIC_GRADER,
     MATH_GRADER,
 )
-from experiments.post_training.task_curation.datasets.evalchemy.likelihood import choice_source
+from experiments.post_training.task_curation.datasets.evalchemy.protocols import choice_source
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -149,6 +149,9 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     population,
                     HarnessTemplate(name, count, fewshot_file=pool or file),
                     normalizations,
+                    metric_kind=MetricKind.CONTINUOUS if name == "truthfulqa_mc2" else MetricKind.BINARY,
+                    scoring="probability_mass" if name == "truthfulqa_mc2" else "most_likely",
+                    version="2026.11.05.2" if count and name in {"boolq", "piqa", "truthfulqa_mc2"} else "2026.11.02",
                 )
             )
     result.append(
@@ -356,6 +359,39 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
                     item_builder=generation_item,
                 ),
                 pipeline=curate,
+            )
+        )
+    return result
+
+
+def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+    """Zero-shot completion variants of the short-answer source families."""
+    result = []
+    for source in generation_sources():
+        dataset = source.config
+        assert dataset is not None
+        profile = dataset.recipe.name.removeprefix("evalchemy-")
+        if profile not in {"nq_open", "triviaqa", "drop"}:
+            continue
+        name = profile + "-0shot"
+        assert isinstance(dataset.recipe.source, HfSource)
+        result.append(
+            replace(
+                source,
+                info=replace(source.info, id="Checkpoint:" + name, title=name),
+                config=replace(
+                    dataset,
+                    recipe=replace(
+                        dataset.recipe,
+                        name="checkpoint-" + name,
+                        inputs={},
+                        source=replace(
+                            dataset.recipe.source,
+                            read=partial(read_generation_file, template=HarnessTemplate(profile, 0)),
+                        ),
+                    ),
+                    protocol=dataset.protocol.model_copy(update={"benchmark": name, "num_fewshot": 0}),
+                ),
             )
         )
     return result

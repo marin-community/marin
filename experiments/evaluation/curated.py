@@ -3,27 +3,23 @@
 
 """Bind evaluation menu entries to the canonical task-curation artifact graph."""
 
-import json
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from functools import cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from fray.types import ResourceConfig
 from huggingface_hub import HfApi
-from marin.evaluation.curated import CuratedExecutor, CuratedRunSettings
+from marin.evaluation.curated import CuratedExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import CuratedRef, EvalRef
+from marin.evaluation.records import DEFAULT_EVALUATION_CONCURRENCY, CuratedRef, CuratedSettings, EvalRef, JudgeIdentity
 from marin.execution.lazy import ArtifactStep
-from marin.rollouts.evaluation import JudgeIdentity
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.secrets import is_secret_reference
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
-from experiments.post_training.task_curation.campaign import CampaignPool, CampaignRuntime, run_campaign
-from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.evaluation import curate
 from experiments.post_training.task_curation.sources import evaluation_sources
@@ -51,14 +47,15 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
     return replace(model, revision=revision, tokenizer=tokenizer, tokenizer_revision=tokenizer_revision)
 
 
-@dataclass(frozen=True)
-class CuratedDefinition:
+class CuratedDefinition(BaseModel):
     """A menu selection names complete curated sources, never evaluator plugins."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     name: str
-    sources: tuple[str, ...]
-    limit: int | None = None
-    max_tokens: int | None = None
+    sources: tuple[str, ...] = Field(min_length=1)
+    limit: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0)
     family: str | None = None
     seed: int | None = None
     judge: JudgeIdentity | None = None
@@ -66,9 +63,8 @@ class CuratedDefinition:
     judge_api_key: tuple[str, ...] = ()
     chat_sources: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
-        if not self.sources:
-            raise ValueError("A curated evaluation requires at least one source")
+    @model_validator(mode="after")
+    def validate_judge(self) -> "CuratedDefinition":
         if self.judge is not None:
             url = urlsplit(self.judge_endpoint or "")
             if (
@@ -82,6 +78,7 @@ class CuratedDefinition:
                 raise ValueError("judge_endpoint must be an HTTP URL without credentials")
             if not self.judge_api_key or any(not is_secret_reference(ref) for ref in self.judge_api_key):
                 raise ValueError("A judge requires secret references in judge_api_key")
+        return self
 
     @property
     def requires_judge(self) -> bool:
@@ -94,21 +91,13 @@ class CuratedDefinition:
 
     @classmethod
     def from_file(cls, path: Path) -> "CuratedDefinition":
-        document = yaml.safe_load(path.read_text())
-        document["sources"] = tuple(document["sources"])
-        if "chat_sources" in document:
-            document["chat_sources"] = tuple(document["chat_sources"])
-        if document.get("judge") is not None:
-            document["judge"] = JudgeIdentity.model_validate(document["judge"])
-        if "judge_api_key" in document:
-            document["judge_api_key"] = tuple(document["judge_api_key"])
-        return cls(**document)
+        return cls.model_validate(yaml.safe_load(path.read_text()))
 
     def executor_for(self, model: ModelConfig, limit: int | None, seed: int | None) -> CuratedExecutor:
         if model.effective_tokenizer_revision is None:
             raise ValueError("Curated evaluation requires an explicit tokenizer revision")
-        settings = CuratedRunSettings(
-            model=model,
+        settings = CuratedSettings(
+            concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
             max_tokens=self.max_tokens,
             source_limit=limit if limit is not None else self.limit,
             seed=seed if seed is not None else self.seed,
@@ -116,7 +105,7 @@ class CuratedDefinition:
         )
         # Corpus paths are bound in the cluster before inference starts.
         sources = self.chat_sources if model.apply_chat_template and self.chat_sources else self.sources
-        return CuratedExecutor(sources, settings, self.judge_endpoint)
+        return CuratedExecutor(sources, model, settings, self.judge_endpoint)
 
     def record_ref_for(self, executor: CuratedExecutor) -> EvalRef:
         return EvalRef(
@@ -136,7 +125,7 @@ class CuratedDefinition:
                     },
                 }
             ),
-            curated=CuratedRef(datasets=executor.datasets, settings_json=executor.settings.record_json()),
+            curated=CuratedRef(datasets=executor.datasets, settings=executor.settings),
         )
 
 
@@ -147,31 +136,3 @@ def corpus_steps(names: tuple[str, ...], runtime: CampaignRuntime) -> tuple[Arti
         raise ValueError(f"Unknown curated evaluation sources: {sorted(unknown)}")
     options = PipelineOptions(SourceProcessingMode.QUICK, runtime)
     return tuple(curate(catalog[name], options) for name in dict.fromkeys(names))
-
-
-def prepare_corpora(names: tuple[str, ...], report_root: str) -> dict[str, str]:
-    """Build or reuse complete corpus artifacts before acquiring serving hardware."""
-    runtime = CampaignRuntime()
-    steps = corpus_steps(names, runtime)
-    catalog = _evaluation_sources()
-    selected = tuple(dict.fromkeys(names))
-    report_path = prefix_join(report_root, "campaign.json")
-    catalog_root = prefix_join(report_root, "catalog")
-    run_campaign(
-        steps,
-        runtime=runtime,
-        pool=CampaignPool(
-            max_workers=4,
-            coordinator_resources=ResourceConfig(cpu=2, ram="8g"),
-            worker_resources=ResourceConfig(cpu=2, ram="8g"),
-            concurrent_sources=2,
-            chunk_storage_prefix=prefix_join(report_root, "chunks"),
-        ),
-        report_path=report_path,
-        source_ids={step.name: catalog[name].info.id for name, step in zip(selected, steps, strict=True)},
-        catalog_root=catalog_root,
-        mode=SourceProcessingMode.QUICK,
-    )
-    report = json.loads(StoragePath(report_path).read_text())
-    publish_catalog(catalog_root, report["run_id"], (catalog[name] for name in selected))
-    return {name: step.path() for name, step in zip(selected, steps, strict=True)}

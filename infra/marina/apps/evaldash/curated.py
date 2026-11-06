@@ -20,10 +20,10 @@ from marin.rollouts.evaluation_results import SCORED_OUTCOMES, evaluation_covera
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
-SUMMARY_REVISION = "2026.11.05.2"
+SUMMARY_REVISION = "2026.11.05.3"
 
 
-def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind, metric: str) -> tuple[float, float | None]:
+def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind) -> tuple[float, float | None]:
     total_weight = sum(weight for _, _, weight in values)
     mean = sum(value * weight for _, value, weight in values) / total_weight
     by_source = defaultdict(float)
@@ -35,7 +35,7 @@ def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind, metric: s
         if count > 1
         else None
     )
-    if kind is SummaryKind.PERPLEXITY and "perplexity" in metric:
+    if kind is SummaryKind.PERPLEXITY:
         value = math.exp(-mean)
         return value, None if stderr is None else value * stderr
     return mean, stderr
@@ -65,6 +65,17 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
             other = protocols[dataset]
             if other.model_dump(exclude={"expected_population"}) != protocol.model_dump(exclude={"expected_population"}):
                 raise ValueError(f"Inconsistent summary protocols for benchmark {name}")
+        log_likelihoods = {metric.name for metric in protocol.likelihood_metrics if metric.scoring == "log_likelihood"}
+        if protocol.summary is SummaryKind.PERPLEXITY and not log_likelihoods:
+            raise ValueError(f"Perplexity summary requires declared log-likelihood metrics for {name}")
+        reductions = {
+            metric.name: (
+                SummaryKind.MEAN
+                if protocol.summary is SummaryKind.PERPLEXITY and metric.name not in log_likelihoods
+                else protocol.summary
+            )
+            for metric in protocol.metrics
+        }
         rows = [row for row in attempts.values() if row["dataset"] in datasets]
         values = defaultdict(list)
         group_values = defaultdict(lambda: defaultdict(list))
@@ -98,7 +109,7 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
                     group_values[f"{group}={label}"][metric.name].append(datum)
         summary = {}
         for metric, observations in values.items():
-            summary[metric], stderr = _reduce(observations, protocol.summary, metric)
+            summary[metric], stderr = _reduce(observations, reductions[metric])
             if stderr is not None:
                 summary[metric + "_stderr"] = stderr
         if protocol.summary is SummaryKind.CLASSIFICATION and values:
@@ -108,7 +119,7 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
             summary["f1"] = 2 * accuracy / (1 + attempted)
         for group, group_metrics in group_values.items():
             for metric, observations in group_metrics.items():
-                summary[f"{group}/{metric}"] = _reduce(observations, protocol.summary, metric)[0]
+                summary[f"{group}/{metric}"] = _reduce(observations, reductions[metric])[0]
         metrics[name] = summary
         primary = next(metric for metric in protocol.metrics if metric.name == protocol.primary_metric)
         tasks.append(
