@@ -65,10 +65,19 @@ docker run --rm --entrypoint bun \
   knotmeter-ingest packages/db/src/migrate.ts --yes --no-ssl
 ```
 
-Start the web image with the same socket mount, `PGUSER=knotmeter_reader`, its
-`PGPASSWORD`, `PGDATABASE=knotmeter`, a unique `CACHE_NAMESPACE` and
-`INVALIDATE_SECRET`. Publish container port 8080 on loopback. The entrypoint refuses
-`DATABASE_WRITE_URL`. Keep `E2E_FIXTURES` unset when reviewing authentic data.
+Set `PGPASSWORD` to the reader password, `INVALIDATE_SECRET` to a local random
+token and `CACHE_NAMESPACE` to a unique preview name. Start the web image:
+
+```sh
+docker run --detach --name knotmeter-web --publish 127.0.0.1:18096:8080 \
+  --mount "type=bind,src=$SOCKET_DIRECTORY,dst=/run/knotmeter" \
+  -e PGHOST=/run/knotmeter -e PGUSER=knotmeter_reader -e PGPASSWORD \
+  -e PGDATABASE=knotmeter -e CACHE_NAMESPACE -e INVALIDATE_SECRET \
+  knotmeter-web
+```
+
+The entrypoint refuses `DATABASE_WRITE_URL`. Keep `E2E_FIXTURES` unset when
+reviewing authentic data. Use the writer password for the import commands below.
 
 The importer accepts one artifact directory:
 
@@ -109,8 +118,16 @@ docker run --rm --entrypoint bun \
 ```
 
 That CLI reads the Hub rows API. Check the Hub revision before and after import
-against the artifact's `dataset_revision` and require 393 conversations. Refresh the
-web cache afterward. This supplies corpus structure without adding measurements.
+against the artifact's `dataset_revision` and require 393 conversations. This supplies
+corpus structure without adding measurements. Refresh the local web cache afterward:
+
+```sh
+DASHBOARD_URL=http://127.0.0.1:18096
+curl --fail --request POST "$DASHBOARD_URL/api/v1/invalidate" \
+  --header "Authorization: Bearer $INVALIDATE_SECRET"
+```
+
+For a hosted request, also supply the IAP token in `Proxy-Authorization` as above.
 
 ## Acceptance
 
@@ -122,6 +139,20 @@ Snowball measures 40.14996 output tokens/s/GPU over eight H100s; the older provi
 Hero setup measures 2.23178 over sixteen GB200s. Keep their original runtime and recipe.
 No optimized Hero measurement is included. The two points cannot demonstrate a
 multi-date trend or multiple loads for one model.
+
+Download each named artifact into its own owned scratch directory:
+
+```sh
+SNOWBALL_BUNDLE="$PWD/.task-runtime/knotmeter-artifacts/snowball"
+HERO_BUNDLE="$PWD/.task-runtime/knotmeter-artifacts/hero"
+gh run download 40633833787 --repo marin-community/marin \
+  --name agentx-results-40625266678-1 --dir "$SNOWBALL_BUNDLE"
+gh run download 40723697736 --repo marin-community/marin \
+  --name agentx-results-40705471793-1 --dir "$HERO_BUNDLE"
+```
+
+Each directory must contain `agentx-source.json` directly, with its aggregate
+and timeline siblings. Use that directory as `BUNDLE` in the import command.
 
 Run the reusable check after import:
 
@@ -164,6 +195,15 @@ The domain remains `knotmeter.oa.dev`. Future image destinations are
 `us-central1-docker.pkg.dev/hai-gcp-models/marin-knotmeter/marin-knotmeter@sha256:DIGEST`
 and `us-central1-docker.pkg.dev/hai-gcp-models/marin-knotmeter/ingest@sha256:DIGEST`;
 these are not claims of published images.
+
+The [focused IAM draft](https://github.com/marin-community/marin/pull/10953)
+declares its bindings in [`iac/gcp/knotmeter.py`](../pulumi/src/iac/gcp/knotmeter.py).
+The [review-grant skill](../../.agents/skills/review-grant/SKILL.md) defines the
+second-person identity review and global `marin` stack application. Startup bindings
+grant Cloud SQL client access, the three scoped secret accessors and repository
+writer/reader access. Service bindings follow service creation: Marina's
+[human viewers](../pulumi/src/iac/gcp/marina.py) and `github-iris` receive IAP access;
+the IAP service agent alone receives direct Cloud Run invocation.
 
 For a later authorized deployment:
 

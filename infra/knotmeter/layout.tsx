@@ -3,7 +3,7 @@ import './globals.css';
 
 import type { Metadata } from 'next';
 import { DM_Sans } from 'next/font/google';
-import { SITE_NAME, SITE_TITLE, SITE_URL } from '@semianalysisai/inferencex-constants';
+import { AUTHOR_NAME, SITE_NAME, SITE_TITLE, SITE_URL } from '@semianalysisai/inferencex-constants';
 import { ThemeProvider } from '@/components/ui/theme-provider';
 import { QueryProvider } from '@/providers/query-provider';
 import { PostHogProvider } from '@/providers/posthog-provider';
@@ -12,7 +12,7 @@ const font = DM_Sans({ subsets: ['latin'], display: 'optional', variable: '--fon
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: SITE_TITLE,
+  title: { default: SITE_TITLE, template: `%s | ${SITE_NAME} by ${AUTHOR_NAME}` },
   robots: { index: false, follow: false },
 };
 
