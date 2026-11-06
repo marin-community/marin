@@ -1,0 +1,17 @@
+{
+  "checkpoint_root": "s3://marin-us-east-02a/marin/grug/hero-ctx65k-step372k/2026.08.19.2/checkpoints",
+  "qk_mult": 1.66,
+  "score_raw_steps": [],
+  "source_roots": {
+    "390351": "s3://marin-us-east-08a/tmp/ttl=1d/hero-semifinal-20261105-r3/keep166/checkpoints"
+  },
+  "windows": {"T": [390251], "N": [390351]},
+  "candidates": [
+    {"name": "w100", "mix": {"N": 1.0}},
+    {"name": "w090", "mix": {"N": 0.9, "T": 0.1}},
+    {"name": "w075", "mix": {"N": 0.75, "T": 0.25}},
+    {"name": "w050", "mix": {"N": 0.5, "T": 0.5}},
+    {"name": "w025", "mix": {"N": 0.25, "T": 0.75}},
+    {"name": "w000", "mix": {"T": 1.0}}
+  ]
+}
