@@ -12,10 +12,10 @@ from taskforge.llm.client import ToolCall as ProviderToolCall
 from taskforge.llm.client import Usage as ProviderUsage
 from taskforge.llm.policy import LLMPolicy
 
-from forge.effects.events import Retrying
+from forge.effects.events import Event, Retrying
 from forge.effects.issues import Hold, Restart
 from forge.model.llm import Completion, Message, Sampling, ToolCall, ToolSchema
-from forge.resources.inference import CompletionBackend, FakeInference, GlmInference, InferenceRequest
+from forge.resources.inference import CompletionBackend, FakeInference, GlmInference, InferenceRequest, complete
 
 
 class Backend(CompletionBackend):
@@ -43,7 +43,8 @@ class Retries:
     def __init__(self) -> None:
         self.events: list[Retrying] = []
 
-    async def __call__(self, event: Retrying) -> None:
+    def __call__(self, event: Event[None]) -> None:
+        assert isinstance(event, Retrying)
         self.events.append(event)
 
 
@@ -77,7 +78,7 @@ async def test_inference_retries_then_preserves_wire_and_completion_values() -> 
     retries = Retries()
     backend = Backend((ModelRequestRejected(503, "private response", ()), provider_completion()))
     event = request()
-    result = await GlmInference(backend, "provider-config", max_attempts=3, notify=retries).complete(event)
+    result = await complete(event, GlmInference(backend, "provider-config"), notify=retries)
     assert result.content == "answer" and result.reasoning == "reason"
     assert result.tool_calls == (ToolCall("id", "shell", "{}"),)
     assert result.usage.cached_tokens == 4 and result.continuations == 2
@@ -99,12 +100,19 @@ async def test_inference_retries_then_preserves_wire_and_completion_values() -> 
 
 async def test_inference_exhausts_bound_without_consuming_later_success() -> None:
     retries = Retries()
-    backend = Backend((ModelRequestRejected(429, "", ()), ModelRequestRejected(503, "", ()), provider_completion()))
+    backend = Backend(
+        (
+            ModelRequestRejected(429, "", ()),
+            ModelRequestRejected(503, "", ()),
+            ModelRequestRejected(503, "", ()),
+            provider_completion(),
+        )
+    )
     event = request()
     with pytest.raises(Restart):
-        await GlmInference(backend, "provider-config", max_attempts=2, notify=retries).complete(event)
-    assert len(backend.calls) == 2
-    assert [retry.attempt for retry in retries.events] == [1]
+        await complete(event, GlmInference(backend, "provider-config"), notify=retries)
+    assert len(backend.calls) == 3
+    assert [retry.attempt for retry in retries.events] == [1, 2]
 
 
 async def test_provider_exhaustion_is_not_retried_by_executor() -> None:
@@ -113,7 +121,7 @@ async def test_provider_exhaustion_is_not_retried_by_executor() -> None:
     retries = Retries()
     event = request()
     with pytest.raises(Restart):
-        await GlmInference(backend, "provider-config", max_attempts=3, notify=retries).complete(event)
+        await complete(event, GlmInference(backend, "provider-config"), notify=retries)
     assert len(backend.calls) == 1
     assert len(retries.events) == 1 and "secret" not in retries.events[0].cause
 
@@ -122,7 +130,7 @@ async def test_request_rejection_holds_without_retry() -> None:
     backend = Backend((ModelRequestRejected(400, "", ()),))
     retries = Retries()
     with pytest.raises(Hold):
-        await GlmInference(backend, "provider-config", max_attempts=3, notify=retries).complete(request())
+        await complete(request(), GlmInference(backend, "provider-config"), notify=retries)
     assert len(backend.calls) == 1 and not retries.events
 
 
@@ -131,6 +139,20 @@ async def test_fake_inference_records_requests_and_stops_at_script_end() -> None
     event = request()
     assert (await client.complete(event)).content == "first"
     assert (await client.complete(event)).content == "second"
-    with pytest.raises(Restart):
+    with pytest.raises(RuntimeError):
         await client.complete(event)
     assert client.requests == [event, event, event]
+
+
+async def test_executor_publishes_provider_retries_after_success_without_another_call() -> None:
+    attempts = (
+        Attempt(0, AttemptOutcome.RETRYABLE_STATUS, 10, 0, 1, 503, "private", ()),
+        Attempt(0, AttemptOutcome.COMPLETED, 10, 1, 1, 200, "", ()),
+    )
+    backend = Backend((provider_completion(attempts),))
+    retries = Retries()
+    event = request()
+    result = await complete(event, GlmInference(backend, "provider"), notify=retries)
+    assert result.retries == ("retryable_status:503",)
+    assert retries.events == [Retrying(event, 1, "retryable_status:503")]
+    assert len(backend.calls) == 1

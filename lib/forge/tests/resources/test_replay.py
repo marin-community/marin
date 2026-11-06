@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
 from pathlib import Path, PurePosixPath
 
 from rolloutengine.models import GradedRollout, Rollout
@@ -9,48 +10,38 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.runtime.resources import inline_resource
 
 from forge.effects.context import Context
-from forge.effects.events import Event, Note, Resolved
+from forge.effects.events import Event, Resolved
 from forge.effects.log import EventLog, JsonlSink, Record
 from forge.model.controls import Candidate
 from forge.model.llm import Completion, Message, Sampling, ToolSchema
-from forge.resources.clock import Clock, Now
-from forge.resources.env import CommandResult, Env, FakeCommand, FakeEnv, ReadFile, RunCommand, WriteFile
+from forge.resources.clock import Clock, Now, now
+from forge.resources.env import (
+    CommandResult,
+    Env,
+    FakeCommand,
+    FakeEnv,
+    ReadFile,
+    RunCommand,
+    WriteFile,
+    run_command,
+    write_file,
+)
 from forge.resources.grading import GradeCandidate
-from forge.resources.ids import Ids, NewId
-from forge.resources.inference import FakeInference, InferenceClient, InferenceRequest
+from forge.resources.ids import Ids, NewId, new_id
+from forge.resources.inference import FakeInference, InferenceClient, InferenceRequest, complete
 from forge.resources.rollouts import SolverRollout
 
 
-async def note(event: Note) -> None:
+def note(event: Event[None]) -> None:
     pass
-
-
-async def command(event: RunCommand, env: Env) -> CommandResult:
-    return await env.run(event.cmd, timeout=event.timeout)
-
-
-async def write(event: WriteFile, env: Env) -> None:
-    await env.write(event.path, event.data)
-
-
-async def infer(event: InferenceRequest, client: InferenceClient) -> Completion:
-    return await client.complete(event)
-
-
-async def now(event: Now, clock: Clock) -> float:
-    return await clock.now(event)
-
-
-async def new_id(event: NewId, ids: Ids) -> str:
-    return await ids.new_id(event)
 
 
 def configure(ctx: Context, env: Env, client: InferenceClient, clock: Clock, ids: Ids) -> None:
     for resource in (env, client, clock, ids):
         ctx.resource(resource, resource.fingerprint)
-    ctx.handle(RunCommand, command, uses=(env,))
-    ctx.handle(WriteFile, write, uses=(env,))
-    ctx.handle(InferenceRequest, infer, uses=(client,))
+    ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
+    ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
+    ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(client,))
     ctx.handle(Now, now, uses=(clock,))
     ctx.handle(NewId, new_id, uses=(ids,))
 
@@ -101,7 +92,7 @@ async def test_jsonl_round_trips_resource_results_and_binary_payloads(tmp_path: 
         Resolved(ReadFile(path), (), b"\xff\x00"),
         Resolved(WriteFile(path, b"\xff\x00"), (), None),
         Resolved(SolverRollout(spec, 1, 0), (), rollout),
-        Resolved(GradeCandidate("task", Candidate("12", (inline_resource("workspace/file", b"\xff"),))), (), grade),
+        Resolved(GradeCandidate(spec, Candidate("12", (inline_resource("workspace/file", b"\xff"),))), (), grade),
     )
     sink = JsonlSink(str(tmp_path / "results.jsonl"))
     await sink.write(tuple(Record(index, 0.0, event) for index, event in enumerate(events, 1)))

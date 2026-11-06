@@ -19,7 +19,9 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
+from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from verifyit.spec import NumericSpec
 
 from forge.effects.issues import Restart, Transient
 from forge.model.controls import Candidate
@@ -64,11 +66,16 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
 async def test_grading_runs_real_engine_without_inference() -> None:
     spec = rollout_spec(arithmetic_task(), trace=TraceMode.MESSAGES)
     engine = RolloutEngine({}, {"shell": ShellHarness(command_timeout=None)})
-    grader = GradingResource(engine, {"task": spec}, "test-config")
-    correct = await grader.grade(GradeCandidate("task", Candidate("12")))
-    incorrect = await grader.grade(GradeCandidate("task", Candidate("9")))
+    grader = GradingResource(engine, "test-config")
+    correct = await grader.grade(GradeCandidate(spec, Candidate("12")))
+    incorrect = await grader.grade(GradeCandidate(spec, Candidate("9")))
     assert correct.status == Outcome.GRADED and correct.reward == 1
     assert incorrect.status == Outcome.GRADED and incorrect.reward == 0
+    authored = arithmetic_task(
+        id="new-task", grader=verifyit_package(NumericSpec("9", tolerance_abs=0, tolerance_rel=0)).grader
+    )
+    new_grade = await grader.grade(GradeCandidate(rollout_spec(authored), Candidate("9")))
+    assert new_grade.status == Outcome.GRADED and new_grade.reward == 1
 
 
 async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
@@ -76,8 +83,8 @@ async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
     success = GradeResult(Outcome.GRADED, 1, "correct")
     rollout = Rollout("trial", (), "stop")
     engine = FakeEngine((GradedRollout(rollout, timeout), GradedRollout(rollout, success)))
-    grader = GradingResource(engine, {"task": rollout_spec(arithmetic_task())}, "config")
-    assert await grader.grade(GradeCandidate("task", Candidate("12"))) == success
+    grader = GradingResource(engine, "config")
+    assert await grader.grade(GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))) == success
     assert engine.replies == ["12", "12"]
     assert len(set(engine.run_ids)) == 2
 
@@ -86,6 +93,6 @@ async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
     timeout = GradeResult(Outcome.INFRA_ERROR, None, "timeout", failure=GradingFailure.TIMEOUT)
     rollout = Rollout("trial", (), "stop")
     engine = FakeEngine((GradedRollout(rollout, timeout), GradedRollout(rollout, timeout)))
-    grader = GradingResource(engine, {"task": rollout_spec(arithmetic_task())}, "config")
-    assert await grader.grade(GradeCandidate("task", Candidate("12"))) == timeout
+    grader = GradingResource(engine, "config")
+    assert await grader.grade(GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))) == timeout
     assert len(engine.run_ids) == 2

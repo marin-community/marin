@@ -12,7 +12,7 @@ from rolloutengine.test_support import machine_runtime
 from shellbox.machine import Command, ExitReason, Machine, MachineTerminated, PackageSpec, Result
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
-from forge.effects.events import Note, Resolved
+from forge.effects.events import Event, Note, Resolved
 from forge.effects.issues import Hold, Restart, Transient
 from forge.resources.env import (
     CommandResult,
@@ -65,7 +65,8 @@ class Notes:
     def __init__(self) -> None:
         self.events: list[Note] = []
 
-    async def __call__(self, event: Note) -> None:
+    def __call__(self, event: Event[None]) -> None:
+        assert isinstance(event, Note)
         self.events.append(event)
 
 
@@ -181,3 +182,13 @@ async def test_shellbox_failure_preserves_unresolved_history(
     with pytest.raises(decision):
         await env.run(COMMAND, timeout=5)
     assert env.fingerprint() == before
+
+
+async def test_shellbox_unexpected_runtime_error_propagates_without_reclassification() -> None:
+    machine = MemoryMachine()
+    bug = RuntimeError("unexpected adapter bug")
+    machine.failure = bug
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    with pytest.raises(RuntimeError) as caught:
+        await env.run(COMMAND, timeout=5)
+    assert caught.value is bug

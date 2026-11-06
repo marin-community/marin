@@ -10,6 +10,7 @@ from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, Rollo
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
 from forge.effects.issues import Restart, Transient
+from forge.resources.execution import Notify, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,3 +48,7 @@ class RolloutResource:
             )
         except RolloutInterrupted as error:
             raise interruption(error) from error
+
+
+async def run_rollout(event: SolverRollout, resource: RolloutResource, *, notify: Notify) -> GradedRollout:
+    return await retry_effect(event, lambda: resource.run(event), notify)

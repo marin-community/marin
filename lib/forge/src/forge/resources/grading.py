@@ -17,15 +17,15 @@ from taskcompendium.models import AssistantToolCalls, TextMessage
 from taskcompendium.runtime.resources import resource_bytes
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy, event_digest
-from forge.effects.issues import Hold
 from forge.model.controls import Candidate
+from forge.resources.execution import Notify, retry_effect
 from forge.resources.rollouts import Engine, interruption
 
 
 @dataclass(frozen=True, slots=True)
 class GradeCandidate(Event[GradeResult]):
     result_type: ClassVar[object] = GradeResult
-    task_digest: str
+    spec: TaskRolloutSpec
     candidate: Candidate
 
 
@@ -37,7 +37,7 @@ class ScriptedModel:
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         served = sum(message["role"] == "assistant" for message in request.messages) - self.context_assistant_turns
         if served >= len(self.turns):
-            raise Hold("Candidate script exhausted before rollout ended")
+            raise RuntimeError("Candidate script exhausted before rollout ended")
         message = self.turns[served]
         return ModelTurn(dict(message), (), (), None, "tool_calls" if "tool_calls" in message else "stop")
 
@@ -68,18 +68,15 @@ def candidate_turns(candidate: Candidate) -> tuple[Mapping[str, object], ...]:
 @dataclass(frozen=True, slots=True)
 class GradingResource:
     engine: Engine
-    specs: Mapping[str, TaskRolloutSpec]
     config_digest: str
 
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("grading", self.config_digest, ReplayPolicy.CACHE)
 
     async def grade(self, event: GradeCandidate) -> GradeResult:
-        spec = self.specs.get(event.task_digest)
-        if spec is None:
-            raise Hold(f"No grading specification for {event.task_digest}")
+        spec = event.spec
         if event.candidate.files and spec.task_machine is None:
-            raise Hold("Candidate files require a task machine")
+            raise ValueError("Candidate files require a task machine")
         turns = candidate_turns(event.candidate)
         count = sum(
             isinstance(message, AssistantToolCalls) or (isinstance(message, TextMessage) and message.role == "assistant")
@@ -96,4 +93,8 @@ class GradingResource:
                 raise interruption(error) from error
             if result.grade.failure != GradingFailure.TIMEOUT or attempt == 1:
                 return result.grade
-        raise Hold("Candidate grading produced no result")
+        raise RuntimeError("Candidate grading produced no result")
+
+
+async def grade(event: GradeCandidate, resource: GradingResource, *, notify: Notify) -> GradeResult:
+    return await retry_effect(event, lambda: resource.grade(event), notify)

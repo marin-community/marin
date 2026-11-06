@@ -26,5 +26,6 @@ class Clock:
     def fingerprint(self) -> Fingerprint:
         return Fingerprint("clock", "wall-time-v1", ReplayPolicy.CACHE)
 
-    async def now(self, event: Now) -> float:
-        return self.source()
+
+async def now(event: Now, resource: Clock) -> float:
+    return resource.source()

@@ -4,7 +4,7 @@
 """Single-writer environments with replayable command and binary-file effects."""
 
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -18,6 +18,7 @@ from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, canonical_digest
 from forge.effects.issues import Hold, Restart, Transient
+from forge.resources.execution import Notify, retry_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +51,6 @@ class ReadFile(Event[bytes]):
 
 
 type Mutation = Resolved[CommandResult] | Resolved[None]
-type Notify = Callable[[Note], Awaitable[None]]
 
 
 class Env(Protocol):
@@ -58,7 +58,13 @@ class Env(Protocol):
     async def run(self, cmd: str, *, timeout: float) -> CommandResult: ...
     async def read(self, path: PurePosixPath) -> bytes: ...
     async def write(self, path: PurePosixPath, data: bytes) -> None: ...
-    async def restore(self, events: Sequence[Mutation]) -> None: ...
+    async def restore(self, events: Sequence[Mutation]) -> None:
+        """Replay mutations, excluding ReadFile; mismatch Notes leave the log authoritative.
+
+        A fingerprint Hold requires human inspection of the inconsistent log and environment.
+        """
+        ...
+
     async def close(self) -> None: ...
 
 
@@ -99,7 +105,7 @@ class _RecordedEnv(Env):
             elif isinstance(request, RunCommand) and isinstance(resolved.value, CommandResult):
                 result = await self.run(request.cmd, timeout=request.timeout)
                 if _stable(result) != _stable(resolved.value):
-                    await self.notify(Note(f"Restore step {index}: command result differs from the log"))
+                    self.notify(Note(f"Restore step {index}: command result differs from the log"))
                     # Keep the logical replay position despite the explicitly reported divergence.
                     self.digest = current.digest
                     self._record_command(request.cmd, request.timeout, resolved.value)
@@ -127,8 +133,12 @@ class ShellboxEnv(_RecordedEnv):
         self._check_open()
         try:
             yield
+        except MachineTerminated as error:
+            raise Restart("Environment machine terminated") from error
         except RuntimeError as error:
-            raise Restart("Environment machine failed or terminated") from error
+            if str(error) != "Machine is closed":
+                raise
+            raise Restart("Environment machine is closed") from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment operation did not resolve") from error
 
@@ -216,7 +226,7 @@ class FakeEnv(_RecordedEnv):
         self._check_open()
         scripted = self.commands.get(cmd)
         if scripted is None:
-            raise Hold(f"Unscripted fake command: {cmd}")
+            raise ValueError(f"Unscripted fake command: {cmd}")
         if isinstance(scripted, Transient | Restart):
             raise scripted
         self.files.update(scripted.writes)
@@ -233,3 +243,15 @@ class FakeEnv(_RecordedEnv):
         self._check_open()
         self.files[path] = data
         self._record_write(path, data)
+
+
+async def run_command(event: RunCommand, env: Env, *, notify: Notify) -> CommandResult:
+    return await retry_effect(event, lambda: env.run(event.cmd, timeout=event.timeout), notify)
+
+
+async def write_file(event: WriteFile, env: Env, *, notify: Notify) -> None:
+    await retry_effect(event, lambda: env.write(event.path, event.data), notify)
+
+
+async def read_file(event: ReadFile, env: Env, *, notify: Notify) -> bytes:
+    return await retry_effect(event, lambda: env.read(event.path), notify)
