@@ -1,11 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import haliax as hax
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty, maybe_fused_next_token_loss
@@ -18,6 +20,15 @@ Embed = hax.Axis("embed", 4)
 Vocab = hax.Axis("vocab", 8)
 
 
+class LossInputs(NamedTuple):
+    embeddings: np.ndarray
+    head: np.ndarray
+    labels: np.ndarray
+    weights: np.ndarray
+    mapping: dict[str, str]
+    placed: tuple[jax.Array, jax.Array]
+
+
 def _arrays(mesh, contract_sharded):
     x = (np.arange(32, dtype=np.float32).reshape(4, 2, 4) - 15) / 23
     head = np.cos(np.arange(32, dtype=np.float32).reshape(8, 4)) / 3
@@ -26,7 +37,7 @@ def _arrays(mesh, contract_sharded):
     mapping = {"batch": "data", "embed" if contract_sharded else "vocab": "model"}
     x_spec = P("data", None, "model" if contract_sharded else None)
     head_spec = P(None, "model") if contract_sharded else P("model", None)
-    return (
+    return LossInputs(
         x,
         head,
         labels,
@@ -144,6 +155,7 @@ def test_shifted_global_targets_keep_full_vocab_loss_and_gradients():
             reduction=None,
             logsumexp_weight=0.0,
             block_size=2,
+            precision=jax.lax.Precision.HIGHEST,
         ).array
 
     with jax.set_mesh(mesh), hax.axis_mapping(mapping):
@@ -157,4 +169,47 @@ def test_shifted_global_targets_keep_full_vocab_loss_and_gradients():
     ref_gradients = ref_backward(jnp.ones_like(expected))
     np.testing.assert_allclose(np.asarray(loss), np.asarray(expected), atol=1e-5, rtol=1e-4)
     for actual_gradient, expected_gradient in zip(gradients, ref_gradients, strict=True):
+        np.testing.assert_allclose(np.asarray(actual_gradient), np.asarray(expected_gradient), atol=1e-5, rtol=1e-4)
+
+
+@pytest.mark.parametrize("contract_sharded", [False, True], ids=["vocab", "contract"])
+def test_explicit_sharded_loss_and_gradients_match_full_reference(contract_sharded):
+    if len(jax.devices()) < 4:
+        pytest.skip("Requires four JAX devices")
+    mesh = Mesh(
+        np.asarray(jax.devices()[:4]).reshape(2, 2),
+        ("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+    with jax.set_mesh(mesh):
+        inputs = _arrays(mesh, contract_sharded)
+        label = hax.named(jax.device_put(inputs.labels, NamedSharding(mesh, P("data", None))), (Batch, Position))
+        weight = hax.named(jax.device_put(inputs.weights, NamedSharding(mesh, P("data", None))), (Batch, Position))
+
+        def actual(embeddings, head):
+            return fused_cross_entropy_loss_and_logsumexp_penalty(
+                hax.named(embeddings, (Batch, Position, Embed)),
+                hax.named(head, (Vocab, Embed)),
+                Contract=Embed,
+                Label=Vocab,
+                target_y=label,
+                weight=weight,
+                reduction=hax.sum,
+                logsumexp_weight=0.1,
+                block_size=2,
+                dtype=jnp.float32,
+                precision=jax.lax.Precision.HIGHEST,
+            ).scalar()
+
+        with hax.axis_mapping(inputs.mapping):
+            value, gradients = jax.value_and_grad(jax.jit(actual), argnums=(0, 1))(*inputs.placed)
+
+    def reference(embeddings, head):
+        return _reference(embeddings, head, inputs.labels, inputs.weights, "sum", 0.1, None)
+
+    expected, expected_gradients = jax.value_and_grad(jax.jit(reference), argnums=(0, 1))(
+        jnp.asarray(inputs.embeddings), jnp.asarray(inputs.head)
+    )
+    np.testing.assert_allclose(np.asarray(value), np.asarray(expected), atol=1e-5, rtol=1e-4)
+    for actual_gradient, expected_gradient in zip(gradients, expected_gradients, strict=True):
         np.testing.assert_allclose(np.asarray(actual_gradient), np.asarray(expected_gradient), atol=1e-5, rtol=1e-4)
