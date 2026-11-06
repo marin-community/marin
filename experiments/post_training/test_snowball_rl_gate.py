@@ -1126,7 +1126,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(
     client.job_status.side_effect = ConnectionError("controller unavailable")
     assert status(preset, argv)["verdict"] == report["verdict"]
     client.job_status.side_effect = None
-    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: (_ for _ in ()).throw(ConnectionError("offline")))
+    monkeypatch.setattr(presets, "iris_client", lambda: (_ for _ in ()).throw(ConnectionError("offline")))
     assert "grafana_links" not in status(preset, argv)["runs"][0]
     monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     native_job.started_at = None
@@ -1335,6 +1335,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     client.submit.return_value.job_id = job
     final = JobState.FAILED if case == "parent-early" else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
+    client.job_status.return_value = SimpleNamespace(
+        state=JobState.SUCCEEDED,
+        started_at=Timestamp.from_ms(1794000000000),
+        finished_at=Timestamp.from_ms(1794003600000),
+    )
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(presets, "iris_client", lambda: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)

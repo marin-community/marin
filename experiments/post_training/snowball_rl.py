@@ -705,6 +705,7 @@ def _publications(run: SnowballRun, preset: presets.Preset) -> tuple[ArtifactSte
 def _status(run: SnowballRun, preset: presets.Preset) -> dict:
     run = replace(run, gate=_completed_gate(run, preset))
     rows = []
+    native_attempts = []
     planned = []
     with ExitStack() as stack:
         client, lookup_started = None, False
@@ -747,6 +748,7 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                     else "not built"
                 )
             )
+            native_attempts.append(receipt.config.get("run", {}).get("attempt_id") if receipt is not None else None)
             rows.append(
                 {
                     "name": step.name,
@@ -790,10 +792,13 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
             if crashed is not None:
                 verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
     publications = _publications(run, preset)
-    for row, publication in zip(rows, publications, strict=False):
+    for row, publication, attempt in zip(rows, publications, native_attempts, strict=False):
         receipt_path = StoragePath(publication.path(presets.artifact_prefix(row["cluster"]))) / "publication.json"
         if presets.exists(receipt_path):
-            row["rl_progress_url"] = json.loads(presets.read_text(receipt_path))["url"]
+            published = json.loads(presets.read_text(receipt_path))
+            identity = published["attempt_id"]
+            if attempt is not None and (identity == attempt or identity.startswith(attempt + "-gate-")):
+                row["rl_progress_url"] = published["url"]
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(presets.REPO_ROOT)),
