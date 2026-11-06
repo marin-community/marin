@@ -14,7 +14,7 @@ from typing import Any
 import requests
 from marina.client import AppletQuery, applet_query
 
-from .adapter import ImportRun, prepare_bundle, read_json
+from .adapter import BUNDLE_MANIFEST, ImportRun, prepare_bundle, read_json
 
 BATCH_BYTES = 750_000
 
@@ -121,7 +121,7 @@ def main() -> None:
     attempts = read_json(args.source_attempts) if args.source_attempts else {}
     prepared = []
     for bundle in args.bundle:
-        source = read_json(bundle / "agentx-source.json")["source"]
+        source = read_json(bundle / BUNDLE_MANIFEST)["source"]
         actual = attempts.get(str(source["run_id"]))
         if actual is None:
             actual = json.loads(

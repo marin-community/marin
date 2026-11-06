@@ -11,15 +11,34 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+BUNDLE_MANIFEST = "agentx-source.json"
+
+
+class RequestRecord(TypedDict):
+    id: str
+    conversation_id: str
+    corpus_id: str
+    source_outer_idx: int
+    source_kind: str
+    turn: int
+    phase: str
+    start_ns: int
+    end_ns: int
+    ttft_ms: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    error: str | None
 
 
 @dataclass(frozen=True)
 class ImportRun:
     key: str
     digest: str
+    # Preserve opaque upstream settings and aggregate fields across collector versions.
     run: dict[str, Any]
-    requests: list[dict[str, Any]]
+    requests: list[RequestRecord]
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -28,7 +47,7 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportRun]:
     """Validate the saved receipt and preserve upstream metrics and source identities."""
-    manifest_path = bundle / "agentx-source.json"
+    manifest_path = bundle / BUNDLE_MANIFEST
     submission = read_json(manifest_path)
     source = submission["source"]
     if (
@@ -98,7 +117,7 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
         files.append(profile_path)
         records = [json.loads(line) for line in profile_path.read_text().splitlines() if line.strip()]
         origin = min(r["metadata"]["request_start_ns"] for r in records)
-        requests = []
+        requests: list[RequestRecord] = []
         for record in records:
             meta, metrics = record["metadata"], record["metrics"]
             start, end = meta["request_start_ns"] - origin, meta["request_end_ns"] - origin
