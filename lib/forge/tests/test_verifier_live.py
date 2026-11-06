@@ -8,7 +8,9 @@ import json
 import os
 import time
 import traceback
+from dataclasses import replace
 from pathlib import Path
+from typing import override
 
 import pytest
 from rigging.filesystem.factory import open_url
@@ -36,6 +38,7 @@ from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.resources.verifier import RoundVerifier
 
 SCRIPT = b"""
+from dataclasses import replace
 from pathlib import Path
 roots = ['/app', '/workspace', '/tests', '/tmp']
 assert all(not (Path(root) / 'candidate-residue').exists() for root in roots)
@@ -45,6 +48,7 @@ for root in roots:
 print(1)
 """
 KILL_SCRIPT = b"""
+from dataclasses import replace
 from pathlib import Path
 import time
 Path('/app/mid-command').write_text('running')
@@ -55,9 +59,10 @@ print(1)
 
 class Factory(IrisMachineFactory):
     def __init__(self) -> None:
-        super().__init__(controller_url=os.environ["IRIS_CONTROLLER_URL"])
+        super().__init__(controller_url=os.environ["IRIS_CONTROLLER_URL"], scheduling_timeout=1200)
         self.created: list[IrisMachine] = []
 
+    @override
     async def create(self, spec: MachineSpec) -> IrisMachine:
         machine = await super().create(spec)
         self.created.append(machine)
@@ -65,7 +70,7 @@ class Factory(IrisMachineFactory):
 
 
 @pytest.mark.cluster
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(3300)
 @pytest.mark.skipif(
     not all(os.environ.get(key) for key in ("IRIS_CONTROLLER_URL", "CW_KEY_ID", "CW_KEY_SECRET", "PROBE_OUTPUT")),
     reason="requires a live Iris job, storage credentials, and artifact destination",
@@ -78,6 +83,12 @@ async def test_verifier_reuse_and_replacement() -> None:
     resource = GradingResource(pool, "live-probe")
     policy = load_policy(Path(forge.__file__).parent / "policy/defaults")
     settings = lowering_settings(policy)
+    # A busy admission queue may take twenty minutes; the grader still gets 180 seconds.
+    settings = replace(
+        settings,
+        verifier_machine=replace(settings.verifier_machine, startup_timeout=1500),
+        limits=settings.limits.model_copy(update={"verifier_timeout": 1500}),
+    )
     output = os.environ["PROBE_OUTPUT"]
     results: dict[str, object] = {"passed": False, "workdir": "/app", "grades": []}
     grades: list[dict[str, object]] = []
