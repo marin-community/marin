@@ -396,31 +396,15 @@ diagram URLs, so it writes only text.
 
 ## Doc sessions
 
-The `doc` profile ([instructions](profiles/doc/AGENTS.md)) is the Loom-native
-counterpart of the `gdoc` profile. The session's record of the work is the
-branch artifact `doc`, with progress updates in the artifact `progress`, and
-the agent writes both with the `loom` MCP artifact tools. Loom opens a `doc`
-session on its `doc` artifact once the agent writes it. A person comments by
-selecting text and submitting a review, which Loom delivers to the agent at
-once, or edits the source, which adds a revision.
-
-A person's edit reaches the agent through the `doc-edits` script watch
-([program](watches/doc_edits.py)). When Loom reports a `doc` session idle, and
-every 15 seconds, it compares the doc's revisions with the last one it looked
-at. It sends the session one message that starts with "A person edited the
-doc" for the revisions a person wrote; Loom records the agent's own writes as
-the agent's, so they never count. Register it from the root of the checkout:
-
-```bash
-loom watch add doc-edits --program "$PWD/infra/loom/watches/doc_edits.py" \
-  --capabilities observe,nudge
-loom watch update doc-edits --program "$PWD/infra/loom/watches/doc_edits.py"
-loom watch run doc-edits --dry-run
-loom watch enable doc-edits
-```
-
-The `update` makes Loom read the program's triggers, which `add` without
-`--every` does not.
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
+record of the work is the branch artifact `doc`, with progress updates in the
+artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
+The profile sets `docArtifact: doc`, so Loom opens the session on a Doc tab that
+shows `doc` once the agent writes it. A person comments by selecting text in the
+Doc tab: **Comment** sends the comment to the agent at once, and **Start a
+review** collects comments that **Submit review** sends together. When a person
+saves an edit to the doc's source, Loom sends the agent a message that starts
+with "A person edited the doc" when its turn ends.
 
 ## claude.ai connector
 
