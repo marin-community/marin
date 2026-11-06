@@ -91,6 +91,19 @@ def test_top_level_import_reaches_transitive_dependents(tmp_path: Path) -> None:
     assert "zephyr" not in scopes_in(matrix), "a lazy import must not propagate"
 
 
+def test_forge_source_change_selects_external_importers_and_its_dedicated_suite(tmp_path: Path) -> None:
+    write(tmp_path, "lib/forge/src/forge/__init__.py")
+    write(tmp_path, "lib/forge/src/forge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/driver.py", "from forge.events import Event\n")
+    write(tmp_path, "lib/iris/tests/test_driver.py", "from iris import driver\n")
+
+    selection = select_changed_tests(["lib/forge/src/forge/events.py"], tmp_path)
+
+    assert leg_paths(selection.matrix, "iris") == ["lib/iris/tests/test_driver.py"]
+    assert "forge-unit" in selection.suites
+
+
 def test_selection_is_empty_when_nothing_depends_on_the_change(tmp_path: Path) -> None:
     _workspace(tmp_path)
     write(tmp_path, "lib/rigging/src/rigging/unused.py", "X = 1\n")

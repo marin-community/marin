@@ -78,7 +78,7 @@ def json_value(value: object) -> object:
 
 
 def canonical_digest(value: object) -> str:
-    """Hash canonical JSON content, including mappings with arbitrary key order."""
+    """Hash canonical JSON; mapping order is ignored and integral floats become integers."""
     return hashlib.sha256(
         json.dumps(json_value(value), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()

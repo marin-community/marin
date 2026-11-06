@@ -1,15 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from forge.effects.events import Fingerprint, ReplayPolicy, Resolved, Retrying, StageCompleted
-from forge.effects.log import EventLog, JsonlSink, Status, fold
+import pytest
 
-from .effect_fakes import Answer, Choices, Query, Timed
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, Retrying, StageCompleted
+from forge.effects.issues import LogFailure
+from forge.effects.log import EventLog, JsonlSink, Record, Status, fold
+
+from .effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
 
 
 async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_keys(tmp_path: Path) -> None:
@@ -29,7 +34,7 @@ async def test_jsonl_reload_in_new_process_preserves_typed_results_and_replay_ke
     script = """
 import asyncio, sys
 from tests.effect_fakes import Answer, Query
-from forge.effects.events import Fingerprint, ReplayPolicy
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy
 from forge.effects.log import EventLog, JsonlSink
 async def main():
     log = EventLog(replay_from=await JsonlSink(sys.argv[1]).read())
@@ -67,3 +72,74 @@ async def test_frozen_set_payloads_roundtrip_with_stable_replay_keys(tmp_path: P
     await log.record(Resolved(event, (), frozenset({"chosen"})))
     resumed = EventLog(replay_from=await sink.read())
     assert resumed.lookup(Choices(frozenset({"first", "second"})), ()) == frozenset({"chosen"})
+
+
+async def test_local_sink_appends_without_rewriting_prefix_and_retries_torn_tail(tmp_path: Path) -> None:
+    path = tmp_path / "append.jsonl"
+    sink = JsonlSink(str(path))
+    first = Record(1, 1.0, Note("first"))
+    second = Record(2, 2.0, Note("second"))
+    third = Record(3, 3.0, Note("third"))
+    await sink.write((first,))
+    prefix = b"  " + path.read_bytes()
+    path.write_bytes(prefix)
+    inode = path.stat().st_ino
+    await sink.write((second,))
+    assert path.stat().st_ino == inode
+    assert path.read_bytes().startswith(prefix)
+    with path.open("ab") as output:
+        output.write(b'{"sequence":3,"wall_time":')
+    assert await sink.read() == (first, second)
+    await sink.write((second, third))
+    assert await sink.read() == (first, second, third)
+
+
+async def test_log_retries_only_unwritten_records_and_retains_failed_batch() -> None:
+    sink = FlakySink(1)
+    log = EventLog(sink=sink, attempts=1)
+    with pytest.raises(LogFailure):
+        await log.record(Note("retained"))
+    await log.record(Note("next"))
+    await log.record(Note("last"))
+    assert tuple(record.event for record in sink.records) == (Note("retained"), Note("next"), Note("last"))
+
+
+async def test_object_store_sink_replaces_snapshot_with_old_and_new_records() -> None:
+    sink = JsonlSink("memory://forge-test/append.jsonl")
+    first = Record(1, 1.0, Note("first"))
+    second = Record(2, 2.0, Note("second"))
+    await sink.write((first,))
+    await sink.write((second,))
+    await sink.write((second,))
+    assert await sink.read() == (first, second)
+
+
+async def test_records_queued_during_upload_coalesce_into_one_incremental_batch() -> None:
+    sink = PausedSink()
+    log = EventLog(sink=sink)
+    first = asyncio.create_task(log.record(Note("first")))
+    await sink.started.wait()
+    second = asyncio.create_task(log.record(Note("second")))
+    third = asyncio.create_task(log.record(Note("third")))
+    # The queued records enter before the callback releases the blocked sink.
+    asyncio.get_running_loop().call_soon(sink.release.set)
+    await asyncio.gather(first, second, third)
+    assert tuple(tuple(record.event for record in batch) for batch in sink.batches) == (
+        (Note("first"),),
+        (Note("second"), Note("third")),
+    )
+
+
+async def test_unencodable_event_does_not_poison_later_persistence(tmp_path: Path) -> None:
+    @dataclass(frozen=True, slots=True)
+    class Invalid(Event[None]):
+        opaque: object
+
+    sink = JsonlSink(str(tmp_path / "valid.jsonl"))
+    log = EventLog(sink=sink)
+    await log.record(Note("before"))
+    with pytest.raises(LogFailure):
+        await log.record(Invalid(object()))
+    await log.record(Note("after"))
+    assert tuple(record.event for record in await sink.read()) == (Note("before"), Note("after"))
+    assert tuple(record.sequence for record in log.records) == (1, 2)

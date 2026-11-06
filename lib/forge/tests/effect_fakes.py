@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import ClassVar, override
@@ -37,7 +38,7 @@ class FlakySink(Sink):
         if self.failures:
             self.failures -= 1
             raise OSError("storage unavailable")
-        self.records = tuple(records)
+        self.records += tuple(records)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,3 +51,16 @@ class Timed(Event[float]):
 class Choices(Event[frozenset[str]]):
     options: frozenset[str]
     result_type: ClassVar[object] = frozenset[str]
+
+
+class PausedSink(Sink):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.batches: tuple[tuple[Record, ...], ...] = ()
+
+    @override
+    async def write(self, records: Sequence[Record]) -> None:
+        self.started.set()
+        await self.release.wait()
+        self.batches += (tuple(records),)
