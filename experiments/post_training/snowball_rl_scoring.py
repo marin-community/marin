@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import PurePosixPath
 
@@ -16,7 +17,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME, TRAIN_FILENAME
+from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN, TRAIN_FILENAME
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [
@@ -40,6 +41,24 @@ PASS_RATE_EVALUATION = replace(presets.EVALUATIONS["panel-910"], name="pass-rate
 
 class InvalidComparison(ValueError):
     """The recorded runs cannot support this calibrated comparison."""
+
+
+def evaluation_ids(sources: Sequence[Mapping[str, str]]) -> frozenset[str]:
+    ids = []
+    try:
+        for source in sources:
+            if source["kind"] != "directory":
+                raise InvalidComparison("panel comparison requires recorded TaskSpec directory sources")
+            path = StoragePath(source["uri"]) / source["relative_path"]
+            fs, key = filesystem_for(str(path))
+            with fs.open(key, "rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(columns=[TASK_SPEC_COLUMN]):
+                    ids.extend(json.loads(row[TASK_SPEC_COLUMN])["id"] for row in batch.to_pylist())
+        if not ids or any(not isinstance(item, str) or not item for item in ids) or len(set(ids)) != len(ids):
+            raise InvalidComparison("recorded evaluation has empty, malformed or duplicate TaskSpec IDs")
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        raise InvalidComparison(f"cannot read recorded evaluation tasks: {error}") from error
+    return frozenset(ids)
 
 
 def task_manifest(root: StoragePath) -> dict[str, dict]:

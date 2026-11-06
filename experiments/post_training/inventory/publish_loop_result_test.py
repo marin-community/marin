@@ -2,80 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import json
 import sys
 
 import pytest
 from pydantic import ValidationError
 
 from experiments.post_training.inventory import publish_loop_result as publication
+from experiments.post_training.inventory.publication_test_support import ReportTransport, result_record
 
 
 @pytest.fixture
 def result():
-    return {
-        "run_id": "test/control",
-        "attempt_id": "attempt-1",
-        "label": "control",
-        "run_date": "2026-11-02T00:00:00Z",
-        "date_basis": "submission_acknowledged",
-        "started_at": "2026-11-02T00:00:00Z",
-        "completed_at": "2026-11-02T01:00:00Z",
-        "elapsed_seconds": 3600,
-        "timing_scope": "coordinator_submission_to_terminal",
-        "status": "succeeded",
-        "optimizer_steps": 25,
-        "source_revision": "source-1",
-        "data_identity": "data-1",
-        "initializer_identity": "model-1",
-        "evaluation": {
-            "name": "fast",
-            "version": "1",
-            "task_count": 100,
-            "task_set_sha256": "a" * 64,
-            "protocol_sha256": None,
-        },
-        "baseline": {"reward": 0.2, "attempted": 100, "scored": 100},
-        "final": {"reward": 0.4, "attempted": 100, "scored": 100},
-        "artifact_uri": "s3://example/test",
-        "evidence": ["synthetic unit-test result"],
-    }
+    return result_record()
 
 
-@pytest.fixture
-def api_result(result):
-    return result | {
-        "partial_coverage": False,
-        "comparison_key": None,
-        "provisional": True,
-        "pareto_eligible": False,
-    }
-
-
-class ReportTransport:
-    def __init__(self, api_runs=()):
-        self.rows = {}
-        self.requests = []
-        self.api_runs = api_runs
-
-    def __call__(self, origin, method, path, *, json_body=None):
-        self.requests.append((origin, method, path))
-        if path.startswith("/api/marina/applets/"):
-            return {"authenticated_url": f"https://applets.marina.oa.dev/a/{publication.APPLET_ID}/"}
-        if method == "POST":
-            parameters = json_body["parameters"]
-            key = (parameters["run_id"], parameters["attempt_id"])
-            if "record" in parameters:
-                if key in self.rows:
-                    return {"row_count": 0}
-                self.rows[key] = json.loads(parameters["record"])
-                return {"row_count": 1}
-            return {"rows": [{"record": copy.deepcopy(self.rows[key])}]}
-        return {"runs": list(self.api_runs)}
-
-
-def test_publication_retries_are_idempotent_and_conflicts_preserve_original(monkeypatch, result, api_result):
-    transport = ReportTransport([api_result])
+def test_publication_retries_are_idempotent_and_conflicts_preserve_original(monkeypatch, result):
+    transport = ReportTransport()
     monkeypatch.setattr(publication, "marina_request", transport)
     first = publication.publish_result(result)
     repeated = publication.publish_result(copy.deepcopy(result))
@@ -90,15 +32,14 @@ def test_publication_retries_are_idempotent_and_conflicts_preserve_original(monk
     assert all(origin == "https://applets.marina.oa.dev" for origin, method, _ in transport.requests if method == "POST")
 
 
-def test_incomplete_success_rejected_before_io_but_failed_attempt_remains_visible(monkeypatch, result, api_result):
-    transport = ReportTransport([api_result])
+def test_incomplete_success_rejected_before_io_but_failed_attempt_remains_visible(monkeypatch, result):
+    transport = ReportTransport()
     monkeypatch.setattr(publication, "marina_request", transport)
     result["baseline"]["scored"] = 99
     with pytest.raises(ValidationError, match="complete baseline"):
         publication.publish_result(result)
     assert transport.requests == []
     result["status"] = "failed"
-    api_result.update(result, partial_coverage=True)
     receipt = publication.publish_result(result)
     assert receipt["verified"]
     assert next(iter(transport.rows.values()))["baseline"]["scored"] == 99
@@ -110,15 +51,6 @@ def test_incomplete_success_rejected_before_io_but_failed_attempt_remains_visibl
             record.update(baseline=None, final=None)
         else:
             record["baseline"]["scored"] = record["final"]["scored"] = scored
-        transport.api_runs.append(
-            record
-            | {
-                "partial_coverage": True,
-                "comparison_key": None,
-                "provisional": True,
-                "pareto_eligible": False,
-            }
-        )
         assert publication.publish_result(record)["verified"]
         assert transport.rows[(record["run_id"], record["attempt_id"])] == record
 
@@ -144,8 +76,8 @@ def test_invalid_evaluation_identity_cannot_poison_report_api(monkeypatch, resul
     assert transport.requests == []
 
 
-def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch, result, api_result):
-    transport = ReportTransport([api_result])
+def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch, result):
+    transport = ReportTransport()
     monkeypatch.setattr(publication, "marina_request", transport)
     result.update(
         status="failed",
@@ -156,7 +88,6 @@ def test_pre_evaluation_failure_publishes_no_fabricated_measurements(monkeypatch
         timing_scope="loop_launcher_to_terminal",
     )
     result["evaluation"]["task_set_sha256"] = None
-    api_result.update(result, partial_coverage=True)
     receipt = publication.publish_result(result)
     assert receipt["verified"]
     stored = next(iter(transport.rows.values()))

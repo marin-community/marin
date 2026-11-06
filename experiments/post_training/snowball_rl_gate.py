@@ -31,7 +31,6 @@ from typing import TypeGuard
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
@@ -47,7 +46,6 @@ from taskcompendium.grading_result import Outcome
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
-from experiments.post_training.task_curation.inventory import TASK_SPEC_COLUMN
 
 GATE_REVISION = "2026.11.06"
 GATE_REPORT_FILENAME = "gate_report.json"
@@ -352,24 +350,6 @@ def _gated(evaluation: presets.Evaluation, preset: presets.Preset) -> bool:
     return any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
 
 
-def _evaluation_ids(sources: Sequence[Mapping[str, str]]) -> frozenset[str]:
-    ids = []
-    try:
-        for source in sources:
-            if source["kind"] != "directory":
-                raise InvalidComparison("panel comparison requires recorded TaskSpec directory sources")
-            path = StoragePath(source["uri"]) / source["relative_path"]
-            fs, key = filesystem_for(str(path))
-            with fs.open(key, "rb") as stream:
-                for batch in pq.ParquetFile(stream).iter_batches(columns=[TASK_SPEC_COLUMN]):
-                    ids.extend(json.loads(row[TASK_SPEC_COLUMN])["id"] for row in batch.to_pylist())
-        if not ids or any(not isinstance(item, str) or not item for item in ids) or len(set(ids)) != len(ids):
-            raise InvalidComparison("recorded evaluation has empty, malformed or duplicate TaskSpec IDs")
-    except (KeyError, TypeError, ValueError, OSError) as error:
-        raise InvalidComparison(f"cannot read recorded evaluation tasks: {error}") from error
-    return frozenset(ids)
-
-
 def _grader_errors(
     rows: Sequence[Mapping[str, float]], prefix: str, name: str, *, answers: int | None = None
 ) -> ErrorBoundInvariant:
@@ -491,7 +471,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
         quality = evaluation.file != scoring.TRAIN_STEM and _gated(evaluation, preset)
-        expected_ids = _evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
+        expected_ids = scoring.evaluation_ids(named.get(evaluation.name, launch["inputs"]["validation_data"]))
         if rates is not None and quality and frozenset(rates["task_id"].to_pylist()) != expected_ids:
             raise InvalidComparison("pass-rate panel task IDs differ from the run's recorded evaluation tasks")
         table = scoring.panel_scores(evaluation, path, answers)

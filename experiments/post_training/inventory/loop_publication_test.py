@@ -1,60 +1,307 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise publication recovery through the real artifact cache."""
-
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from marin.execution.lazy import ArtifactStep, resolve
+import yaml
+from marin.execution.lazy import OUT, ArtifactStep, apply, resolve
 from marin.rl.skyrl import SkyRLRun
+from rigging.timing import Timestamp
+from taskcompendium.convert.answers import answer_task
+from taskcompendium.models import Source
+from taskcompendium.pipeline.models import RawRow
+from verifyit.spec import ExactSpec
 
-from experiments.post_training.inventory import loop_publication
+from experiments.post_training import snowball_rl_gate as gate
+from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training.inventory import loop_publication, publish_loop_result
+from experiments.post_training.inventory.publication_test_support import ReportTransport, result_record
 
 
-def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch):
+def _json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+
+
+def _gate_result(output, verdict, interpretation):
+    return gate.GateReport(
+        path=output,
+        preset="learning-medium",
+        verdict=verdict,
+        label=None,
+        reason=interpretation,
+        run=gate.RunMetadata(settings=(), tasks=None, init=None, replicates=1, requirements=()),
+        control=gate.ControlMetadata(main_commit="control", revision=presets.PRESET_REVISION, runs=4),
+        invariants=(),
+        guards=(),
+        reported=(),
+        gaps=(),
+    )
+
+
+@pytest.mark.parametrize("mode", ["legacy", "snowball"])
+def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode):
+    result = result_record()
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    transport = ReportTransport()
+    monkeypatch.setattr(publish_loop_result, "marina_request", transport)
     training_calls = []
-    publication_calls = []
+    panel = tmp_path / "panel"
+    template = answer_task(
+        RawRow("template", Source(dataset="fixture", revision="1", row="template", importer_revision="1"), {}),
+        prompt="Reply yes.",
+        spec=ExactSpec(expected=("yes",)),
+    )
+    identifiers = [f"task-{index}" for index in range(100)]
+    panel.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {presets.TASK_SPEC_COLUMN: template.model_copy(update={"id": item}).model_dump_json()}
+                for item in identifiers
+            ]
+        ),
+        panel / "full_validation.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_id": item,
+                    "family": "small" if index == 0 else "large",
+                    "aaii_category": "coding",
+                    "agentic": False,
+                }
+                for index, item in enumerate(identifiers)
+            ]
+        ),
+        panel / presets.TASK_MANIFEST_FILENAME,
+    )
+    start = 1794000000000
+    job = SimpleNamespace(started_at=Timestamp.from_ms(start), finished_at=Timestamp.from_ms(start + 3600000))
+    client = SimpleNamespace(job_status=lambda job_id: job)
+    monkeypatch.setattr(loop_publication, "open_iris_client", lambda **kwargs: nullcontext(client))
 
-    def train(config):
-        output = config["output"]
-        training_calls.append(output)
-        export = Path(output) / "exports"
-        export.mkdir(parents=True)
-        (export / "loop-result.json").write_text(json.dumps({"run_id": "test/run", "attempt_id": "attempt-1"}))
-        return SkyRLRun(
-            path=output,
-            hf_model_uri=None,
-            global_step=None,
-            tokenizer_uri="test/model",
-            tokenizer_revision="revision",
-            checkpoint_root=str(Path(output) / "checkpoints"),
-            draft_checkpoint_root=None,
-            terminal_manifest_uri=str(Path(output) / "terminal.json"),
-            iris_job_id="test-job",
+    def write_native(output, attempt="native-1", kind="full"):
+        export = output / "exports"
+        source = {
+            "kind": "directory",
+            "uri": str(panel),
+            "relative_path": "full_validation.parquet",
+            "identity": "panel@2026.11.06",
+        }
+        launch = {
+            "run": {"id": "native-run", "attempt_id": attempt},
+            "inputs": {
+                "model": {"identity": "initializer@2026.11.06"},
+                "train_data": [{"identity": "training@2026.11.06"}],
+                "validation_data": [source],
+                "evaluation_data": {"full_panel": [source]},
+            },
+            "skyrl": {
+                "trainer": {"max_steps": 2},
+                "generator": {"eval_n_samples_per_prompt": 1},
+                "data": {"expected_eval_rows": None} if kind == "full" else {},
+            },
+        }
+        (output / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
+        _json(
+            output / "terminal.json",
+            {
+                "config": launch,
+                "result": {
+                    "state": "failed" if kind == "native-failed" else "succeeded",
+                    "iris_job_id": f"/tests/{attempt}",
+                    "provenance": {"tree_hash": "native-tree", "base_commit": "native-base", "dirty": False},
+                },
+            },
+        )
+        _json(export / "tracking.json", {"wandb_url": f"https://wandb.example/team/project/runs/{attempt}"})
+        for step, windows in ((1, 2), (2, 3)):
+            _json(
+                export / f"metrics/step-{step:06d}.json",
+                {
+                    "step": step,
+                    "attempt_id": attempt,
+                    "trainer/global_step": step,
+                    "timing/step_wall/unaccounted": 0,
+                    "policy/policy_update_steps": windows,
+                    "policy/policy_loss": 0.1,
+                    "policy/raw_grad_norm": 1,
+                },
+            )
+        _json(
+            export / "metrics/step-000003.json",
+            {
+                "step": 3,
+                "attempt_id": "old-attempt",
+                "trainer/global_step": 3,
+                "timing/step_wall/unaccounted": 0,
+                "policy/policy_update_steps": 999,
+                "policy/policy_loss": 0.1,
+                "policy/raw_grad_norm": 1,
+            },
+        )
+        for step in (0, 2):
+            count = int(kind) if kind in ("99", "98") and step == 2 else 100
+            rows = [
+                {
+                    "task_id": item,
+                    "response_token_ids": [1],
+                    "verification": {
+                        "status": "verified",
+                        "score": float(index == 0) if step == 0 else 0.5,
+                        "score_min": 0,
+                        "score_max": 1,
+                    },
+                }
+                for index, item in enumerate(identifiers[:count])
+            ]
+            if kind == "foreign" and step == 2:
+                rows[-1]["task_id"] = "foreign-task"
+            dump = export / f"dumped_evals/global_step_{step}_evals/panel.jsonl"
+            dump.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "missing" and step == 0:
+                if dump.exists():
+                    dump.unlink()
+            else:
+                dump.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            metric = export / f"metrics/step-{step:06d}.json"
+            previous = json.loads(metric.read_text()) if metric.exists() else {"step": step}
+            _json(
+                metric,
+                previous
+                | {
+                    "attempt_id": "old-attempt" if kind == "stale" and step == 0 else attempt,
+                    "eval/all/num_attempted": len(rows),
+                    "eval/all/num_scored": len(rows),
+                },
+            )
+        other = export / "full_panel/dumped_evals/global_step_2_evals/panel.jsonl"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text(
+            json.dumps(
+                {
+                    "task_id": identifiers[0],
+                    "verification": {"status": "verified", "score": 1, "score_min": 0, "score_max": 1},
+                }
+            )
+            + "\n"
         )
 
-    def publish(summary):
-        publication_calls.append(summary)
-        if len(publication_calls) == 1:
-            raise ConnectionError("synthetic dashboard outage")
-        return {"verified": True}
+    def train(config):
+        output = Path(config["output"])
+        output.mkdir(parents=True, exist_ok=True)
+        training_calls.append(output)
+        if mode == "legacy":
+            _json(output / "exports/loop-result.json", result)
+        else:
+            write_native(output)
+        return SkyRLRun(
+            path=str(output),
+            hf_model_uri=None,
+            global_step=777,
+            tokenizer_uri="test/model",
+            tokenizer_revision="revision",
+            checkpoint_root=str(output / "checkpoints"),
+            draft_checkpoint_root=None,
+            terminal_manifest_uri=str(output / "terminal.json"),
+            iris_job_id="/tests/native-1",
+        )
 
-    monkeypatch.setattr(loop_publication, "publish_result", publish)
     training = ArtifactStep(
         name="test/training",
-        version="2026.11.02",
+        version=presets.PRESET_REVISION,
         artifact_type=SkyRLRun,
         build_config=lambda ctx: {"output": ctx.output_path},
         run=train,
     )
-    publication = loop_publication.publication_step(training)
+    resolve(training)
+    gate_step = None
+    if mode == "snowball":
+        gate_step = apply(
+            "test/gate-native-1",
+            _gate_result,
+            version=presets.PRESET_REVISION,
+            artifact_type=gate.GateReport,
+            verdict="fail",
+            interpretation="original",
+            output=OUT,
+        )
+        resolve(gate_step)
+        job.finished_at = None
+        unavailable = loop_publication.publication_step(training, gate=gate_step)
+        with pytest.raises(RuntimeError, match=r"step\(s\) failed"):
+            resolve(unavailable)
+        assert transport.rows == {}
+        job.finished_at = Timestamp.from_ms(start + 3600000)
+    publication = loop_publication.publication_step(training, gate=gate_step)
+    transport.fail_readback = True
     with pytest.raises(RuntimeError, match=r"step\(s\) failed"):
         resolve(publication)
-    result = resolve(publication)
-    assert result.attempt_id == "attempt-1"
+    summary_path = (
+        Path(publication.deps[0].path()) / "loop-result.json"
+        if mode == "snowball"
+        else Path(training.path()) / "exports/loop-result.json"
+    )
+    retained = summary_path.read_bytes()
+    job.finished_at = Timestamp.from_ms(start + 7200000)
+    published = resolve(publication)
+    assert len(training_calls) == 1 and len(transport.rows) == 1
+    assert summary_path.read_bytes() == retained
+    stored = next(iter(transport.rows.values()))
+    assert json.loads((Path(published.path) / "publication.json").read_text())["verified"]
+    if mode == "legacy":
+        assert stored == result
+        return
+    assert stored["status"] == "succeeded" and stored["verdict"] == "fail"
+    assert stored["optimizer_steps"] == 5 and stored["elapsed_seconds"] == 3600
+    assert stored["baseline"] == {"reward": 0.01, "attempted": 100, "scored": 100}
+    assert stored["final"] == {"reward": 0.5, "attempted": 100, "scored": 100}
+    assert stored["wandb_url"].endswith("/native-1")
+    assert stored["evaluation"]["task_count"] == 100
+    assert stored["evaluation"]["task_set_sha256"] is None and stored["evaluation"]["protocol_sha256"] is None
+    assert stored["baseline_source"].endswith("global_step_0_evals")
+    job.finished_at = Timestamp.from_ms(start + 3600000)
+    identities = {published.attempt_id}
+    for index, kind in enumerate(("99", "98", "missing", "stale", "foreign", "native-failed"), 2):
+        write_native(Path(training.path()), f"native-{index}", kind)
+        completed_gate = apply(
+            f"test/gate-native-{index}",
+            _gate_result,
+            version=presets.PRESET_REVISION,
+            artifact_type=gate.GateReport,
+            verdict="invalid",
+            interpretation=kind,
+            output=OUT,
+        )
+        resolve(completed_gate)
+        item = resolve(loop_publication.publication_step(training, gate=completed_gate))
+        assert item.attempt_id not in identities
+        identities.add(item.attempt_id)
+        record = transport.rows[(item.run_id, item.attempt_id)]
+        assert record["status"] == ("failed" if kind == "native-failed" else "succeeded")
+        if kind in ("99", "98"):
+            assert record["final"]["scored"] == int(kind) and record["final"]["attempted"] == int(kind)
+        if kind in ("missing", "stale", "foreign"):
+            assert record["baseline"] is None or record["final"] is None
+    changed_gate = apply(
+        "test/another-group-attempt",
+        _gate_result,
+        version=presets.PRESET_REVISION,
+        artifact_type=gate.GateReport,
+        verdict="invalid",
+        interpretation="another replica changed",
+        output=OUT,
+    )
+    resolve(changed_gate)
+    another = resolve(loop_publication.publication_step(training, gate=changed_gate))
+    assert another.attempt_id not in identities
     assert len(training_calls) == 1
-    assert len(publication_calls) == 2
-    assert json.loads((Path(result.path) / "publication.json").read_text()) == {"verified": True}
+    assert len(transport.rows) == 8
