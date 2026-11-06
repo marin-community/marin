@@ -110,9 +110,14 @@ def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode
                 "data": {"expected_eval_rows": None} if kind == "full" else {},
             },
         }
+        destination = output / "terminal.json"
+        if kind == "native-failed":
+            destination.unlink(missing_ok=True)
+            launch["artifacts"] = {"attempts_root": str(output / "attempts")}
+            destination = output / "attempts" / f"{attempt}.json"
         (output / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
         _json(
-            output / "terminal.json",
+            destination,
             {
                 "config": launch,
                 "result": {
@@ -149,7 +154,7 @@ def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode
             },
         )
         for step in (0, 2):
-            count = int(kind) if kind in ("99", "98") and step == 2 else 100
+            count = int(kind) if kind in ("99", "98") else 100
             rows = [
                 {
                     "task_id": item,
@@ -241,6 +246,14 @@ def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode
             resolve(unavailable)
         assert transport.rows == {}
         job.finished_at = Timestamp.from_ms(start + 3600000)
+        metric = Path(training.path()) / "exports/metrics/step-000001.json"
+        values = json.loads(metric.read_text())
+        for field, value in (("policy/policy_update_steps", None), ("policy/raw_grad_norm", float("nan"))):
+            _json(metric, values | {field: value})
+            with pytest.raises(RuntimeError, match=r"step\(s\) failed"):
+                resolve(unavailable)
+            assert transport.rows == {}
+        _json(metric, values)
     publication = loop_publication.publication_step(training, gate=gate_step)
     transport.fail_readback = True
     with pytest.raises(RuntimeError, match=r"step\(s\) failed"):
@@ -287,10 +300,15 @@ def test_publication_retry_reuses_completed_training(tmp_path, monkeypatch, mode
         identities.add(item.attempt_id)
         record = transport.rows[(item.run_id, item.attempt_id)]
         assert record["status"] == ("failed" if kind == "native-failed" else "succeeded")
+        assert record["evaluation"]["task_count"] == 100
         if kind in ("99", "98"):
-            assert record["final"]["scored"] == int(kind) and record["final"]["attempted"] == int(kind)
-        if kind in ("missing", "stale", "foreign"):
-            assert record["baseline"] is None or record["final"] is None
+            assert all(
+                record[phase]["scored"] == record[phase]["attempted"] == int(kind) for phase in ("baseline", "final")
+            )
+        if kind in ("missing", "stale"):
+            assert record["baseline"] is None and record["final"] == {"reward": 0.5, "attempted": 100, "scored": 100}
+        if kind == "foreign":
+            assert record["baseline"] == {"reward": 0.01, "attempted": 100, "scored": 100} and record["final"] is None
     changed_gate = apply(
         "test/another-group-attempt",
         _gate_result,

@@ -184,13 +184,16 @@ def _retain_snowball_summary(
         "runtime task-content and sampling-protocol hashes are unknown/unranked.",
         "Optimizer steps count finite applied windows recorded by this native attempt.",
     ]
-    try:
-        scores = scoring.panel_scores(evaluation, training_path)
-        baseline = _phase_result(scores, evaluation, 0, task_ids, metrics, evidence)
-        final = _phase_result(scores, evaluation, launch["skyrl"]["trainer"]["max_steps"], task_ids, metrics, evidence)
-    except scoring.InvalidComparison as error:
-        baseline, final = None, None
-        evidence.append(str(error))
+    answers = scoring.evaluation_answers(training_path)
+    phases = []
+    for step in (0, launch["skyrl"]["trainer"]["max_steps"]):
+        try:
+            scores = scoring.panel_scores(evaluation, training_path, [answer for answer in answers if answer[0] == step])
+            phases.append(_phase_result(scores, evaluation, step, task_ids, metrics, evidence))
+        except scoring.InvalidComparison as error:
+            phases.append(None)
+            evidence.append(f"Evaluation step {step}: {error}")
+    baseline, final = phases
     started, completed_at, elapsed = _native_interval(receipt.result.iris_job_id)
     provenance = receipt.result.provenance or {}
     record = presets.artifact_record(training_path)

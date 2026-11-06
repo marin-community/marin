@@ -724,7 +724,14 @@ def _completed_gate(run: SnowballRun, preset: presets.Preset) -> ArtifactStep | 
 def _publications(run: SnowballRun, preset: presets.Preset) -> tuple[ArtifactStep, ...]:
     if run.gate is None or preset.recipe.layout.role_plan.generate_only or preset.focus == presets.Focus.SPEED:
         return ()
-    return tuple(loop_publication.publication_step(training, gate=run.gate) for training in run.runs)
+    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
+    return tuple(
+        loop_publication.publication_step(
+            replace(training, override_path=training.path(prefix)),
+            gate=replace(run.gate, override_path=run.gate.path(prefix)),
+        )
+        for training in run.runs
+    )
 
 
 def _status(run: SnowballRun, preset: presets.Preset) -> dict:

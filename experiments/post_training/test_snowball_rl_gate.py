@@ -1444,7 +1444,11 @@ def test_built_gate_and_rescore_share_inputs_and_status(
     _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.example/team/project/runs/actual-id"})
     _json(source / "exports/metrics/step-000026.json", {"step": 26, "startup/load_checkpoints": 3.0})
     _json(source / "exports/metrics/step-000028.json", {"step": 28, "trainer/global_step": 28})
+    run(loop_publication.publication_step(built.runs[0], gate=built.gate))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "host-default"))
     printed = status(preset, argv)
+    assert printed["runs"][0]["rl_progress_url"].startswith("https://applets.marina.oa.dev/")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     assert printed["runs"][0]["wandb_url"] == "https://wandb.example/team/project/runs/actual-id"
     assert printed["runs"][0]["latest_completed_update"] == 25
     receipt = json.loads((source / "terminal.json").read_text())
