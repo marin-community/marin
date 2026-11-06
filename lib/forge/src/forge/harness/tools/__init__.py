@@ -9,7 +9,6 @@ from types import MappingProxyType
 from shellbox.machine import MachineFactory
 
 from forge.harness.protocol import Tool
-from forge.harness.tools.adversary import ReportTool
 from forge.harness.tools.files import ReadFileTool, WriteFileTool
 from forge.harness.tools.finish import FinishTool
 from forge.harness.tools.grade import GradeTool
@@ -44,7 +43,6 @@ def adversary_tools(
         ShellTool(),
         ReadFileTool(),
         GradeTool(task_path, factories, settings),
-        ReportTool(),
         FinishTool(),
     )
     return MappingProxyType({tool.schema.name: tool for tool in tools})

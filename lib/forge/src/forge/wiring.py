@@ -164,11 +164,8 @@ def hydration(_wp: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
 
 
 def prompt_limit(policy: Policy) -> int:
-    """Reserve the configured output allowance within the served model context."""
-    limit = policy.setting("provider.context_tokens", int) - policy.setting("sampling.max_tokens", int)
-    if limit <= 0:
-        raise ValueError("The model context must exceed the sampling output allowance")
-    return limit
+    """Use the served model context without reserving an output allowance."""
+    return policy.setting("provider.context_tokens", int)
 
 
 def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactory]) -> ForgeConfig:

@@ -9,7 +9,7 @@ import httpx
 import pytest
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import StdoutReward
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.spec import NumericSpec
@@ -232,13 +232,23 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
     assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
-    report = await ReportTool()(
-        ctx, {"findings": ["false reject"], "candidates": [{"reply": "12", "files": ["/workspace/answer"]}]}, env
+    report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)))(
+        ctx,
+        {
+            "findings": [
+                {
+                    "claim": "false reject",
+                    "candidate": {"reply": "12", "files": ["/workspace/answer"]},
+                    "expected": {"status": "graded", "reward_max": 0},
+                }
+            ]
+        },
+        env,
     )
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"changed"))
     await ctx.drain()
     assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
-    assert resource_bytes(report.payload.candidates[0].files[0]) == b"candidate"
+    assert resource_bytes(report.payload.findings[0].candidate.files[0]) == b"candidate"
 
 
 async def test_web_and_error_results_are_capped_before_the_next_inference() -> None:
@@ -303,11 +313,11 @@ async def test_missing_paths_are_tool_feedback(kind: str) -> None:
     assert isinstance(result, ToolResult) and missing in result.content
 
 
-@pytest.mark.parametrize("output_tokens", [131072, 8192])
-async def test_model_window_and_output_allowance_determine_context_exit(output_tokens: int) -> None:
-    policy = DEFAULT_POLICY.overlaid({"sampling.max_tokens": output_tokens})
+@pytest.mark.parametrize("context_tokens", [262144, 131072])
+async def test_model_window_determines_context_exit(context_tokens: int) -> None:
+    policy = DEFAULT_POLICY.overlaid({"provider.context_tokens": context_tokens})
     harness = build_config(policy, "S", {}).author
-    budget = 262144 - output_tokens
+    budget = context_tokens
     client = FakeInference(
         tuple(
             Completion(
@@ -456,3 +466,60 @@ async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
     assert len(client.requests) == 1
     assert len(result.session.messages[-1].content) == output_chars
+
+
+async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    task = arithmetic_task()
+    tool = ReportTool(task)
+    commentary = await tool(ctx, {"findings": ["No grading defect found"]}, env)
+    assert isinstance(commentary, ToolResult)
+    claim = {
+        "claim": "wrong answer accepted",
+        "candidate": {"reply": "9"},
+        "expected": {"status": "graded", "reward_min": 1},
+    }
+    report = await tool(ctx, {"findings": [claim]}, env)
+    assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
+    finding = report.payload.findings[0]
+    assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
+    assert finding.expected.met_by(GradeResult(Outcome.GRADED, 1))
+    assert not finding.expected.met_by(GradeResult(Outcome.GRADED, 0))
+    # The adversary can edit its scratch task file, but cannot change the bound task's machine requirement.
+    edited = arithmetic_task(environment_requirements=requirements(image=None))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), TASK_SPEC.dump_json(edited)))
+    await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"9"))
+    rejected = await tool(
+        ctx, {"findings": [{**claim, "candidate": {"reply": "9", "files": ["/workspace/answer"]}}]}, env
+    )
+    empty = await tool(ctx, {"findings": []}, env)
+    await ctx.drain()
+    assert isinstance(rejected, ToolResult) and "Candidate files require a task machine" in rejected.content
+    assert isinstance(empty, ReturnRequest) and isinstance(empty.payload, AdversaryReport)
+    assert empty.payload.findings == ()
+
+
+async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_reported() -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    await ctx.emit(RunCommand("task", 30))
+
+    async def invalid_checks(event: GradeCandidate) -> GradeResult:
+        return GradeResult(Outcome.GRADED, 1, detail={"checks": {"A": False}})
+
+    ctx.handle(GradeCandidate, invalid_checks)
+    settings = LoweringSettings(MachineHost.LAPTOP, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    tool = GradeTool("/workspace/task.json", {}, settings)
+    result = await tool(ctx, {"reply": "12"}, env)
+    assert isinstance(result, ToolResult) and "checks must be a list of" in result.content
+    assert "name" in result.content and "passed" in result.content and "weight" in result.content
+
+    async def valid_checks(event: GradeCandidate) -> GradeResult:
+        return GradeResult(Outcome.GRADED, 0, detail={"checks": [{"name": "A", "passed": False, "weight": 1}]})
+
+    ctx.handle(GradeCandidate, valid_checks)
+    corrected = await tool(ctx, {"reply": "9"}, env)
+    await ctx.drain()
+    assert isinstance(corrected, ToolResult)
+    assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]

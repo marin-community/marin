@@ -4,36 +4,65 @@
 from dataclasses import dataclass
 from typing import override
 
+from taskcompendium.models import TaskSpec
+
 from forge.effects.context import Context
 from forge.harness.protocol import ReturnRequest, ToolResult
 from forge.harness.tools.base import ValidatedTool
 from forge.harness.tools.grade import CandidateArgs, read_candidate
-from forge.model.controls import Candidate
+from forge.lowering import check_candidates
+from forge.model.controls import Candidate, RewardBand
 from forge.resources.env import Env
 
 
 @dataclass(frozen=True, slots=True)
+class AdversaryClaim:
+    claim: str
+    candidate: Candidate
+    expected: RewardBand
+
+
+@dataclass(frozen=True, slots=True)
 class AdversaryReport:
-    findings: tuple[str, ...]
-    candidates: tuple[Candidate, ...]
+    findings: tuple[AdversaryClaim, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimArgs:
+    claim: str
+    candidate: CandidateArgs
+    expected: RewardBand
 
 
 @dataclass(frozen=True, slots=True)
 class ReportArgs:
-    findings: tuple[str, ...]
-    candidates: tuple[CandidateArgs, ...] = ()
+    findings: tuple[ClaimArgs, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class ReportTool(ValidatedTool[ReportArgs]):
+    task: TaskSpec
     name = "report"
-    description = "Finish the adversarial review with findings and candidate replies/files for validation."
+    description = (
+        "Report demonstrated grading defects. Each finding needs a claim, candidate reply/files, and expected "
+        "status and reward band showing the defect (for example, a wrong answer receiving full credit). "
+        "Validation grades each candidate against the original task. Use empty findings when no defect was found."
+    )
     args_type = ReportArgs
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task", self.task.model_copy(deep=True))
 
     @override
     async def run(self, ctx: Context, args: ReportArgs, env: Env) -> ToolResult | ReturnRequest[AdversaryReport]:
         try:
-            candidates = tuple([await read_candidate(ctx, candidate) for candidate in args.candidates])
-        except (FileNotFoundError, KeyError) as error:
-            return ToolResult(f"Candidate file not found: {error}")
-        return ReturnRequest("report", AdversaryReport(args.findings, candidates))
+            findings = tuple(
+                [
+                    AdversaryClaim(finding.claim, await read_candidate(ctx, finding.candidate), finding.expected)
+                    for finding in args.findings
+                ]
+            )
+            check_candidates(self.task, tuple(finding.candidate for finding in findings))
+        except (ValueError, FileNotFoundError, KeyError) as error:
+            return ToolResult(f"Invalid report: {error}")
+        return ReturnRequest("report", AdversaryReport(findings))

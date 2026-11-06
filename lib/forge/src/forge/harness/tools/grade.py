@@ -58,6 +58,11 @@ class GradeTool(ValidatedTool[CandidateArgs]):
         except (ValidationError, ValueError, NotImplementedError, FileNotFoundError, KeyError) as error:
             return ToolResult(f"Cannot grade draft: {error}")
         result = await ctx.emit(GradeCandidate(spec, candidate))
-        return ToolResult(
-            pretty_json({"reward": result.reward, "status": result.status, "grader_checks": grader_checks(result)})
-        )
+        try:
+            checks = grader_checks(result)
+        except ValueError as error:
+            return ToolResult(
+                "Grader checks must be a list of {name: string, passed: boolean, weight: number}; "
+                f"fix the grader output: {error}"
+            )
+        return ToolResult(pretty_json({"reward": result.reward, "status": result.status, "grader_checks": checks}))

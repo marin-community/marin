@@ -117,7 +117,7 @@ async def one(args: argparse.Namespace) -> None:
             print("\n".join(resolution_lines(declared, policy)), flush=True)
             print(
                 f"POLICY max_prompt_tokens provider.context_tokens={policy.setting('provider.context_tokens', int)} "
-                f"sampling.max_tokens={policy.setting('sampling.max_tokens', int)} resolved={prompt_limit(policy)}",
+                f"resolved={prompt_limit(policy)}",
                 flush=True,
             )
             source = endpoint_source(
