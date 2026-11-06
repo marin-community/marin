@@ -138,8 +138,6 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         config.model.moe_implementation,
         config.model.qb_estimator,
         config.model.qb_hist_bins,
-        config.trainer.trainer.train_batch_size,
-        config.model.max_seq_len,
         config.processes_per_task,
         config.trainer.trainer.watch.interval,
         config.tensorstore_cache_bytes,
@@ -159,8 +157,6 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
-        64,
-        65536,
         4,
         10,
         1_000_000_000,
@@ -220,9 +216,11 @@ def test_context_batch_below_device_count_validates():
 
 
 def test_hero_batch_validation_matches_default_mesh():
-    # The context axis is length 1 on the hero, so the added axis must not move a single number the
-    # hero has always computed.
-    step = launch.build_diagnostic_run(run_id="hero-validate", dp_racks=1, num_steps=1, version="dev")
+    # With a context axis of length 1, the added axis must not move a single number the hero computed
+    # through 65K.
+    step = launch.build_diagnostic_run(
+        run_id="hero-validate", dp_racks=1, num_steps=1, max_seq_len=65536, context_axis_size=1, version="dev"
+    )
     trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
 
     default_mesh_trainer = dataclasses.replace(
@@ -416,7 +414,13 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match=r"must be divisible by expert \(64\) \* context \(1\) = 64"):
         launch.build_diagnostic_run(
-            run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, context_axis_size=1, version="dev"
+            run_id="bad-bank",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=200,
+            max_seq_len=65536,
+            context_axis_size=1,
+            version="dev",
         )
 
 
@@ -444,6 +448,7 @@ def test_pooled_wave_expert_bank_must_support_three_waves():
             dp_racks=1,
             num_steps=1,
             num_experts=256,
+            max_seq_len=65536,
             context_axis_size=1,
             moe_implementation="fixed_pooled_wave_all_to_all",
             version="dev",
@@ -453,7 +458,13 @@ def test_pooled_wave_expert_bank_must_support_three_waves():
 def test_ragged_expert_bank_ignores_the_pooled_wave_count():
     # Only the pooled-wave transport splits local experts into waves; 4 local experts are fine for ragged.
     launch.build_diagnostic_run(
-        run_id="ragged-waves", dp_racks=1, num_steps=1, num_experts=256, context_axis_size=1, version="dev"
+        run_id="ragged-waves",
+        dp_racks=1,
+        num_steps=1,
+        num_experts=256,
+        max_seq_len=65536,
+        context_axis_size=1,
+        version="dev",
     )
 
 
@@ -929,7 +940,7 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
     off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
     on = launch.build_diagnostic_run(
-        run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, context_axis_size=1, version="dev"
+        run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, max_seq_len=65536, context_axis_size=1, version="dev"
     )
     off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
     on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))

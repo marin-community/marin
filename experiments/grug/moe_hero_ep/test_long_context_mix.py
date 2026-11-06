@@ -215,6 +215,38 @@ def test_hero_contexts_up_to_the_threshold_read_harrier(monkeypatch, seq_len, hi
     assert not any(isinstance(component, LengthSkewDatasetComponent) for component in config.data.components.values())
 
 
+def _training_data(data: LmDataConfig) -> LmDataConfig:
+    """Drop the held-out components, which train at zero weight and leave the mixture's sources unchanged."""
+    ((stage, weights),) = data.train_weights
+    train_weights = {name: weight for name, weight in weights.items() if weight > 0}
+    return dataclasses.replace(
+        data,
+        components={name: data.components[name] for name in train_weights},
+        train_weights=[(stage, train_weights)],
+    )
+
+
+def test_hero_and_diagnostics_select_the_same_data():
+    hero = _fingerprint_config(build_ladder_run(run_id="test-long-context-hero", size="d6144", version="dev"))
+    start_step = launch_scaling_ladder.HERO_CONTEXT_PHASES[-1].end_step
+    diagnostic = _fingerprint_config(
+        build_diagnostic_run(
+            run_id="test-long-context-diagnostic",
+            dp_racks=1,
+            num_steps=start_step + 1,
+            schedule_steps=start_step,
+            long_context_start_step=start_step,
+            restore_from=f"s3://bucket/checkpoints/step-{start_step}",
+            eval_every=100,
+            version="dev",
+        )
+    )
+
+    assert _training_data(hero.data) == _training_data(diagnostic.data)
+    assert hero.trainer.trainer.seed == diagnostic.trainer.trainer.seed
+    assert hero.trainer.data_seed == diagnostic.trainer.data_seed
+
+
 def test_diagnostic_arms_select_the_same_data_on_any_rack_count():
     def arm(racks: int):
         return _fingerprint_config(
