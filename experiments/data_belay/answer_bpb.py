@@ -34,7 +34,8 @@ from experiments.grug.fast_track.launch import SEQ_LEN
 logger = logging.getLogger(__name__)
 
 ANSWER_BPB_VERSION = "eval-policy-answer-bpb-v1"
-ANSWER_BPB_ROOT = f"s3://marin-us-east-02a/marin/data_belay/eval/{ANSWER_BPB_VERSION}"
+# Under the training cluster's MARIN_PREFIX.
+ANSWER_BPB_PATH = f"data_belay/eval/{ANSWER_BPB_VERSION}"
 MANIFEST_NAME = "manifest.json"
 # A fixed seeded sample of a larger task keeps one run's eval to a few minutes.
 MAX_EXAMPLES_PER_TASK = 2000
@@ -310,7 +311,7 @@ def build_task_cache(task: AnswerTask, tokenizer: MarinTokenizer, root: str) -> 
     return TaskCache(task_component_name(task), cache_dir, len(kept), dropped, answer_tokens)
 
 
-def build_answer_bpb(tokenizer: MarinTokenizer, root: str = ANSWER_BPB_ROOT) -> list[TaskCache]:
+def build_answer_bpb(tokenizer: MarinTokenizer, root: str) -> list[TaskCache]:
     """Write every task's cache under ``root`` and a manifest that the launcher reads."""
     caches = [build_task_cache(task, tokenizer, root) for task in TASKS]
     manifest = {

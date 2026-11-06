@@ -26,7 +26,8 @@ from experiments.data_belay.intake import MAX_EPOCHS, IntakeReport
 
 logger = logging.getLogger(__name__)
 
-CACHE_ROOT = "s3://marin-us-east-02a/marin/data_belay/caches"
+# Candidate caches live under the training cluster's MARIN_PREFIX, beside the Track's base cache.
+CACHE_PATH = "data_belay/caches"
 FILE_MARGIN = 1.5
 SAMPLE_SEED = 0
 MANIFEST_NAME = "data_belay_cache.json"
@@ -64,8 +65,10 @@ def select_files(files: list[FileEntry], tokens_per_byte: float, need_tokens: in
     return chosen
 
 
-def plan_cache(report: IntakeReport, need_tokens: int, tokenizer: str, seed: int = SAMPLE_SEED) -> CachePlan:
-    """Choose the files for ``report``'s dataset and the cache path that names them."""
+def plan_cache(
+    report: IntakeReport, need_tokens: int, tokenizer: str, cache_root: str, seed: int = SAMPLE_SEED
+) -> CachePlan:
+    """Choose the files for ``report``'s dataset and the cache path under ``cache_root`` that names them."""
     data_files = load_dataset_builder(report.repo, report.config, revision=report.revision).config.data_files
     files = drop_sidecars(glob_with_sizes(list(data_files[report.split])))
     total_bytes = sum(f.size for f in files)
@@ -83,7 +86,7 @@ def plan_cache(report: IntakeReport, need_tokens: int, tokenizer: str, seed: int
     name = f"{report.config or 'default'}-{report.split}-{digest}"
     estimated = round(sum(f.size for f in chosen) * report.estimated_tokens / total_bytes)
     estimated = min(estimated, round(max_rows * report.sample.tokens_per_row))
-    path = prefix_join(CACHE_ROOT, f"{slug}/{report.revision[:12]}/{name}")
+    path = prefix_join(cache_root, f"{slug}/{report.revision[:12]}/{name}")
     return CachePlan(path, paths, max_rows, estimated, need_tokens)
 
 

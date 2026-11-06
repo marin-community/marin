@@ -13,7 +13,9 @@ The control depends only on the rung and the seed, so every candidate reuses the
 
 ## Commands
 
-Point `MARIN_PREFIX` at `s3://marin-us-east-02a/marin` for local commands that read the tokenizer or write caches.
+Caches and the Eval Policy manifest live under the `MARIN_PREFIX` that the training cluster (`cw-us-east-02a`) sets
+in its Iris config, so they sit beside the Track's base cache. Commands that load the tokenizer on your machine
+(`check`, `build-answer-bpb`, `prepare` without `--submit`) also need `MARIN_PREFIX` set to that prefix.
 
 ```bash
 # 1. Intake: pin the revision, check the license, estimate the size and epochs at each rung.

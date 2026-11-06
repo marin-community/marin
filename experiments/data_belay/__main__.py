@@ -10,31 +10,31 @@ import statistics
 import sys
 
 import click
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.cluster.config import load_config
 from levanter.tokenizers import load_tokenizer
+from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.belay.config import H100_CLUSTER
-from experiments.data_belay.answer_bpb import ANSWER_BPB_ROOT, build_answer_bpb
+from experiments.data_belay.answer_bpb import ANSWER_BPB_PATH, build_answer_bpb
 from experiments.data_belay.answer_bpb import MANIFEST_NAME as ANSWER_BPB_MANIFEST
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
 from experiments.data_belay.judge import HARM_LIMITS, judge
-from experiments.data_belay.prepare import build_cache, cache_share, plan_cache
+from experiments.data_belay.prepare import CACHE_PATH, build_cache, cache_share, plan_cache
 from experiments.data_belay.results import CONTROL_SEEDS, arm_metrics, control_run_id, treatment_run_id
 from experiments.data_belay.rungs import DATA_BELAY_RUNGS, ladder_tokens
 from experiments.grug.fast_track import belay_tracks
 from experiments.grug.fast_track.launch import V16384_TOKENIZER
 
-MARIN_PREFIX = "s3://marin-us-east-02a/marin"
 PRIORITY = "batch"
 
 
 def _submit_cpu_job(job_name: str, cpu: int, memory: str) -> None:
     """Re-run this command, without ``--submit``, as an Iris CPU job. Never returns."""
     args = [a for a in sys.argv[1:] if a != "--submit"]
-    env = ["-e", "MARIN_PREFIX", MARIN_PREFIX]
-    if os.environ.get("HF_TOKEN"):
-        env += ["-e", "HF_TOKEN", os.environ["HF_TOKEN"]]
+    env = ["-e", "HF_TOKEN", os.environ["HF_TOKEN"]] if os.environ.get("HF_TOKEN") else []
     cmd = [
         *("uv", "run", "iris", "--cluster", "marin", "job", "run", "--no-wait", "--enable-extra-resources"),
         *("--target-cluster", H100_CLUSTER, "--priority", PRIORITY, "--cpu", str(cpu), "--memory", memory),
@@ -59,6 +59,15 @@ def _dataset_options(command):
     ):
         command = option(command)
     return command
+
+
+def _training_prefix() -> str:
+    """``MARIN_PREFIX`` that the training cluster sets for its tasks: the caches and evals that its runs read."""
+    config = load_config(resolve_cluster_config(H100_CLUSTER, dirs=IRIS_CLUSTER_CONFIG_DIRS))
+    prefix = config.defaults.task_env.get("MARIN_PREFIX")
+    if prefix is None:
+        raise click.ClickException(f"cluster {H100_CLUSTER} sets no MARIN_PREFIX in its task_env")
+    return prefix
 
 
 def _intake(repo, revision, config_name, split, text_field, share) -> IntakeReport:
@@ -131,18 +140,19 @@ def prepare(
     report = _intake(repo, revision, config_name, split, text_field, share)
     if not report.passed:
         raise click.ClickException(f"intake did not pass: license {report.license_verdict}, needs {report.needs}")
-    plan = plan_cache(report, max(need.new_tokens for need in report.needs), V16384_TOKENIZER)
+    need_tokens = max(need.new_tokens for need in report.needs)
+    plan = plan_cache(report, need_tokens, V16384_TOKENIZER, prefix_join(_training_prefix(), CACHE_PATH))
     click.echo(f"plan: {len(plan.files)} files, about {plan.estimated_tokens:,} tokens -> {plan.train_cache}")
     manifest = build_cache(report, plan, V16384_TOKENIZER)
     click.echo(f"cache: {plan.train_cache} {manifest['stats']}")
 
 
 @cli.command("build-answer-bpb")
-@click.option("--root", default=ANSWER_BPB_ROOT, show_default=True)
-def build_answer_bpb_command(root: str) -> None:
-    """Write the Eval Policy gold-answer BPB caches and their manifest."""
+def build_answer_bpb_command() -> None:
+    """Write the Eval Policy gold-answer BPB caches and their manifest under the training cluster's prefix."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
+    root = prefix_join(_training_prefix(), ANSWER_BPB_PATH)
     for cache in build_answer_bpb(load_tokenizer(V16384_TOKENIZER), root):
         click.echo(
             f"{cache.name}: {cache.examples} examples, {cache.dropped} dropped, "
@@ -170,13 +180,14 @@ def train(
     """Train one arm on the Belay `vanilla` Track: the control, or the base cache mixed with a candidate's cache."""
     if (candidate is None) != (mix_cache is None):
         raise click.UsageError("a candidate needs --candidate and --mix-cache; the control takes neither")
+    # The share of --mix-cache, and the eval manifest in the plan printed without --submit, are read from S3.
+    configure_coreweave_s3()
     run_id = control_run_id(rung, seed) if candidate is None else treatment_run_id(rung, candidate, seed)
     if num_steps is not None:
         run_id += f"-smoke{num_steps}"
     args = ["--track", "vanilla", "--size", rung, "--run-id", run_id, "--seed", str(seed)]
-    args += ["--eval-manifest", prefix_join(ANSWER_BPB_ROOT, ANSWER_BPB_MANIFEST)]
+    args += ["--eval-manifest", prefix_join(_training_prefix(), f"{ANSWER_BPB_PATH}/{ANSWER_BPB_MANIFEST}")]
     if mix_cache is not None:
-        configure_coreweave_s3()
         # The share that prepare sized the cache for and checked its epochs at, on the built cache.
         args += ["--mix-cache", mix_cache, "--mix-share", str(cache_share(mix_cache))]
     if num_steps is not None:
