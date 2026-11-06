@@ -74,7 +74,7 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
         attempt_path = raw_dir / "attempt.json"
         attempt = read_json(attempt_path)
         hardware = config["profiles"][manifest["profile"]]
-        hosts = hardware.get("hosts", len(manifest.get("placement", {}).get("nodes", [])) or 1)
+        hosts = hardware.get("hosts", 1)
         physical_gpus = hosts * hardware["gpus"]
         if (
             receipt["status"] != "valid"
@@ -100,7 +100,7 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             if (
                 len(tasks) != hosts
                 or len({t["iris_node_name"] for t in tasks}) != hosts
-                or {t["iris_node_name"] for t in tasks} != set(manifest["placement"]["nodes"])
+                or not {t["iris_node_name"] for t in tasks}.issubset(manifest["placement"]["nodes"])
                 or len({gpu for t in tasks for gpu in t["gpu_uuids"]}) != physical_gpus
                 or any(
                     t["status"] != "succeeded"

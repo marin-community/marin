@@ -97,7 +97,8 @@ def bundle(tmp_path: Path):
             "point/attempt.json": attempt,
         }
         if hosts > 1:
-            manifest["placement"] = {"nodes": [str(host) for host in range(hosts)]}
+            # Placement is an eligible pool; the gang selects only the requested hosts.
+            manifest["placement"] = {"nodes": [str(host) for host in range(hosts + 2)]}
             files["point/gang.json"] = {
                 "attempts": {f"task-{host}": f"attempt-{host}" for host in range(hosts)},
                 "tasks": [

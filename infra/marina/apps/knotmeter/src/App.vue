@@ -327,7 +327,8 @@ onMounted(async () => {
       </div>
       <p v-if="provisional(run)" class="notice">
         Provisional October 28 Hero run. Prefix caching was disabled; max
-        batched tokens 512 and max sequences 64. This is the older saved setup.
+        batched tokens 512 and max sequences 64. Its optimized setup has not
+        been measured here.
       </p>
       <div class="stat-grid">
         <div>

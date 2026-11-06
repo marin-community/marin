@@ -39,15 +39,17 @@ uv run --package marin-marina python -m infra.marina.apps.knotmeter.ingest \
 `--source-attempts`, the loader reads the original attempt through `gh api`; saved
 responses are a JSON object keyed by run ID. No benchmark runs are submitted.
 
-The retained collectors are [Snowball 40633833787](https://github.com/marin-community/marin/actions/runs/40633833787)
+The retained collectors measure Snowball v0.1.1
+(`open-athena/Marin-Snowball-67B-A2B-v0.1.1`) and Hero step144000
+(`marin-community/Hero-535B-step144000`): [Snowball 40633833787](https://github.com/marin-community/marin/actions/runs/40633833787)
 and [Hero 40723697736](https://github.com/marin-community/marin/actions/runs/40723697736).
 Their source measurements are 40625266678/1 and 40705471793/1, both on October 28,
 2026. Collector IDs must never replace source IDs or dates. The retained local
 corpus snapshot contains 393 upstream conversation structures for
 `semianalysisai/cc-traces-weka-062126-256k` at revision
 `8fecd2fc56694469f758f0afbbb6335ad3043740`. Keep that JSONL and saved attempt responses
-beside the collector bundles, outside the application package. The comparison
-handoff gives their exact local paths and hashes.
+beside the collector bundles, outside the application package. The corpus snapshot
+is a separate input; it is not included in the collector bundles.
 
 On a Mac, forward the printed server port, then open the same application path:
 
@@ -137,8 +139,8 @@ owns its charts and timeline interactions; upstream UI improvements will not arr
 automatically. Current production Marina dependencies are reused without additions.
 The app has its own frontend development lockfile.
 
-One load and one date per model can verify navigation and metrics. They cannot show
-a throughput elbow or performance trend. Hero remains the older provisional run
+One measured concurrency setting and one date per model can verify navigation and metrics. They cannot show
+a throughput elbow or performance trend. Hero remains the provisional October 28 run
 with prefix caching disabled, max batched tokens 512 and max sequences 64.
 
 If Marina is selected, release the reviewed package, explicitly load the corpus and
