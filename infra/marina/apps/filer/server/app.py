@@ -84,6 +84,16 @@ def checked_url(url: str) -> str:
     return url
 
 
+def bounded_media_response(url: str, mime: str, max_bytes: int) -> Response:
+    fs, path = filesystem_for(url)
+    if fs.size(path) > max_bytes:
+        raise HTTPException(413, f"Object exceeds the {max_bytes // (1024 * 1024)} MiB preview limit.")
+    data = fs.cat_file(path, start=0, end=max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(413, f"Object exceeds the {max_bytes // (1024 * 1024)} MiB preview limit.")
+    return Response(data, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
+
+
 def json_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): json_value(item) for key, item in value.items()}
@@ -412,28 +422,16 @@ def create_api(services: AppletServices) -> FastAPI:
     def media(url: str) -> Response:
         checked_url(url)
         mime = mimetypes.guess_type(url)[0]
-        if mime not in MEDIA_TYPES:
+        if mime is None or mime not in MEDIA_TYPES:
             raise HTTPException(400, "This media format is not supported.")
-        fs, path = filesystem_for(url)
-        if fs.size(path) > MAX_MEDIA_BYTES:
-            raise HTTPException(413, "Media exceeds the 10 MiB preview limit.")
-        data = fs.cat_file(path, start=0, end=MAX_MEDIA_BYTES + 1)
-        if len(data) > MAX_MEDIA_BYTES:
-            raise HTTPException(413, "Media exceeds the 10 MiB preview limit.")
-        return Response(data, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
+        return bounded_media_response(url, mime, MAX_MEDIA_BYTES)
 
     @api.get("/thumbnail")
     def thumbnail(url: str) -> Response:
         checked_url(url)
         mime = mimetypes.guess_type(url)[0]
-        if MEDIA_TYPES.get(mime) != "image":
+        if mime is None or MEDIA_TYPES.get(mime) != "image":
             raise HTTPException(400, "Thumbnails are available for images only.")
-        fs, path = filesystem_for(url)
-        if fs.size(path) > MAX_THUMBNAIL_BYTES:
-            raise HTTPException(413, "Image exceeds the 1 MiB thumbnail limit.")
-        data = fs.cat_file(path, start=0, end=MAX_THUMBNAIL_BYTES + 1)
-        if len(data) > MAX_THUMBNAIL_BYTES:
-            raise HTTPException(413, "Image exceeds the 1 MiB thumbnail limit.")
-        return Response(data, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
+        return bounded_media_response(url, mime, MAX_THUMBNAIL_BYTES)
 
     return api
