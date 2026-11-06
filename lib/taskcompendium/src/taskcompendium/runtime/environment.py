@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 from shellbox.machine import (
-    DEFAULT_WORKDIR,
     Backend,
     HostImage,
     MachineFactory,
@@ -46,10 +45,9 @@ def resolve_env_vars(environment: Mapping[str, str], host_environment: Mapping[s
 
 
 def bound_machine_spec(requirements: EnvironmentRequirements, factory: MachineFactory, spec: MachineSpec) -> MachineSpec:
-    """Bind required software and workdir, and omit advisory local memory before feature checks."""
+    """Bind package requirements and omit advisory local memory before feature checks."""
     return replace(
         spec,
-        workdir=requirements.working_directory or spec.workdir or DEFAULT_WORKDIR,
         source=requirements.package_spec if requirements.package_spec is not None else spec.source,
         memory_mb=None if factory.backend == Backend.LOCAL else spec.memory_mb,
     )
@@ -93,5 +91,6 @@ def prepare_machine_spec(
         variables = runtime.env
     return replace(
         spec,
+        workdir=requirements.working_directory if requirements.working_directory is not None else spec.workdir,
         env={**variables, **spec.env, **required_variables},
     )

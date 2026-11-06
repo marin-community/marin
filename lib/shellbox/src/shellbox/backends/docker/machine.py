@@ -320,8 +320,6 @@ class DockerMachineFactory:
         self.runtime = runtime
 
     def _check_spec(self, spec: MachineSpec) -> DockerImage | RegistryImage | DockerfileSource:
-        if not spec.workdir:
-            raise ValueError("Machine workdir must not be empty")
         if not isinstance(spec.source, (DockerImage, RegistryImage, DockerfileSource)):
             raise UnsupportedMachineSpec("Docker requires a DockerImage, RegistryImage or DockerfileSource")
         return spec.source

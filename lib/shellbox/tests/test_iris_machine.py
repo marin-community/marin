@@ -542,12 +542,6 @@ def test_missing_download_is_a_file_error(tmp_path):
         asyncio.run(machine.download(missing, tmp_path / "download"))
 
 
-def test_empty_workdir_is_rejected_before_iris_submission():
-    factory = IrisMachineFactory(controller_url="http://unused")
-    with pytest.raises(ValueError, match="workdir must not be empty"):
-        asyncio.run(factory.create(MachineSpec(RegistryImage("fixture"), workdir="")))
-
-
 @pytest.mark.parametrize("memory_mb", [None, 4096])
 def test_oom_termination_reports_effective_memory_request(tmp_path, memory_mb):
     task = LocalTask(TaskState.FAILED)

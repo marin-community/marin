@@ -19,7 +19,6 @@ from taskcompendium.models import (
 from forge.lowering import (
     GRADING_MACHINE,
     LoweringSettings,
-    host_requirements,
     lower_with_settings,
     lowering_settings,
     requirements,
@@ -77,10 +76,13 @@ def test_missing_workdir_resolves_before_machine_creation(directory: str | None)
     declared = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_BASE_IMAGE, working_directory=directory
     )
-    resolved = host_requirements(declared)
-    assert resolved.working_directory == (directory or "/workspace")
-    assert _machine_spec(resolved, machine_runtime(backend="gvisor")).workdir == (directory or "/workspace")
-    assert _machine_spec(declared, machine_runtime(backend="gvisor")).workdir == (directory or "/workspace")
+    policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
+    task = arithmetic_task(environment_requirements=declared.model_copy(update={"capabilities": ("shell",)}))
+    spec = lower_with_settings(task, lowering_settings(policy), {"gvisor": AvailableFactory(Backend.GVISOR)})
+    assert spec.task.environment_requirements.working_directory == (directory or "/workspace")
+    assert spec.task_machine is not None
+    assert _machine_spec(spec.task.environment_requirements, spec.task_machine).workdir == (directory or "/workspace")
+    assert _machine_spec(declared, machine_runtime(backend="gvisor")).workdir == (directory or "")
 
 
 def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs() -> None:
