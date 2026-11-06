@@ -1340,7 +1340,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         def completed_native(config):
             terminal = json.loads((source / "terminal.json").read_text())
             authored = yaml.safe_load(config.launch_config_yaml)
-            terminal["config"]["run"] = authored["run"]
+            terminal["config"]["run"] = authored["run"] | {"id": config.run_id, "attempt_id": config.attempt_id}
             terminal["config"]["inputs"]["model"] = authored["inputs"]["model"]
             terminal["config"]["artifacts"] = authored["artifacts"]
             _json(source / "terminal.json", terminal)
