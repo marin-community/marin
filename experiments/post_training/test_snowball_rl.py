@@ -154,7 +154,7 @@ print(json.dumps([{
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
     "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
     "quality_wire": quality_request(config),
-    "at_start": [entry.eval_before_train for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
+    "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
     "engine_profile": [config.skyrl.trainer.algorithm.batch_invariant,
                        config.skyrl.generator.vllm_attention_backend,
                        config.skyrl.generator.enable_prefix_caching],
