@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""JSON file boundary: one reusable adapter per persisted value type."""
+"""Pydantic adapters for Forge model values and proposal generation."""
 
 import json
 from typing import Any

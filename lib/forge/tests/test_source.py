@@ -1,11 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A batch assembled from slots written in separate calls equals the one-shot batch.
-
-Invariants: none (pins ``propose_all`` and ``proposal_batch`` over a persisted portfolio).
-"""
-
 from collections.abc import Mapping
 from dataclasses import dataclass
 
