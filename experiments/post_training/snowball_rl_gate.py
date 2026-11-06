@@ -760,9 +760,10 @@ def _pins(preset: str) -> tuple[ControlPin, ...]:
     pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
     if not pins:
         name, replicas = (known[0].preset, known[0].runs) if known else (preset, 4)
+        revisions = sorted({pin.revision for pin in known})
         raise InvalidComparison(
-            f"no control pin for {preset} at {presets.PRESET_REVISION}; collect with "
-            f"python -m experiments.post_training.snowball_rl --preset {name} "
+            f"no control pin for {preset} at {presets.PRESET_REVISION}; recorded control revisions={revisions}; "
+            f"collect with python -m experiments.post_training.snowball_rl --preset {name} "
             f"--version {presets.PRESET_REVISION} --control --replicates {replicas} --run"
         )
     return pins

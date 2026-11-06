@@ -43,7 +43,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 
 pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
-pytestmark = pytest.mark.usefixtures("source_provenance")
+pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
 def _json(path, value):

@@ -13,6 +13,8 @@ coordinator. Repeating the same command reuses completed artifacts. Source files
 under `experiments/`, `lib/` and `vendor/` must be tracked or staged: the git tree
 hash forms part of each run's identity. `--version dev` satisfies the standard
 launcher interface; Snowball steps use the fixed `PRESET_REVISION` instead.
+Single-answer panel evaluations use greedy sampling and request no rollout logprobs.
+Evaluation sampling belongs to the preset revision; controls must match that revision.
 
 Add `--run --wait` to poll every 60 seconds and print the final status and report
 table. Its exit code is 0 for PASS or completed train-long/control collection,
@@ -223,9 +225,4 @@ data-short. Each run forwards its required keys through Iris.
 | AAII coverage; no-agentic-tasks | current tasks cover only part of AAII; add missing task families and agentic tasks |
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
-| eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling needs a new panel and new controls. |
 | no-async-speed-gate | Speed-long has no pinned controls; collect controls before using its throughput verdict. |
-| mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
-
-Speed-short measures engines only. A speed claim also needs speed-medium, whose
-mismatch guard compares engine and trainer log-probabilities on trained tokens.

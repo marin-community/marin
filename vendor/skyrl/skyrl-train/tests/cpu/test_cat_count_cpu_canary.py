@@ -15,6 +15,7 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
+from rigging.provenance import launch_provenance
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
@@ -25,6 +26,8 @@ from skyrl_gym.envs.cat_count.reward import TARGET_WORD
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
+from skyrl_train.io import io
+from skyrl_train.utils.tracking import Tracking
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
@@ -35,6 +38,7 @@ from tests.cpu.tiny_training.cat_count import (
     cat_count_config,
     run_cat_count,
     run_cat_count_generate,
+    run_tracked_cat_count,
 )
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
 from tests.cpu.tiny_training.experiment import read_metrics
@@ -48,6 +52,34 @@ def test_policy_download_rejects_a_corrupted_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr("tests.cpu.cat_count_policy.create_s3_filesystem", lambda **_kwargs: filesystem)
     with pytest.raises(ValueError, match="manifest SHA256"):
         download_policy(tmp_path)
+
+
+def test_metrics_cleanup_uses_object_store_listing_paths(monkeypatch):
+    export_root = "s3://tracker-test/exports"
+    filesystem = fsspec.filesystem("memory")
+    list_directory = filesystem.ls
+
+    def list_objects(path, detail=True, **kwargs):
+        entries = list_directory(path, detail=detail, **kwargs)
+        return entries if detail else [entry.removeprefix("s3://") for entry in entries]
+
+    monkeypatch.setattr(filesystem, "ls", list_objects)
+    resolve = io.filesystem_and_path
+    monkeypatch.setattr(
+        io, "filesystem_and_path", lambda uri: (filesystem, uri) if uri.startswith("s3://") else resolve(uri)
+    )
+    for step in (0, 8):
+        io.write_bytes_atomic(f"{export_root}/metrics/step-{step:06d}.json", json.dumps({"old": 1}).encode())
+    config = OmegaConf.create({"trainer": {"export_path": export_root}, "runtime": {"attempt_id": "new"}})
+    with Tracking("project", "name", "files", config) as tracker:
+        tracker.start(resumed_step=None)
+        tracker.log({"loss": 0.25}, step=0)
+    assert not io.exists(f"{export_root}/metrics/step-000008.json")
+    assert json.loads(io.read_bytes(f"{export_root}/metrics/step-000000.json")) == {
+        "step": 0,
+        "attempt_id": "new",
+        "loss": 0.25,
+    }
 
 
 @pytest.fixture
@@ -319,6 +351,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
     for steps, resume in ((2, False), (4, True)):
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
         OmegaConf.update(cfg, "runtime", {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}"}, force_add=True)
+        cfg.trainer.logger = ["files", "wandb"]
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
         cfg.trainer.step_wise_training = step_wise
         cfg.trainer.algorithm.group_advantage_min_size = 2
@@ -347,7 +380,14 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             paths.append(str(path.with_suffix(".parquet")))
             write_tasks(Path(paths[-1]), tasks)
         cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
-        records = run_process(forkserver_context, root, cfg)
+        records = run_process(forkserver_context, root, cfg, runner=run_tracked_cat_count)
+        tracking = json.loads((root / "wandb-init.json").read_text())
+        assert {key: tracking[key] for key in ("run_id", "attempt_id", "source_commit", "iris_job_id")} == {
+            "run_id": "cpu-rloo-n",
+            "attempt_id": f"attempt-{steps}",
+            "source_commit": launch_provenance().base_commit,
+            "iris_job_id": "/tests/native-tracking",
+        }
         assert [row["step"] for row in records] == list(range(steps + 1))
         assert all("prior_attempt_only" not in row for row in records)
         assert records[-1]["attempt_id"] == f"attempt-{steps}"

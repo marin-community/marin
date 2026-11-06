@@ -24,8 +24,7 @@ def run_config(config_path: Path) -> None:
             "run_id": str(config.run.id),
             "attempt_id": str(config.run.attempt_id),
         }
-    if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
-        with open_dict(config.skyrl):
+        if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
             config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
     run(config.skyrl)
 
