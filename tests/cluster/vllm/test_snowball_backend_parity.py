@@ -24,8 +24,7 @@ from marin.testing.inference.snowball_backend_parity_jobs import (
     score_vllm_against_goldens,
 )
 
-from tests.cluster.conftest import MARIN_GPU_CLUSTER
-
+SNOWBALL_GPU_CLUSTER = "cw-rno2a"
 PENDING_TIMEOUT = 30 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
 
@@ -37,7 +36,7 @@ def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
         name=f"snowball-parity-levanter-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(score_levanter_against_goldens, args=[goldens]),
         resources=ResourceConfig.with_gpu(
-            "H100", count=GPU_COUNT, cpu=64, ram="256g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+            "H100", count=GPU_COUNT, cpu=64, ram="256g", disk="128g", target_cluster=SNOWBALL_GPU_CLUSTER
         ),
         environment=create_environment(
             extras=["gpu"],
@@ -47,7 +46,7 @@ def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
                 "XLA_FLAGS": "--xla_gpu_deterministic_ops=true",
             },
         ),
-        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
     )
 
 
@@ -63,7 +62,7 @@ def _vllm_job(
             args=[goldens, attention_backend, pipeline_parallel_size],
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=SNOWBALL_GPU_CLUSTER
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -72,7 +71,7 @@ def _vllm_job(
                 "VLLM_USE_FLASHINFER_SAMPLER": "0",
             },
         ),
-        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
         replicas=pipeline_parallel_size,
         max_retries_failure=2,
         max_task_failures=2,
