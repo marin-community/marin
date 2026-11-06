@@ -365,6 +365,8 @@ def build_diagnostic_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
+            max_retries_failure=1000,  # DIAGNOSTIC ONLY: the production ladder's retry settings.
+            max_task_failures=1000,
         )
 
     return ArtifactStep(

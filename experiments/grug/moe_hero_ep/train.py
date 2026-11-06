@@ -1431,10 +1431,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
         state_callbacks.add_hook(lambda step_info: _log_hbm_diag("after_step", int(step_info.step)), every=20)
-        squeeze_after_step = 390258  # DIAGNOSTIC ONLY: a run past this step cannot grow its pool.
+        squeeze_after_step = 390272  # DIAGNOSTIC ONLY: a run past this step cannot grow its pool.
+        squeeze_restored_step = 390251  # DIAGNOSTIC ONLY: the retry restores later, so it does not squeeze.
 
         def squeeze_once(step_info):
-            if int(step_info.step) == squeeze_after_step:
+            if restored_step == squeeze_restored_step and int(step_info.step) == squeeze_after_step:
                 squeeze_device_free_memory()
 
         state_callbacks.add_hook(squeeze_once, every=1)
