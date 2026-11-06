@@ -152,16 +152,9 @@ async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
 
 
 @pytest.mark.parametrize("failures", [1, 3])
-@pytest.mark.parametrize(
-    "reason",
-    [
-        "Websocket setup failed (status 0): handshake refused",
-        "'NoneType' object has no attribute 'decode'",
-    ],
-)
-async def test_grading_retries_pre_command_websocket_setup_failures(failures: int, reason: str) -> None:
+async def test_grading_retries_pre_command_websocket_setup_failures(failures: int) -> None:
     interrupted = RolloutInterrupted(Rollout("trial", (), "interrupted"), RolloutOperation.GRADE)
-    interrupted.__cause__ = ExecSetupFailed(reason)
+    interrupted.__cause__ = ExecSetupFailed("handshake refused")
     success = GradedRollout(Rollout("trial", (), "stop"), GradeResult(Outcome.GRADED, 1, "ok"))
     engine = FakeEngine((*([interrupted] * failures), success))
     events: list[Event[None]] = []

@@ -5,7 +5,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Protocol, override
+from typing import Protocol, override
 
 import httpx
 
@@ -16,13 +16,11 @@ from forge.resources.execution import Notify, retry_effect
 
 @dataclass(frozen=True, slots=True)
 class WebSearch(Event[str]):
-    result_type: ClassVar[object] = str
     query: str
 
 
 @dataclass(frozen=True, slots=True)
 class WebFetch(Event[str]):
-    result_type: ClassVar[object] = str
     url: str
 
 

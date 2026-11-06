@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import override
 
 import pytest
-from taskforge.llm.client import Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import Attempt, AttemptOutcome, ContextExhausted, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.client import Completion as ProviderCompletion
 from taskforge.llm.client import FinishReason as ProviderFinish
 from taskforge.llm.client import ToolCall as ProviderToolCall
@@ -169,7 +169,7 @@ async def test_executor_publishes_provider_retries_after_success_without_another
 
 async def test_provider_context_limit_exits_without_retry() -> None:
     body = "This model's maximum context length is 262144 tokens. " + "x" * 500
-    rejection = ModelRequestRejected(400, body, ())
+    rejection = ContextExhausted(body, ())
     backend = Backend((rejection, provider_completion()))
     retries = Retries()
     with pytest.raises(ContextExceeded) as caught:

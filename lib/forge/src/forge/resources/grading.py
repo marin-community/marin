@@ -8,7 +8,6 @@ import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
-from typing import ClassVar
 
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutInterrupted, TaskRolloutSpec, TraceMode
 from taskcompendium.grading_result import GradeResult, GradingFailure
@@ -22,7 +21,6 @@ from forge.resources.rollouts import Engine, interruption
 
 @dataclass(frozen=True, slots=True)
 class GradeCandidate(Event[GradeResult]):
-    result_type: ClassVar[object] = GradeResult
     spec: TaskRolloutSpec
     candidate: Candidate
     fresh_verifier: bool = False
@@ -56,7 +54,7 @@ def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mappin
         target = PurePosixPath(spec.task.environment_requirements.working_directory or "/workspace", file.path)
         path, parent = shlex.quote(str(target)), shlex.quote(str(target.parent))
         source = shlex.quote(f"/.forge-candidates/{index}")
-        command = f"mkdir -p {parent} && cp -p {source} {path}"
+        command = f"mkdir -p {parent} && cp -p {source} {path} && chmod {file.mode or '644'} {path}"
         turns.append(
             {
                 "role": "assistant",

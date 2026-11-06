@@ -302,6 +302,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
 def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason: StopReason) -> None:
     settings = config("S")
     edge = settings.transitions[(Stage.AUTHOR, Stopped)]
+    assert edge[0] is None
     previous = Modify(("prior review",))
     wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
     session = Conversation((), ())

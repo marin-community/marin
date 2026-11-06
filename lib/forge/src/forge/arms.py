@@ -6,27 +6,23 @@
 from functools import partial
 from types import MappingProxyType
 
-from forge.config import Edge, Transitions
+from forge.config import Transitions, transition
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.validate import ValidateRequest
 from forge.model.llm import Message, Role, ToolCall
 from forge.model.review import Accept, BandOutcome, Budget, Incomplete, Modify, Reject, RejectKind, Retry
-from forge.model.stage import Exit, Stage
+from forge.model.stage import Stage
 from forge.model.workpiece import Conversation, Terminal, Workpiece
 from forge.policy import Policy
 from forge.stages.exits import Decided, Validated
 from forge.stages.summary import validation_path, validation_summary
 
 
-def submitted(wp: Workpiece, result: Exit) -> Workpiece:
-    if not isinstance(result, Submitted):
-        raise ValueError("Submission edge requires Submitted")
+def submitted(wp: Workpiece, result: Submitted) -> Workpiece:
     return wp.with_(submission=result.submission, session=result.session)
 
 
-def returned(wp: Workpiece, result: Exit) -> Workpiece:
-    if not isinstance(result, Returned) or not isinstance(result.payload, ValidateRequest):
-        raise ValueError("Validate edge requires Returned[ValidateRequest]")
+def returned(wp: Workpiece, result: Returned[ValidateRequest]) -> Workpiece:
     return wp.with_(submission=result.payload.submission, session=result.session)
 
 
@@ -36,9 +32,7 @@ def pending_validate(session: Conversation) -> ToolCall | None:
     return next((call for call in calls if call.name == "validate" and call.id not in answered), None)
 
 
-def validated(wp: Workpiece, result: Exit, *, tool: bool, workdir: str, output_chars: int) -> Workpiece:
-    if not isinstance(result, Validated):
-        raise ValueError("Validation edge requires Validated")
+def validated(wp: Workpiece, result: Validated, *, tool: bool, workdir: str, output_chars: int) -> Workpiece:
     session = wp.session
     if tool and session is not None and (call := pending_validate(session)) is not None:
         content = validation_summary(result.result, validation_path(workdir, len(wp.evidence)), output_chars)
@@ -51,9 +45,7 @@ def after_validation(wp: Workpiece) -> Stage:
     return Stage.AUTHOR if wp.session and wp.session.messages[-1].role == "tool" else Stage.REVIEW
 
 
-def decided(wp: Workpiece, result: Exit, *, budget: Budget, policy: Policy) -> Workpiece:
-    if not isinstance(result, Decided):
-        raise ValueError("Review edge requires Decided")
+def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -> Workpiece:
     decision = result.decision
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
@@ -94,9 +86,7 @@ def after_review(wp: Workpiece) -> Stage | None:
     return Stage.VALIDATE if isinstance(wp.decisions[-1], Retry) else Stage.AUTHOR
 
 
-def stopped(wp: Workpiece, result: Exit) -> Workpiece:
-    if not isinstance(result, Stopped):
-        raise ValueError("Stop edge requires Stopped")
+def stopped(wp: Workpiece, result: Stopped) -> Workpiece:
     kind = RejectKind.BUDGET if result.reason == StopReason.CONTEXT_LIMIT else RejectKind.TASK
     decision = Reject(kind, (f"author stopped: {result.summary}",))
     return wp.with_(session=result.session, terminal=Terminal.ABANDONED, decisions=(*wp.decisions, decision))
@@ -105,20 +95,25 @@ def stopped(wp: Workpiece, result: Exit) -> Workpiece:
 def transitions(arm: str, budget: Budget, policy: Policy) -> Transitions:
     if arm not in ("S", "T"):
         raise ValueError(f"Unknown arm {arm!r}")
-    edges: dict[tuple[Stage, type[Exit]], Edge] = {
-        (Stage.AUTHOR, Submitted): (Stage.VALIDATE, submitted),
-        (Stage.AUTHOR, Stopped): (Stage.AUTHOR, stopped),
-        (Stage.VALIDATE, Validated): (
-            after_validation if arm == "T" else Stage.REVIEW,
-            partial(
-                validated,
-                tool=arm == "T",
-                workdir=policy.setting("author.workdir", str),
-                output_chars=policy.setting("tools.output_chars", int),
+    edges = dict(
+        (
+            transition(Stage.AUTHOR, Submitted, Stage.VALIDATE, submitted),
+            transition(Stage.AUTHOR, Stopped, None, stopped),
+            transition(
+                Stage.VALIDATE,
+                Validated,
+                after_validation if arm == "T" else Stage.REVIEW,
+                partial(
+                    validated,
+                    tool=arm == "T",
+                    workdir=policy.setting("author.workdir", str),
+                    output_chars=policy.setting("tools.output_chars", int),
+                ),
             ),
-        ),
-        (Stage.REVIEW, Decided): (after_review, partial(decided, budget=budget, policy=policy)),
-    }
+            transition(Stage.REVIEW, Decided, after_review, partial(decided, budget=budget, policy=policy)),
+        )
+    )
     if arm == "T":
-        edges[(Stage.AUTHOR, Returned)] = (Stage.VALIDATE, returned)
+        key, edge = transition(Stage.AUTHOR, Returned, Stage.VALIDATE, returned)
+        edges[key] = edge
     return MappingProxyType(edges)

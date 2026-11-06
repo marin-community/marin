@@ -438,3 +438,22 @@ def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_pro
         # A pool that a closed loop opened fails on its kept-alive connection with "Event loop is closed".
         assert [asyncio.run(health()) for _ in range(2)] == [200, 200]
         server.shutdown()
+
+
+def test_endpoint_output_limit_survives_pickling_and_preserves_tool_calls(fake_glm, fast_provider):
+    fake_glm.stream(tool_calls=(("answer", '{"value": 1}'),), finish="tool_calls", completion_tokens=200000)
+    client = pickle.loads(
+        pickle.dumps(GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider, limit_output=False))
+    )
+
+    async def call():
+        async with client:
+            return await client.complete(
+                MESSAGES, LLMPolicy(max_tokens=1), {"max_tokens": 2, "max_completion_tokens": 3}
+            )
+
+    result = asyncio.run(call())
+    assert result.finish_reason is FinishReason.TOOL_CALLS
+    assert len(fake_glm.requests) == 1
+    assert "max_tokens" not in fake_glm.requests[0] and "max_completion_tokens" not in fake_glm.requests[0]
+    assert result.attempts[0].max_tokens == 0

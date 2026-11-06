@@ -11,36 +11,9 @@ from dataclasses import replace
 from typing import override
 
 from taskforge.llm.client import Attempt, Completion, ModelUnavailable
-from taskforge.llm.glm_client import GlmClient, _Segment, request_kwargs
 from taskforge.llm.policy import LLMPolicy
 
 from forge.resources.inference import CompletionBackend
-
-
-class EndpointLimitedClient(GlmClient):
-    """The serving endpoint alone sets output capacity; no max_tokens is sent."""
-
-    # Source: frozen taskforge/llm/glm_client.py::_segment, without its output cap/heuristic.
-    @override
-    async def _segment(
-        self,
-        messages: Sequence[dict[str, object]],
-        policy: LLMPolicy,
-        request_fields: Mapping[str, object],
-        segment: int,
-        attempts: list[Attempt],
-    ) -> _Segment:
-        fields = {
-            key: value for key, value in request_fields.items() if key not in ("max_tokens", "max_completion_tokens")
-        }
-        kwargs = request_kwargs(self.model, messages, 0, policy, fields)
-        kwargs.pop("max_tokens")
-
-        async def send(events: list[str]) -> _Segment:
-            return await self._stream(kwargs, events)
-
-        # Zero records an unspecified client output allowance in transport telemetry.
-        return await self._retrying(send, segment, 0, attempts)
 
 
 class WaitingBackend(CompletionBackend):
@@ -58,7 +31,7 @@ class WaitingBackend(CompletionBackend):
         if unavailable_wait <= 0 or initial <= 0 or maximum <= 0 or factor < 1:
             raise ValueError("Provider availability window and backoff must be positive; factor must be at least 1")
         self.client, self.unavailable_wait = client, unavailable_wait
-        self.initial, self.maximum, self.factor = initial, min(maximum, 60.0), factor
+        self.initial, self.maximum, self.factor = initial, maximum, factor
         self.clock, self.sleep = clock, sleep
 
     @property

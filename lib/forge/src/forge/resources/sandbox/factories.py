@@ -5,22 +5,12 @@
 
 """Backend selection shared with task lowering."""
 
-from enum import StrEnum
-
 import shellsim
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, MachineFactory
+from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge
 
 SANDBOX_SCHEDULING_TIMEOUT = 600
-
-
-class MachineHost(StrEnum):
-    IRIS = "iris"
-
-
-def container_backend(where: MachineHost) -> Backend:
-    return Backend.GVISOR
 
 
 def shellsim_factory() -> MachineFactory:

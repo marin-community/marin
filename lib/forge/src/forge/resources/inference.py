@@ -5,9 +5,16 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import ClassVar, Protocol, override
+from typing import Protocol, override
 
-from taskforge.llm.client import RETRYABLE_STATUSES, Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import (
+    RETRYABLE_STATUSES,
+    Attempt,
+    AttemptOutcome,
+    ContextExhausted,
+    ModelRequestRejected,
+    ModelUnavailable,
+)
 from taskforge.llm.client import Completion as ProviderCompletion
 from taskforge.llm.policy import LLMPolicy
 
@@ -23,7 +30,6 @@ class ContextExceeded(Exception):
 
 @dataclass(frozen=True, slots=True)
 class InferenceRequest(Event[Completion]):
-    result_type: ClassVar[object] = Completion
     messages: tuple[Message, ...]
     tools: tuple[ToolSchema, ...]
     sampling: LLMPolicy
@@ -106,14 +112,16 @@ class GlmInference(InferenceClient):
                 tuple(_message(message) for message in request.conversation), policy, fields
             )
         except ModelUnavailable as error:
-            raise Restart("GLM transport exhausted its retry or hold budget", _retries(error.attempts)) from error
+            raise Restart(
+                "GLM transport exhausted its retry or hold budget", retries=_retries(error.attempts)
+            ) from error
+        except ContextExhausted as error:
+            raise ContextExceeded(error.body) from error
         except ModelRequestRejected as error:
-            if error.status == 400 and "maximum context length" in error.body.lower():
-                raise ContextExceeded(error.body) from error
             decision = Transient if error.status in RETRYABLE_STATUSES else Hold
             detail = f": {error.body[:500]}" if decision is Hold else ""
             raise decision(
-                f"GLM request rejected with status {error.status}{detail}", _retries(error.attempts)
+                f"GLM request rejected with status {error.status}{detail}", retries=_retries(error.attempts)
             ) from error
         return Completion(
             result.content,
@@ -163,7 +171,7 @@ async def complete(event: InferenceRequest, client: InferenceClient, *, notify: 
         try:
             result = await client.complete(event)
         except (Transient, Restart, Hold) as error:
-            for index, cause in enumerate(error.args[1] if len(error.args) > 1 else (), 1):
+            for index, cause in enumerate(error.retries, 1):
                 notify(Retrying(event, index, str(cause)))
             raise
         for index, cause in enumerate(result.retries, 1):

@@ -21,6 +21,8 @@ from taskforge.llm.policy import LLMPolicy
 
 from forge.model.content_hash import digest
 
+GRADER_BASE_IMAGE = "docker.io/library/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+
 PROMPTS_DIR = "prompts"
 SETTINGS_FILE = "policy.json"
 PROMPT_SUFFIX = ".md"
@@ -106,6 +108,7 @@ def load_policy(defaults_dir: Path) -> Policy:
             raise ValueError(f"{path} does not end with a newline")
         prompts[".".join(path.relative_to(defaults_dir / PROMPTS_DIR).with_suffix("").parts)] = Prompt(text[:-1])
     settings = json.loads((defaults_dir / SETTINGS_FILE).read_text())
+    settings = {key: GRADER_BASE_IMAGE if value == "${GRADER_BASE_IMAGE}" else value for key, value in settings.items()}
     shared = sorted(set(prompts) & set(settings))
     if shared:
         raise ValueError(f"{defaults_dir / SETTINGS_FILE} sets prompt keys: {', '.join(shared)}")

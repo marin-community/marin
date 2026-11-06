@@ -40,7 +40,7 @@ from forge.lowering import (
 from forge.model.controls import Candidate, RewardBand
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.rollouts import RolloutResource, SolverRollout
-from forge.resources.sandbox.factories import MachineHost, shellsim_factory
+from forge.resources.sandbox.factories import shellsim_factory
 from forge.resources.verifier import RoundVerifier
 from forge.stages.validate import claim_result
 
@@ -132,7 +132,7 @@ def event(script: bytes = SCRIPT) -> GradeCandidate:
     task = arithmetic_task(grader=grader, resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)))
     spec = lower_with_settings(
         task,
-        LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits()),
+        LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits()),
         {"shellsim": shellsim_factory()},
     )
     return GradeCandidate(spec.model_copy(update={"trace": TraceMode.MESSAGES}), Candidate("12"))

@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import ClassVar, Protocol, override
+from typing import Protocol, override
 
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
@@ -44,21 +44,18 @@ class CommandResult:
 
 @dataclass(frozen=True, slots=True)
 class RunCommand(Event[CommandResult]):
-    result_type: ClassVar[object] = CommandResult
     cmd: str
     timeout: float
 
 
 @dataclass(frozen=True, slots=True)
 class WriteFile(Event[None]):
-    result_type: ClassVar[object] = type(None)
     path: PurePosixPath
     data: bytes
 
 
 @dataclass(frozen=True, slots=True)
 class ReadFile(Event[bytes]):
-    result_type: ClassVar[object] = bytes
     path: PurePosixPath
     offset: int = 0
     limit: int | None = None

@@ -3,7 +3,8 @@
 
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import ClassVar, Generic, TypeVar
+from types import get_original_bases
+from typing import ClassVar, Generic, TypeVar, get_args, get_origin
 
 from forge.model.content_hash import (
     BYTES_TAG as BYTES_TAG,
@@ -56,6 +57,10 @@ class Event(Generic[T_co]):
         }
 
     def __init_subclass__(cls) -> None:
+        for base in get_original_bases(cls):
+            if get_origin(base) is Event:
+                cls.result_type = get_args(base)[0]
+                break
         EVENT_TYPES[f"{cls.__module__}.{cls.__qualname__}"] = cls
 
 

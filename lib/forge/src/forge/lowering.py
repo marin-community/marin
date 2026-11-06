@@ -21,14 +21,11 @@ from taskcompendium.models import (
 )
 
 from forge.model.controls import Candidate
-from forge.policy import Policy
+from forge.policy import GRADER_BASE_IMAGE, Policy
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
-    MachineHost,
-    container_backend,
     grading_environment,
 )
-from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 
 SHELL_CAPABILITY = "shell"
 TOOL_HARNESS = "tools"
@@ -110,13 +107,12 @@ def rollout_engine(factories: Mapping[str, MachineFactory], *, command_timeout: 
 def lower(
     task: TaskSpec,
     *,
-    host: MachineHost,
     task_machine: MachineSettings | None,
     verifier_machine: MachineSettings | None,
     limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
 ) -> TaskRolloutSpec:
-    """The ``TaskRolloutSpec`` that runs ``task`` on ``host``'s ``factories`` under ``TOOL_HARNESS``.
+    """The ``TaskRolloutSpec`` that runs ``task`` on ``factories`` under ``TOOL_HARNESS``.
 
     Supply a task machine exactly when the task offers shell tools, and a verifier machine exactly
     when its grader declares an environment. Backend selection and software requirements are bound
@@ -137,11 +133,9 @@ def lower(
     spec = TaskRolloutSpec(
         task=task,
         harness=TOOL_HARNESS,
-        task_machine=(
-            None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
-        ),
+        task_machine=(None if task_machine is None else machine_runtime(task_machine, task.environment_requirements)),
         verifier_machine=(
-            None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading, host)
+            None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading)
         ),
         limits=limits,
     )
@@ -149,15 +143,13 @@ def lower(
     return spec
 
 
-def machine_runtime(
-    settings: MachineSettings, requirements: EnvironmentRequirements, host: MachineHost
-) -> MachineRuntimeSpec:
-    """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
+def machine_runtime(settings: MachineSettings, requirements: EnvironmentRequirements) -> MachineRuntimeSpec:
+    """The ``MachineRuntimeSpec`` of a machine with ``requirements``.
 
     Pass requirements already resolved for the available factories with ``host_requirements``.
     """
     return MachineRuntimeSpec(
-        backend=machine_backend(requirements, host).value,
+        backend=machine_backend(requirements).value,
         network=settings.network,
         cpus=settings.limits.cpus,
         memory_mb=settings.limits.memory_mb,
@@ -169,10 +161,10 @@ def machine_runtime(
     )
 
 
-def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) -> Backend:
+def machine_backend(requirements: EnvironmentRequirements) -> Backend:
     """Choose Iris for images and ShellSim for simulated commands."""
     if requirements.docker_image is not None:
-        return container_backend(host)
+        return Backend.GVISOR
     if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
         raise ValueError("Linux process requirements need a container image on Iris")
     return Backend.SHELLSIM
@@ -196,7 +188,6 @@ def _hosted_task(task: TaskSpec) -> TaskSpec:
 
 @dataclass(frozen=True, slots=True)
 class LoweringSettings:
-    host: MachineHost
     task_machine: MachineSettings
     verifier_machine: MachineSettings
     limits: RolloutLimits
@@ -218,7 +209,7 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
     if memory_mb <= 0:
         raise ValueError("sandbox.memory_mb must be positive")
     settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
-    return LoweringSettings(MachineHost(policy.setting("runtime.host", str)), settings, settings, limits)
+    return LoweringSettings(settings, settings, limits)
 
 
 def lower_with_settings(
@@ -231,7 +222,6 @@ def lower_with_settings(
     limits = settings.limits.model_copy(update={"verifier_timeout": verifier_timeout(task.grader)})
     return lower(
         task,
-        host=settings.host,
         task_machine=settings.task_machine if SHELL_CAPABILITY in task.environment_requirements.capabilities else None,
         verifier_machine=settings.verifier_machine if grading_environment(task) is not None else None,
         limits=limits,

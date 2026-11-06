@@ -6,7 +6,6 @@
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import ClassVar
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
 
@@ -19,7 +18,6 @@ def _new_id() -> str:
 class NewId(Event[str]):
     """A deterministic call-site key; repeated emits of the same key replay the same value."""
 
-    result_type: ClassVar[object] = str
     key: str
 
 

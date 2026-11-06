@@ -2,30 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-# A container that cannot execute commands must Restart on a fresh machine; retrying
-# its WriteFile or grading RPC cannot repair a terminating pod. OOM remains a Hold.
+class EffectIssue(Exception):
+    """A typed execution decision with provider retry history for the event log."""
 
-# A failed verifier reset raises MachineTerminated and discards the lease. Rollout
-# interruption then selects Restart at every phase, never a score.
-
-# Lowering rejects image-free Linux process requirements with ValueError: an unsupported
-# task contract needs repair, not a retry on the same Iris host.
-
-# resources.inference.ContextExceeded is a harness context-limit outcome, not an effect
-# retry or hold: the same full conversation cannot succeed on another provider attempt.
+    def __init__(self, message: str, *, retries: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.retries = retries
 
 
-class Transient(Exception):
-    """Retry this effect inside its executor."""
+class Transient(EffectIssue):
+    """Retry this effect inside its executor; interrupted startup replays its stage."""
 
 
-class Restart(Exception):
-    """The caller may rerun the function that exhausted its attempts."""
+class Restart(EffectIssue):
+    """Reconstruct an interrupted stage on a fresh machine, replaying resolved effects.
+
+    Lost containers and failed verifier resets need replacement, never a score.
+    """
 
 
-class Hold(Exception):
-    """Stop the workpiece until a later relaunch."""
+class Hold(EffectIssue):
+    """Publish held until explicit resume; exhausted resources require human review."""
 
 
-class LogFailure(Exception):
+class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""

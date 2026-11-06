@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import ClassVar, override
+from typing import override
 
 from forge.effects.events import Event
 from forge.effects.log import Record, Sink
@@ -19,13 +19,11 @@ class Answer:
 @dataclass(frozen=True, slots=True)
 class Query(Event[Answer]):
     arguments: Mapping[str, str]
-    result_type: ClassVar[object] = Answer
 
 
 @dataclass(frozen=True, slots=True)
 class Number(Event[int]):
     value: int
-    result_type: ClassVar[object] = int
 
 
 class FlakySink(Sink):
@@ -44,13 +42,11 @@ class FlakySink(Sink):
 @dataclass(frozen=True, slots=True)
 class Timed(Event[float]):
     timeout: float
-    result_type: ClassVar[object] = float
 
 
 @dataclass(frozen=True, slots=True)
 class Choices(Event[frozenset[str]]):
     options: frozenset[str]
-    result_type: ClassVar[object] = frozenset[str]
 
 
 class PausedSink(Sink):

@@ -40,8 +40,7 @@ from forge.lowering import (
     rollout_engine,
 )
 from forge.model.controls import Candidate
-from forge.policy import load_policy
-from forge.resources.sandbox.images import GRADER_BASE_IMAGE
+from forge.policy import GRADER_BASE_IMAGE, load_policy
 from forge.resources.grading import GradeCandidate, GradingResource
 from forge.resources.verifier import RoundVerifier
 

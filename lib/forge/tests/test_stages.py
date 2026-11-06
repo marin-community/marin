@@ -53,7 +53,7 @@ from forge.model.review import (
     ValidationResult,
 )
 from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from forge.policy import Policy, load_policy
+from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
@@ -61,8 +61,6 @@ from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference
 from forge.resources.rollouts import RolloutResource
-from forge.resources.sandbox.factories import MachineHost
-from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.resources.web import FakeWeb
 from forge.stages.author import author
 from forge.stages.exits import Decided, Triaged, TriageRejected, Validated
@@ -199,10 +197,10 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
         control_schema.validate(control)
     resolved = tuple(EnvironmentRequirements.model_validate(value) for value in environments)
     assert resolved[0].docker_image == GRADER_BASE_IMAGE and resolved[1].docker_image is None
-    assert tuple(machine_backend(value, MachineHost.IRIS).value for value in resolved) == ("gvisor", "shellsim")
+    assert tuple(machine_backend(value).value for value in resolved) == ("gvisor", "shellsim")
     task_resolved = tuple(EnvironmentRequirements.model_validate(value) for value in task_environments)
     assert all(value.capabilities == ("shell",) for value in task_resolved)
-    assert tuple(machine_backend(value, MachineHost.IRIS).value for value in task_resolved) == ("gvisor", "shellsim")
+    assert tuple(machine_backend(value).value for value in task_resolved) == ("gvisor", "shellsim")
 
 
 async def test_validate_propagates_solver_restart_for_stage_replay(workpiece: Workpiece) -> None:

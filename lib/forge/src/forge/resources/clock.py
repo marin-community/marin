@@ -6,7 +6,6 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import ClassVar
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
 
@@ -15,7 +14,6 @@ from forge.effects.events import Event, Fingerprint, ReplayPolicy
 class Now(Event[float]):
     """A deterministic call-site key; repeated emits of the same key replay the same value."""
 
-    result_type: ClassVar[object] = float
     key: str
 
 

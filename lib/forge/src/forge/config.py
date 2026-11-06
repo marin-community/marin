@@ -6,7 +6,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, cast
 
 from taskcompendium.models import TaskResource
 
@@ -28,8 +28,16 @@ class WorkspaceHydration:
     rendered: Callable[[Workpiece, Policy], tuple[TaskResource, ...]]
 
 
-type Edge = tuple[Stage | Callable[[Workpiece], Stage | None], Callable[[Workpiece, Exit], Workpiece]]
-type Transitions = Mapping[tuple[Stage, type[Exit]], Edge]
+type Target = Stage | None | Callable[[Workpiece], Stage | None]
+type Edge[E: Exit] = tuple[Target, Callable[[Workpiece, E], Workpiece]]
+type Transitions = Mapping[tuple[Stage, type[Exit]], Edge[Exit]]
+
+
+def transition[E: Exit](
+    stage: Stage, kind: type[E], target: Target, adapt: Callable[[Workpiece, E], Workpiece]
+) -> tuple[tuple[Stage, type[Exit]], Edge[Exit]]:
+    """Check adapter types at registration; coordinator dispatches by exact exit class."""
+    return (stage, kind), (target, cast(Callable[[Workpiece, Exit], Workpiece], adapt))
 
 
 @dataclass(frozen=True, slots=True)

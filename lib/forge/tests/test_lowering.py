@@ -23,9 +23,7 @@ from forge.lowering import (
     lowering_settings,
     requirements,
 )
-from forge.policy import load_policy
-from forge.resources.sandbox.factories import MachineHost
-from forge.resources.sandbox.images import GRADER_BASE_IMAGE
+from forge.policy import GRADER_BASE_IMAGE, load_policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +57,7 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
             timeout=1,
         )
     )
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     factories = {backend.value: AvailableFactory(backend) for backend in (Backend.GVISOR, Backend.SHELLSIM)}
     if image not in (None, GRADER_BASE_IMAGE):
         with pytest.raises(ValueError, match="grader image must be") as raised:

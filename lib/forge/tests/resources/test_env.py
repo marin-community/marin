@@ -264,16 +264,9 @@ async def test_relative_paths_use_environment_workdir(workdir: str) -> None:
     assert machine.files["/absolute.py"] == b"absolute"
 
 
-@pytest.mark.parametrize(
-    "reason",
-    [
-        "Websocket setup failed (status 0): handshake refused",
-        "'NoneType' object has no attribute 'decode'",
-    ],
-)
-async def test_websocket_setup_failure_retries_only_three_times(reason: str) -> None:
+async def test_websocket_setup_failure_retries_only_three_times() -> None:
     machine = MemoryMachine()
-    machine.failure = ExecSetupFailed(reason)
+    machine.failure = ExecSetupFailed("handshake refused")
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
     events: list[Event[None]] = []
     with pytest.raises(Restart, match="exhausted its retry budget"):
@@ -282,15 +275,8 @@ async def test_websocket_setup_failure_retries_only_three_times(reason: str) -> 
     assert len(events) == 2 and all(isinstance(event, Retrying) for event in events)
 
 
-@pytest.mark.parametrize(
-    "reason",
-    [
-        "Websocket setup failed (status 0): handshake refused",
-        "'NoneType' object has no attribute 'decode'",
-    ],
-)
-async def test_machine_startup_websocket_failure_is_transient(monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
-    failure = ExecSetupFailed(reason)
+async def test_machine_startup_websocket_failure_is_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure = ExecSetupFailed("handshake refused")
 
     @asynccontextmanager
     async def failed_start(*args: object, **kwargs: object) -> AsyncIterator[Machine]:
@@ -322,15 +308,8 @@ async def test_directory_read_names_requested_path_without_retry(failure: Except
     assert machine.calls == 1
 
 
-@pytest.mark.parametrize(
-    "detail",
-    [
-        "Non-integer exec status: invalid literal for int()",
-        "invalid literal for int() with base 10: 'Internal error occurred: "
-        "error executing command in container: failed to exec'",
-    ],
-)
-async def test_noninteger_exec_status_requires_new_machine_without_retry(detail: str) -> None:
+async def test_noninteger_exec_status_requires_new_machine_without_retry() -> None:
+    detail = "container no longer accepts exec"
     machine = MemoryMachine()
     machine.failure = MachineTerminated(detail)
     env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())

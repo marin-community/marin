@@ -22,7 +22,7 @@ from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, TaskResource
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmEndpoint, Pool
+from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.rollout_model import model_turn
 
@@ -51,11 +51,10 @@ from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids, NewId, new_id
 from forge.resources.inference import CompletionBackend, GlmInference, InferenceRequest, complete
-from forge.resources.provider import EndpointLimitedClient, WaitingBackend
+from forge.resources.provider import WaitingBackend
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
-    MachineHost,
     shellsim_factory,
 )
 from forge.resources.verifier import RoundVerifier
@@ -119,8 +118,8 @@ class Environments(EnvFactory):
     @override
     async def create(self, requirements: EnvironmentRequirements) -> Env:
         requirements = host_requirements(requirements)
-        runtime = machine_runtime(self.settings.task_machine, requirements, self.settings.host)
-        factory = self.factories[machine_backend(requirements, self.settings.host).value]
+        runtime = machine_runtime(self.settings.task_machine, requirements)
+        factory = self.factories[machine_backend(requirements).value]
         cleanup = self.settings.limits.cleanup_timeout
         if cleanup is None:
             raise ValueError("Environment cleanup timeout must be explicit")
@@ -246,12 +245,14 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
 
 
 def provider_policy(policy: Policy) -> Policy:
-    """Resolve trial deadlines so availability waits cannot exhaust them first."""
+    """Reject deadlines that expire before the declared provider availability window."""
     window = policy.setting("provider.unavailable_wait", float)
-    turn = max(policy.setting("solver.turn_timeout", float), window + policy.setting("provider.stall_timeout", float))
-    attempt = max(policy.setting("solver.attempt_timeout", float), 2 * turn)
-    resolved = policy.overlaid({"solver.turn_timeout": turn, "solver.attempt_timeout": attempt})
-    return resolved
+    turn = policy.setting("solver.turn_timeout", float)
+    if turn < window + policy.setting("provider.stall_timeout", float):
+        raise ValueError("solver.turn_timeout must cover provider.unavailable_wait plus provider.stall_timeout")
+    if policy.setting("solver.attempt_timeout", float) < 2 * turn:
+        raise ValueError("solver.attempt_timeout must cover two solver.turn_timeout windows")
+    return policy
 
 
 @asynccontextmanager
@@ -264,12 +265,10 @@ async def runtime(
     provider_fields = {
         key.removeprefix("provider."): value
         for key, value in policy.entries.items()
-        if key.startswith("provider.")
-        and key not in ("provider.context_tokens", "provider.unavailable_wait", "provider.max_attempts")
+        if key.startswith("provider.") and key != "provider.unavailable_wait"
     }
     # The wrapper owns both busy retries and empty-pool waits under one deadline.
     provider_fields.update(max_attempts=1, hold_timeout=0)
-    MachineHost(policy.setting("runtime.host", str))
     job = get_job_info()
     controller = os.environ.get("IRIS_CONTROLLER_URL") or (job.controller_address if job else None)
     if not controller:
@@ -284,7 +283,7 @@ async def runtime(
             provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
             role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
             logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
-            client = await owned.enter_async_context(EndpointLimitedClient(role_source, provider))
+            client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
             clients[role] = WaitingBackend(
                 client,
                 policy.setting("provider.unavailable_wait", float),

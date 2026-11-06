@@ -9,12 +9,12 @@ import httpx
 import pytest
 from taskforge.llm import glm_client
 from taskforge.llm.client import Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
-from taskforge.llm.glm_client import FixedEndpoint, GlmEndpoint, Pool
+from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 
 from forge import wiring
 from forge.policy import load_policy
-from forge.resources.provider import EndpointLimitedClient, WaitingBackend
+from forge.resources.provider import WaitingBackend
 from forge.wiring import provider_policy
 from tests.resources.test_inference import Backend, provider_completion, request
 
@@ -52,7 +52,7 @@ async def test_busy_provider_waits_past_eight_attempts_with_capped_backoff() -> 
     result = await waiting.complete((), LLMPolicy())
     assert result.content == "answer" and len(backend.calls) == 13
     assert len(result.attempts) == 12
-    assert max(time.waits) == 60 and time.waits[:4] == [1, 2, 4, 8]
+    assert max(time.waits) == 120 and time.waits[:4] == [1, 2, 4, 8]
 
 
 async def test_busy_provider_stops_at_window_not_attempt_count() -> None:
@@ -101,7 +101,7 @@ async def test_endpoint_request_body_has_no_client_output_allowance(monkeypatch:
     monkeypatch.setattr(glm_client.httpx, "AsyncClient", MockClient)
     provider = LLMProviderConfig("test", 1, 3600, 1, 60, 2, 600, 10, 1)
     source = FixedEndpoint(GlmEndpoint("http://fake/v1", "fake", Pool.BULK))
-    async with EndpointLimitedClient(source, provider) as client:
+    async with GlmClient(source, provider, limit_output=False) as client:
         result = await client.complete(({"role": "user", "content": "hello"},), LLMPolicy(max_tokens=1))
     assert result.content == "ok"
     assert len(bodies) == 1
@@ -122,3 +122,10 @@ def test_trial_timeouts_outlast_declared_provider_window() -> None:
     resolved = provider_policy(policy)
     assert resolved.setting("solver.turn_timeout", float) == 4200
     assert resolved.setting("solver.attempt_timeout", float) == 8400
+
+
+@pytest.mark.parametrize("overlay", [{"solver.turn_timeout": 1800.0}, {"solver.attempt_timeout": 3600.0}])
+def test_inconsistent_provider_deadlines_are_rejected(overlay: dict[str, float]) -> None:
+    policy = load_policy(Path(__file__).parents[2] / "src/forge/policy/defaults").overlaid(overlay)
+    with pytest.raises(ValueError, match="must cover"):
+        provider_policy(policy)

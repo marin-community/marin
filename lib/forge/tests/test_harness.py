@@ -53,7 +53,6 @@ from forge.resources.env import (
 )
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.inference import ContextExceeded, FakeInference
-from forge.resources.sandbox.factories import MachineHost
 from forge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch, search
 
 pytestmark = pytest.mark.asyncio
@@ -197,7 +196,7 @@ async def test_web_transport_and_replay_cache_http_results() -> None:
 async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -> None:
     ctx = Context(log=EventLog())
     environment(ctx)
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     grading = GradingResource(rollout_engine({}, command_timeout=1), "fixture")
     ctx.resource(grading, grading.fingerprint)
     ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grading,))
@@ -348,7 +347,7 @@ async def test_candidate_files_without_task_machine_return_feedback(name: str) -
     controls = (Control(candidate, RewardBand(Outcome.GRADED, reward_min=1), ControlKind.POSITIVE),)
     await ctx.emit(WriteFile(PurePosixPath("/workspace/controls.json"), CONTROLS.dump_json(controls)))
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"12"))
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     tools: dict[str, Tool[object]] = {
         "grade": GradeTool("/workspace/task.json", {}, settings),
         "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
@@ -447,7 +446,7 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
         return GradeResult(Outcome.GRADED, 1, detail={"checks": {"A": False}})
 
     ctx.handle(GradeCandidate, invalid_checks)
-    settings = LoweringSettings(MachineHost.IRIS, GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     tool = GradeTool("/workspace/task.json", {}, settings)
     result = await tool(ctx, {"reply": "12"})
     assert isinstance(result, ToolResult) and "checks must be a list of" in result.content

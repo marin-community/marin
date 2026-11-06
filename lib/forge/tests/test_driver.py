@@ -60,7 +60,7 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     monkeypatch.setattr(wiring, "get_job_info", lambda: SimpleNamespace(controller_address="http://controller"))
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
-    policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults").overlaid({"runtime.host": "iris"})
+    policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
     source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3")
     async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
         assert set(resources.factories) == {"gvisor", "shellsim"}

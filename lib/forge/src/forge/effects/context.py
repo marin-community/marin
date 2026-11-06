@@ -25,7 +25,7 @@ class _Observer:
 
 @dataclass(frozen=True, slots=True)
 class _Pending:
-    task: asyncio.Task[None]
+    task: asyncio.Future[None]
     raises: type[BaseException]
 
 
@@ -80,10 +80,7 @@ class Context:
         for scope in chain:
             for observer in scope.observers:
                 if isinstance(event, observer.etype):
-                    owner.pending += (_Pending(asyncio.create_task(self._observe(observer.fn, event)), observer.raises),)
-
-    async def _observe(self, fn: Observer[Event[object]], event: Event[object]) -> None:
-        await fn(event)
+                    owner.pending += (_Pending(asyncio.ensure_future(observer.fn(event)), observer.raises),)
 
     def emit[T](self, event: Event[T]) -> Handle[T]:
         chain = self._chain.get()
@@ -152,12 +149,18 @@ class Context:
             if errors:
                 raise BaseExceptionGroup("Unawaited effect failures", errors)
 
-    async def _finish(self, owner: _Scope, types: tuple[type[BaseException], ...] = ()) -> None:
+    async def _join(self, owner: _Scope, types: tuple[type[BaseException], ...] = (), *, check: bool = True) -> None:
         while owner.effects or any(
             issubclass(p.raises, types) if types else not issubclass(p.raises, self._defer) for p in owner.pending
         ):
-            await self._settle(owner)
-            await self._check(owner, types)
+            if check:
+                await self._settle(owner)
+                await self._check(owner, types)
+            else:
+                effects, owner.effects = owner.effects, ()
+                pending = tuple(p for p in owner.pending if not issubclass(p.raises, self._defer))
+                owner.pending = tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
+                await asyncio.gather(*(e._task for e in effects), *(p.task for p in pending), return_exceptions=True)
 
     @asynccontextmanager
     async def scope(self, name: str) -> AsyncIterator[None]:
@@ -168,7 +171,7 @@ class Context:
         failed = True
         try:
             yield
-            await self._finish(owner)
+            await self._join(owner)
             failed = False
         finally:
             # Exceptional exits join owned work without inspecting observer issues.
@@ -178,22 +181,9 @@ class Context:
                     *(p.task for p in owner.pending if not issubclass(p.raises, self._defer)),
                 ):
                     task.cancel()
-                await asyncio.gather(
-                    *(effect._task for effect in owner.effects), *(p.task for p in owner.pending), return_exceptions=True
-                )
             self._notify(ScopeExited(name, failed), chain)
-            remaining = tuple(p for p in owner.pending if not issubclass(p.raises, self._defer))
             try:
-                if not failed:
-                    await self._finish(owner)
-                else:
-                    while remaining or owner.effects:
-                        effects, owner.effects = owner.effects, ()
-                        owner.pending = tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
-                        await asyncio.gather(
-                            *(p.task for p in remaining), *(e._task for e in effects), return_exceptions=True
-                        )
-                        remaining = tuple(p for p in owner.pending if not issubclass(p.raises, self._defer))
+                await self._join(owner, check=not failed)
             finally:
                 self._root.pending += tuple(p for p in owner.pending if issubclass(p.raises, self._defer))
                 self._chain.reset(token)
@@ -201,4 +191,4 @@ class Context:
     async def drain(self) -> None:
         if self._chain.get() != (self._root,):
             raise RuntimeError("Drain is only valid outside active scopes")
-        await self._finish(self._root, (BaseException,))
+        await self._join(self._root, (BaseException,))

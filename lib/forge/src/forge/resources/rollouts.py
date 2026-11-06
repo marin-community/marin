@@ -4,7 +4,7 @@
 """Solver attempts through RolloutEngine, with explicit restart decisions."""
 
 from dataclasses import dataclass
-from typing import ClassVar, Protocol
+from typing import Protocol
 
 from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import ExecSetupFailed, MachineTerminated
@@ -16,7 +16,6 @@ from forge.resources.execution import Notify, has_cause, retry_effect
 
 @dataclass(frozen=True, slots=True)
 class SolverRollout(Event[GradedRollout]):
-    result_type: ClassVar[object] = GradedRollout
     spec: TaskRolloutSpec
     trial: int
     attempt: int

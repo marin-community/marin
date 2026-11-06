@@ -19,10 +19,9 @@ from forge.model.proposal import render
 from forge.model.review import VALIDATION_RESULT
 from forge.model.stage import Exit
 from forge.model.workpiece import Conversation, Workpiece
-from forge.policy import Policy
+from forge.policy import GRADER_BASE_IMAGE, Policy
 from forge.resources.bundle import Resources
 from forge.resources.env import Env, ReadFile, RunCommand, WriteFile, read_file, run_command, write_file
-from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.stages.summary import validation_path
 
 
