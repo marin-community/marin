@@ -22,12 +22,16 @@ requires the served tokenizer and context length; inputs are never truncated or
 filtered to fit. Provider reasoning-budget semantics and effective wire settings
 must still be checked before a live evaluation. Thinking effort is model-specific.
 
-The grader selects final content, strips supported thinking markers, and uses
-the last `### Answer` section. Without that heading it requires an explicit
-`Answer: X`. Conflicting or invalid letters fail. Empty answers, explicit provider
-refusals, and output-limit truncations receive zero; transport failures remain
-ungraded. The selected span, extracted letter, failure type, and original response
-remain in controlled run artifacts.
+The grader reuses shared final-content selection and thinking-marker cleanup,
+then applies a GenomeQA-specific letter parser to the last `### Answer` section.
+Without that heading it requires an explicit `Answer: X`. Conflicting or invalid
+letters fail. Empty answers, reported provider refusals, and reported output-limit
+truncations receive zero; transport failures remain ungraded. Refusal and
+truncation detection require structured response metadata (`CompletionText`);
+plain-text responses cannot establish either condition. Verify that each backend
+preserves this metadata before claiming those protocol guarantees. The selected
+span, extracted letter, failure type, and original response remain in controlled
+run artifacts.
 
 The existing weighted-mean reducer computes `genomeqa_macro`: each motif
 question has weight 5 and every other question weight 1, so all 12 cells have
