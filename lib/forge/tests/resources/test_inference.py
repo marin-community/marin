@@ -174,7 +174,7 @@ async def test_provider_context_limit_exits_without_retry() -> None:
     retries = Retries()
     with pytest.raises(ContextExceeded) as caught:
         await complete(request(), GlmInference(backend, "provider-config"), notify=retries)
-    assert str(caught.value) == body[:500]
+    assert str(caught.value) == body
     assert caught.value.__cause__ is rejection
     assert len(backend.calls) == 1 and not retries.events
 

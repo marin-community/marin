@@ -38,6 +38,13 @@ class Returned[P](Exit):
 class Stopped(Exit):
     reason: StopReason
     session: Conversation
+    detail: str = ""
+    turns: int = 0
+
+    @property
+    def summary(self) -> str:
+        detail = f": {self.detail}" if self.detail else ""
+        return f"{self.reason.value} after {self.turns} turns{detail}"
 
 
 @dataclass(frozen=True, slots=True)

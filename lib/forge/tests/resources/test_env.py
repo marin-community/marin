@@ -329,3 +329,52 @@ async def test_noninteger_exec_status_is_retried_and_retained_at_exhaustion(deta
         await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
     assert machine.calls == 3
     assert detail in str(caught.value)
+
+
+async def test_read_ranges_flow_through_executor(create_env: Callable[[], Awaitable[Env]]) -> None:
+    env = await create_env()
+    await env.write(OUTPUT, b"0123456789")
+    assert await read_file(ReadFile(OUTPUT, offset=3, limit=4), env, notify=Notes()) == b"3456"
+    assert await read_file(ReadFile(OUTPUT, offset=8), env, notify=Notes()) == b"89"
+    assert await read_file(ReadFile(OUTPUT, limit=0), env, notify=Notes()) == b""
+
+
+class RangedMachine(MemoryMachine):
+    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes:
+        assert (path, offset, limit) == (str(OUTPUT), 2, 3)
+        if self.failure is not None:
+            raise self.failure
+        return b"234"
+
+    @override
+    async def download(self, source: str, target: Path) -> None:
+        raise AssertionError("FileReader must bypass downloads, including on directory errors")
+
+
+@pytest.mark.parametrize("directory", [False, True])
+async def test_native_read_preflight_and_range_bypass_download(directory: bool) -> None:
+    machine = RangedMachine()
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    if directory:
+        machine.failure = IsADirectoryError(str(OUTPUT))
+        with pytest.raises(IsADirectoryError):
+            await read_file(ReadFile(OUTPUT, offset=2, limit=3), env, notify=Notes())
+    else:
+        assert await read_file(ReadFile(OUTPUT, offset=2, limit=3), env, notify=Notes()) == b"234"
+
+
+@pytest.mark.parametrize(
+    "detail,expected",
+    [
+        ("Not a directory", NotADirectoryError),
+        ("Permission denied", PermissionError),
+        ("No such file or directory", FileNotFoundError),
+    ],
+)
+async def test_write_backend_path_failures_are_normalized(detail: str, expected: type[OSError]) -> None:
+    machine = MemoryMachine()
+    machine.failure = RuntimeError(f"Iris command failed: {detail}")
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    with pytest.raises(expected) as caught:
+        await env.write(OUTPUT, b"data")
+    assert caught.value.filename == str(OUTPUT)
