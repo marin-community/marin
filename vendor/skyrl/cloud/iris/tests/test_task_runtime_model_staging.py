@@ -140,16 +140,13 @@ def test_artifact_draft_staging_requires_matching_manifest_identity(tmp_path, mo
     artifact_uri = "s3://draft/artifact"
     artifact = prepare_draft_model(
         SpeculatorModelConfig(source_uri=artifact_uri, source_identity=manifest.identity),
-        cache_ttl_days=14,
-        cache_source_prefix="s3://region/run",
+        cache_ttl_days=14, cache_source_prefix="s3://region/run",
     )
     assert artifact.source_uri == artifact_uri and artifact.source_identity == manifest.identity
     mismatched = SpeculatorModelConfig(source_uri=artifact_uri, source_identity="sha256:" + "b" * 64)
     with pytest.raises(ValueError, match="identity mismatch"):
         prepare_draft_model(
-            mismatched,
-            cache_ttl_days=14,
-            cache_source_prefix="s3://region/run",
+            mismatched, cache_ttl_days=14, cache_source_prefix="s3://region/run",
         )
 
 

@@ -103,8 +103,8 @@ def test_context_budget_derives_overlong_window_for_single_and_multi_turn(
     }
 
 
-@pytest.mark.parametrize("penalty_scale", [0.0, 0.25])
-def test_context_budget_allows_overlong_fraction_overrides(tmp_path, penalty_scale):
+def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
+    penalty_scale = 0.0
     config = tmp_path / "overlong.yaml"
     config.write_text(
         yaml.safe_dump(

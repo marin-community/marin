@@ -159,7 +159,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
 
 def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
     raw = _raw_config()
-    raw["skyrl"]["trainer"].update(ckpt_interval=1, hf_save_interval=-1)
+    raw["skyrl"]["trainer"].update(ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 

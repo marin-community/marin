@@ -180,7 +180,7 @@ def _is_source_recipe(skyrl: DictConfig) -> bool:
     return "context_budget" in skyrl or "config_groups" in skyrl or "defaults" in skyrl
 
 
-def _compose_source_recipe(config: DictConfig) -> tuple[DictConfig, str]:
+def _compose_source_recipe(config: DictConfig) -> DictConfig:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
@@ -236,11 +236,18 @@ def _compose_source_recipe(config: DictConfig) -> tuple[DictConfig, str]:
     )
     resolved.runtime.training_type = None if training_type is None else training_type.value
     resolved.skyrl = compiled.config
-    return compose_launch_config(resolved), parsed.recipe.data.kind
+    data_kind = parsed.recipe.data.kind
+    if OmegaConf.is_missing(resolved.inputs, "data_kind"):
+        resolved.inputs.data_kind = data_kind
+    elif resolved.inputs.data_kind != data_kind:
+        raise ValueError(
+            f"inputs.data_kind={resolved.inputs.data_kind!r} does not match the composed SkyRL value {data_kind!r}"
+        )
+    return compose_launch_config(resolved)
 
 
-def _fill_launch_fields(config: DictConfig, *, data_kind: str | None = None) -> None:
-    """Fill omitted envelope fields and validate the supplied derived values."""
+def _fill_launch_fields(config: DictConfig) -> None:
+    """Fill omitted allocation and runtime profile fields."""
     skyrl = OmegaConf.to_container(config.skyrl, resolve=True)
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
@@ -253,23 +260,16 @@ def _fill_launch_fields(config: DictConfig, *, data_kind: str | None = None) -> 
             skyrl.get("trainer", {}).get("strategy"),
             mode=RuntimeMode.CHECKPOINT_EXPORT if checkpoint_export else RuntimeMode.TRAINING,
         ).value
-    if data_kind is not None and OmegaConf.is_missing(config.inputs, "data_kind"):
-        config.inputs.data_kind = data_kind
-    elif data_kind is not None and config.inputs.data_kind != data_kind:
-        raise ValueError(
-            f"inputs.data_kind={config.inputs.data_kind!r} does not match the composed SkyRL value {data_kind!r}"
-        )
 
 
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
-    data_kind = None
     if _is_source_recipe(config.skyrl):
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
-        config, data_kind = _compose_source_recipe(config)
-    _fill_launch_fields(config, data_kind=data_kind)
+        config = _compose_source_recipe(config)
+    _fill_launch_fields(config)
     probe = config.skyrl.get("trainer", {}).get("mismatch_probe", {})
     if probe.get("enabled") and not probe.get("archive_uri"):
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))

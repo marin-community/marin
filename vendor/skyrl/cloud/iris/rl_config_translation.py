@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
-import math
 from importlib.resources import files
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from collections.abc import Mapping
@@ -212,11 +212,11 @@ def parse_rl_config(config_path: str, model_override: str | None = None) -> Pars
         run_engines_locally=recipe.generator.run_engines_locally,
         entrypoint=entrypoint,
         colocate_all=recipe.trainer.placement.colocate_all,
+        num_inference_engines=recipe.generator.num_inference_engines,
         tensor_parallel_size=recipe.generator.inference_engine_tensor_parallel_size,
         pipeline_parallel_size=recipe.generator.inference_engine_pipeline_parallel_size,
         engine_init_kwargs=generator.get("engine_init_kwargs", {}),
         context=f"{path}: generator.speculative_decoding",
-        num_inference_engines=recipe.generator.num_inference_engines,
     )
     if model_override:
         trainer.setdefault("policy", {}).setdefault("model", {})["path"] = model_override
@@ -407,7 +407,9 @@ def _skyrl_config_sections(
     trainer["placement"] = placement
 
     if generator.get("num_inference_engines") is None:
-        generator["num_inference_engines"] = (num_nodes * gpus_per_node) // parsed.recipe.generator.inference_engine_tensor_parallel_size
+        generator["num_inference_engines"] = (
+            num_nodes * gpus_per_node
+        ) // parsed.recipe.generator.inference_engine_tensor_parallel_size
     for key in ("train_data", "val_data"):
         supplied = _data_override(exp_args.get(key))
         if not supplied:

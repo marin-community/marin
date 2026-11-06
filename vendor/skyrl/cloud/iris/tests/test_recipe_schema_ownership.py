@@ -93,13 +93,8 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else f"author-{suffix}")
     for path in FILL_WHEN_UNSET | GPU_PATHS:
-        set_path(
-            seeded,
-            path,
-            f"author-{suffix}"
-            if path in {"trainer.run_name", "terminal_bench.installed_agent.output_path"}
-            else number,
-        )
+        value = f"author-{suffix}" if path in {"trainer.run_name", "terminal_bench.installed_agent.output_path"} else number
+        set_path(seeded, path, value)
     section_values = {
         name: seeded[name]
         for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
@@ -140,9 +135,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     absent = copy.deepcopy(section_values)
     for path in FILL_WHEN_UNSET:
         set_path(absent, path, None)
-    defaults = launcher._skyrl_config_sections(
-        replace(parsed, **absent), parameters, SimpleNamespace(gpus_per_node=8)
-    )
+    defaults = launcher._skyrl_config_sections(replace(parsed, **absent), parameters, SimpleNamespace(gpus_per_node=8))
     defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
