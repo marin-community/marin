@@ -7,9 +7,10 @@ import json
 import math
 import runpy
 import shutil
+import subprocess
 import sys
 from contextlib import contextmanager, nullcontext
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -30,8 +31,8 @@ from iris.cluster.types import JobName
 from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import ArtifactStep, run
-from marin.rl.skyrl import SkyRLRun
+from marin.execution.lazy import ArtifactStep, StepContext, run
+from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from marin.training.training import LevanterCheckpoint
 from rigging.timing import Timestamp
 from scipy.stats import t
@@ -317,6 +318,49 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         return root
 
     return write
+
+
+def _native_launches(steps, tmp_path):
+    paths, authored = [], []
+    for index, step in enumerate(steps):
+        context = StepContext.for_run(
+            str(tmp_path / step.name / step.version), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+        )
+        config = step.build_config(context)
+        path = tmp_path / f"compose-{index}.yaml"
+        path.write_text(config.launch_config_yaml)
+        authored.append(config)
+        paths.append(str(path))
+    program = (
+        "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+        "from cloud.iris import launch_config\n"
+        f"assert Path(launch_config.__file__).resolve().is_relative_to({str(presets.REPO_ROOT / 'vendor/skyrl')!r})\n"
+        "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(Path(p)),resolve=True) "
+        "for p in sys.argv[1:]]))\n"
+    )
+    result = subprocess.run(
+        skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=170
+    )
+    assert result.returncode == 0, result.stderr
+    return tuple(zip(authored, json.loads(result.stdout.splitlines()[-1]), strict=True))
+
+
+def _record_launch(root, config, compiled):
+    old = json.loads((root / "resolved-launch.yaml").read_text())["config"]["inputs"]
+    for name, sources in {"primary": old["validation_data"], **old["evaluation_data"]}.items():
+        actual = (
+            compiled["inputs"]["validation_data"] if name == "primary" else compiled["inputs"]["evaluation_data"][name]
+        )
+        for source, destination in zip(sources, actual, strict=True):
+            target = Path(urlsplit(destination["uri"]).path)
+            if not target.exists():
+                shutil.copytree(Path(urlsplit(source["uri"]).path), target)
+    record = json.loads((root / RECORD_FILENAME).read_text())
+    record["config"] = asdict(config)
+    _json(root / RECORD_FILENAME, record)
+    terminal = json.loads((root / "terminal.json").read_text())
+    _json(root / "terminal.json", terminal | {"config": compiled})
+    (root / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": compiled}))
 
 
 def controls(write, preset, *, constant=False, fault=None, common_fault=None):
@@ -1042,8 +1086,161 @@ def test_update_guard_alone_sets_improves(recorded_runs):
 REQUIREMENT = "policy/raw_grad_norm<=1"
 
 
-@pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
-def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch):
+@pytest.mark.timeout(240)  # Native control and rescore recipes compose in their independent locked environment.
+@pytest.mark.parametrize(
+    "preset,panel_change",
+    [("learning-medium", False), ("data-medium", False), ("learning-medium", True), ("speed-short", True)],
+)
+def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, panel_change, monkeypatch):
+    if panel_change:
+        original_preset = presets.PRESETS[preset]
+        pin = gate.CONTROLS[preset][0]
+        originals = controls(recorded_runs, preset, common_fault={"metrics": {"timing/grading/mean": 2.0}})
+        recorded_preset = replace(
+            original_preset,
+            recipe=replace(
+                original_preset.recipe,
+                engine_init_kwargs={**original_preset.recipe.engine_init_kwargs, "cpu_offload_gb": 1},
+            ),
+        )
+        steps = snowball.build_run(recorded_preset, control=True, replicates=pin.runs).runs
+        for root, (config, compiled) in zip(originals, _native_launches(steps, tmp_path), strict=True):
+            record = json.loads((root / RECORD_FILENAME).read_text())
+            record["result"].update(
+                hf_model_uri=str(root / "retained-hf"),
+                tokenizer_uri=compiled["inputs"]["model"]["tokenizer_uri"],
+                tokenizer_revision=compiled["inputs"]["model"]["tokenizer_revision"],
+            )
+            _json(root / RECORD_FILENAME, record)
+            _json(root / "retained-hf/config.json", {})
+            _record_launch(root, config, compiled)
+        original_bytes = {
+            (root, filename): (root / filename).read_bytes()
+            for root in originals
+            for filename in (RECORD_FILENAME, "terminal.json", "resolved-launch.yaml")
+        }
+        panel_name, _ = presets.DEFAULT_TEST_PANEL.split("@")
+        new_panel = f"{panel_name}@2099.01.01"
+        shutil.copytree(
+            presets.selection_artifact(presets.DEFAULT_TEST_PANEL).path(), presets.selection_artifact(new_panel).path()
+        )
+        changed_presets = dict(presets.PRESETS)
+        for name in (preset, "data-medium") if preset == "learning-medium" else (preset,):
+            changed = replace(
+                presets.PRESETS[name],
+                evaluations=tuple(
+                    replace(item, source=new_panel) if item.name == "test_panel" else item
+                    for item in presets.PRESETS[name].evaluations
+                ),
+            )
+            changed_presets[name] = changed
+        monkeypatch.setattr(presets, "PRESETS", changed_presets)
+        selected = presets.PRESETS[preset]
+        candidate = f"users/test/new-panel-{preset}"
+        recorded_runs(selected, candidate, score=0.495, initial_score=0.2, speed=101.5, argv=("--preset", preset))
+        missing = rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=0.48")
+        assert missing["verdict"] == "invalid" and new_panel in missing["reason"]
+        rescored = snowball.build_run(selected, control=True, rescore_panel=new_panel)
+        assert len(rescored.runs) == pin.runs
+        evaluation_preset = presets.rescore_preset(selected, new_panel)
+        receipts = []
+        for index, (step, (config, compiled)) in enumerate(
+            zip(rescored.runs, _native_launches(rescored.runs, tmp_path), strict=True)
+        ):
+            assert compiled["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+            assert compiled["iris"]["allocation"]["num_nodes"] == 1
+            assert compiled["iris"]["allocation"]["gpus_per_node"] == 8
+            assert not compiled["run"]["export_hf"]
+            assert not compiled["skyrl"]["trainer"]["callbacks"]
+            assert compiled["skyrl"]["generator"]["engine_init_kwargs"]["cpu_offload_gb"] == 1
+            assert compiled["skyrl"]["generator"]["eval_n_samples_per_prompt"] == 1
+            assert compiled["skyrl"]["generator"]["eval_sampling_params"]["temperature"] == 0
+            root = recorded_runs(
+                evaluation_preset,
+                step.name,
+                score=0.49 + 0.01 * index,
+                speed=9999,
+                metrics={"timing/grading/mean": 9999.0},
+            )
+            _record_launch(root, config, compiled)
+            receipts.append(root)
+        recovered = rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=0.48")
+        assert recovered["verdict"] == "pass", recovered
+        assert recovered["report"] != missing["report"]
+        assert recovered["control"]["panel"] == recovered["run"]["panel"] == new_panel
+        assert not any(
+            row["metric"].endswith(("/initial", "/gain")) and row["control"] is not None for row in recovered["reported"]
+        )
+        performance_key = "generate/tokens_per_second_per_gpu" if preset == "speed-short" else "timing/grading/mean"
+        performance = next(
+            row for row in (*recovered["guards"], *recovered["reported"]) if row["metric"] == performance_key
+        )
+        assert performance["control"] == pytest.approx(100 + (pin.runs - 1) / 2 if preset == "speed-short" else 2.0)
+        assert rescore(preset, "--candidate", candidate, "--require", "test_panel/mean>=control")["verdict"] == "pass"
+        snowball.build_run(
+            selected, requirements=("test_panel/mean>=control",), baselines=(f"{candidate}@{presets.PRESET_REVISION}",)
+        )
+        assert rescore(preset, "--leave-out", "r0")["verdict"] == "pass"
+        if preset == "learning-medium":
+            data_candidate = "users/test/data-new-panel"
+            recorded_runs(presets.PRESETS["data-medium"], data_candidate, score=0.495)
+            assert rescore("data-medium", "--candidate", data_candidate)["verdict"] == "pass"
+        first = receipts[0]
+        terminal = json.loads((first / "terminal.json").read_text())
+        for index, fault in enumerate(
+            ("model", "tokenizer", "control", "protocol", "file", "panel", "failed", "incomplete")
+        ):
+            broken = json.loads(json.dumps(terminal))
+            broken["config"]["run"]["attempt_id"] = f"fault-{index}"
+            if fault == "model":
+                broken["config"]["inputs"]["model"]["identity"] = "other@2026.11.06"
+            elif fault == "tokenizer":
+                broken["config"]["inputs"]["model"]["tokenizer_revision"] = "wrong"
+            elif fault == "control":
+                broken["config"]["run"]["id"] = "another-control"
+            elif fault == "protocol":
+                broken["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 1
+            elif fault == "file":
+                broken["config"]["inputs"]["validation_data"][0]["relative_path"] = "validation.parquet"
+            elif fault == "panel":
+                broken["config"]["inputs"]["validation_data"][0][
+                    "identity"
+                ] = f"{presets.SELECTION_PREFIX}/{presets.DEFAULT_TEST_PANEL}"
+            elif fault == "failed":
+                broken["result"]["state"] = "failed"
+            dump = first / "exports/dumped_evals/eval_only/panel.jsonl"
+            original_dump = dump.read_bytes()
+            if fault == "incomplete":
+                dump.write_text("\n".join(dump.read_text().splitlines()[:-1]) + "\n")
+            _json(first / "terminal.json", broken)
+            (first / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": broken["config"]}))
+            invalid = rescore(preset, "--candidate", candidate)
+            assert invalid["verdict"] == "invalid", (fault, invalid)
+            dump.write_bytes(original_dump)
+        _json(first / "terminal.json", terminal)
+        (first / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": terminal["config"]}))
+        if preset == "learning-medium":
+            client = MagicMock(spec=IrisClient)
+            client.submit.side_effect = AssertionError("a missing control export submitted GPU work")
+            monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+            (originals[-1] / "retained-hf/config.json").unlink()
+            refused = CliRunner().invoke(
+                snowball.main,
+                [
+                    "--preset",
+                    preset,
+                    "--version",
+                    presets.PRESET_REVISION,
+                    "--control",
+                    "--rescore-panel",
+                    new_panel,
+                    "--run",
+                ],
+            )
+            assert refused.exit_code == 2, (refused.output, refused.exception)
+            assert str(pin.runs - 1) in refused.output and "retained HF weights" in refused.output
+        assert all((root / filename).read_bytes() == content for (root, filename), content in original_bytes.items())
+        return
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")
     controls(recorded_runs, preset)
     if preset == "learning-medium":

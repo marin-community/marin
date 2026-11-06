@@ -17,6 +17,7 @@ from experiments.post_training import snowball_rl_scoring as scoring
 @pytest.fixture
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
+    monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
     root.mkdir(parents=True)
     (root / "summary.json").write_text(

@@ -62,9 +62,23 @@ Data presets require `--tasks` and refuse recipe settings. Their immutable
 selection must name the same heldout input as the default selection.
 
 `--init NAME@VERSION` on learning-medium or train-long selects another model
-artifact or a retained HF export. It also evaluates the initial weights.
+artifact or a retained HF export. Learning-medium and data-medium evaluate the initial weights by default.
 Learning-medium/data-medium controls retain their final HF weights automatically; candidates do so with
 `--keep-weights`. Kept HF exports have no expiry and can initialize later runs with `--init`.
+To evaluate a different heldout panel, score every pinned control on its immutable version:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
+  --control --rescore-panel PANEL_NAME@VERSION --version dev --run --wait
+```
+
+This submits one 8-H100 evaluation job per control and uses its recorded evaluation and engine settings.
+Omit experiment overrides and `--replicates`. A learning control without retained weights is refused before
+submission. Speed-short uses its recorded initializer. The CPU gate joins only matching completed panel
+results; training and throughput measurements come from the original controls. Missing or mismatched
+control, model, tokenizer, panel, file or protocol evidence gives INVALID. Re-running the CPU gate after
+rescoring creates a report for the completed evidence. Speed-medium and speed-long have no panel to rescore.
+
 Train-long retains checkpoints and exports weights by default. `--resume-from RUN` on train-long continues the
 earlier train-long checkpoint root and optimizer state under a new run identity.
 The same command retries its own latest checkpoint. Temporary checkpoints expire
@@ -149,9 +163,8 @@ counters leave an unknown 0–100% bound.
 A candidate straddling 1% is `invalid` if every other check passes, otherwise `fail`.
 An ambiguous control is `invalid`. Both bounds remain in the report.
 
-For another initializer, the report includes update-0 score and final-minus-initial
-score in their own Breakdown table. Their comparisons are unavailable when controls have
-no update-0 evaluation.
+Medium learning and data reports include update-0 scores and final-minus-initial scores in their
+Breakdown tables. Their comparisons require matching update-0 measurements from the controls.
 
 Re-score saved runs on CPU:
 
@@ -205,7 +218,7 @@ Grading measures wall time excluding verifier setup; both timers exclude cleanup
 The gate reports the mean of each statistic over the measured updates, so its p95 row is
 the average of the update p95 values.
 
-Learning/data medium evaluates `test_panel` after update 25; `--init` adds update 0.
+Learning/data medium evaluates `test_panel` at update 0 and after update 25.
 Train-long evaluates `fast_panel` before training and every 10 updates.
 Speed-short measures throughput and its grading/setup timers before running the full
 `test_panel` in the same engine job. Quality answers and timers do not enter the primary

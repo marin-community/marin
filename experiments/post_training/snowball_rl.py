@@ -42,7 +42,9 @@ and prints the final status and report. It exits 0 for PASS or a finished ungate
 pinned controls. Status includes each run's latest completed update and saved W&B URL.
 Panel evaluation is seeded and greedy, with natural replies up to EVAL_REPLY_TOKENS (8,192).
 --keep-weights retains a learning-medium/data-medium candidate's final HF export for --init or
-later evaluation; their controls retain weights automatically. Selections must contain no AI-judged tasks.
+later evaluation; their controls retain weights automatically. --control --rescore-panel NAME@VERSION
+scores every pinned control on that panel using its retained weights and recorded engine settings.
+Selections must contain no AI-judged tasks.
 Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
 --version dev satisfies
 the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
@@ -68,6 +70,7 @@ import logging
 import math
 import os
 import subprocess
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
@@ -107,6 +110,7 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     artifact_identity,
     read_skyrl_launch_receipt,
+    skyrl_cpu_command,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -385,6 +389,100 @@ def _run_step(
     )
 
 
+def _validate_control_panel_steps(
+    steps: list[ArtifactStep[SkyRLRun]], expected: list[dict], controls: list[str], preset: presets.Preset
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="snowball-control-panels-") as directory:
+        paths = []
+        for index, step in enumerate(steps):
+            config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+            path = Path(directory) / f"panel-{index}.yaml"
+            path.write_text(config.launch_config_yaml)
+            paths.append(str(path))
+        program = (
+            "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+            "from cloud.iris.launch_config import load_launch_config\n"
+            "print(json.dumps([OmegaConf.to_container(load_launch_config(Path(path)), resolve=True) "
+            "for path in sys.argv[1:]]))\n"
+        )
+        result = subprocess.run(
+            skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=180
+        )
+        if result.returncode:
+            raise click.BadParameter("The recorded control recipes could not be composed for panel re-scoring")
+        compiled = json.loads(result.stdout.splitlines()[-1])
+        for control, before, after in zip(controls, expected, compiled, strict=True):
+            if presets.panel_settings(preset, after) != before:
+                raise click.BadParameter(
+                    f"re-score for {control} changes the recorded evaluation or engine settings; use matching code"
+                )
+
+
+def _control_panel_runs(preset: presets.Preset, panel: str) -> SnowballRun:
+    evaluation_preset = presets.rescore_preset(preset, panel)
+    selection = presets.selection_artifact(panel)
+    pins = snowball_rl_gate.control_pins(preset.name)
+    evaluation = evaluation_preset.evaluations[0]
+    steps, protocols, names = [], [], []
+    for pin in pins:
+        original_preset = presets.PRESETS[pin.preset]
+        for index in range(pin.runs):
+            name = presets.control_name(pin.preset, pin.main_commit, index)
+            path = str(StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster)) / name / pin.revision)
+            record = presets.artifact_record(path)
+            receipt = read_skyrl_launch_receipt(path)
+            if receipt is None or receipt.result.state != "succeeded":
+                raise click.BadParameter(f"control {name}@{pin.revision} did not complete successfully")
+            original = receipt.config
+            protocol = presets.panel_settings(original_preset, original)
+            authored = yaml.safe_load(record.config["launch_config_yaml"])
+            config = deepcopy(authored["skyrl"])
+            if original_preset.recipe.layout.role_plan.generate_only:
+                source = original["inputs"]["model"]
+                model_name, _, model_version = source["identity"].partition(":")[0].rpartition("@")
+                model = ArtifactHfModel(
+                    ArtifactStep.adopt(model_name, model_version, source["uri"], kind=LevanterCheckpoint),
+                    source["tokenizer_uri"],
+                    source["tokenizer_revision"],
+                    relative_path="",
+                )
+            else:
+                export = (record.result or {}).get("hf_model_uri")
+                if not export or not presets.exists(StoragePath(export) / "config.json"):
+                    raise click.BadParameter(f"control {name}@{pin.revision} has no retained HF weights")
+                model = SkyRLPolicyModel(ArtifactStep.adopt(name, pin.revision, path, kind=SkyRLRun))
+            config["trainer"].update(
+                max_steps=1,
+                eval_interval=1,
+                dump_eval_results=True,
+                callbacks=[],
+                ckpt_interval=0,
+                hf_save_interval=-1,
+                resume_mode="none",
+            )
+            config["generator"].update(
+                eval_sampling_params=protocol["generator"]["eval_sampling_params"],
+                eval_n_samples_per_prompt=protocol["generator"]["eval_n_samples_per_prompt"],
+            )
+            step = _run_step(
+                presets.control_panel_name(name, pin.revision, panel),
+                config,
+                model,
+                selection,
+                set(),
+                layout=presets.E8,
+                export_hf=False,
+                retention=2,
+                validation_data=(ArtifactDataSource(selection, relative_path=f"{evaluation.file}.parquet"),),
+                wandb_entity=os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY,
+            )
+            steps.append(step)
+            protocols.append(protocol)
+            names.append(f"{name}@{pin.revision}")
+    _validate_control_panel_steps(steps, protocols, names, evaluation_preset)
+    return SnowballRun(tuple(steps))
+
+
 def build_run(
     preset: presets.Preset,
     *,
@@ -399,8 +497,18 @@ def build_run(
     keep_weights: bool = False,
     requirements: tuple[str, ...] = (),
     baselines: tuple[str, ...] = (),
+    rescore_panel: str | None = None,
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
+    if rescore_panel is not None:
+        if not control or any(
+            (settings, tasks, init, layout, resume_from, evaluations, requirements, baselines, keep_weights)
+        ):
+            raise click.BadParameter("--rescore-panel requires --control with no experiment overrides")
+        if replicates != 1:
+            raise click.BadParameter("--rescore-panel scores every pinned control; omit --replicates")
+        _provenance(control=True)
+        return _control_panel_runs(preset, rescore_panel)
     snowball_rl_gate.validate_candidate(preset, requirements, control=control)
     learning = (
         preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA) and not preset.recipe.layout.role_plan.generate_only
@@ -754,7 +862,10 @@ def _run_command(function: Callable) -> click.Command:
                     extra_env_vars=(_WANDB_ENTITY_ENV,),
                 )
                 if wait and job is not None:
-                    _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])
+                    preset = presets.PRESETS[kwargs["preset_name"]]
+                    if kwargs.get("rescore_panel"):
+                        preset = presets.rescore_preset(preset, kwargs["rescore_panel"])
+                    _wait_for_run(job, handles, preset)
             except click.exceptions.Exit:
                 raise
             except Exception as error:
@@ -787,6 +898,7 @@ def main(
     keep_weights: bool,
     requirements: tuple[str, ...],
     baselines: tuple[str, ...],
+    rescore_panel: str | None = None,
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
@@ -805,7 +917,10 @@ def main(
         keep_weights=keep_weights,
         requirements=requirements,
         baselines=baselines,
+        rescore_panel=rescore_panel,
     )
+    if rescore_panel is not None:
+        preset = presets.rescore_preset(preset, rescore_panel)
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
         changes, reason = _changed_paths(source_tree, ("vendor/skyrl", "lib/marin/src/marin/rl"))

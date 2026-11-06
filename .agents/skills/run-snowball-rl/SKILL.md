@@ -91,8 +91,8 @@ you need and read under the run's `output` path:
 - `exports/dumped_evals/<session>/<data source>.jsonl`, where `<session>` is `global_step_<N>_evals`
   for an evaluation after update N, or `eval_only` for data-short. Each line is one answer with
   `task_id`, `input_prompt`, `output_response`, `score`, `stop_reason`, and `verification`.
-- learning-medium and data-medium write the 1,500-task `test_panel` after update 25, and also at update 0
-  with `--init`; train-long writes the 100-task `fast_panel` at update 0 and every 10 updates.
+- learning-medium and data-medium write the 1,500-task `test_panel` at update 0 and after update 25;
+  train-long writes the 100-task `fast_panel` at update 0 and every 10 updates.
 - speed-short's quality answers are under
   `exports/test_panel/dumped_evals/eval_only/<data source>.jsonl`; its primary throughput answers are
   forced to 4,096 tokens.
@@ -152,6 +152,17 @@ window, or a panel slice. It refuses other keys before launch.
   ```
 
   Kept HF exports have no expiry and can initialize another learning or train-long run with `--init`.
+- Score every pinned control on a different heldout panel using its retained weights and recorded engine settings:
+
+  ```bash
+  uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
+    --control --rescore-panel PANEL_NAME@VERSION --version dev --run --wait
+  ```
+
+  This uses one 8-H100 evaluation job per replicate. Omit experiment overrides and `--replicates`.
+  Missing learning-control weights are refused before submission; speed-short uses its original initializer.
+  The CPU gate requires matching control/model/tokenizer/panel/file/protocol evidence and keeps the original
+  training and throughput measurements. Re-run it after scoring completes. Speed-medium and speed-long have no panel.
 - Re-score one finished replicate on CPU with added requirements or baselines, without GPU work:
 
   ```bash
