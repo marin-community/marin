@@ -11,6 +11,8 @@ from urllib.parse import quote
 
 import requests
 
+MAX_TUPLE_MUTATIONS = 100
+
 
 class OpenFGAOperator:
     def __init__(self, api_url: str, token_file: Path, *, ca_bundle: str | bool = True):
@@ -66,10 +68,10 @@ class OpenFGAOperator:
         writes = [row for item, row in desired.items() if item not in current]
         deletes = [row for item, row in current.items() if item not in desired]
         # OpenFGA limits one Write transaction to 100 tuple mutations.
-        for offset in range(0, len(deletes), 100):
-            self.write(store_id, model_id, writes=[], deletes=deletes[offset : offset + 100])
-        for offset in range(0, len(writes), 100):
-            self.write(store_id, model_id, writes=writes[offset : offset + 100], deletes=[])
+        for offset in range(0, len(deletes), MAX_TUPLE_MUTATIONS):
+            self.write(store_id, model_id, writes=[], deletes=deletes[offset : offset + MAX_TUPLE_MUTATIONS])
+        for offset in range(0, len(writes), MAX_TUPLE_MUTATIONS):
+            self.write(store_id, model_id, writes=writes[offset : offset + MAX_TUPLE_MUTATIONS], deletes=[])
 
 
 def main() -> None:

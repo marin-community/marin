@@ -3,7 +3,7 @@
 
 """Exercise the shared grant flow against a real TLS, Raft-backed OpenBao.
 
-This local proof never contacts CoreWeave. The separately invoked live storage
+This proof never contacts CoreWeave object storage. The separately invoked live storage
 check is required to establish provider enforcement after WIF registration.
 """
 
@@ -245,7 +245,12 @@ def prove(
             caller = _identity_jwt(operator, caller_file, "marin-auth", certificate)
             other = _identity_jwt(operator, other_file, "marin-auth", certificate)
             headers = {"Authorization": f"Bearer {caller}"}
-            evidence = {"openbao": "real TLS + Raft, non-dev", "coreweave": "not contacted", "checks": []}
+            evidence = {
+                "openbao": "real TLS + Raft, non-dev",
+                "openfga": "real authenticated engine; disposable memory datastore",
+                "coreweave_storage": "not contacted",
+                "checks": [],
+            }
             with _serve(app, auth_port), httpx.Client(base_url=auth_url, timeout=30) as client:
                 response = client.post(
                     "/v1/grants",

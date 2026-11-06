@@ -50,7 +50,7 @@ def isolated_loom(
     source: Path,
     verify_storage_binding: str | None = None,
 ):
-    """Start the real Loom backend before constructing its lifecycle observer."""
+    """Yield a private Loom server, then archive its sessions and stop it on exit."""
     directory.mkdir(parents=True, exist_ok=False)
     home = directory / "home"
     repo = directory / "repo"

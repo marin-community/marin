@@ -212,6 +212,7 @@ class LoomLauncher:
             return observed
 
     def _retire_local_authority(self, run: LoomRun) -> bool:
+        """Revoke local authority if retirement is due; return whether cleanup is needed."""
         unbound = not run.run_id and self._now() - run.requested_at >= UNBOUND_GRANT_TTL
         retiring = unbound or run.status in _TERMINAL or not self.grants.active(run.grant_id, run.actor)
         if retiring:
