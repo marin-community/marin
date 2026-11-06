@@ -18,6 +18,8 @@ from typing import Any, Dict, Mapping, Optional, Protocol
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
+from skyrl_train.evaluation_profiles import named_evaluation_profiles
+
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.ftpo import FTPOConfig
 from skyrl_train.rollouts.harbor_settings import concurrent_trials
@@ -687,6 +689,7 @@ class TaskLocalSkyRLValues:
     terminal_bench_data: tuple[str, ...]
     policy_model_path: str | None = None
     draft_model_uri: str | None = None
+    evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 TASK_LOCAL_SKYRL_PATHS = MappingProxyType(
@@ -917,5 +920,9 @@ def apply_task_local_values(config: DictConfig, values: TaskLocalSkyRLValues) ->
             continue
         for path in paths:
             OmegaConf.update(updated, path, list(value) if isinstance(value, tuple) else value, force_add=False)
+    for name, data_files in values.evaluation_data:
+        profiles = named_evaluation_profiles(updated, name)
+        for profile in profiles:
+            OmegaConf.update(profile, "data_files", list(data_files), force_add=True)
     OmegaConf.resolve(updated)
     return updated

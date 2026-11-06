@@ -10,7 +10,7 @@ with a new --require or --baseline, or to check calibration by scoring a control
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
-  --preset learning-medium --candidate RUN_NAME --require 'panel-910/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME --require 'test_panel/aaii_category/coding/mean>=control'
   --preset speed-medium --leave-out r0
   --preset learning-medium --candidate RUN_NAME --baseline EARLIER_RUN@2026.10.27
 """
@@ -24,6 +24,7 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import TypeGuard
@@ -31,11 +32,19 @@ from typing import TypeGuard
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
+import yaml
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
+from marin.rl.skyrl import (
+    RESOLVED_LAUNCH_FILENAME,
+    SkyRLReceiptLookupError,
+    SkyRLRun,
+    named_evaluation_profiles,
+    read_skyrl_launch_config,
+    read_skyrl_launch_receipt,
+)
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
@@ -132,7 +141,7 @@ def parse_requirement(text: str) -> Requirement:
 def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
     gated = presets.gated(preset)
-    pins = _pins(preset.name) if not control and gated else ()
+    pins = control_pins(preset.name) if not control and gated else ()
     if not requirements:
         return
     if control or not gated:
@@ -140,7 +149,7 @@ def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, c
     keys = [parse_requirement(text).key for text in requirements]
     rates_path = _pass_rates_path(preset)
     rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
-    reference = _load_run(_control_path(preset, pins[0], 0), preset, rates)
+    reference = _load_control(_control_path(preset, pins[0], 0), pins[0], preset, rates)
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
@@ -213,6 +222,7 @@ class RunMetadata(BaseModel):
     replicates: int
     requirements: tuple[str, ...]
     baselines: tuple[str, ...] = ()
+    panel: str | None = None
 
 
 class ControlMetadata(BaseModel):
@@ -220,6 +230,7 @@ class ControlMetadata(BaseModel):
     revision: str
     runs: int
     gate_revision: str = GATE_REVISION
+    panel: str | None = None
 
 
 class GateReport(Artifact):
@@ -298,7 +309,7 @@ def _verdict(
             None,
             "; ".join(
                 f"grader-error union is ambiguous: lower={row.lower_bound:.12g}, upper={row.upper_bound:.12g}, "
-                f"limit={row.limit}; recorded counts do not identify overlap"
+                f"limit={row.limit}; available counters do not determine the grader-error fraction"
                 for row in ambiguous
             ),
         )
@@ -348,16 +359,39 @@ def _gated(evaluation: presets.Evaluation, preset: presets.Preset) -> bool:
     return any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
 
 
+def _grader_errors(
+    rows: Sequence[Mapping[str, float]], prefix: str, name: str, *, answers: int | None = None
+) -> ErrorBoundInvariant:
+    recorded = all(prefix + outcome in row for row in rows for outcome in (*Outcome, "rollout_failure"))
+
+    def count(*outcomes: str) -> float:
+        return math.fsum(row.get(prefix + outcome, 0) for row in rows for outcome in outcomes)
+
+    total = count(*Outcome)
+    bad = count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK)
+    failures = count("rollout_failure")
+    lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
+    if answers is not None and (not recorded or total != answers or failures > total):
+        lower, upper = 0.0, 1.0
+    return ErrorBoundInvariant(
+        name=name,
+        value=upper,
+        lower_bound=lower,
+        upper_bound=upper,
+        limit=GRADER_ERROR_LIMIT,
+        holds=upper <= GRADER_ERROR_LIMIT and recorded,
+    )
+
+
 def _session_invariants(
-    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset
+    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset, expected: int
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["item"] for row in rows)
-    expected = presets.evaluation_answer_count(evaluation, presets.default_selection())
-    holds = len(counts) * evaluation.answers == expected and set(counts.values()) == {evaluation.answers}
+    holds = len(rows) == expected and set(counts.values()) == {evaluation.answers}
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, holds=holds)]
     if _gated(evaluation, preset):
-        coverage = len({row["item"] for row in rows if row["scored"]}) / (expected / evaluation.answers)
+        coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
             Invariant(
                 name=f"{name}/panel_scored_fraction",
@@ -373,6 +407,7 @@ def _session_invariants(
 class RunData:
     path: str
     version: str
+    panel: str | None
     provenance: dict
     values: dict[str, float]
     panel_ids: dict[str, frozenset[str]]
@@ -381,7 +416,59 @@ class RunData:
     slices: dict[str, tuple[int, float | None]]
 
 
-def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs: GateInputs = GateInputs()) -> RunData:
+def _recorded_panel(launch: dict, evaluation: presets.Evaluation) -> str:
+    try:
+        identities = {
+            source["identity"].partition(":")[0] for source in scoring.recorded_sources(launch, evaluation.name)
+        }
+        if len(identities) != 1:
+            raise ValueError("expected one panel identity")
+        identity = identities.pop()
+        name, separator, version = identity.rpartition("@")
+        if not name or not separator or not version:
+            raise ValueError("expected NAME@VERSION")
+        return identity
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        raise InvalidComparison(f"recorded panel version is missing or malformed: {error}") from error
+
+
+def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) -> str | None:
+    evaluation = presets.panel_evaluation(preset)
+    if evaluation is None:
+        return None
+    default = presets.default_selection()
+    selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
+    selected = evaluation.tasks(selection, default)
+    panel = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
+    binding = selected
+    if evaluation.sample is not None:
+        binding = presets.sampled_tasks_step(
+            selected,
+            evaluation.file,
+            evaluation.sample,
+            launch["skyrl"]["trainer"]["seed"],
+            local_only=evaluation.local_only,
+        )
+    expected = f"{binding.name}@{binding.version}"
+    sources = scoring.recorded_sources(launch, evaluation.name)
+    recorded = _recorded_panel(launch, evaluation)
+    if recorded != expected:
+        raise InvalidComparison(
+            f"recorded panel differs from preset: expected {panel} ({expected}); recorded {recorded}"
+        )
+    if evaluation.file != scoring.TRAIN_STEM and any(
+        source["relative_path"] != f"{evaluation.file}.parquet" for source in sources
+    ):
+        raise InvalidComparison(f"recorded panel file differs from preset {panel}: expected {evaluation.file}.parquet")
+    return panel
+
+
+def _load_run(
+    path: str,
+    preset: presets.Preset,
+    rates: pa.Table | None,
+    inputs: GateInputs = GateInputs(),
+) -> RunData:
     terminal = read_skyrl_launch_receipt(path)
     if terminal is None:
         raise FileNotFoundError(f"no launch receipt at {path}")
@@ -398,8 +485,24 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         Invariant(name="planned_updates", value=len(completed), limit=len(planned), holds=completed == planned)
     ]
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
+    launch = read_skyrl_launch_config(path) if preset.evaluations else {}
+    panel = _panel_identity(preset, launch, inputs)
+    named = launch.get("inputs", {}).get("evaluation_data", {})
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
+    default = presets.default_selection()
+    selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
     for evaluation in preset.evaluations:
+        quality = evaluation.file != scoring.TRAIN_STEM and _gated(evaluation, preset)
+        expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default))
+        if rates is not None and quality:
+            manifest_ids = set().union(
+                *(
+                    scoring.task_manifest(StoragePath(source["uri"]))
+                    for source in scoring.recorded_sources(launch, evaluation.name)
+                )
+            )
+            if set(rates["task_id"].to_pylist()) != manifest_ids:
+                raise InvalidComparison("pass-rate panel task IDs differ from the panel manifest")
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
@@ -408,11 +511,23 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         ids = frozenset(table["item"].to_pylist())
         if evaluation.file != scoring.TRAIN_STEM:
             panel_ids[evaluation.name] = ids
-        invariants.extend(_session_invariants(evaluation.name, table, evaluation, preset))
-        if inputs.init is not None:
+        sessions = [(evaluation.name, table, 0 if generating else preset.updates)]
+        if evaluation.at_start:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final panel task IDs differ: {path}")
-            invariants.extend(_session_invariants(evaluation.name + "/initial", initial, evaluation, preset))
+            sessions.append((evaluation.name + "/initial", initial, 0))
+        prefix = f"eval/{evaluation.name}/all/outcome/" if evaluation.name in named else "eval/all/outcome/"
+        for session_name, session, metric_step in sessions:
+            invariants.extend(_session_invariants(session_name, session, evaluation, preset, expected))
+            if quality:
+                invariants.append(
+                    _grader_errors(
+                        [metrics.get(metric_step, {})],
+                        prefix,
+                        session_name + "/grader_error_fraction",
+                        answers=session.num_rows,
+                    )
+                )
     if not generating:
         finite = all(
             "policy/raw_grad_norm" in row
@@ -422,27 +537,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         )
         invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
 
-    def count(*outcomes: str) -> float:
-        return math.fsum(row.get(OUTCOME_PREFIX + outcome, 0) for row in training for outcome in outcomes)
-
-    total, bad, failures = (
-        count(*Outcome),
-        count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK),
-        count("rollout_failure"),
-    )
-    lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
-    recorded = all(OUTCOME_PREFIX + outcome in row for row in training for outcome in (*Outcome, "rollout_failure"))
-    holds = upper <= GRADER_ERROR_LIMIT and recorded
-    invariants.append(
-        ErrorBoundInvariant(
-            name="grader_error_fraction",
-            value=upper,
-            lower_bound=lower,
-            upper_bound=upper,
-            limit=GRADER_ERROR_LIMIT,
-            holds=holds,
-        )
-    )
+    invariants.append(_grader_errors(training, OUTCOME_PREFIX, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens
     if fixed is not None:
         if generating:
@@ -469,7 +564,32 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         values[key + "/initial"] = value
         if key in values:
             values[key + "/gain"] = values[key] - value
-    for text in inputs.requirements:
+    initializer = {row["task_id"]: row["mean_score"] for row in rates.to_pylist()} if rates is not None else {}
+    slices = {}
+    for key, rows in scoring.score_slices(final, rates).items():
+        ids = {row["item"] for row in rows}
+        initial = statistics.mean(initializer[item] for item in ids) if ids <= initializer.keys() else None
+        slices[key] = len(ids), initial
+    return _with_requirements(
+        RunData(
+            path=path,
+            version=presets.artifact_record(path).version,
+            panel=panel,
+            provenance=terminal.result.provenance,
+            values=values,
+            panel_ids=panel_ids,
+            invariants=tuple(invariants),
+            missing_tokens=missing,
+            slices=slices,
+        ),
+        inputs.requirements,
+    )
+
+
+def _with_requirements(candidate: RunData, requirements: Sequence[str]) -> RunData:
+    invariants = list(candidate.invariants)
+    values = candidate.values
+    for text in requirements:
         requirement = parse_requirement(text)
         value = values.get(requirement.key)
         if value is None or not math.isfinite(value):
@@ -479,22 +599,196 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
             invariants.append(
                 Invariant(name=f"require/{requirement.key}", value=value, limit=requirement.bound, holds=holds)
             )
-    initializer = {row["task_id"]: row["mean_score"] for row in rates.to_pylist()} if rates is not None else {}
-    slices = {}
-    for key, rows in scoring.score_slices(final, rates).items():
-        ids = {row["item"] for row in rows}
-        initial = statistics.mean(initializer[item] for item in ids) if ids <= initializer.keys() else None
-        slices[key] = len(ids), initial
-    return RunData(
-        path=path,
-        version=presets.artifact_record(path).version,
-        provenance=terminal.result.provenance,
-        values=values,
-        panel_ids=panel_ids,
-        invariants=tuple(invariants),
-        missing_tokens=missing,
-        slices=slices,
+    return replace(candidate, invariants=tuple(invariants))
+
+
+def _control_panel_path(path: str, preset: presets.Preset) -> tuple[str, str | None]:
+    evaluation = presets.panel_evaluation(preset)
+    if evaluation is None or evaluation.file == scoring.TRAIN_STEM:
+        return "original", path
+    try:
+        launch = read_skyrl_launch_config(path)
+    except FileNotFoundError:
+        return "original", path
+    recorded = _recorded_panel(launch, evaluation)
+    default = presets.default_selection()
+    expected = evaluation.tasks(default, default)
+    if recorded == f"{expected.name}@{expected.version}":
+        return "original", path
+    record = presets.artifact_record(path)
+    name = presets.panel_rescore_name(record.name, record.version, evaluation.source)
+    root = StoragePath(presets.artifact_prefix(presets.E8.cluster)) / name / presets.PRESET_REVISION
+    return "rescore", str(root) if presets.exists(root / RESOLVED_LAUNCH_FILENAME) else None
+
+
+def control_model_binding(path: str, preset: presets.Preset, launch: dict) -> dict:
+    if preset.recipe.layout.role_plan.generate_only:
+        return launch["inputs"]["model"]
+    record = presets.artifact_record(path)
+    return {
+        "identity": f"{record.name}@{record.version}",
+        **{key: record.result[key] for key in ("tokenizer_uri", "tokenizer_revision")},
+        "uri": record.result["hf_model_uri"],
+    }
+
+
+def evaluation_protocol(preset: presets.Preset, launch: dict) -> dict:
+    evaluation = presets.panel_evaluation(preset)
+    if evaluation is None or evaluation.file == scoring.TRAIN_STEM:
+        raise ValueError("The control has no heldout evaluation profile")
+    config = launch["skyrl"]
+    generator = deepcopy(config["generator"])
+    if evaluation.name in launch["inputs"].get("evaluation_data", {}):
+        profiles = named_evaluation_profiles(yaml.safe_dump(config), evaluation.name)
+        if len(profiles) != 1:
+            raise ValueError("The recorded named panel has no unique evaluation profile")
+        profile = profiles[0]
+        generator["eval_sampling_params"].update(profile.get("sampling_params") or {})
+        if profile.get("n_samples_per_prompt") is not None:
+            generator["eval_n_samples_per_prompt"] = profile["n_samples_per_prompt"]
+    elif any(source["relative_path"] != f"{evaluation.file}.parquet" for source in launch["inputs"]["validation_data"]):
+        raise ValueError("The control did not record the expected heldout evaluation file")
+    for key in ("model_name", "served_model_name", "model_source_identity", "trajectory_retention"):
+        generator.pop(key, None)
+    generator.get("engine_init_kwargs", {}).pop("served_model_name", None)
+    return {
+        "generator": generator,
+        "data": {
+            key: value
+            for key, value in config.get("data", {}).items()
+            if key not in {"train_data", "val_data", "expected_eval_rows"}
+        },
+        "trainer": {
+            key: config["trainer"].get(key)
+            for key in ("seed", "eval_batch_size", "eval_num_prompts", "evaluation_runner", "max_prompt_length")
+        },
+        "batch_invariant": config["trainer"]["algorithm"].get("batch_invariant", False),
+        "vllm_env": {key: value for key, value in config.get("extra_env", {}).items() if key.startswith("VLLM_")},
+        "task_env": launch.get("runtime", {}).get("task_env", {}),
+    }
+
+
+def _load_control(
+    path: str,
+    pin: ControlPin,
+    preset: presets.Preset,
+    rates: pa.Table | None,
+    inputs: GateInputs = GateInputs(),
+    *,
+    panel_paths: Mapping[str, tuple[str, str | None]] | None = None,
+) -> RunData:
+    kind, selected = _control_panel_path(path, preset) if panel_paths is None else panel_paths[path]
+    if kind == "original":
+        return _load_run(path, preset, rates, inputs)
+    evaluation = presets.panel_evaluation(preset)
+    if evaluation is None:
+        raise InvalidComparison(f"control {path} has no panel evaluation")
+    if selected is None:
+        raise InvalidComparison(f"control {path} has no completed re-score for panel {evaluation.source}")
+    original_preset = presets.PRESETS[pin.preset]
+    original_evaluation = presets.panel_evaluation(original_preset)
+    base = _load_run(
+        path,
+        replace(
+            original_preset,
+            evaluations=tuple(item for item in original_preset.evaluations if item != original_evaluation),
+        ),
+        None,
     )
+    original = read_skyrl_launch_receipt(path)
+    rescored = read_skyrl_launch_receipt(selected)
+    if rescored is None or rescored.result.state != "succeeded":
+        raise InvalidComparison(f"control {path} has no successful re-score for panel {evaluation.source}: {selected}")
+    try:
+        record = presets.artifact_record(path)
+        model = control_model_binding(path, original_preset, original.config)
+        actual = rescored.config["inputs"]["model"]
+        if actual["identity"].partition(":")[0] != model["identity"].partition(":")[0] or any(
+            actual[key] != model[key] for key in ("uri", "tokenizer_uri", "tokenizer_revision")
+        ):
+            raise InvalidComparison(f"panel re-score model or tokenizer differs from control {path}: {selected}")
+        expected_name = presets.panel_rescore_name(record.name, record.version, evaluation.source)
+        if rescored.config["run"]["id"] != f"{expected_name}-{presets.PRESET_REVISION}":
+            raise InvalidComparison(f"panel re-score names another control or panel: {selected}")
+        evaluation_preset = presets.panel_rescore_preset(preset, evaluation.source)
+        protocol = evaluation_protocol(original_preset, original.config)
+        if evaluation_protocol(evaluation_preset, rescored.config) != protocol:
+            raise InvalidComparison(
+                f"panel re-score changes evaluation or engine settings for control {path}: {selected}"
+            )
+        panel = _load_run(selected, evaluation_preset, rates)
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        raise InvalidComparison(
+            f"invalid panel re-score for control {path} on panel {evaluation.source}: {selected}: {error}"
+        ) from error
+    prefix = evaluation.name + "/"
+    native_prefix = (
+        f"eval/{evaluation.name}/"
+        if evaluation.name in original.config["inputs"].get("evaluation_data", {})
+        else "eval/all/"
+    )
+    return _with_requirements(
+        replace(
+            base,
+            panel=panel.panel,
+            values={
+                **{key: value for key, value in base.values.items() if not key.startswith((prefix, native_prefix))},
+                **{
+                    key: value
+                    for key, value in panel.values.items()
+                    if key.startswith(prefix) and not key.endswith(("/initial", "/gain"))
+                },
+            },
+            invariants=(*base.invariants, *(row for row in panel.invariants if row.name.startswith(prefix))),
+            panel_ids={**base.panel_ids, **panel.panel_ids},
+            slices={**base.slices, **panel.slices},
+        ),
+        inputs.requirements,
+    )
+
+
+def _load_comparison_run(
+    path: str,
+    preset: presets.Preset,
+    rates: pa.Table | None,
+    inputs: GateInputs,
+    panel_paths: Mapping[str, tuple[str, str | None]] | None = None,
+) -> RunData:
+    for pin in control_pins(preset.name):
+        if path in {_control_path(preset, pin, index) for index in range(pin.runs)}:
+            candidate = _load_control(
+                path, pin, preset, rates, replace(inputs, requirements=()), panel_paths=panel_paths
+            )
+            _check_control(candidate, pin)
+            return _with_requirements(candidate, inputs.requirements)
+    return _load_run(path, preset, rates, inputs)
+
+
+def receipt_evidence(path: str | None) -> tuple[str | None, str | None, str | None]:
+    if path is None:
+        return None, None, None
+    try:
+        receipt = read_skyrl_launch_receipt(path)
+        return (
+            (path, receipt.result.state, receipt.config.get("run", {}).get("attempt_id"))
+            if receipt
+            else (path, None, None)
+        )
+    except (FileNotFoundError, SkyRLReceiptLookupError):
+        return path, "unresolved", None
+
+
+def _control_evidence(
+    preset: presets.Preset, pins: tuple[ControlPin, ...]
+) -> tuple[dict[str, tuple[str, str | None]], list]:
+    paths, identities = {}, []
+    for pin in pins:
+        for index in range(pin.runs):
+            path = _control_path(preset, pin, index)
+            kind, selected = _control_panel_path(path, preset)
+            paths[path] = (kind, selected)
+            identities.append(receipt_evidence(selected if kind == "rescore" else None))
+    return paths, identities
 
 
 def _check_control(run: RunData, pin: ControlPin) -> None:
@@ -666,6 +960,7 @@ def _write_gate(
     pins: tuple[ControlPin, ...],
     inputs: GateInputs,
     pass_rates_path: str | None,
+    control_panel_paths: Mapping[str, tuple[str, str | None]],
     output: str,
 ) -> GateReport:
     preset = presets.PRESETS[preset_name]
@@ -678,22 +973,25 @@ def _write_gate(
     verdict, label, reason = Verdict.INVALID, None, None
     try:
         rates = scoring.read_pass_rates(pass_rates_path) if pass_rates_path is not None else None
-        runs = [_load_run(path, preset, rates, inputs) for path in run_paths]
+        runs = [_load_comparison_run(path, preset, rates, inputs, control_panel_paths) for path in run_paths]
         if runs:
             fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
-            metadata = metadata.model_copy(update={field: runs[0].provenance[key] for field, key in fields.items()})
+            metadata = metadata.model_copy(
+                update={"panel": runs[0].panel, **{field: runs[0].provenance[key] for field, key in fields.items()}}
+            )
         invariants = [
             row.model_copy(update={"replicate": index})
             for index, candidate in enumerate(runs)
             for row in candidate.invariants
         ]
         grouped = {
-            pin: [_load_run(path, preset, rates) for path in paths]
+            pin: [_load_control(path, pin, preset, rates, panel_paths=control_panel_paths) for path in paths]
             for pin, paths in zip(pins, control_paths, strict=True)
         }
         controls = [candidate for group in grouped.values() for candidate in group]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
+        control = control.model_copy(update={"panel": controls[0].panel})
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
@@ -755,7 +1053,7 @@ def _write_gate(
     return report
 
 
-def _pins(preset: str) -> tuple[ControlPin, ...]:
+def control_pins(preset: str) -> tuple[ControlPin, ...]:
     known = CONTROLS.get(preset, ())
     pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
     if not pins:
@@ -775,10 +1073,23 @@ def _control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
 
 
 def _pass_rates_path(preset: presets.Preset) -> str | None:
-    if not any(evaluation.source == "default" and _gated(evaluation, preset) for evaluation in preset.evaluations):
+    if preset.focus == presets.Focus.SPEED:
         return None
-    root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
-    return str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION)
+    for evaluation in preset.evaluations:
+        if not _gated(evaluation, preset) or evaluation.file == scoring.TRAIN_STEM:
+            continue
+        default = presets.default_selection()
+        summary = presets.selection_summary(evaluation.tasks(default, default))
+        reference = summary["recipe"]["pass_rates"]
+        path = StoragePath(reference["uri"])
+        if (
+            reference["model_revision"] != presets.MODEL_REVISION
+            or reference["rows"] != summary["full_validation_rows"]
+            or path.name != scoring.PASS_RATES_FILENAME
+        ):
+            raise InvalidComparison("panel pass-rate reference differs from its initializer or declared cohort")
+        return str(path.parent)
+    return None
 
 
 def _gate_artifact(
@@ -788,20 +1099,27 @@ def _gate_artifact(
     inputs: GateInputs,
     leave_out: int | None = None,
 ) -> ArtifactStep[GateReport]:
-    pins = _pins(preset.name)
+    pins = control_pins(preset.name)
     controls = tuple(
         tuple(_control_path(preset, pin, index) for index in range(pin.runs) if pin != pins[0] or index != leave_out)
         for pin in pins
     )
+    control_panel_paths, evidence = _control_evidence(preset, pins)
     if inputs.baselines and isinstance(candidates[0], ArtifactStep):
         rates_path = _pass_rates_path(preset)
         rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
         try:
-            _baseline_runs(inputs.baselines, preset, rates, _load_run(controls[0][0], preset, rates))
+            _baseline_runs(
+                inputs.baselines,
+                preset,
+                rates,
+                _load_control(controls[0][0], pins[0], preset, rates, panel_paths=control_panel_paths),
+            )
         except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
             raise click.BadParameter(str(error), param_hint="--baseline") from error
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     name += "-base-" + fingerprint_hash(canonical_json(inputs.baselines)) if inputs.baselines else ""
+    name += "-panels-" + fingerprint_hash(canonical_json(evidence))
     return apply(
         name,
         _write_gate,
@@ -813,6 +1131,7 @@ def _gate_artifact(
         pins=pins,
         inputs=inputs,
         pass_rates_path=_pass_rates_path(preset),
+        control_panel_paths=control_panel_paths,
         output=OUT,
     )
 
@@ -820,7 +1139,7 @@ def _gate_artifact(
 def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
-    pins = _pins(preset.name)
+    pins = control_pins(preset.name)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
     return _gate_artifact(name, preset, runs, inputs)
 
@@ -862,7 +1181,7 @@ def _baseline_runs(
         if preset_name != preset.name:
             raise InvalidComparison(f"baseline is not a recorded {preset.name} run: {reference}")
         inputs = replace(recorded, requirements=(), baselines=())
-        baseline = _load_run(path, preset, rates, inputs)
+        baseline = _load_comparison_run(path, preset, rates, inputs)
         if baseline.version != presets.PRESET_REVISION:
             raise InvalidComparison(f"baseline preset revision differs: {reference}")
         if baseline.panel_ids != control.panel_ids:
@@ -920,7 +1239,7 @@ def main(
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
     preset = presets.PRESETS[preset_name]
     try:
-        pins = _pins(preset_name)
+        pins = control_pins(preset_name)
     except InvalidComparison as error:
         click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
         raise click.exceptions.Exit(2) from error

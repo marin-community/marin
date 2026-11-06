@@ -458,13 +458,41 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
     assert base.fingerprint() == resized.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
+    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
+    source = ArtifactDataSource(panel, relative_path="validation.parquet")
+    profiled_spec = dataclasses.replace(
+        spec, config_yaml=yaml.safe_dump(recipe), evaluation_data=(("quality", (source,)),)
+    )
+    profiled = skyrl_step(profiled_spec, _execution())
+    changed_panel = dataclasses.replace(source, step=dataclasses.replace(panel, version="2026.11.05.1"))
+    assert (
+        profiled.fingerprint()
+        != skyrl_step(
+            dataclasses.replace(profiled_spec, evaluation_data=(("quality", (changed_panel,)),)), _execution()
+        ).fingerprint()
+    )
+
 
 def test_skyrl_step_declares_model_and_data_dependencies() -> None:
-    step = skyrl_step(_spec(), _execution())
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
+    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
+    step = skyrl_step(
+        dataclasses.replace(
+            spec,
+            config_yaml=yaml.safe_dump(recipe),
+            evaluation_data=(("quality", (ArtifactDataSource(panel, relative_path="validation.parquet"),)),),
+        ),
+        _execution(),
+    )
 
     assert [(dep.name, dep.version) for dep in step.deps] == [
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
+        ("tests/heldout-panel", "2026.11.05"),
     ]
 
 

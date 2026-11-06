@@ -51,13 +51,12 @@ def task_manifest(root: StoragePath) -> dict[str, dict]:
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
-    fs, key = filesystem_for(str(pattern))
-    return [StoragePath(fs.unstrip_protocol(path)) for path in sorted(fs.glob(key))]
+    return sorted(pattern.glob(), key=str)
 
 
-def evaluation_answers(run_output: str) -> list[tuple[int, StoragePath, dict]]:
+def _evaluation_answers(dump_root: StoragePath) -> list[tuple[int, StoragePath, dict]]:
     answers = []
-    for session in paths(StoragePath(run_output) / "exports/dumped_evals/*"):
+    for session in paths(dump_root / "*"):
         name = PurePosixPath(str(session)).name
         step = -1 if name == "eval_only" else int(name.removeprefix("global_step_").removesuffix("_evals"))
         for path in paths(session / "*.jsonl"):
@@ -68,12 +67,23 @@ def evaluation_answers(run_output: str) -> list[tuple[int, StoragePath, dict]]:
     return answers
 
 
+def evaluation_answers(run_output: str) -> list[tuple[int, StoragePath, dict]]:
+    return _evaluation_answers(StoragePath(run_output) / "exports/dumped_evals")
+
+
+def recorded_sources(launch: dict, name: str) -> list[dict]:
+    return launch["inputs"].get("evaluation_data", {}).get(name, launch["inputs"]["validation_data"])
+
+
 def panel_scores(
     evaluation: presets.Evaluation, run_output: str, answers: list[tuple[int, StoragePath, dict]] | None = None
 ) -> pa.Table:
     launch = read_skyrl_launch_config(run_output)
+    sources = recorded_sources(launch, evaluation.name)
+    if evaluation.name in launch["inputs"].get("evaluation_data", {}):
+        answers = _evaluation_answers(StoragePath(run_output) / "exports" / evaluation.name / "dumped_evals")
     manifest = {}
-    for source in launch["inputs"]["validation_data"]:
+    for source in sources:
         manifest.update(task_manifest(StoragePath(source["uri"])))
     attempts = Counter()
     rows = []
@@ -85,8 +95,9 @@ def panel_scores(
         if evaluation.file != TRAIN_STEM and not metadata:
             raise InvalidComparison(f"panel task {item} is absent from its task manifest")
         verdict = row.get("verification")
+        verified = bool(verdict and verdict["status"] == "verified")
         score = 0.0
-        if verdict and verdict["status"] == "verified":
+        if verified:
             value, lower, upper = (float(verdict[key]) for key in ("score", "score_min", "score_max"))
             if not all(math.isfinite(number) for number in (value, lower, upper)) or upper <= lower:
                 raise InvalidComparison(f"invalid verifier score or bounds for {item}")
@@ -101,7 +112,7 @@ def panel_scores(
                 "aaii_category": metadata.get("aaii_category"),
                 "agentic": metadata.get("agentic"),
                 "score": score,
-                "scored": not row.get("exception_type") and not row.get("error_treatment"),
+                "scored": verified and not row.get("exception_type") and not row.get("error_treatment"),
             }
         )
         attempts[step, item] += 1
@@ -186,18 +197,13 @@ def read_pass_rates(path: str) -> pa.Table:
         table = pq.read_table(stream)
     rows = table.to_pylist()
     ids = {row["task_id"] for row in rows}
-    expected = set(task_manifest(StoragePath(presets.default_selection().path())))
-    if (
-        ids != expected
-        or len(rows) != len(ids)
-        or any(
-            row["model_revision"] != presets.MODEL_REVISION
-            or not 1 <= row["samples"] <= PASS_RATE_EVALUATION.answers
-            or not 0 <= row["passed"] <= row["samples"]
-            or not math.isfinite(row["mean_score"])
-            or not 0 <= row["mean_score"] <= 1
-            for row in rows
-        )
+    if len(rows) != len(ids) or any(
+        row["model_revision"] != presets.MODEL_REVISION
+        or not 1 <= row["samples"] <= PASS_RATE_EVALUATION.answers
+        or not 0 <= row["passed"] <= row["samples"]
+        or not math.isfinite(row["mean_score"])
+        or not 0 <= row["mean_score"] <= 1
+        for row in rows
     ):
-        raise InvalidComparison("pass-rate artifact differs from the pinned initializer or development panel")
+        raise InvalidComparison("pass-rate artifact has invalid initializer scores, samples or task IDs")
     return table

@@ -472,9 +472,21 @@ class SkyRLSpec:
     retention: SkyRLRetentionPolicy
     seed: int
     resume_checkpoint_root: str | None = None
+    evaluation_data: tuple[tuple[str, tuple[SkyRLDataSource, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
+        if not self.evaluation_data:
+            return
+        names = [name for name, _ in self.evaluation_data]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate evaluation data names")
+        for name, _ in self.evaluation_data:
+            profiles = named_evaluation_profiles(self.config_yaml, name)
+            if not profiles:
+                raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
+            if any(profile.get("data_files") is not None for profile in profiles):
+                raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
 
 
 @dataclass(frozen=True)
@@ -541,6 +553,16 @@ def _parsed_config(config_yaml: str) -> dict[str, object]:
     if not isinstance(config, dict):
         raise ValueError("SkyRL config_yaml must contain a mapping at the document root")
     return config
+
+
+def named_evaluation_profiles(config_yaml: str, name: str) -> list[dict]:
+    return [
+        profile
+        for callback in _parsed_config(config_yaml).get("trainer", {}).get("callbacks") or []
+        if callback.get("type") == "evaluation"
+        for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
+        if profile_name == name
+    ]
 
 
 def declared_config_value(config: dict[str, object], dotted_key: str) -> object:
@@ -933,6 +955,7 @@ def _launch_config_yaml(
     model: ResolvedModelLocator,
     train_data: tuple[ResolvedDataSource, ...],
     validation_data: tuple[ResolvedDataSource, ...],
+    evaluation_data: tuple[tuple[str, tuple[ResolvedDataSource, ...]], ...],
     output: SkyRLOutputPaths,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
@@ -1010,6 +1033,10 @@ def _launch_config_yaml(
         },
         "skyrl": recipe,
     }
+    if evaluation_data:
+        launch["inputs"]["evaluation_data"] = {
+            name: [_launch_data_source(source) for source in sources] for name, sources in evaluation_data
+        }
     if execution.container_profile is not None:
         launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
@@ -1029,6 +1056,7 @@ def skyrl_step(
                 *spec.model.deps(),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
+                *(dep for _, sources in spec.evaluation_data for source in sources for dep in source.deps()),
             )
         )
     )
@@ -1062,6 +1090,9 @@ def skyrl_step(
         model = spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
+        evaluation_data = tuple(
+            (name, tuple(source.resolve(ctx) for source in sources)) for name, sources in spec.evaluation_data
+        )
         execution = (
             _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
         )
@@ -1075,6 +1106,7 @@ def skyrl_step(
                 model=model,
                 train_data=train_data,
                 validation_data=validation_data,
+                evaluation_data=evaluation_data,
                 output=output,
             ),
             run_id=run_id,

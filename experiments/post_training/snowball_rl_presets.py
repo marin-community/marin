@@ -55,7 +55,7 @@ from experiments.post_training.task_curation.inventory import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-PRESET_REVISION = "2026.11.06"
+PRESET_REVISION = "2026.11.06.1"
 RUN_PREFIX = "checkpoints/snowball-rl"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
@@ -66,8 +66,10 @@ MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
-DEFAULT_SELECTION_VERSION = "2026.11.04"
-JUDGE_KEY = "TOGETHER_API_KEY"
+DEFAULT_SELECTION_VERSION = "2026.11.04.1"
+DEFAULT_TEST_PANEL_NAME = "snowball-test-panel"
+DEFAULT_TEST_PANEL_VERSION = "2026.11.06.1"
+EVAL_REPLY_TOKENS = 8192
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 GRAFANA_SPEED_PANELS = (
     ("response_tokens", 3),
@@ -98,14 +100,17 @@ class WindowStatistic(StrEnum):
 
 
 class Gap(StrEnum):
-    REMOTE_JUDGE = "remote-judge"
     LAYOUT_P40_ONLY = "layout-p40-only"
     NO_ASYNC_SPEED_GATE = "no-async-speed-gate"
     AAII_COVERAGE = "aaii-coverage"
-    REUSED_DEV_PANEL = "reused-dev-panel"
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
+
+
+class EngineProfile(StrEnum):
+    THROUGHPUT = "throughput"
+    DETERMINISTIC = "deterministic"
 
 
 class EvalHarness(StrEnum):
@@ -125,7 +130,11 @@ class Evaluation:
     local_only: bool = False
 
     def tasks(self, selection: ArtifactStep, default: ArtifactStep) -> ArtifactStep:
-        return default if self.source == "default" else selection
+        if self.source == "default":
+            return default
+        if self.source == "tasks":
+            return selection
+        return selection_artifact(self.source)
 
 
 @dataclass(frozen=True)
@@ -147,6 +156,7 @@ class Recipe:
     staleness: int
     estimator: Mapping[str, object]
     optimizer: Mapping[str, object]
+    engine_profile: EngineProfile = EngineProfile.DETERMINISTIC
     max_turns: int = 1
     engine_init_kwargs: Mapping[str, object] = field(default_factory=dict)
     policy_megatron_overrides: Mapping[str, object] = field(default_factory=dict)
@@ -203,14 +213,11 @@ def setting_leaves(setting: Setting) -> tuple[Setting, ...]:
 
 
 def read_text(path: str | StoragePath) -> str:
-    fs, key = filesystem_for(str(path))
-    with fs.open(key, "rt") as stream:
-        return stream.read()
+    return StoragePath(str(path)).read_text()
 
 
 def exists(path: str | StoragePath) -> bool:
-    fs, key = filesystem_for(str(path))
-    return fs.exists(key)
+    return StoragePath(str(path)).exists()
 
 
 class PanelEvaluator:
@@ -232,15 +239,24 @@ class PanelEvaluator:
                 tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], local_only=evaluation.local_only
             )
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
-        config["generator"].update(
-            eval_n_samples_per_prompt=evaluation.answers,
-            eval_sampling_params={
-                "temperature": 0.0 if evaluation.answers == 1 else 1.0,
+        sampling = (
+            {
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "seed": config["trainer"]["seed"],
+                "logprobs": None,
+                "ignore_eos": False,
+                "max_generate_length": EVAL_REPLY_TOKENS,
+            }
+            if evaluation.answers == 1
+            else {
+                "temperature": 1.0,
                 "top_p": 1.0,
                 "logprobs": None,
                 "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
-            },
+            }
         )
+        config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
         return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
@@ -258,6 +274,16 @@ EVALUATIONS = MappingProxyType(
         for evaluation in (
             Evaluation(name="panel-100", file=Path(VALIDATION_FILENAME).stem),
             Evaluation(name="panel-910", file=Path(FULL_VALIDATION_FILENAME).stem),
+            Evaluation(
+                name="test_panel",
+                file=Path(FULL_VALIDATION_FILENAME).stem,
+                source=f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}",
+            ),
+            Evaluation(
+                name="test_panel_100",
+                file=Path(VALIDATION_FILENAME).stem,
+                source=f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}",
+            ),
             Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4, local_only=True),
             Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
@@ -356,17 +382,15 @@ _LEARNING = Recipe(
     staleness=0,
     estimator=_ESTIMATOR,
     optimizer=_OPTIMIZER,
-    engine_init_kwargs={"moe_backend": "triton"},
+    engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
 )
 _ASYNC_P40 = replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"})
 _GAPS = (
     Gap.AAII_COVERAGE,
-    Gap.REUSED_DEV_PANEL,
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
-    Gap.REMOTE_JUDGE,
 )
-_PANEL = EVALUATIONS["panel-100"]
+_PANEL = EVALUATIONS["test_panel_100"]
 _TIMER_REPORTS = tuple(
     Metric(f"{phase}/{statistic}", False)
     for phase in sorted(TASK_TIMING_KEYS)
@@ -445,9 +469,9 @@ _LEARNING_MEDIUM = Preset(
     recipe=_LEARNING,
     updates=25,
     measured=range(21, 26),
-    evaluations=(EVALUATIONS["panel-910"],),
-    guards=(Metric("panel-910/family_mean", True),),
-    reported=(*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
+    evaluations=(replace(EVALUATIONS["test_panel"], at_start=True),),
+    guards=(Metric("test_panel/family_mean", True),),
+    reported=(*_TRAINING_REPORTS, Metric("test_panel/mean", True)),
     gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
 )
@@ -458,11 +482,11 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.SHORT,
-                recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
+                recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096, engine_profile=EngineProfile.THROUGHPUT),
                 updates=0,
                 measured=range(1),
-                evaluations=(EVALUATIONS["speed-512x4"],),
-                guards=(Metric("generate/tokens_per_second_per_gpu", True),),
+                evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["test_panel"]),
+                guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("test_panel/family_mean", True)),
                 reported=(
                     *_TIMER_REPORTS,
                     Metric(GENERATE_WALL_SECONDS_METRIC, False),
@@ -471,12 +495,12 @@ PRESETS = MappingProxyType(
                     Metric("generate/vllm/peak_gpu_cache_usage_perc", False),
                 ),
                 gaps=_GAPS,
-                budget="9-12 min; 1.5 H100-h",
+                budget="14-17 min; 2 H100-h",
             ),
             Preset(
                 focus=Focus.DATA,
                 duration=Duration.SHORT,
-                recipe=replace(_LEARNING, layout=E8),
+                recipe=replace(_LEARNING, layout=E8, engine_profile=EngineProfile.THROUGHPUT),
                 updates=0,
                 measured=range(1),
                 evaluations=(EVALUATIONS["screen-256x4"],),
@@ -498,6 +522,7 @@ PRESETS = MappingProxyType(
                 recipe=replace(
                     _LEARNING,
                     fixed_reply_tokens=4096,
+                    engine_profile=EngineProfile.THROUGHPUT,
                     estimator={**_ESTIMATOR, "rloo_n_filter_zero_reward_groups": False},
                 ),
                 updates=10,
@@ -513,7 +538,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
-                recipe=_ASYNC_P40,
+                recipe=replace(_ASYNC_P40, engine_profile=EngineProfile.THROUGHPUT),
                 updates=20,
                 measured=range(3, 21),
                 guards=(
@@ -822,6 +847,38 @@ def control_name(preset: str, commit: str, replicate: int) -> str:
     return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
 
 
+def panel_evaluation(preset: Preset) -> Evaluation | None:
+    return next(
+        (
+            evaluation
+            for evaluation in preset.evaluations
+            if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
+        ),
+        None,
+    )
+
+
+def panel_rescore_name(control: str, revision: str, panel: str) -> str:
+    return f"{control}/panel-{fingerprint_hash(json.dumps((revision, panel)))}"
+
+
+def panel_rescore_preset(preset: Preset, panel: str) -> Preset:
+    evaluation = panel_evaluation(preset)
+    if not gated(preset) or evaluation is None or evaluation.file == Path(TRAIN_FILENAME).stem:
+        raise click.BadParameter("--rescore-panel requires a gated preset with a heldout panel")
+    return replace(
+        preset,
+        recipe=replace(preset.recipe, layout=E8, fixed_reply_tokens=None),
+        updates=0,
+        measured=range(1),
+        evaluations=(replace(evaluation, source=panel, every=None, at_start=False),),
+        guards=tuple(metric for metric in preset.guards if metric.key.startswith(evaluation.name + "/")),
+        reported=tuple(metric for metric in preset.reported if metric.key.startswith(evaluation.name + "/")),
+        checkpoint_every=0,
+        budget="Evaluation only; 8 H100 per control replicate",
+    )
+
+
 def run_command(*, help_text: str | None = None):
     def decorate(function):
         options = (
@@ -877,6 +934,18 @@ def run_command(*, help_text: str | None = None):
                 "the gain.",
             ),
             click.option(
+                "--rescore-panel",
+                metavar="NAME@VERSION",
+                help="With --control, evaluate every pinned control on an immutable panel version using its retained "
+                "weights and recorded evaluation settings. No training or control refresh; omit --replicates.",
+            ),
+            click.option(
+                "--keep-weights",
+                is_flag=True,
+                help="Save a learning/data candidate's final HF weights. "
+                "Learning controls and train-long save them automatically.",
+            ),
+            click.option(
                 "--resume-from",
                 "resume_name",
                 metavar="NAME[@VERSION]",
@@ -910,8 +979,8 @@ def run_command(*, help_text: str | None = None):
                 "--control",
                 is_flag=True,
                 help="Run the preset's control replicates from a clean checkout with only its pinned default "
-                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require and "
-                "data-medium, which uses learning-medium's controls.",
+                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require, "
+                "--keep-weights and data-medium, which uses learning-medium's controls.",
             ),
         )
         command = rl_build_options(function)
