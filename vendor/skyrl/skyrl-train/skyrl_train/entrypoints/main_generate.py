@@ -134,6 +134,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 trajectory_sink.close()
 
         with self.get_tracker() as tracker:
+            tracker.start(resumed_step=None)
             tracker.log(results, step=0, commit=True)
 
         return results

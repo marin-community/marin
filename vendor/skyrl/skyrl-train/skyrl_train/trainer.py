@@ -1328,6 +1328,7 @@ class RayPPOTrainer:
                 self._restored_rollout_state = None
                 restored_data = True
 
+        self.tracker.start(resumed_step=self.global_step if self.loaded_checkpoint_path is not None else None)
         await self._start_draft_trainer()
         await self._sync_policy_for_rollouts(reason="initial")
 

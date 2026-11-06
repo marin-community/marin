@@ -101,6 +101,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         initial_score=None,
         omit_step=None,
         version=presets.PRESET_REVISION,
+        record_version=None,
         fixed=True,
         mixed=128,
         fingerprint="",
@@ -124,7 +125,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         )
         record = ArtifactRecord(
             name=name,
-            version=version,
+            version=record_version or version,
             fingerprint=fingerprint,
             result_type=result_type_name(SkyRLRun),
             result=result.result_payload(),
@@ -143,6 +144,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 row["timing/step_wall/unaccounted"] = 0.0
             row |= {metric.key: 0.0 for metric in preset.reported if metric.key.startswith("timing/step_wall/")}
             row |= {
+                "attempt_id": "recorded-attempt",
                 "generate/outcome/graded": 512.0,
                 "loss/policy_loss": 0.01,
                 "policy/raw_grad_norm": 1.0,
@@ -480,6 +482,16 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
         ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None),
         ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None),
+        pytest.param(
+            "speed-medium",
+            {},
+            {"fault": {"record_version": "2026.10.01"}},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="candidate-and-control-evaluation-revisions-differ",
+        ),
         ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"panel-910/batch_finished"}, None),
         (
             "speed-medium",
@@ -541,6 +553,11 @@ def test_rescore_reports_candidate_and_control_contracts(
             "policy/mismatch/staleness0/kl_k3",
         }
         assert any(row["metric"] == "policy/mismatch/pooled/kl_k3" for row in report["reported"])
+    if "version" in fault:
+        assert fault["version"] in report["reason"] and presets.PRESET_REVISION in report["reason"]
+    if "record_version" in control_fault.get("fault", {}):
+        assert control_fault["fault"]["record_version"] in report["reason"]
+        assert presets.PRESET_REVISION in report["reason"]
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
     assert not fault.get("unresolved_receipt") or report["reason"].startswith(
         "cannot identify the Iris job lookup-missing-job"
