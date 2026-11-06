@@ -1281,10 +1281,7 @@ def main(
     report = run(step)[0]
     if leave_out is None and presets.published(preset):
         try:
-            try:
-                receipt = read_skyrl_launch_receipt(source)
-            except SkyRLReceiptLookupError:
-                receipt = None
+            receipt = read_skyrl_launch_receipt(source)
             if receipt is not None and receipt.config.get("run", {}).get("attempt_id"):
                 native = apply(
                     name,
