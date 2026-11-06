@@ -12,7 +12,8 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Protocol
+from typing import Literal, Protocol
+from urllib.parse import urlencode
 
 import click
 import pyarrow as pa
@@ -39,6 +40,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rolloutengine.models import TASK_TIMING_KEYS
 from taskcompendium.models import TaskSpec, grades_with_judge
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
@@ -55,6 +57,7 @@ from experiments.post_training.task_curation.inventory import (
 REPO_ROOT = find_project_root(Path(__file__))
 PRESET_REVISION = "2026.11.06"
 RUN_PREFIX = "checkpoints/snowball-rl"
+GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
 # Fraction of a native panel that must be scored before its scores count.
 MINIMUM_PANEL_COVERAGE = 0.99
@@ -65,6 +68,15 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 DEFAULT_SELECTION_VERSION = "2026.11.04"
 JUDGE_KEY = "TOGETHER_API_KEY"
+GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
+GRAFANA_SPEED_PANELS = (
+    ("response_tokens", 3),
+    ("rollout_wait", 102),
+    ("step_composition", 121),
+    ("vllm_throughput", 109),
+)
+GRAFANA_LEARNING_PANELS = (("reward", 22), ("evaluation", 23), ("loss_and_kl", 24))
+GRAFANA_MISMATCH_PANEL = ("logprob_mismatch", 54)
 
 
 class Focus(StrEnum):
@@ -93,7 +105,6 @@ class Gap(StrEnum):
     REUSED_DEV_PANEL = "reused-dev-panel"
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
-    NO_GRADING_TIMER = "no-grading-timer"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
 
 
@@ -347,15 +358,20 @@ _LEARNING = Recipe(
     optimizer=_OPTIMIZER,
     engine_init_kwargs={"moe_backend": "triton"},
 )
+_ASYNC_P40 = replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"})
 _GAPS = (
     Gap.AAII_COVERAGE,
     Gap.REUSED_DEV_PANEL,
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
     Gap.REMOTE_JUDGE,
-    Gap.NO_GRADING_TIMER,
 )
 _PANEL = EVALUATIONS["panel-100"]
+_TIMER_REPORTS = tuple(
+    Metric(f"{phase}/{statistic}", False)
+    for phase in sorted(TASK_TIMING_KEYS)
+    for statistic in ("mean", "p50", "p95", "max")
+)
 _MISMATCH_REPORTS = tuple(
     Metric(f"policy/mismatch/staleness0/{name}", False)
     for name in (
@@ -369,6 +385,7 @@ _MISMATCH_REPORTS = tuple(
     )
 )
 _TRAINING_REPORTS = (
+    *_TIMER_REPORTS,
     *_MISMATCH_REPORTS,
     *(
         Metric(key, higher)
@@ -387,6 +404,7 @@ _TRAINING_REPORTS = (
     ),
 )
 _SPEED_REPORTS = (
+    *_TIMER_REPORTS,
     *_MISMATCH_REPORTS,
     *(
         Metric(f"timing/step_wall/{phase}", False)
@@ -408,6 +426,18 @@ _SPEED_REPORTS = (
     Metric("vllm/latency_ttft_mean", False),
     Metric("startup/init_weight_sync_state", False),
     Metric("startup/load_checkpoints", False),
+)
+_ASYNC_SPEED_REPORTS = (
+    *_SPEED_REPORTS,
+    *(Metric(f"async/staleness_{statistic}", False) for statistic in ("mean", "max", "ratio")),
+    *(
+        Metric(f"policy/mismatch/pooled/{statistic}", False)
+        for statistic in ("kl_k3", "log_ratio_abs_mean", "log_ratio_abs_p99", "log_ratio_abs_p999")
+    ),
+    *(
+        Metric(f"policy/mismatch/{bucket}/selected_tokens", bucket == "staleness0")
+        for bucket in ("staleness0", "staleness1", "staleness2", "staleness3", "staleness4-7", "staleness8+")
+    ),
 )
 _LEARNING_MEDIUM = Preset(
     focus=Focus.LEARNING,
@@ -434,7 +464,8 @@ PRESETS = MappingProxyType(
                 evaluations=(EVALUATIONS["speed-512x4"],),
                 guards=(Metric("generate/tokens_per_second_per_gpu", True),),
                 reported=(
-                    Metric("generate/wall_seconds", False),
+                    *_TIMER_REPORTS,
+                    Metric(GENERATE_WALL_SECONDS_METRIC, False),
                     Metric("generate/response_tokens", True),
                     Metric("generate/vllm/latency_ttft_mean", False),
                     Metric("generate/vllm/peak_gpu_cache_usage_perc", False),
@@ -451,6 +482,7 @@ PRESETS = MappingProxyType(
                 evaluations=(EVALUATIONS["screen-256x4"],),
                 guards=(Metric("screen-256x4/mixed_fraction", True),),
                 reported=(
+                    *_TIMER_REPORTS,
                     Metric("screen-256x4/mean", True),
                     Metric("screen-256x4/all_right_fraction", False),
                     Metric("screen-256x4/all_wrong_fraction", False),
@@ -477,6 +509,22 @@ PRESETS = MappingProxyType(
                 reported=_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY, Gap.NO_ASYNC_SPEED_GATE),
                 budget="35-40 min; 25 H100-h",
+            ),
+            Preset(
+                focus=Focus.SPEED,
+                duration=Duration.LONG,
+                recipe=_ASYNC_P40,
+                updates=20,
+                measured=range(3, 21),
+                guards=(
+                    Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
+                    Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
+                    Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
+                    Metric("policy/mismatch/staleness0/kl_k3", False),
+                ),
+                reported=_ASYNC_SPEED_REPORTS,
+                gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
+                budget="45-75 min; 30-50 H100-h",
             ),
             _LEARNING_MEDIUM,
             replace(_LEARNING_MEDIUM, focus=Focus.DATA),
@@ -521,6 +569,7 @@ PRESETS = MappingProxyType(
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
+                reported=_TIMER_REPORTS,
                 gaps=_GAPS,
             ),
         )
@@ -528,7 +577,7 @@ PRESETS = MappingProxyType(
 )
 TRAIN_LONG_RECIPES = MappingProxyType(
     {
-        "p40": replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"}),
+        "p40": _ASYNC_P40,
         "l112": PRESETS["train-long"].recipe,
     }
 )
@@ -541,6 +590,10 @@ def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate
     if preset.focus != Focus.TRAIN:
         name += f"-r{replicate}"
     return user_owned_name(name)
+
+
+def gated(preset: Preset) -> bool:
+    return preset.name in PRESETS and preset.focus != Focus.TRAIN
 
 
 def run_tree_hash(name: str) -> str:
@@ -696,6 +749,41 @@ def cluster_config_path(cluster: str) -> str:
     return f"lib/iris/config/{cluster}.yaml"
 
 
+def grafana_links(
+    preset: Preset,
+    *,
+    run_id: str,
+    cluster: str,
+    training_type: Literal["sync", "async"],
+    started_ms: int,
+    finished_ms: int | None,
+) -> dict[str, str]:
+    """Build dashboard and preset-panel links for a native run; an unfinished run links through now."""
+    query = urlencode(
+        {
+            "orgId": 1,
+            "timezone": "utc",
+            "from": started_ms,
+            "to": finished_ms if finished_ms is not None else "now",
+            "var-training_type": training_type,
+            "var-cluster": cluster,
+            "var-run": run_id,
+            "var-job": "$__all",
+            "var-execution": "$__all",
+        },
+        safe="$",
+    )
+    url = f"{GRAFANA_URL}?{query}"
+    panels = (
+        GRAFANA_SPEED_PANELS
+        if preset.focus == Focus.SPEED
+        else GRAFANA_LEARNING_PANELS if preset.focus in (Focus.LEARNING, Focus.DATA) else ()
+    )
+    if preset.name == "speed-medium":
+        panels = (*panels, GRAFANA_MISMATCH_PANEL)
+    return {"run": url, **{name: f"{url}&viewPanel={panel}" for name, panel in panels}}
+
+
 def artifact_prefix(cluster: str) -> str:
     config = yaml.safe_load((REPO_ROOT / cluster_config_path(cluster)).read_text())
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
@@ -766,6 +854,13 @@ def run_command(*, help_text: str | None = None):
                 "A training metric the controls never recorded is refused before launch.",
             ),
             click.option(
+                "--baseline",
+                "baselines",
+                multiple=True,
+                metavar="NAME@VERSION",
+                help="Compare with earlier finished runs; the verdict still uses pinned controls. Repeatable.",
+            ),
+            click.option(
                 "--tasks",
                 "tasks_name",
                 metavar="NAME@VERSION",
@@ -800,15 +895,15 @@ def run_command(*, help_text: str | None = None):
                 "evaluations",
                 multiple=True,
                 type=click.Choice(sorted(EVALUATIONS)),
-                help="Add an evaluation to train-long, which already runs panel-100 before training and every 10 "
-                "updates. Repeatable.",
+                help="Train-long evaluation requests; repeatable. Panel-100 runs before training and every 10 updates. "
+                "A second native panel is refused.",
             ),
             click.option(
                 "--replicates",
                 type=click.IntRange(1, 5),
                 default=1,
                 show_default=True,
-                help="Identical copies of a short or medium preset, sharing one seed. The gate compares their "
+                help="Identical copies of a gated preset, sharing one seed. The gate compares their "
                 "mean with the controls; more copies narrow the tolerance. Not for train-long.",
             ),
             click.option(

@@ -3,8 +3,8 @@
 
 """Run a Snowball RL experiment from a preset; gated presets compare the run with pinned controls.
 
-Every preset except train-long is gated: it reports PASS, FAIL or INVALID against control runs of
-the same preset, with a change label. Choose the preset by what the change can affect. Each entry
+Calibrated presets report PASS, FAIL or INVALID against control runs of the same preset, with a
+change label. Choose the preset by what the change can affect. Each entry
 gives what the preset runs, its cost, what it measures and the changes it is for:
 
 \b
@@ -14,6 +14,9 @@ gives what the preset runs, its cost, what it measures and the changes it is for
   speed-medium     10 sync updates, every reply 4,096 tokens; 40 H100, about 40 min. Measures
                    median update time and trainer-vs-engine log-prob mismatch. For trainer
                    speed, weight sync and startup.
+  speed-long       20 async updates with staleness 2 and TIS, replies up to 8,192 tokens;
+                   40 H100, target 45-75 min. Measures update time and learner/engine
+                   tokens/s per GPU. For the async loop, grading and admission speed.
   learning-medium  25 sync updates, then the 910-task panel; 40 H100, about 2 h. Measures the
                    panel score. For loss, estimator, optimizer, schedule, reward shaping,
                    batch shape and --init.
@@ -31,12 +34,20 @@ An engine change runs speed-short, then speed-medium. A trainer kernel, parallel
 change runs speed-medium, then learning-medium. A new task selection runs data-short, then
 data-medium. --require adds a condition of your own, such as a mismatch bound on a speed run or
 a per-category score on a learning run. Without --run the command prints the plan and the status
-block, including the verdict of a finished gated run; --run submits it. --version dev satisfies
+block, including the verdict of a finished gated run; --run submits it. --wait polls every 60 s
+and prints the final status and report. It exits 0 for PASS or a finished ungated run,
+1 for FAIL, 2 for INVALID, and 3 when a required verdict is unavailable.
+--baseline NAME@VERSION adds a comparison with earlier finished runs; the verdict uses the
+pinned controls. Status includes each run's latest completed update and saved W&B URL.
+Set WANDB_ENTITY before submission to choose the W&B team; unset uses marin-community.
+--version dev satisfies
 the launcher; Snowball steps use PRESET_REVISION. Guide: docs/recipes/snowball-rl.md.
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset speed-medium --version dev --run
+  --preset speed-medium --version dev --run --wait
+  --preset speed-medium --baseline EARLIER_RUN@2026.10.27 --version dev --run --wait
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo --version dev --run
   --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
   --preset learning-medium --require 'panel-910/aaii_category/coding/mean>=control' --version dev --run
@@ -47,26 +58,40 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import subprocess
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from functools import wraps
+from pathlib import Path
 
 import click
 import yaml
+from iris.cli.connect import open_iris_client
+from iris.client.client import IrisClient
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
+from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
 from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_status import get_status_path
+from marin.experiment.cli import build_options_with_runner
+from marin.rl.cli import submit_or_run
 from marin.rl.skyrl import (
     BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
     SKYRL_TEMPORARY_STORAGE_TTL_DAYS,
+    TRACKING_FILENAME,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLLaunchReceipt,
     SkyRLModelSource,
     SkyRLPolicyModel,
     SkyRLReceiptLookupError,
@@ -84,13 +109,21 @@ from rigging.provenance import Provenance, git_output
 
 from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
 )
 
+logger = logging.getLogger(__name__)
+
 # Iris limit for one Snowball run, coordinator and job alike.
 RUN_TIMEOUT_HOURS = 72
+
+
+DEFAULT_WANDB_ENTITY = "marin-community"
+_WANDB_ENTITY_ENV = "WANDB_ENTITY"
+_FAILED_RUN_STATES = {"failed", "killed", "worker_failed", "unschedulable"}
 
 
 def training_config(
@@ -131,7 +164,7 @@ def training_config(
             "resume_mode": "latest" if preset.focus == presets.Focus.TRAIN else "none",
             "seed": presets.SEED,
             "logger": ["console", "files", "wandb"],
-            "project_name": "snowball-rl",
+            "project_name": "marin-snowball-rl",
             "tracker_commit_each_step": True,
             "training_metrics": True,
             "rollout_spans": True,
@@ -301,6 +334,7 @@ def _run_step(
     export_hf: bool,
     retention: int,
     validation_data: tuple[ArtifactDataSource, ...],
+    wandb_entity: str | None,
     checkpoint_root: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     plan = layout.role_plan
@@ -329,7 +363,7 @@ def _run_step(
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=RUN_TIMEOUT_HOURS,
             job_timeout_seconds=RUN_TIMEOUT_HOURS * 3600,
-            wandb_entity="dogml",
+            wandb_entity=wandb_entity,
             required_env_vars=tuple(sorted(required | {"WANDB_API_KEY"})),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
@@ -349,9 +383,12 @@ def build_run(
     replicates: int = 1,
     control: bool = False,
     requirements: tuple[str, ...] = (),
+    baselines: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
-    snowball_rl_gate.check_requirements(preset, requirements, control=control)
+    snowball_rl_gate.validate_candidate(preset, requirements, control=control)
+    if baselines and (control or not presets.gated(preset)):
+        raise click.BadParameter("--baseline needs a gated candidate preset, without --control")
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -425,6 +462,7 @@ def build_run(
         "evaluations": sorted(selected),
     }
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
+    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
@@ -438,20 +476,22 @@ def build_run(
             export_hf=preset.focus == presets.Focus.TRAIN,
             retention=5 if preset.checkpoint_every else 2,
             validation_data=validation_data,
+            wandb_entity=wandb_entity,
             checkpoint_root=checkpoint_root,
         )
         runs.append(run)
     gate = (
         snowball_rl_gate.gate_step(
-            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements)
+            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
         )
-        if preset.name in snowball_rl_gate.CONTROLS and not control
+        if presets.gated(preset) and not control
         else None
     )
     return SnowballRun(tuple(runs), gate)
 
 
 def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str]] | None, str | None]:
+    """Return source changes, or the reason git comparison is unavailable."""
     if not (presets.REPO_ROOT / ".git").exists():
         return None, "git metadata is unavailable on this host"
     try:
@@ -462,44 +502,120 @@ def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str
     return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
-def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
+@contextmanager
+def _iris_client() -> Iterator[IrisClient]:
+    info = get_job_info()
+    if info is not None and info.controller_address:
+        with IrisClient.in_cluster(info.controller_address) as client:
+            yield client
+    else:
+        with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=presets.REPO_ROOT) as client:
+            yield client
+
+
+def _grafana_links(
+    client: IrisClient | None, preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, cluster: str
+) -> dict[str, str]:
+    if client is None or receipt is None or not receipt.result.iris_job_id:
+        return {}
+    run_id = receipt.config.get("run", {}).get("id")
+    if not run_id:
+        return {}
+    try:
+        job = client.job_status(JobName.from_wire(receipt.result.iris_job_id))
+    except Exception as error:
+        logger.warning("Could not read Iris timing for %s: %s", receipt.result.iris_job_id, error)
+        return {}
+    if job.started_at is None or (job.state in TERMINAL_JOB_STATES and job.finished_at is None):
+        return {}
+    training_type = receipt.config.get("runtime", {}).get("training_type")
+    return presets.grafana_links(
+        preset,
+        run_id=run_id,
+        cluster=cluster,
+        training_type=(
+            "async" if training_type == "async" or (training_type is None and preset.recipe.staleness) else "sync"
+        ),
+        started_ms=job.started_at.epoch_ms(),
+        finished_ms=job.finished_at.epoch_ms() if job.finished_at is not None else None,
+    )
+
+
+def _completed_update(path: str, *, generating: bool) -> int | None:
+    key = presets.GENERATE_WALL_SECONDS_METRIC if generating else "timing/step_wall/unaccounted"
+    for metric in reversed(scoring.paths(StoragePath(path) / "exports/metrics/step-*.json")):
+        values = json.loads(presets.read_text(metric))
+        if key in values and (generating or values.get("trainer/global_step") == values["step"]):
+            return values["step"]
+    return None
+
+
+def _status(run: SnowballRun, preset: presets.Preset) -> dict:
     rows = []
     planned = []
-    for step in run.runs:
-        execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-        path = step.path(presets.artifact_prefix(execution.cluster))
-        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-        planned.append(yaml.safe_load(config.launch_config_yaml))
-        try:
-            receipt = read_skyrl_launch_receipt(path)
-        except SkyRLReceiptLookupError as error:
-            raise click.BadParameter(str(error)) from error
-        result = receipt.result if receipt is not None else None
-        state = (
-            result.state
-            if result
-            else (
-                presets.read_text(get_status_path(path)).strip()
-                if presets.exists(get_status_path(path))
-                else "not built"
+    with ExitStack() as stack:
+        client, lookup_started = None, False
+        for step in run.runs:
+            execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
+            path = step.path(presets.artifact_prefix(execution.cluster))
+            config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+            planned.append(yaml.safe_load(config.launch_config_yaml))
+            try:
+                receipt = read_skyrl_launch_receipt(path)
+            except SkyRLReceiptLookupError as error:
+                raise click.BadParameter(str(error)) from error
+            result = receipt.result if receipt is not None else None
+            tracking_path = StoragePath(path) / "exports" / TRACKING_FILENAME
+            tracking = (
+                {"wandb_url": json.loads(presets.read_text(tracking_path))["wandb_url"]}
+                if presets.exists(tracking_path)
+                else {}
             )
-        )
-        rows.append(
-            {
-                "name": step.name,
-                "version": step.version,
-                "state": state,
-                "iris_job_id": result.iris_job_id if result else None,
-                "cluster": execution.cluster,
-                "allocation": {
-                    **planned[-1]["iris"]["allocation"],
-                    "cpu": execution.cpu,
-                    "memory": execution.memory,
-                    "disk": execution.disk,
-                },
-                "output": path,
-            }
-        )
+            team = receipt.config.get("iris", {}).get("wandb_entity") if receipt is not None else execution.wandb_entity
+            if (
+                receipt is not None
+                and receipt.result.iris_job_id
+                and receipt.config.get("run", {}).get("id")
+                and not lookup_started
+            ):
+                lookup_started = True
+                try:
+                    client = stack.enter_context(_iris_client())
+                except Exception as error:
+                    logger.warning("Could not connect to Iris for status links: %s", error)
+                    client = None
+            grafana = _grafana_links(client, preset, receipt, execution.cluster)
+            state = (
+                result.state
+                if result
+                else (
+                    presets.read_text(get_status_path(path)).strip()
+                    if presets.exists(get_status_path(path))
+                    else "not built"
+                )
+            )
+            rows.append(
+                {
+                    "name": step.name,
+                    "version": step.version,
+                    "state": state,
+                    "iris_job_id": result.iris_job_id if result else None,
+                    "wandb_entity": team or DEFAULT_WANDB_ENTITY,
+                    **tracking,
+                    **({"grafana_links": grafana} if grafana else {}),
+                    "latest_completed_update": _completed_update(
+                        path, generating=preset.recipe.layout.role_plan.generate_only
+                    ),
+                    "cluster": execution.cluster,
+                    "allocation": {
+                        **planned[-1]["iris"]["allocation"],
+                        "cpu": execution.cpu,
+                        "memory": execution.memory,
+                        "disk": execution.disk,
+                    },
+                    "output": path,
+                }
+            )
     verdict = {}
     if run.gate is not None:
         path = (
@@ -517,39 +633,97 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
             if reason:
                 verdict["rl_path_changes_reason"] = reason
         else:
-            crashed = next((row for row in rows if str(row["state"]).lower() in ("failed", "killed")), None)
+            crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
             if crashed is not None:
                 verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
-    click.echo(
-        yaml.safe_dump(
-            {
-                "preset": preset.name,
-                "code": asdict(Provenance.capture(presets.REPO_ROOT)),
-                "inputs": {
-                    "model": planned[0]["inputs"]["model"]["identity"],
-                    **{
-                        name: [source["identity"] for source in planned[0]["inputs"][name]]
-                        for name in ("train_data", "validation_data")
-                    },
-                },
-                "context_budget": planned[0]["skyrl"]["context_budget"],
-                "updates": (
-                    0 if preset.recipe.layout.role_plan.generate_only else planned[0]["skyrl"]["trainer"]["max_steps"]
-                ),
-                "measured_updates": list(preset.measured),
-                "budget_estimate": preset.budget,
-                "guards": [metric.key for metric in preset.guards],
-                "reported_metrics": [{**asdict(metric), "window": metric.window.value} for metric in preset.reported],
-                "gaps": [gap.value for gap in preset.gaps],
-                "runs": rows,
-                **verdict,
+    return {
+        "preset": preset.name,
+        "code": asdict(Provenance.capture(presets.REPO_ROOT)),
+        "inputs": {
+            "model": planned[0]["inputs"]["model"]["identity"],
+            **{
+                name: [source["identity"] for source in planned[0]["inputs"][name]]
+                for name in ("train_data", "validation_data")
             },
-            sort_keys=False,
-        )
+        },
+        "context_budget": planned[0]["skyrl"]["context_budget"],
+        "updates": 0 if preset.recipe.layout.role_plan.generate_only else planned[0]["skyrl"]["trainer"]["max_steps"],
+        "measured_updates": list(preset.measured),
+        "budget_estimate": preset.budget,
+        "guards": [metric.key for metric in preset.guards],
+        "reported_metrics": [{**asdict(metric), "window": metric.window.value} for metric in preset.reported],
+        "gaps": [gap.value for gap in preset.gaps],
+        "runs": rows,
+        **verdict,
+    }
+
+
+def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
+    with _iris_client() as client:
+        parent = client.job(job).wait(RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
+    if parent.state != JobState.SUCCEEDED:
+        click.echo(yaml.safe_dump({"preset": preset.name, "reason": f"coordinator {job} is {parent.state}"}))
+        raise click.exceptions.Exit(3)
+    run = SnowballRun(
+        tuple(step for step in handles if step.artifact_type is SkyRLRun),
+        next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
     )
+    snapshot = _status(run, preset)
+    if run.gate is not None and "report" not in snapshot:
+        snapshot.pop("verdict", None)
+        snapshot["reason"] = "coordinator finished without a gate report"
+    click.echo(yaml.safe_dump(snapshot, sort_keys=False))
+    if "report" in snapshot:
+        click.echo(presets.read_text(snapshot["report"].removesuffix(".json") + ".md"))
+    if run.gate is not None and "report" not in snapshot:
+        raise click.exceptions.Exit(3)
+    verdict = snapshot.get("verdict", "pass")
+    raise click.exceptions.Exit({"pass": 0, "fail": 1, "invalid": 2}[verdict])
 
 
-@presets.run_command(help_text=__doc__)
+def _run_command(function: Callable) -> click.Command:
+    command = click.option(
+        "--wait",
+        is_flag=True,
+        help="Wait after --run; exit 0 for PASS or a finished ungated run, "
+        "1 for FAIL, 2 for INVALID, 3 without a required verdict.",
+    )(presets.run_command(help_text=__doc__)(function))
+
+    @wraps(function)
+    def callback(*args, wait: bool = False, **kwargs):
+        if wait and not kwargs.get("do_run"):
+            raise click.BadParameter("--wait requires --run")
+
+        def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
+            try:
+                job = submit_or_run(
+                    "experiments.post_training.snowball_rl",
+                    handles,
+                    max_concurrent,
+                    os.environ,
+                    extra_env_vars=(_WANDB_ENTITY_ENV,),
+                )
+                if wait and job is not None:
+                    _wait_for_run(job, handles, presets.PRESETS[kwargs["preset_name"]])
+            except click.exceptions.Exit:
+                raise
+            except Exception as error:
+                if not wait:
+                    raise
+                click.echo(yaml.safe_dump({"preset": kwargs["preset_name"], "reason": str(error)}))
+                raise click.exceptions.Exit(3) from error
+
+        try:
+            return build_options_with_runner(function, runner)(*args, **kwargs)
+        except scoring.InvalidComparison as error:
+            click.echo(json.dumps({"preset": kwargs["preset_name"], "verdict": "invalid", "reason": str(error)}))
+            raise click.exceptions.Exit(2) from error
+
+    command.callback = callback
+    return command
+
+
+@_run_command
 def main(
     preset_name: str,
     settings: tuple[str, ...],
@@ -561,27 +735,25 @@ def main(
     replicates: int,
     control: bool,
     requirements: tuple[str, ...],
+    baselines: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
     preset = presets.PRESETS[preset_name]
     layout = presets.LAYOUTS[layout_name] if layout_name else None
-    try:
-        run = build_run(
-            preset,
-            settings=tuple(presets.parse_setting(setting) for setting in settings),
-            tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
-            init=presets.published_artifact(init_name) if init_name else None,
-            resume_from=presets.published_artifact(resume_name) if resume_name else None,
-            layout=layout,
-            evaluations=evaluations,
-            replicates=replicates,
-            control=control,
-            requirements=requirements,
-        )
-    except snowball_rl_gate.InvalidComparison as error:
-        click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
-        raise click.exceptions.Exit(2) from error
+    run = build_run(
+        preset,
+        settings=tuple(presets.parse_setting(setting) for setting in settings),
+        tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
+        init=presets.published_artifact(init_name) if init_name else None,
+        resume_from=presets.published_artifact(resume_name) if resume_name else None,
+        layout=layout,
+        evaluations=evaluations,
+        replicates=replicates,
+        control=control,
+        requirements=requirements,
+        baselines=baselines,
+    )
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
         changes, reason = _changed_paths(source_tree, ("vendor/skyrl", "lib/marin/src/marin/rl"))
@@ -594,7 +766,7 @@ def main(
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
-    _print_status(run, preset)
+    click.echo(yaml.safe_dump(_status(run, preset), sort_keys=False))
     return (*run.runs, *((run.gate,) if run.gate else ()))
 
 

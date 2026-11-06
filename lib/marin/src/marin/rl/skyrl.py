@@ -48,6 +48,8 @@ SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
 TERMINAL_MANIFEST_FILENAME = "terminal.json"
+# Shared with marinskyrl.checkpoint_paths.TRACKING_FILENAME.
+TRACKING_FILENAME = "tracking.json"
 GENERATE_ENTRYPOINT = "generate"
 BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")

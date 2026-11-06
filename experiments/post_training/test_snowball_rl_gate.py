@@ -6,11 +6,14 @@ import inspect
 import json
 import math
 import runpy
+import shutil
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit
 
 import click
 import marin.rl.skyrl as adapter
@@ -19,11 +22,18 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from iris.client.client import IrisClient
+from iris.cluster.client.job_info import set_job_info
+from iris.cluster.types import JobName
+from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
+from rigging.timing import Timestamp
 from scipy.stats import t
 from taskcompendium.grading_result import Outcome
 
@@ -99,6 +109,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         answers=None,
         missing_receipt=False,
         unresolved_receipt=False,
+        first_panel_task="task-0",
     ):
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
@@ -129,6 +140,9 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         (root / ".executor_status").write_text("SUCCESS")
         for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
             row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
+            row |= {"step": step, "trainer/global_step": step}
+            if not preset.recipe.layout.role_plan.generate_only:
+                row["timing/step_wall/unaccounted"] = 0.0
             row |= {metric.key: 0.0 for metric in preset.reported if metric.key.startswith("timing/step_wall/")}
             row |= {
                 "attempt_id": "recorded-attempt",
@@ -136,7 +150,10 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 "loss/policy_loss": 0.01,
                 "policy/raw_grad_norm": 1.0,
                 "policy/mismatch/staleness0/kl_k3": speed / 1000,
+                "policy/mismatch/pooled/kl_k3": speed / 1000,
                 "policy/mismatch/staleness0/selected_tokens": 1000,
+                "async/performance/loss_tokens_per_configured_policy_gpu_second": speed,
+                "async/performance/response_tokens_per_configured_inference_gpu_second": 4 * speed,
                 "generate/min_num_tokens": 4096 if fixed else 12,
                 "generate/max_num_tokens": 4096,
                 "generate/tokens_per_second_per_gpu": speed,
@@ -146,9 +163,17 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 "timing/step_wall/evaluation": 700,
                 "timing/step_wall/checkpoint_work": 900,
             }
+            if preset.recipe.layout.role_plan.generate_only:
+                row["generate/wall_seconds"] = 1.0
             if step != omit_step:
                 _json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
-        launch = {"inputs": {"validation_data": [{"uri": str(panel)}]}}
+        run_panel = panel
+        if first_panel_task != "task-0":
+            run_panel = root / "heldout"
+            run_panel.mkdir()
+            manifest = [{**row, "task_id": first_panel_task} if row["task_id"] == "task-0" else row for row in tasks]
+            pq.write_table(pa.Table.from_pylist(manifest), run_panel / presets.TASK_MANIFEST_FILENAME)
+        launch = {"inputs": {"validation_data": [{"uri": str(run_panel)}]}}
         if unresolved_receipt:
             launch |= {
                 "artifacts": {"attempts_root": str(root / "attempts")},
@@ -174,7 +199,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
             for step, average in sessions.items():
                 rows = answers or [
                     _answer(
-                        f"train-task-{i}" if evaluation.file == "train" else f"task-{i}",
+                        f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" if i else first_panel_task,
                         (float(i < mixed and attempt == 0) if evaluation.file == "train" else average),
                         tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed else 1,
                         error="GraderUnavailable" if i < unscored else None,
@@ -241,6 +266,9 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
         path: hashlib.sha256(path.read_bytes()).digest() for root in roots for path in root.rglob("*") if path.is_file()
     }
     report = rescore("speed-medium", "--leave-out", "r0")
+    assert {f"timing/{phase}/{stat}" for phase in ("grading", "setup") for stat in ("mean", "p50", "p95", "max")} <= {
+        row["metric"] for row in report["reported"]
+    }
     timing, mismatch = report["guards"]
     assert [timing[key] for key in ("run", "control", "sd", "df", "n_run", "n_control", "delta")] == [
         100,
@@ -269,6 +297,8 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
         "invariants",
         "guards",
         "reported",
+        "vs_baseline",
+        "vs_baseline_reason",
         "gaps",
     }
     pin = gate.CONTROLS["speed-medium"][0]
@@ -285,6 +315,112 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(
         {"report": str(artifact), **report}
     ]
     assert before == {path: hashlib.sha256(path.read_bytes()).digest() for path in before}
+
+
+def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_runs, tmp_path):
+    controls(recorded_runs, "speed-medium")
+    recorded_runs("speed-medium", "users/test/baseline-candidate", speed=101.5, argv=("--preset", "speed-medium"))
+    first = recorded_runs("speed-medium", "users/test/baseline-a", speed=20, argv=("--preset", "speed-medium"))
+    recorded_runs("speed-medium", "users/test/baseline-b", speed=24, argv=("--preset", "speed-medium"))
+    alias = first.parents[1] / "baseline-alias" / presets.PRESET_REVISION
+    record = json.loads((first / RECORD_FILENAME).read_text())
+    _json(alias / RECORD_FILENAME, record | {"name": "users/test/baseline-alias", "source": str(first)})
+    references = [
+        f"users/test/{name}@{presets.PRESET_REVISION}"
+        for name in ("baseline-b", "baseline-a", "baseline-a", "baseline-alias")
+    ]
+    original = rescore("speed-medium", "--candidate", "users/test/baseline-candidate")
+    report = rescore(
+        "speed-medium",
+        "--candidate",
+        "users/test/baseline-candidate",
+        *(item for ref in references for item in ("--baseline", ref)),
+    )
+    assert (report["verdict"], report["label"]) == (original["verdict"], original["label"]) == ("pass", "no change")
+    assert report["guards"] == original["guards"] and report["reported"] == original["reported"]
+    assert report["report"] != original["report"]
+    assert report["run"]["baselines"] == sorted(set(references))
+    rows = {row["metric"]: row for row in report["vs_baseline"]}
+    timing = rows["speed/update_seconds"]
+    expected = {"run": 101.5, "control": 22, "n_run": 1, "n_control": 2, "df": 3, "delta": -79.5, "change": "worse"}
+    assert {key: timing[key] for key in expected} == expected
+    assert timing["sd"] == pytest.approx(math.sqrt(5 / 3))
+    assert timing["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 2, 3) * math.sqrt(5 / 3) * math.sqrt(1.5))
+    startup = rows["startup/init_weight_sync_state"]
+    assert startup["control"] == pytest.approx(2.2)
+    assert startup["tolerance"] == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) / 10 * math.sqrt(1.5))
+    assert "## Vs baseline" in Path(report["report"]).with_suffix(".md").read_text()
+    missing = recorded_runs("speed-medium", "users/test/missing-telemetry", argv=("--preset", "speed-medium"))
+    for path in missing.glob("exports/metrics/*.json"):
+        values = json.loads(path.read_text())
+        values.pop("policy/mismatch/staleness0/kl_k3", None)
+        _json(path, values)
+    optional = rescore(
+        "speed-medium",
+        "--candidate",
+        "users/test/baseline-candidate",
+        "--baseline",
+        f"users/test/missing-telemetry@{presets.PRESET_REVISION}",
+    )
+    assert optional["guards"] == original["guards"] and optional["reported"] == original["reported"]
+    assert (optional["verdict"], optional["label"]) == (original["verdict"], original["label"])
+    optional_rows = {row["metric"]: row for row in optional["vs_baseline"]}
+    unavailable = optional_rows["policy/mismatch/staleness0/kl_k3"]
+    assert unavailable["control"] is None and unavailable["change"] == "unavailable"
+    wrong = recorded_runs("speed-medium", "users/test/wrong-baseline", argv=("--preset", "learning-medium"))
+    old = recorded_runs(
+        "speed-medium", "users/test/old-baseline", version="2026.10.26", argv=("--preset", "speed-medium")
+    )
+    unfinished = recorded_runs("speed-medium", "users/test/unfinished-baseline", missing_receipt=True)
+    failed = recorded_runs("speed-medium", "users/test/failed-baseline", argv=("--preset", "speed-medium"))
+    terminal = json.loads((failed / "terminal.json").read_text())
+    terminal["result"]["state"] = "failed"
+    _json(failed / "terminal.json", terminal)
+    incomplete = recorded_runs(
+        "speed-medium",
+        "users/test/incomplete-baseline",
+        metrics={"policy/raw_grad_norm": float("nan")},
+        argv=("--preset", "speed-medium"),
+    )
+    controls(recorded_runs, "learning-medium")
+    recorded_runs("learning-medium", "users/test/panel-candidate", argv=("--preset", "learning-medium"))
+    other_panel = recorded_runs(
+        "learning-medium",
+        "users/test/other-panel",
+        argv=("--preset", "learning-medium"),
+        first_panel_task="other-heldout-task",
+    )
+    missing_record = first.parents[1] / "missing-record" / presets.PRESET_REVISION
+    panel_original = rescore("learning-medium", "--candidate", "users/test/panel-candidate")
+    cases = [
+        ("speed-medium", root, reason)
+        for root, reason in (
+            (wrong, "not a recorded speed-medium"),
+            (old, "revision differs"),
+            (unfinished, "not a recorded speed-medium"),
+            (failed, "run crashed"),
+            (incomplete, "failed invariants"),
+            (missing_record, "record"),
+        )
+    ]
+    cases.append(("learning-medium", other_panel, "panel task IDs differ"))
+    for preset_name, root, reason in cases:
+        candidate_name = (
+            "users/test/panel-candidate" if preset_name == "learning-medium" else "users/test/baseline-candidate"
+        )
+        expected = panel_original if preset_name == "learning-medium" else original
+        ref = f"{root.relative_to(first.parents[3]).parent}@{root.name}"
+        rejected = CliRunner().invoke(
+            gate.main, ["--preset", preset_name, "--candidate", candidate_name, "--baseline", ref]
+        )
+        assert rejected.exit_code == 0, (ref, rejected.output, rejected.exception)
+        payload = json.loads(rejected.output.strip().splitlines()[-1])
+        assert (payload["verdict"], payload["label"]) == (expected["verdict"], expected["label"])
+        assert payload["vs_baseline"] == [] and reason in payload["vs_baseline_reason"]
+        refused = CliRunner().invoke(
+            snowball.main, ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--baseline", ref]
+        )
+        assert refused.exit_code == 2 and reason in refused.output
 
 
 VLLM = "vllm/median_generation_throughput"
@@ -321,6 +457,27 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ("speed-medium", {"speed": 80}, {}, "pass", "improves", set(), None),
         ("speed-medium", {"speed": 80, "metrics": {VLLM: 1}}, {}, "pass", "trade-off", set(), None),
         ("speed-medium", {"speed": 130, "metrics": {VLLM: 1000}}, {}, "fail", "trade-off", set(), None),
+        ("speed-long", {}, {}, "pass", "no change", set(), None),
+        (
+            "speed-long",
+            {"metrics": {"async/performance/loss_tokens_per_configured_policy_gpu_second": 50}},
+            {},
+            "fail",
+            "regression",
+            set(),
+            None,
+        ),
+        (
+            "speed-long",
+            {"metrics": {"async/performance/response_tokens_per_configured_inference_gpu_second": 50}},
+            {},
+            "fail",
+            "regression",
+            set(),
+            None,
+        ),
+        ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
+        ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
         ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
         ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
@@ -375,8 +532,10 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
     ],
 )
 def test_rescore_reports_candidate_and_control_contracts(
-    recorded_runs, preset, fault, control_fault, verdict, label, failed, bounds
+    recorded_runs, monkeypatch, preset, fault, control_fault, verdict, label, failed, bounds
 ):
+    if preset == "speed-long":
+        monkeypatch.setitem(gate.CONTROLS, preset, (gate.ControlPin(preset, "09026fd100", presets.PRESET_REVISION, 4),))
     controls(recorded_runs, preset, **control_fault)
     source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **fault)
     report = rescore(
@@ -387,6 +546,14 @@ def test_rescore_reports_candidate_and_control_contracts(
     error = next((row for row in report["invariants"] if row["name"] == "grader_error_fraction"), {})
     assert bounds is None or (error["lower_bound"], error["upper_bound"]) == bounds
     assert Path(report["report"]).with_suffix(".md").exists()
+    if preset == "speed-long":
+        assert {row["metric"] for row in report["guards"]} == {
+            "speed/update_seconds",
+            "async/performance/loss_tokens_per_configured_policy_gpu_second",
+            "async/performance/response_tokens_per_configured_inference_gpu_second",
+            "policy/mismatch/staleness0/kl_k3",
+        }
+        assert any(row["metric"] == "policy/mismatch/pooled/kl_k3" for row in report["reported"])
     if "version" in fault:
         assert fault["version"] in report["reason"] and presets.PRESET_REVISION in report["reason"]
     if "record_version" in control_fault.get("fault", {}):
@@ -478,12 +645,12 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
 
 
-def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs, monkeypatch):
+def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs):
     for name in ("speed-short", "speed-medium", "learning-medium"):
         controls(recorded_runs, name)
     speed, learning = presets.PRESETS["speed-medium"], presets.PRESETS["learning-medium"]
-    gate.check_requirements(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
-    gate.check_requirements(
+    gate.validate_candidate(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
+    gate.validate_candidate(
         learning,
         ["panel-910/aaii_category/coding/mean>=control", "panel-910/family/large/difficulty/hard/mean>=0"],
         control=False,
@@ -499,22 +666,6 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
     ):
         with pytest.raises(click.BadParameter):
             snowball.build_run(preset, requirements=(requirement,), **kwargs)
-
-    expired_revision = "2026.10.27"
-    monkeypatch.setitem(
-        gate.CONTROLS,
-        "speed-medium",
-        tuple(replace(pin, revision=expired_revision) for pin in gate.CONTROLS["speed-medium"]),
-    )
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: pytest.fail("unpinned GPU submission"))
-    for command, arguments in (
-        (snowball.main, ["--version", "dev", "--require", "speed/update_seconds<=120", "--run"]),
-        (gate.main, ["--candidate", "tests/unpinned"]),
-    ):
-        refused = CliRunner().invoke(command, ["--preset", "speed-medium", *arguments])
-        assert refused.exit_code == 2, (refused.output, refused.exception)
-        assert presets.PRESET_REVISION in refused.output and expired_revision in refused.output
-        assert f"--version {presets.PRESET_REVISION} --control --replicates 4 --run" in refused.output
 
 
 def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded_runs):
@@ -612,7 +763,8 @@ REQUIREMENT = "policy/raw_grad_norm<=1"
 
 
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
-def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset):
+def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch):
+    monkeypatch.setenv("WANDB_ENTITY", "planned-team")
     controls(recorded_runs, preset)
     if preset == "learning-medium":
         (summary,) = inspect.unwrap(snowball_pass_rates.main.callback)()
@@ -645,7 +797,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         settings = (
             "trainer.policy.optimizer_config.lr=2e-6",
             "trainer.algorithm={group_advantage_min_size: null, advantage_estimator: grpo}",
-            "trainer.policy.optimizer_config.lr=1e-6",
+            "trainer.policy.optimizer_config.lr=1.0e-6",
         )
         built = snowball.build_run(
             presets.PRESETS[preset],
@@ -664,7 +816,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         ]
         algorithm = {"trainer.algorithm.advantage_estimator": "grpo", "trainer.algorithm.group_advantage_min_size": None}
         expected = (
-            algorithm | {"trainer.policy.optimizer_config.lr": "1e-6"},
+            algorithm | {"trainer.policy.optimizer_config.lr": 1e-6},
             None,
             f"{init.name}@{init.version}",
             [pytest.approx(0.295)],
@@ -676,7 +828,13 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         )
         argv = ["--require", REQUIREMENT, "--tasks", f"unused@{presets.DEFAULT_SELECTION_VERSION}", "--tasks", tasks]
         expected = ({}, tasks, None, [])
+    assert status(preset, argv)["runs"][0]["wandb_entity"] == "planned-team"
     initial = 0.2 if preset == "learning-medium" else None
+    timers = {
+        f"timing/{phase}/{stat}": float(index)
+        for phase in ("grading", "setup")
+        for index, stat in enumerate(("mean", "p50", "p95", "max"), 1)
+    }
     source = recorded_runs(
         preset,
         built.runs[0].name,
@@ -684,8 +842,14 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         initial_score=initial,
         argv=["snowball_rl", *argv],
         fingerprint=built.runs[0].fingerprint(),
+        metrics=timers,
     )
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
+    timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
+    assert {key: row["run"] for key, row in timer_rows.items()} == timers
+    assert all(row["control"] is None and row["change"] == "unavailable" for row in timer_rows.values())
+    markdown = (Path(built.gate.path()) / gate.GATE_REPORT_FILENAME).with_suffix(".md").read_text()
+    assert all(key in markdown for key in timers)
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
     settings = {key: json.loads(value) for key, _, value in (item.partition("=") for item in report["run"]["settings"])}
     gains = [row["run"] for row in report["reported"] if row["metric"] == "panel-910/mean/gain"]
@@ -693,9 +857,63 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert [(row["name"], row["holds"]) for row in report["invariants"] if row["name"].startswith("require/")] == [
         ("require/" + REQUIREMENT.split("<=")[0], True)
     ]
+    assert "wandb_url" not in status(preset, argv)["runs"][0]
+    assert status(preset, argv)["runs"][0]["wandb_entity"] == snowball.DEFAULT_WANDB_ENTITY
+    _json(source / "exports/tracking.json", {"wandb_url": "https://wandb.example/team/project/runs/actual-id"})
+    _json(source / "exports/metrics/step-000026.json", {"step": 26, "startup/load_checkpoints": 3.0})
+    _json(source / "exports/metrics/step-000028.json", {"step": 28, "trainer/global_step": 28})
     printed = status(preset, argv)
+    assert printed["runs"][0]["wandb_url"] == "https://wandb.example/team/project/runs/actual-id"
+    assert printed["runs"][0]["latest_completed_update"] == 25
+    receipt = json.loads((source / "terminal.json").read_text())
+    linked_receipt = receipt | {
+        "config": {
+            "run": {"id": "run / id?x=1&y=2"},
+            "runtime": {"training_type": "sync"},
+            "iris": {"wandb_entity": "receipt-team"},
+        }
+    }
+    _json(source / "terminal.json", linked_receipt)
+    started, finished = 1793840000000, 1793840060000
+    native_job = SimpleNamespace(
+        state=JobState.SUCCEEDED, started_at=Timestamp.from_ms(started), finished_at=Timestamp.from_ms(finished)
+    )
+    client = MagicMock(spec=IrisClient)
+    client.job_status.return_value = native_job
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    linked = status(preset, argv)["runs"][0]
+    assert linked["wandb_entity"] == "receipt-team"
+    links = linked["grafana_links"]
+    query = parse_qs(urlsplit(links["run"]).query)
+    assert query["var-run"] == ["run / id?x=1&y=2"]
+    assert query["from"] == [str(started)] and query["to"] == [str(finished)]
+    client.job_status.side_effect = ConnectError(Code.NOT_FOUND, "archived native job")
+    assert "grafana_links" not in status(preset, argv)["runs"][0]
+    client.job_status.side_effect = ConnectionError("controller unavailable")
+    assert status(preset, argv)["verdict"] == report["verdict"]
+    client.job_status.side_effect = None
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: (_ for _ in ()).throw(ConnectionError("offline")))
+    assert "grafana_links" not in status(preset, argv)["runs"][0]
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    native_job.started_at = None
+    assert "grafana_links" not in status(preset, argv)["runs"][0]
+    _json(source / "terminal.json", receipt)
+    for step in (26, 28):
+        (source / f"exports/metrics/step-{step:06d}.json").unlink()
+    assert timers.keys() <= {row["key"] for row in printed["reported_metrics"]}
     assert (printed["verdict"], printed["label"]) == (report["verdict"], report["label"])
     assert printed["report"].endswith("gate_report.json") and "rl_path_changes_since_control" in printed
+    recorded_runs(preset, "users/test/earlier-" + preset, score=0.49, argv=("--preset", preset))
+    baseline = f"users/test/earlier-{preset}@{presets.PRESET_REVISION}"
+    with_baseline = status(preset, [*argv, "--baseline", baseline])
+    assert with_baseline["runs"][0]["name"] == printed["runs"][0]["name"]
+    assert "report" not in with_baseline
+    receipt = json.loads((source / "terminal.json").read_text())
+    receipt["result"]["provenance"]["command_line"] += ["--baseline", baseline]
+    _json(source / "terminal.json", receipt)
+    recovered = rescore(preset, "--candidate", built.runs[0].name)
+    assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
+    assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
     if preset == "learning-medium":
         later = recorded_runs(preset, "users/test/later-replicate", score=0.495)
         receipt = json.loads((later / "terminal.json").read_text())
@@ -718,6 +936,106 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         "run crashed",
         "/tests/native-run",
     )
+
+
+@pytest.mark.parametrize("preset", ["speed-long", "speed-medium"])
+def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, preset):
+    if preset == "speed-medium":
+        monkeypatch.setitem(
+            gate.CONTROLS,
+            preset,
+            tuple(replace(pin, revision="2026.10.27") for pin in gate.CONTROLS[preset]),
+        )
+    client = MagicMock(spec=IrisClient)
+    client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    for command, arguments in (
+        (snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, "--run", "--wait"]),
+        (gate.main, ["--preset", preset, "--candidate", "tests/unpinned"]),
+    ):
+        refused = CliRunner().invoke(command, arguments)
+        assert refused.exit_code == 2, (refused.output, refused.exception)
+        payload = json.loads(refused.output)
+        assert payload["preset"] == preset and payload["verdict"] == "invalid"
+        assert payload["reason"].endswith(
+            f"python -m experiments.post_training.snowball_rl --preset {preset} "
+            f"--version {presets.PRESET_REVISION} --control --replicates 4 --run"
+        )
+        assert presets.PRESET_REVISION in payload["reason"]
+        if preset == "speed-medium":
+            assert "2026.10.27" in payload["reason"]
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("pass", 0),
+        ("fail", 1),
+        ("invalid", 2),
+        ("missing", 3),
+        ("parent-early", 3),
+        ("no-wait", 0),
+        ("child", 0),
+        ("control", 0),
+        ("generate", 0),
+    ],
+)
+def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
+    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    monkeypatch.setenv("WANDB_ENTITY", "submission-team")
+    preset_name = "speed-short" if case == "generate" else "speed-medium"
+    controls(recorded_runs, preset_name)
+    preset = presets.PRESETS[preset_name]
+    built = snowball.build_run(preset, control=case == "control")
+    source = recorded_runs(
+        preset,
+        built.runs[0].name,
+        speed=150 if case in {"fail", "no-wait"} else 101,
+        fingerprint=built.runs[0].fingerprint(),
+    )
+    if case == "invalid":
+        receipt = json.loads((source / "terminal.json").read_text())
+        receipt["result"]["provenance"] = None
+        _json(source / "terminal.json", receipt)
+    if case not in {"missing", "control"}:
+        run(built.gate)
+    if case == "parent-early":
+        shutil.rmtree(source)
+        shutil.rmtree(built.gate.path())
+    job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
+    client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = job
+    final = JobState.FAILED if case == "parent-early" else JobState.SUCCEEDED
+    client.job.return_value.wait.return_value = SimpleNamespace(state=final)
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    if case == "child":
+        monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
+        client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
+    arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
+    if case != "no-wait":
+        arguments.append("--wait")
+    if case == "control":
+        arguments.append("--control")
+    try:
+        result = CliRunner().invoke(snowball.main, arguments)
+    finally:
+        set_job_info(None)
+    assert result.exit_code == expected, (result.output, result.exception)
+    waited = [] if case in {"no-wait", "child"} else [(job,)]
+    assert [call.args for call in client.job.call_args_list] == waited
+    assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
+    if case != "child":
+        assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
+    if case in {"pass", "fail", "invalid"}:
+        assert "# speed-medium" in result.output
+    if case == "generate":
+        snapshot = status(preset_name, [])
+        assert snapshot["runs"][0]["latest_completed_update"] == 0
+        assert {
+            f"timing/{phase}/{stat}" for phase in ("grading", "setup") for stat in ("mean", "p50", "p95", "max")
+        } <= {row["key"] for row in snapshot["reported_metrics"]}
 
 
 def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
@@ -767,3 +1085,26 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     }
     expected |= {"scored_fraction": 0.8, "aaii_category/format/mean": 0.5}
     assert {key: statistics["panel-100/" + key] for key in expected} == pytest.approx(expected)
+
+
+def test_grafana_links_reference_dashboard_panels_and_variables():
+    dashboard = json.loads((presets.REPO_ROOT / "infra/grafana/dashboards/rl_runs.json").read_text())
+    variables = {value["name"] for value in dashboard["templating"]["list"]}
+    panels, pending = set(), list(dashboard["panels"])
+    while pending:
+        panel = pending.pop()
+        panels.add(panel["id"])
+        pending.extend(panel.get("panels", []))
+    for preset in presets.PRESETS.values():
+        links = presets.grafana_links(
+            preset,
+            run_id="run / id?x=1&y=2",
+            cluster="cw-us-east-02a",
+            training_type="sync",
+            started_ms=1793840000000,
+            finished_ms=None,
+        )
+        for url in links.values():
+            query = parse_qs(urlsplit(url).query)
+            assert {key.removeprefix("var-") for key in query if key.startswith("var-")} <= variables
+            assert all(int(value) in panels for value in query.get("viewPanel", ()))

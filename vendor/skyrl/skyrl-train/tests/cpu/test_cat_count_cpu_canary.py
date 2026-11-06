@@ -17,10 +17,13 @@ import zstandard
 from omegaconf import OmegaConf
 from rigging.provenance import launch_provenance
 from taskcompendium.grading_result import Outcome
+from taskcompendium.grader import verifyit_package
+from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
-from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC
+from skyrl_gym.envs.cat_count.reward import TARGET_WORD
+from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.io import io
@@ -28,6 +31,7 @@ from skyrl_train.utils.tracking import Tracking
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
+from tests.cpu.task_specs import lowered_task, text_task
 from tests.cpu.tiny_training.cat_count import (
     FAST_STEPS,
     RUN_TIMEOUT_SECONDS,
@@ -284,9 +288,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     ]
     sampled_rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl")
-        .read_text()
-        .splitlines()
+        for line in (
+            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
+        )
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
@@ -357,12 +361,25 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.trainer.micro_train_batch_size_per_gpu = 1
         cfg.trainer.micro_forward_batch_size_per_gpu = 1
         cfg.generator.n_samples_per_prompt = 2
-        for filename in (cfg.data.train_data[0], cfg.data.val_data[0]):
+        paths = []
+        environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
+        for filename in (cfg.data.train_data[0], *cfg.data.val_data):
             path = Path(filename)
-            row = json.loads(path.read_text().splitlines()[0])
-            row["prompt"][0]["content"] = "cat " * 200
-            with path.open("a") as handle:
-                handle.write(json.dumps(row) + "\n")
+            tasks = []
+            for index, line in enumerate(path.read_text().splitlines()):
+                row = json.loads(line)
+                n = row["extra_info"]["n"]
+                lowered = source_row_task(row, index, source_name=path.stem, environment_configs=environment_configs)
+                if index % 5 == 0:
+                    task = lowered.task.model_copy(
+                        update={"grader": verifyit_package(ExactSpec(expected=(" ".join([TARGET_WORD] * n),))).grader}
+                    )
+                    lowered = lowered_task(task, max_turns=1)
+                tasks.append(lowered)
+            tasks.append(lowered_task(text_task("overlong", prompt="cat " * 200), max_turns=1))
+            paths.append(str(path.with_suffix(".parquet")))
+            write_tasks(Path(paths[-1]), tasks)
+        cfg.data.train_data, cfg.data.val_data = paths[:1], paths[1:]
         records = run_process(forkserver_context, root, cfg, runner=run_tracked_cat_count)
         tracking = json.loads((root / "wandb-init.json").read_text())
         assert {key: tracking[key] for key in ("run_id", "attempt_id", "source_commit", "iris_job_id")} == {
@@ -388,6 +405,17 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
+        evaluations = [row for row in records if "eval/all/timing/grading/mean" in row]
+        timed_training = [row for row in training if "timing/grading/mean" in row]
+        assert evaluations and timed_training
+        for rows, prefix in ((timed_training, ""), (evaluations, "eval/all/")):
+            for row in rows:
+                for raw in TASK_TIMING_KEYS:
+                    values = [row[f"{prefix}{raw}/{stat}"] for stat in ("mean", "p50", "p95", "max")]
+                    assert all(math.isfinite(value) and value >= 0 for value in values)
+                    assert values[1] <= values[2] <= values[3]
+                assert row[f"{prefix}timing/grading/mean"] > 0
+                assert row[f"{prefix}timing/setup/max"] == 0
         if not resume:
             preserved = (directory / "step-000001.json").read_bytes()
             for step in (3, 8):
@@ -413,6 +441,9 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         }
         lowered = source_row_task(row, 0, source_name="cat-count", environment_configs=environment_configs)
         spec = lowered.task.model_copy(update={"id": identifier})
+        if n == 7:
+            spec = spec.model_copy(update={"grader": verifyit_package(ExactSpec(expected=(TARGET_WORD,))).grader})
+            return lowered_task(spec, max_turns=1)
         return lowered.model_copy(update={"task": spec})
 
     expected = {f"stable-cat-count-{n}": PROMPT.format(N=n) for n in (7, 1, 4, 2)}
@@ -460,6 +491,10 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         "unavailable": 2,
     }
     assert metrics["generate/outcome/rollout_failure"] == 2
+    for raw in TASK_TIMING_KEYS:
+        assert all(math.isfinite(metrics[f"{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
+    assert metrics["timing/grading/mean"] > 0
+    assert metrics["timing/setup/max"] == 0
 
 
 @pytest.mark.nightly
