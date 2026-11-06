@@ -40,6 +40,8 @@ CORRECTION_PRESETS = tuple(
     )
 )
 
+OPTIMIZER_CHECKPOINT_SHARDING = 'Literal["fully_reshardable", "dp_reshardable"]'
+
 TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
@@ -57,12 +59,8 @@ TYPES = MappingProxyType(
         "trainer.logger": "LoggingBackend | tuple[LoggingBackend, ...]",
         "trainer.policy.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
         "trainer.critic.optimizer_config.scheduler": 'Literal["constant_with_warmup", "cosine"]',
-        "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": (
-            'Literal["fully_reshardable", "dp_reshardable"]'
-        ),
-        "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": (
-            'Literal["fully_reshardable", "dp_reshardable"]'
-        ),
+        "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
+        "trainer.ref.megatron_config.optimizer_checkpoint_sharding_type": OPTIMIZER_CHECKPOINT_SHARDING,
         "trainer.rollout_buffer.max_staleness_steps": "NonNegativeInt",
         "trainer.rollout_buffer.batch_policy": _literal(BatchPolicy),
         "trainer.hf_upload_mode": _literal(HFUploadMode),
