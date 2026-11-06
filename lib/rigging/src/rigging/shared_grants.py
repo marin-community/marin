@@ -53,7 +53,7 @@ class SharedGrantConfig(BaseModel):
     public_keys: tuple[str, ...]
     authority_url: str
     ca_bundle: str | None = None
-    timeout: float = Field(gt=0, default=5)
+    timeout: float = Field(gt=0, default=5, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_trust(self):

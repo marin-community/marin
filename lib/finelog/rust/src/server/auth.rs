@@ -249,6 +249,10 @@ impl JwtVerifier {
     /// HS256/`alg:none` token is rejected as algorithm confusion), audience, and
     /// expiry in one pass; we try each trusted key and return the first that admits.
     fn verify(&self, token: &str) -> Option<&str> {
+        // Shared grants use this audience too, but carry no native writer authority.
+        if is_grant_token(token) {
+            return None;
+        }
         self.keys
             .iter()
             .find(|k| {
@@ -919,6 +923,25 @@ mod tests {
 
     fn token_policy() -> AuthPolicy {
         AuthPolicy::parse(&jwt_policy_json("alpha", PUB_A)).unwrap()
+    }
+
+    #[test]
+    fn shared_query_grant_cannot_become_a_native_writer_when_keys_overlap() {
+        let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
+        header.typ = Some("at+jwt".into());
+        let claims = serde_json::json!({
+            "iss": "alpha", "aud": "finelog", "sub": "reader", "exp": FUTURE,
+            "iat": unix_now(), "act": {"sub": "reader"}, "owner": "team",
+            "grant_id": "query-only", "policy_revision": "one", "grant_version": 1,
+            "jti": "one", "permissions": [{"service": "finelog", "actions": ["logs.query"], "resource": "/instances/proof/"}]
+        });
+        let key = jsonwebtoken::EncodingKey::from_ed_pem(PRIV_A.as_bytes()).unwrap();
+        let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+        let policy = token_policy();
+        assert!(policy
+            .admits(Some(&mint_finelog(PRIV_A, FUTURE)), None)
+            .is_some());
+        assert!(policy.admits(Some(&token), None).is_none());
     }
 
     fn stacked_policy() -> AuthPolicy {

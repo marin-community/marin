@@ -189,10 +189,6 @@ struct Decision {
 }
 
 impl Client {
-    pub fn verify(&self, token: &str) -> Result<Access, String> {
-        self.verifier.verify(token)
-    }
-
     pub fn new(config: &Config, audience: &str) -> Result<Self, String> {
         let origin = url::Url::parse(&config.authority_url).map_err(|e| e.to_string())?;
         if !origin.username().is_empty()

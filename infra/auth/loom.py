@@ -12,11 +12,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urlsplit
 
 import requests
 from rigging.auth import TokenProvider
 from rigging.grants import Grant, GrantDenied
+from rigging.shared_grants import authority_origin
 
 
 class LoomGrantService(Protocol):
@@ -65,22 +65,8 @@ class LoomLauncher:
         timeout: float = 30,
         now: Callable[[], float] = time.time,
     ):
-        parsed = urlsplit(base_url)
-        if (
-            not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-            or parsed.path not in {"", "/"}
-            or not (
-                parsed.scheme == "https"
-                or (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"})
-            )
-        ):
-            raise ValueError("Loom requires an HTTPS origin outside loopback")
         self.database = database
-        self.base_url = base_url.rstrip("/")
+        self.base_url = authority_origin(base_url)
         self.observer_tokens = observer_tokens
         self.grants = grants
         self.session = session

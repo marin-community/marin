@@ -9,10 +9,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import requests
 from rigging.grants import Permission, PrincipalAuthority, permissions_allow, permissions_cover
+from rigging.shared_grants import authority_origin
 
 ACTIONS = frozenset(
     {
@@ -85,21 +86,7 @@ class OpenFGAPolicy:
         providers: Sequence[ProviderIdentity],
         ca_bundle: str | bool = True,
     ):
-        parsed = urlsplit(api_url)
-        if (
-            not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-            or parsed.path not in {"", "/"}
-            or not (
-                parsed.scheme == "https"
-                or (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"})
-            )
-        ):
-            raise ValueError("OpenFGA requires an HTTPS origin outside isolated loopback tests")
-        self._url = f"{api_url.rstrip('/')}/stores/{quote(store_id, safe='')}/check"
+        self._url = f"{authority_origin(api_url)}/stores/{quote(store_id, safe='')}/check"
         self._model_id = model_id
         self._token_file = token_file
         self._ca_bundle = ca_bundle
