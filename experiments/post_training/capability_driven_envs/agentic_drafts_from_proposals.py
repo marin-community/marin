@@ -45,6 +45,7 @@ import httpx
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rolloutengine.models import RolloutOperation
 from shellbox.machine import Backend
 from taskforge.agentic.drafts import DraftConfig, DraftProposal, DraftResult, draft_task
 from taskforge.agentic.instances import task_instances
@@ -181,8 +182,10 @@ async def _draft_all(slots: Sequence[Slot], settings: RunSettings) -> list[dict[
         command_timeout=COMMAND_TIMEOUT,
     )
     slots_open = asyncio.Semaphore(settings.sessions)
+    model_failures = 0
 
     async def one(slot: Slot) -> dict[str, Any]:
+        nonlocal model_failures
         directory = StoragePath(settings.output) / slot.capability / slot.name
         if (directory / RESULT_FILE).exists():
             return {"capability": slot.capability, "slot": slot.slot, "skipped": "done"}
@@ -207,6 +210,12 @@ async def _draft_all(slots: Sequence[Slot], settings: RunSettings) -> list[dict[
             seconds = time.monotonic() - started
         summary = write_draft(directory, slot, result, instances, seconds)
         logger.info("%s: %d instances, failure %s", proposal.id, len(instances), result.failure)
+        failed_on_model = result.failure is not None and result.failure.startswith(f"{RolloutOperation.MODEL}:")
+        model_failures = model_failures + 1 if failed_on_model else 0
+        if model_failures >= settings.sessions:
+            # Ortet is down, for example a relay whose router is offline: each session would fail on its first turn
+            # and move on to the next proposal. Stop, so that a relaunch drafts the rest once Ortet is back.
+            raise RuntimeError(f"{model_failures} sessions in a row failed on a model call: {result.failure}")
         return summary
 
     try:
