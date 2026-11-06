@@ -3,6 +3,7 @@
 
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,7 +21,7 @@ from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
 from harbor.models.trial.config import AgentConfig, TrialConfig, TaskConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.models.verifier.result import VerifierResult
 
 RANGES = {
@@ -111,6 +112,8 @@ def candidate_trials(root):
                 config=config,
                 agent_info=AgentInfo(name="sotopia", version="test"),
                 verifier_result=VerifierResult(rewards=dict(row["metrics"])),
+                finished_at=datetime.now(),
+                completion=TrialCompletion(trajectory_present=False),
             )
         )
     return trials
@@ -130,7 +133,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         "models": [{"model": "baseline", "results_path": str(baseline)}],
     }
     result = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(cohort),
     )
     adjusted = [
         row.length_controlled_overall
@@ -144,9 +150,15 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     assert [trial.model_dump() for trial in trials] == before
     assert result.cohort == cohort
     assert len(result.source_episodes) == 200
-    assert correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
-    ) == result
+    assert (
+        correct_sotopia(
+            trials,
+            model="candidate",
+            trials_dir=trials_dir,
+            cohort=SotopiaCohort.model_validate(cohort),
+        )
+        == result
+    )
     replacement = {
         **cohort,
         "models": [
@@ -155,7 +167,10 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         ],
     }
     replaced = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(replacement)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(replacement),
     )
     assert replaced.source_episodes == result.source_episodes
     assert replaced.canonical_metrics == result.canonical_metrics
@@ -163,13 +178,19 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     candidate.rename(relocated)
     trials_dir = UPath(relocated / "harbor_jobs" / "job")
     resumed = correct_sotopia(
-        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        trials,
+        model="candidate",
+        trials_dir=trials_dir,
+        cohort=SotopiaCohort.model_validate(cohort),
     )
     assert resumed == result
     next((baseline / "harbor_jobs").rglob("sotopia-summary.json")).unlink()
     with pytest.raises(ValueError, match="missing SOTOPIA summary"):
         correct_sotopia(
-            trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+            trials,
+            model="candidate",
+            trials_dir=trials_dir,
+            cohort=SotopiaCohort.model_validate(cohort),
         )
 
 
@@ -198,7 +219,9 @@ def test_length_control_removes_synthetic_verbosity_bonus() -> None:
     )
 
 
-async def test_resumed_job_matches_original_model_to_cohort_with_new_serving_alias(tmp_path):
+async def test_resumed_job_matches_original_model_to_cohort_with_new_serving_alias(
+    tmp_path,
+):
     baseline, candidate = tmp_path / "baseline", tmp_path / "candidate"
     sotopia_archive(baseline, 0)
     sotopia_archive(candidate, 200)
@@ -224,19 +247,32 @@ async def test_resumed_job_matches_original_model_to_cohort_with_new_serving_ali
         (directory / "config.json").write_text(trial.config.model_dump_json())
         (directory / "result.json").write_text(trial.model_dump_json())
     config = JobConfig(
-        job_name="job", jobs_dir=candidate / "harbor_jobs", tasks=tasks, agents=[agent],
-        sotopia_cohort=SotopiaCohort.model_validate({
-            "version": "test-v1", "models": [
-                {"model": "baseline", "results_path": str(baseline)},
-                {"model": "org/candidate", "results_path": str(tmp_path / "superseded")},
-            ],
-        }),
+        job_name="job",
+        jobs_dir=candidate / "harbor_jobs",
+        tasks=tasks,
+        agents=[agent],
+        sotopia_cohort=SotopiaCohort.model_validate(
+            {
+                "version": "test-v1",
+                "models": [
+                    {"model": "baseline", "results_path": str(baseline)},
+                    {
+                        "model": "org/candidate",
+                        "results_path": str(tmp_path / "superseded"),
+                    },
+                ],
+            }
+        ),
     )
     job_dir = candidate / "harbor_jobs" / "job"
     (job_dir / "config.json").write_text(config.model_dump_json())
-    resumed_config = config.model_copy(update={
-        "agents": [agent.model_copy(update={"model_alias": "hosted_vllm/new-endpoint"})],
-    })
+    resumed_config = config.model_copy(
+        update={
+            "agents": [
+                agent.model_copy(update={"model_alias": "hosted_vllm/new-endpoint"})
+            ],
+        }
+    )
     job = await Job.create(resumed_config)
     try:
         result = await job.run()
@@ -244,10 +280,19 @@ async def test_resumed_job_matches_original_model_to_cohort_with_new_serving_ali
         evidence = persisted.metric_evidence["adhoc"]
         assert len(result.trial_results) == 100
         assert persisted.stats.n_completed_trials == 100
-        assert {row["model"] for row in evidence["source_episodes"]} == {"baseline", "org/candidate"}
+        assert {row["model"] for row in evidence["source_episodes"]} == {
+            "baseline",
+            "org/candidate",
+        }
         assert len(evidence["source_episodes"]) == 200
-        assert persisted.canonical_metrics["adhoc"]["length_controlled_overall"] == pytest.approx(
-            next(row["length_controlled_overall"] for row in evidence["scores"] if row["model"] == "org/candidate")
+        assert persisted.canonical_metrics["adhoc"][
+            "length_controlled_overall"
+        ] == pytest.approx(
+            next(
+                row["length_controlled_overall"]
+                for row in evidence["scores"]
+                if row["model"] == "org/candidate"
+            )
         )
     finally:
         job._close_logger_handlers()

@@ -48,8 +48,9 @@ Fields require explicit values except `trace`, which defaults to `TraceMode.EXAC
 which defaults to `None`. `judge_connection` is a verifyit `JudgeConnection` for a judge grader (see
 [Grading](#grading)). It holds an API key, so `model_dump`, `model_dump_json`, and `pickle` leave it out, and a spec
 loaded from them has no connection. Optional fields accept `None`. `RolloutLimits.cleanup_timeout` requires a
-finite, positive value. Other deadlines accept `None` or a finite, positive value. `max_total_tokens` accepts `None`
-or a positive integer.
+finite, positive value. Other deadlines accept `None` or a finite, positive value. `max_turns` and `max_total_tokens`
+accept `None` or a positive integer; with `max_turns=None` an attempt ends only on its token budget, its deadlines, or
+a `length` stop.
 
 The engine resolves two registries by key:
 
@@ -632,6 +633,7 @@ It does not add an oversized observation to retained response evidence.
 
 A model adapter reports `stop_reason="length"` for every response that ends on its output token budget.
 This includes a response that the server's tool parser reports as tool calls; vLLM's GLM tool parser reports such a response with finish reason `tool_calls`.
+`ChatModel` with a `context_window` also reports `length` for a `tool_calls` response whose prompt and completion tokens fill that window.
 The shell harness does not execute tool calls from a `length` response.
 
 ## Trace modes
@@ -660,8 +662,9 @@ the task holds the work. A task with `NoGrader` gets an unavailable grade. An `A
 `context.limits`.
 
 `ChatModel` from `rolloutengine.chat` serves an OpenAI-compatible chat endpoint and needs
-`trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys.
-It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
+`trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys; `max_tokens=None`
+sends no output limit. Its `context_window`, when set, turns a `tool_calls` response that fills the window into a
+`length` stop. It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
 
 ```python
 engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None, tools={"lookup/v1": lookup})})

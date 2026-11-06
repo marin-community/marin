@@ -20,6 +20,8 @@ def test_packaging_preserves_private_verifier_and_checks_source_identity(tmp_pat
     dockerfile = b"FROM ubuntu:24.04\nWORKDIR /app\nCOPY public.txt /app/input.txt\n"
     (context / "Dockerfile").write_bytes(dockerfile)
     (context / "public.txt").write_bytes(b"public input\n")
+    for name in ("Dockerfile", "public.txt"):
+        (context / name).chmod(0o644)
     instructions = [
         {"command": command, "args": args, "flags": [], "heredocs": []}
         for command, args in (

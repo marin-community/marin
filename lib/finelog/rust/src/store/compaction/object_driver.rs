@@ -17,8 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::RwLock;
-
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
 use crate::query::file_scan::open_cached_parquet;
@@ -47,7 +45,6 @@ pub struct ObjectCompaction<'a> {
     pub catalog: &'a Catalog,
     pub controller: &'a TableController,
     pub segments: &'a SegmentView,
-    pub query_visibility: &'a Arc<RwLock<()>>,
     /// The process-wide leveled tuning, before the table's own object-size
     /// target is applied.
     pub config: &'a CompactionConfig,
@@ -200,7 +197,6 @@ async fn run(
     let objects = Arc::clone(compaction.controller.object_store().ok_or_else(|| {
         StatsError::Internal("object compaction has no backing store".to_string())
     })?);
-    let visibility = Arc::clone(compaction.query_visibility);
     let runtime = tokio::runtime::Handle::current();
     // Same dedicated merge thread as a migration rewrite, mildly deprioritized:
     // an ordinary compaction merge at blocking-pool priority competes with
@@ -236,8 +232,7 @@ async fn run(
                     StatsError::Internal(format!("compaction reader lost input {path}"))
                 })?;
                 runtime.block_on(async {
-                    let input =
-                        open_cached_parquet(objects.as_ref(), reference, &visibility).await?;
+                    let input = open_cached_parquet(Arc::clone(&objects), reference).await?;
                     if input.is_cached() {
                         cached_inputs += 1;
                     } else {
@@ -386,7 +381,8 @@ async fn commit_replacement(
         }
         Err(error) => return Err(error.into()),
     };
-    let _visibility_guard = compaction.query_visibility.write().await;
+    // Object snapshots own immutable references. Updating this accounting view
+    // neither unlinks their files nor requires waiting for unrelated readers.
     let rows = published
         .iter()
         .map(|segment| segment.row_count)

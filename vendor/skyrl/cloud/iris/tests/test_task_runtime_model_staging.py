@@ -1,12 +1,17 @@
 from argparse import Namespace
 import hashlib
 from pathlib import Path
+import shutil
 
 import fsspec
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
 from safetensors.numpy import save
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from cloud.iris import hf_model_cache, task_runtime
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, HuggingFaceSnapshotFile, publish_hugging_face_snapshot
@@ -133,9 +138,7 @@ def test_hugging_face_draft_mirror_uses_the_policy_tokenizer(tmp_path, monkeypat
 
 def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monkeypatch) -> None:
     tokenizer_source = tmp_path / "tokenizer-source"
-    tokenizer_source.mkdir()
-    (tokenizer_source / "tokenizer.json").write_text('{"identity": "requested"}')
-    (tokenizer_source / "tokenizer_config.json").write_text('{"chat_template": "requested"}')
+    _write_tokenizer(tokenizer_source)
     destination = tmp_path / "prepared-tokenizer"
     monkeypatch.setattr(task_runtime, "_metadata_path", lambda _uri, _revision: str(destination))
 
@@ -145,8 +148,71 @@ def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monk
 
     assert prepared is not None
     assert prepared.local_path == str(destination)
-    assert (destination / "tokenizer.json").read_text() == '{"identity": "requested"}'
-    assert (destination / "tokenizer_config.json").read_text() == '{"chat_template": "requested"}'
+    assert (destination / "tokenizer.json").read_bytes() == (tokenizer_source / "tokenizer.json").read_bytes()
+    tokenizer = AutoTokenizer.from_pretrained(prepared.local_path, local_files_only=True)
+    assert tokenizer.encode("hello world") == [1, 2]
+
+
+def _write_tokenizer(destination: Path) -> None:
+    backend = Tokenizer(WordLevel({"[UNK]": 0, "hello": 1, "world": 2}, unk_token="[UNK]"))
+    backend.pre_tokenizer = Whitespace()
+    PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]").save_pretrained(destination)
+
+
+@pytest.mark.parametrize("loading", [RolloutModelLoading.STREAM, RolloutModelLoading.STAGE_LOCAL])
+@pytest.mark.parametrize("tokenizer_state", ["valid", "missing", "malformed"])
+def test_model_only_artifact_uses_independently_validated_pinned_tokenizer(
+    tmp_path, monkeypatch, loading, tokenizer_state
+) -> None:
+    source = tmp_path / "model-only"
+    source.mkdir()
+    (source / "config.json").write_text('{"model_type": "llama"}')
+    weight_bytes = save({"weight": np.arange(4, dtype=np.float32)})
+    (source / "model.safetensors").write_bytes(weight_bytes)
+    tokenizer_source = tmp_path / "tokenizer-source"
+    _write_tokenizer(tokenizer_source)
+    if tokenizer_state == "missing":
+        shutil.rmtree(tokenizer_source)
+        tokenizer_source.mkdir()
+    elif tokenizer_state == "malformed":
+        (tokenizer_source / "tokenizer_config.json").write_text("not json")
+    revision = "a" * 40
+
+    def snapshot_download(repo_id, *, revision, local_dir, allow_patterns):
+        assert repo_id == "org/separate-tokenizer"
+        assert revision == "a" * 40
+        shutil.copytree(tokenizer_source, local_dir, dirs_exist_ok=True)
+        return str(local_dir)
+
+    monkeypatch.setattr(hf_model_cache, "snapshot_download", snapshot_download)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    args = Namespace(
+        model_source_uri=source.as_uri(),
+        model_source_identity="model-only@v1:completed",
+        runtime_profile="megatron",
+        rollout_model_loading=loading,
+        policy_tokenizer="org/separate-tokenizer",
+        policy_tokenizer_revision=revision,
+    )
+    model = prepare_policy_model(args)
+    assert model is not None
+    model_path = Path(model.local_path)
+    assert (model_path / "config.json").read_bytes() == (source / "config.json").read_bytes()
+    assert not (model_path / "tokenizer.json").exists()
+    if loading is RolloutModelLoading.STAGE_LOCAL:
+        assert (model_path / "model.safetensors").read_bytes() == weight_bytes
+    else:
+        assert not (model_path / "model.safetensors").exists()
+    if tokenizer_state != "valid":
+        with pytest.raises(ValueError):
+            prepare_policy_tokenizer(args)
+        return
+
+    prepared = prepare_policy_tokenizer(args)
+    assert prepared is not None
+    assert prepared.local_path != model.local_path
+    tokenizer = AutoTokenizer.from_pretrained(prepared.local_path, local_files_only=True)
+    assert tokenizer.encode("hello world") == [1, 2]
 
 
 def test_staged_models_are_written_as_structured_config(tmp_path, monkeypatch) -> None:
