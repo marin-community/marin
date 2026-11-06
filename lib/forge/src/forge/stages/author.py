@@ -14,7 +14,8 @@ from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.harness.classify import host_failure
 from forge.harness.events import ToolReturned
-from forge.lowering import host_requirements, requirements
+from forge.harness.tools.shell import ShellArgs
+from forge.lowering import host_requirements, lowering_settings, requirements
 from forge.model import serialization as wire
 from forge.model.llm import Message
 from forge.model.proposal import render
@@ -24,6 +25,7 @@ from forge.policy import Policy
 from forge.resources.bundle import Resources
 from forge.resources.env import Env, ReadFile, RunCommand, WriteFile, read_file, run_command, write_file
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
+from forge.stages.summary import validation_path
 
 
 def system_prompt(policy: Policy) -> str:
@@ -51,9 +53,21 @@ def system_prompt(policy: Policy) -> str:
         workdir=policy.setting("author.workdir", str),
         output_chars=policy.setting("tools.output_chars", int),
         grader_environments=json.dumps(environments, sort_keys=True),
+        sandbox_limits=sandbox_limits(policy),
         task_environments=json.dumps(
             tuple(dict(value, capabilities=["shell"]) for value in environments), sort_keys=True
         ),
+    )
+
+
+def sandbox_limits(policy: Policy) -> str:
+    limits = lowering_settings(policy).task_machine.limits
+    return (
+        f"Sandbox memory limit: {limits.memory_mb} MiB; CPU request: {limits.cpus}. "
+        f"The shell tool defaults to {ShellArgs(command='').timeout:g} seconds per command; "
+        "set its timeout argument explicitly for longer commands. "
+        f"Solver commands default to {policy.setting('solver.command_timeout', float):g} seconds. "
+        "The grader command uses the task's declared grader timeout."
     )
 
 
@@ -91,6 +105,10 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
                 await ctx.emit(WriteFile(workdir / "task.json", wire.TASK_SPEC.dump_json(submission.task)))
                 await ctx.emit(WriteFile(workdir / "controls.json", wire.CONTROLS.dump_json(submission.controls)))
             proposal = render(workpiece.proposal)
+            for index, evidence in enumerate(workpiece.evidence):
+                await ctx.emit(
+                    WriteFile(validation_path(str(workdir), index), wire.VALIDATION_RESULT.dump_json(evidence))
+                )
             await ctx.emit(WriteFile(workdir / "proposal.json", proposal.encode()))
             tools = config.tools["author"]
             session = workpiece.session or Conversation(

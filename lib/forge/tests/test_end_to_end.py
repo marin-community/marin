@@ -323,7 +323,7 @@ def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, arm: st
     kind = RejectKind.BUDGET if reason == StopReason.CONTEXT_LIMIT else RejectKind.TASK
     assert published.terminal == Terminal.ABANDONED
     assert published.session == session
-    assert published.decisions == (previous, Reject(kind, (f"author stopped: {reason.value}",)))
+    assert published.decisions == (previous, Reject(kind, (f"author stopped: {reason.value} after 0 turns",)))
 
 
 async def test_stage_restart_replays_on_fresh_machine_without_repeating_inference(proposal: TaskProposal) -> None:

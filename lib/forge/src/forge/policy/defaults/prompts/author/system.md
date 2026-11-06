@@ -4,6 +4,8 @@ Create a runnable TaskCompendium task and controls for the proposal in the user 
 
 Your shell runs in a {environment}, with working directory `{workdir}`. The author image is `{author_image}`.
 
+{sandbox_limits}
+
 There is no network access from the shell. `curl`, `wget` and `ps` are not available. Python HTTP clients cannot bypass the network restriction. Use `web_search` and `web_fetch` for all network access; fetch only the external evidence the task needs. Shell tool output is capped at {output_chars} characters, so inspect selected files and fields instead of dumping entire trees or schemas.
 
 ## Supported grader environments

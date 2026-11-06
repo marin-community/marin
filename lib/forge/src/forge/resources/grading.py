@@ -19,6 +19,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from forge.effects.events import Event, Fingerprint, ReplayPolicy, event_digest
 from forge.model.controls import Candidate
 from forge.resources.execution import Notify, retry_effect
+from forge.resources.grade_health import check_timeout
 from forge.resources.rollouts import Engine, interruption
 from forge.resources.sandbox.images import DEFAULT_MODE
 
@@ -106,6 +107,7 @@ class GradingResource:
                 result = await engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
             except RolloutInterrupted as error:
                 raise interruption(error) from error
+            check_timeout(result.grade, spec.task)
             if result.grade.failure != GradingFailure.TIMEOUT or attempt == 1:
                 return result.grade
         raise RuntimeError("Candidate grading produced no result")

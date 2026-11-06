@@ -11,7 +11,7 @@ from rolloutengine.models import TaskRolloutSpec, TraceMode
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Resolved
-from forge.effects.issues import Hold, Restart
+from forge.effects.issues import Hold
 from forge.harness.protocol import Returned, Stopped
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
@@ -25,25 +25,20 @@ from forge.resources.bundle import Resources
 from forge.resources.env import WriteFile
 from forge.resources.grading import GradeCandidate
 from forge.resources.rollouts import SolverRollout
-from forge.stages.author import hydrate, install_env
-from forge.stages.classify import grade_cause, host_failure, restart_cause, trial_cause
+from forge.stages.author import hydrate, install_env, sandbox_limits
+from forge.stages.classify import grade_cause, host_failure, trial_cause
 from forge.stages.exits import Validated
+from forge.stages.summary import task_manifest
 
 
 async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, control: Control) -> ControlResult:
-    try:
-        grade = await ctx.emit(GradeCandidate(spec, control.candidate))
-    except Restart as error:
-        return ControlResult(index, None, False, restart_cause(error))
+    grade = await ctx.emit(GradeCandidate(spec, control.candidate))
     cause = grade_cause(grade, spec.task)
     return ControlResult(index, grade, cause is None and control.expected.met_by(grade), cause)
 
 
 async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
-    try:
-        result = await ctx.emit(SolverRollout(spec, trial, attempt))
-    except Restart as error:
-        return TrialResult(trial, None, restart_cause(error))
+    result = await ctx.emit(SolverRollout(spec, trial, attempt))
     return TrialResult(trial, result.grade, trial_cause(result, spec.task))
 
 
@@ -53,7 +48,7 @@ async def adversary_result(
     result = AdversaryResult(name, False, ())
     try:
         result = await run_adversary(ctx, workpiece, config, resources, spec, name)
-    except* (Hold, Restart) as error:
+    except* Hold as error:
         result = AdversaryResult(name, False, (), failure_reasons(error))
     return result
 
@@ -67,12 +62,9 @@ def failure_reasons(error: BaseException) -> tuple[str, ...]:
 
 
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:
-    try:
-        grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
-        if grade_cause(grade, spec.task) is None and claim.expected.met_by(grade):
-            grade = await ctx.emit(GradeCandidate(spec, claim.candidate, fresh_verifier=True))
-    except Restart as error:
-        return AdversaryFinding(claim.claim, claim.candidate, claim.expected, None, False, restart_cause(error))
+    grade = await ctx.emit(GradeCandidate(spec, claim.candidate))
+    if grade_cause(grade, spec.task) is None and claim.expected.met_by(grade):
+        grade = await ctx.emit(GradeCandidate(spec, claim.candidate, fresh_verifier=True))
     cause = grade_cause(grade, spec.task)
     return AdversaryFinding(
         claim.claim, claim.candidate, claim.expected, grade, cause is None and claim.expected.met_by(grade), cause
@@ -103,11 +95,17 @@ async def run_adversary(
             tools = {**config.tools[name], "report": ReportTool(spec.task)}
             session = Conversation(
                 (
-                    Message("system", config.policy.prompt("adversary.system").render()),
+                    Message(
+                        "system",
+                        config.policy.prompt("adversary.system").render(sandbox_limits=sandbox_limits(config.policy)),
+                    ),
                     Message(
                         "user",
                         config.policy.prompt("adversary.user").render(
-                            task=task_json.decode(), proposal=render(workpiece.proposal), name=name
+                            task=task_manifest(spec.task),
+                            proposal=render(workpiece.proposal),
+                            name=name,
+                            workdir=config.policy.setting("author.workdir", str),
                         ),
                     ),
                 ),
@@ -120,7 +118,7 @@ async def run_adversary(
                 or not isinstance(outcome.payload, AdversaryReport)
             ):
                 reason = (
-                    f"{outcome.reason} without report"
+                    f"{outcome.summary} without report"
                     if isinstance(outcome, Stopped)
                     else f"Expected report, got {type(outcome).__name__}"
                 )

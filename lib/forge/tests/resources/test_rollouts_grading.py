@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Sequence
+from functools import partial
 from typing import override
 
 import pytest
@@ -32,11 +33,13 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import NumericSpec
 
+from forge.effects.context import Context
 from forge.effects.events import Event, Retrying
 from forge.effects.issues import Restart, Transient
+from forge.effects.log import EventLog
 from forge.model.controls import Candidate
 from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
-from forge.resources.rollouts import Engine, RolloutResource, SolverRollout
+from forge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
 
 
 class FakeEngine(Engine):
@@ -116,7 +119,13 @@ async def test_grading_runs_real_engine_without_inference() -> None:
 
 
 async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
-    timeout = GradeResult(Outcome.INFRA_ERROR, None, "timeout", failure=GradingFailure.TIMEOUT)
+    timeout = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        "timeout",
+        failure=GradingFailure.TIMEOUT,
+        diagnostics={"grader_elapsed_seconds": 300.0, "grader_timeout_seconds": 300.0},
+    )
     success = GradeResult(Outcome.GRADED, 1, "correct")
     rollout = Rollout("trial", (), "stop")
     engine = FakeEngine((GradedRollout(rollout, timeout), GradedRollout(rollout, success)))
@@ -127,7 +136,13 @@ async def test_grading_timeout_replays_candidate_on_new_attempt_once() -> None:
 
 
 async def test_grading_repeated_timeout_returns_the_second_grade() -> None:
-    timeout = GradeResult(Outcome.INFRA_ERROR, None, "timeout", failure=GradingFailure.TIMEOUT)
+    timeout = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        "timeout",
+        failure=GradingFailure.TIMEOUT,
+        diagnostics={"grader_elapsed_seconds": 300.0, "grader_timeout_seconds": 300.0},
+    )
     rollout = Rollout("trial", (), "stop")
     engine = FakeEngine((GradedRollout(rollout, timeout), GradedRollout(rollout, timeout)))
     grader = GradingResource(engine, "config")
@@ -159,3 +174,35 @@ async def test_grading_retries_pre_command_websocket_setup_failures(failures: in
     assert len(engine.run_ids) == min(failures + 1, 3)
     assert len(events) == min(failures, 2)
     assert all(isinstance(record, Retrying) for record in events)
+
+
+@pytest.mark.parametrize("solver", [False, True])
+async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> None:
+    cut = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        failure=GradingFailure.TIMEOUT,
+        diagnostics={"grader_elapsed_seconds": 63, "grader_timeout_seconds": 600, "exit_code": 124},
+    )
+    success = GradeResult(Outcome.GRADED, 1)
+    engine = FakeEngine(
+        (GradedRollout(Rollout("cut", (), "stop"), cut), GradedRollout(Rollout("ok", (), "stop"), success))
+    )
+    ctx = Context(log=EventLog())
+    spec = rollout_spec(arithmetic_task())
+    if solver:
+        resource = RolloutResource(engine, twelve, "cut-test")
+        ctx.resource(resource, resource.fingerprint)
+        ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.emit), uses=(resource,))
+        event = SolverRollout(spec, 0, 0)
+    else:
+        resource = GradingResource(engine, "cut-test")
+        ctx.resource(resource, resource.fingerprint)
+        ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(resource,))
+        event = GradeCandidate(spec, Candidate("12"))
+    with pytest.raises(Restart):
+        await ctx.emit(event)
+    await ctx.emit(event)
+    await ctx.emit(event)
+    await ctx.drain()
+    assert len(engine.run_ids) == 2

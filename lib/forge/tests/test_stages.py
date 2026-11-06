@@ -9,12 +9,12 @@ from pathlib import PurePosixPath
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.forge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
-from rolloutengine.test_support import arithmetic_task
+from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.runtime.resources import inline_resource
 
-from forge.arms import decided
+from forge.arms import decided, validated
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
 from forge.effects.issues import Hold, Restart
@@ -25,7 +25,7 @@ from forge.harness.web import FakeWeb
 from forge.lowering import machine_backend, requirements
 from forge.model import serialization as wire
 from forge.model.controls import Candidate, Control, ControlKind, RewardBand
-from forge.model.llm import Completion, Message
+from forge.model.llm import Completion, Message, ToolCall
 from forge.model.proposal import (
     REQUIRED_HEADINGS,
     Environment,
@@ -66,11 +66,11 @@ from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import MachineHost
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.stages.author import author
-from forge.stages.exits import Decided, Triaged, TriageRejected
+from forge.stages.exits import Decided, Triaged, TriageRejected, Validated
 from forge.stages.review import review
 from forge.stages.rules import default_review
 from forge.stages.triage import triage
-from forge.stages.validate import validate
+from forge.stages.validate import adversary_result, claim_result, control_result, validate
 
 
 @pytest.fixture
@@ -184,10 +184,13 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
-    await author(ctx, workpiece, config(harness), resources(ctx))
+    setup = config(harness)
+    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.memory_mb": 16384}))
+    await author(ctx, workpiece, setup, resources(ctx))
     await ctx.drain()
     assert harness.session is not None and workpiece.submission is not None
     system = harness.session.messages[0].content
+    assert "memory limit: 16384 MiB" in system and "defaults to 30 seconds per command" in system
     environments, task_environments, schemas = (
         json.loads(block.split("```", 1)[0]) for block in system.split("```json\n")[1:]
     )
@@ -212,20 +215,14 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
 
 
 @pytest.mark.asyncio
-async def test_validate_collects_controls_and_concurrent_trials_despite_one_restart(workpiece: Workpiece) -> None:
+async def test_validate_propagates_solver_restart_for_stage_replay(workpiece: Workpiece) -> None:
     ctx = Context(log=EventLog())
     bundle = resources(ctx, restart=1)
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    result = (await validate(ctx, workpiece, config(harness), bundle)).result
+    with pytest.raises(Restart):
+        await validate(ctx, workpiece, config(harness), bundle)
     await ctx.drain()
-    assert workpiece.submission is not None and result.task_digest == workpiece.submission.digest
-    assert [(c.index, c.met, c.grade.reward if c.grade else None) for c in result.controls] == [
-        (0, True, 1),
-        (1, True, 0),
-    ]
-    assert [(t.trial, t.cause) for t in result.solver] == [(0, None), (1, Cause.MODEL_UNAVAILABLE), (2, None)]
-    assert result.solver[1].grade is None
-    assert isinstance(default_review(result, config(harness).band), Incomplete)
+    assert isinstance(bundle.rollouts.engine, SolverEngine) and len(bundle.rollouts.engine.started) == 3
 
 
 @pytest.mark.parametrize("reply,confirmed", [("9", False), ("12", True)])
@@ -314,6 +311,13 @@ async def test_adversary_environment_hold_is_incomplete_evidence(
     )
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
+    if kind is Restart:
+        with pytest.raises((Restart, ExceptionGroup)) as caught:
+            await validate(ctx, workpiece, setup, bundle)
+        if isinstance(caught.value, ExceptionGroup):
+            assert caught.value.subgroup(Restart) is not None
+        await ctx.drain()
+        return
     evidence = (await validate(ctx, workpiece, setup, bundle)).result
     await ctx.drain()
     assert evidence.adversary == (AdversaryResult("finder", False, (), (f"{kind.__name__}: {message}",)),)
@@ -354,14 +358,13 @@ async def test_adversary_stop_reason_survives_review_and_serialization(workpiece
         tools={"finder": {}},
     )
     ctx = Context(log=EventLog())
-    evidence = (await validate(ctx, workpiece, setup, resources(ctx, restart=1))).result
+    evidence = (await validate(ctx, workpiece, setup, resources(ctx))).result
     await ctx.drain()
     restored = wire.WORKPIECE.validate_json(wire.WORKPIECE.dump_json(workpiece.with_(evidence=(evidence,))))
-    assert restored.evidence[0].adversary[0].reasons == (f"{reason} without report",)
+    assert restored.evidence[0].adversary[0].reasons == (f"{reason} after 0 turns without report",)
     decision = default_review(restored.evidence[0], setup.band)
     assert isinstance(decision, Incomplete)
-    assert f"finder: {reason} without report" in decision.reasons
-    assert "1 ungraded trial(s): model_unavailable" in decision.reasons
+    assert f"finder: {reason} after 0 turns without report" in decision.reasons
 
 
 @pytest.mark.parametrize("repair_budget", [0, 1])
@@ -499,7 +502,17 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     setup = config(harness)
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    grader = GradingResource(CandidateEngine(GradeResult(status, None, failure=failure)), "broken")
+    grader = GradingResource(
+        CandidateEngine(
+            GradeResult(
+                status,
+                None,
+                failure=failure,
+                diagnostics={"grader_elapsed_seconds": 300.0, "grader_timeout_seconds": 300.0},
+            )
+        ),
+        "broken",
+    )
     ctx.resource(grader, grader.fingerprint)
     ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(grader,))
     if cause is Cause.GRADER_INFRA:
@@ -513,4 +526,87 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
         assert isinstance(decision, Incomplete if cause is Cause.NO_GRADE else Modify)
         if cause is Cause.GRADER_TIMEOUT:
             assert isinstance(decision, Modify) and any("grader_timeout" in finding for finding in decision.findings)
+    await ctx.drain()
+
+
+@pytest.mark.asyncio
+async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    payload = b"large-payload" * 50000
+    task = workpiece.submission.task
+    task = task.model_copy(
+        update={
+            "resources": task.resources.model_copy(update={"all": (inline_resource("workspace/input.bin", payload),)})
+        }
+    )
+    workpiece = workpiece.with_(submission=replace(workpiece.submission, task=task))
+    harness = RecordingHarness(Returned("report", AdversaryReport(()), Conversation((), ())))
+    setup = config(harness)
+    setup = replace(
+        setup,
+        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        adversaries={"finder": harness},
+        tools={"finder": {}},
+    )
+    ctx = Context(log=EventLog())
+    await adversary_result(ctx, workpiece, setup, resources(ctx), rollout_spec(task), "finder")
+    await ctx.drain()
+    assert harness.session is not None
+    prompt = harness.session.messages[-1].content
+    assert "memory limit: 8192 MiB" in harness.session.messages[0].content
+    assert len(prompt) < 10000 and "content_base64" not in prompt
+    assert f'"bytes":{len(payload)}' in prompt and '"role":"resources.all"' in prompt
+    assert harness.files[PurePosixPath("/workspace/input.bin")] == payload
+    assert wire.TASK_SPEC.validate_json(harness.files[PurePosixPath("/workspace/task.json")]) == task
+
+
+@pytest.mark.asyncio
+async def test_validate_summary_hydrates_full_evidence_before_author_resumes(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    grade = GradeResult(Outcome.GRADED, 1, diagnostics={"stdout": "first line\n" + "x" * 100000})
+    finding = AdversaryFinding(
+        "wrong answer accepted",
+        Candidate("x", (inline_resource("answer.bin", b"z" * 100000),)),
+        RewardBand(Outcome.GRADED, 1),
+        grade,
+        True,
+    )
+    evidence = ValidationResult(
+        workpiece.submission.digest,
+        (TrialResult(0, grade),),
+        (ControlResult(0, grade, True),),
+        (AdversaryResult("finder", True, (finding,)),),
+    )
+    session = Conversation((Message("assistant", "", (ToolCall("v1", "validate", "{}"),)),), ())
+    resumed = validated(workpiece.with_(session=session), Validated(evidence), tool=True, output_chars=3000)
+    assert resumed.session is not None
+    message = resumed.session.messages[-1]
+    assert message.tool_call_id == "v1" and len(message.content) <= 3000
+    assert "first line" in message.content and "answer.bin" in message.content
+    assert "content_base64" not in message.content and "/workspace/.validation/0.json" in message.content
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    ctx = Context(log=EventLog())
+    await author(ctx, resumed, config(harness), resources(ctx))
+    await ctx.drain()
+    saved = harness.files[PurePosixPath("/workspace/.validation/0.json")]
+    assert wire.VALIDATION_RESULT.validate_json(saved) == evidence
+
+
+@pytest.mark.parametrize("claim", [False, True])
+@pytest.mark.asyncio
+async def test_control_and_claim_preemption_restarts_validation(workpiece: Workpiece, claim: bool) -> None:
+    assert workpiece.submission is not None
+    ctx = Context(log=EventLog())
+
+    async def preempted(event: GradeCandidate) -> GradeResult:
+        raise Restart("verifier preempted")
+
+    ctx.handle(GradeCandidate, preempted)
+    control = workpiece.submission.controls[0]
+    spec = rollout_spec(workpiece.submission.task)
+    with pytest.raises(Restart, match="verifier preempted"):
+        if claim:
+            await claim_result(ctx, spec, AdversaryClaim("wrong", control.candidate, control.expected))
+        else:
+            await control_result(ctx, spec, 0, control)
     await ctx.drain()

@@ -11,16 +11,15 @@ from rolloutengine.models import (
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GradedRollout,
-    RolloutInterrupted,
-    RolloutOperation,
 )
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import NoGrader, TaskSpec
 
 from forge.effects.events import Resolved
-from forge.effects.issues import Hold, Restart
+from forge.effects.issues import Hold
 from forge.model.review import Cause
 from forge.model.verdict import grader_checks
+from forge.resources.grade_health import check_timeout
 
 TASK_DEFECTS = frozenset(
     {
@@ -39,6 +38,7 @@ TASK_DEFECTS = frozenset(
 
 
 def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
+    check_timeout(grade, task)
     try:
         grader_checks(grade)
     except ValueError:
@@ -74,27 +74,6 @@ def trial_cause(result: GradedRollout, task: TaskSpec) -> Cause | None:
     if stop in (LENGTH_STOP_REASON, "context"):
         return Cause.GENERATION_LIMIT
     return grade_cause(result.grade, task)
-
-
-def restart_cause(error: Restart) -> Cause:
-    linked: BaseException | None = error
-    while linked is not None:
-        if isinstance(linked, RolloutInterrupted):
-            original = linked.__cause__
-            if linked.operation in (RolloutOperation.START, RolloutOperation.PREPARE) and (
-                isinstance(original, RuntimeError) and str(original).startswith("Environment setup command ")
-            ):
-                return Cause.TASK_SETUP
-            return {
-                RolloutOperation.START: Cause.MACHINE_START,
-                RolloutOperation.PREPARE: Cause.SESSION_PREPARE,
-                RolloutOperation.MODEL: Cause.MODEL_UNAVAILABLE,
-                RolloutOperation.ADVANCE: Cause.TOOL_EXECUTION,
-                RolloutOperation.GRADE: Cause.GRADER_RAISED,
-                RolloutOperation.ATTEMPT: Cause.ATTEMPT_TIMEOUT,
-            }[linked.operation]
-        linked = linked.__cause__
-    return Cause.UNCLASSIFIED
 
 
 async def host_failure(event: Resolved[object]) -> None:
