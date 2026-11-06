@@ -46,7 +46,7 @@ index d797752..ae4bfba 100644
      </InferenceProvider>
    );
 diff --git a/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx b/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
-index a9c567e..a370692 100644
+index a9c567e..2a65e58 100644
 --- a/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
 +++ b/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
 @@ -12,7 +12,7 @@ export async function generateMetadata({
@@ -54,7 +54,7 @@ index a9c567e..a370692 100644
    const { id } = await params;
    return {
 -    title: 'Agentic trace detail | InferenceX',
-+    title: 'Agentic trace detail | Knotmeter',
++    title: 'Agentic trace detail',
      description: `Inspect request timelines, server metrics, aggregates, and logs for Agentic benchmark point #${id}.`,
      alternates: enAlternates(`/inference/agentic/${id}`),
      robots: { index: false },
@@ -75,7 +75,7 @@ index 091e729..b3765d0 100644
        </InferenceProvider>
      </>
 diff --git a/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
-index a40ad29..92a3b29 100644
+index a40ad29..32d12ad 100644
 --- a/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
 +++ b/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
 @@ -12,7 +12,7 @@ export async function generateMetadata({
@@ -83,7 +83,7 @@ index a40ad29..92a3b29 100644
    const { id } = await params;
    return {
 -    title: 'Agentic trace 详情 | InferenceX',
-+    title: 'Agentic trace 详情 | Knotmeter',
++    title: 'Agentic trace 详情',
      description: `查看 Agentic 基准测试数据点 #${id} 的请求时间线、服务器指标、聚合数据与日志。`,
      alternates: zhAlternates(`/inference/agentic/${id}`),
      openGraph: { locale: ZH_OG_LOCALE },
