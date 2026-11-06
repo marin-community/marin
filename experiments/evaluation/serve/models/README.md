@@ -180,12 +180,14 @@ lifecycle and unregisters the endpoint. Stop the affected job with
 configuration. Existing Iris whole-task retries are separate from the router's disabled HTTP
 retries. A benchmark must not treat a restarted service as retaining the old KV cache.
 
-For runner integration, use `VllmEngineConfig(router=VllmRouterConfig(data_parallel_size=16,
-request_timeout_seconds=14400), release=promoted_release, ...)` with
+For runner integration, use `VllmEngineConfig(router=VllmRouterConfig(request_timeout_seconds=14400),
+release=promoted_release, ...)` with
 `IrisConfig(serving_geometry=ServingGeometry(1, 16, 1, 4, data_parallel_size_local=4), ...)`, one native
 group and no broker. `VllmBackend.start()` returns a `VllmEnvironment`; call `wait_until_ready()`
 before consuming its routed `server_url`. `worker_server_url` and `command` retain the direct
 worker URL and vLLM launch record. The environment accepts the runner's existing `collect_metrics`,
 `collect_nccl` and `compilation_cache_mode` controls. The lower-level
-`vllm_router(config, worker_urls)` context supports independently addressable workers with equal
-DP sizes. The CLI's `--instances` broker path cannot be combined with session routing.
+`vllm_router(config, worker_urls, data_parallel_size=N)` context supports independently addressable
+workers with equal DP sizes. Each URL must reach all `N` native ranks. Managed serving derives this
+count from the native vLLM arguments; the router does not configure the worker topology.
+The CLI's `--instances` broker path cannot be combined with session routing.

@@ -143,7 +143,7 @@ def local(
             source=source,
             version=vllm_version,
             release=load_vllm_gpu_release(vllm_release),
-            router=VllmRouterConfig(data_parallel_size, router_timeout) if session_router else None,
+            router=VllmRouterConfig(request_timeout_seconds=router_timeout) if session_router else None,
             startup_timeout_seconds=startup_timeout,
             max_num_batched_tokens=max_num_batched_tokens,
             extra_args=(

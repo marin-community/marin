@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import contextlib
 import dataclasses
 import functools
@@ -773,6 +774,18 @@ def _get_first_model_id(server_url: str) -> str:
     return str(model_id)
 
 
+def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
+    """Read the native ranks reachable behind vLLM's global internal DP frontend."""
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--data-parallel-size", type=int, default=1)
+    parser.add_argument("--data-parallel-hybrid-lb", action="store_true")
+    parser.add_argument("--data-parallel-external-lb", action="store_true")
+    topology, _ = parser.parse_known_args(extra_cli_args)
+    if topology.data_parallel_hybrid_lb or topology.data_parallel_external_lb:
+        raise ValueError("session routing requires vLLM's global internal DP load balancer")
+    return topology.data_parallel_size
+
+
 class VllmEnvironment:
     """Manage vLLM server lifecycle and eval-client configuration."""
 
@@ -799,6 +812,7 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        self._router_data_parallel_size = _router_data_parallel_size(self.extra_cli_args) if router is not None else 1
         # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
@@ -885,6 +899,7 @@ class VllmEnvironment:
                     vllm_router(
                         self.router_config,
                         (self.worker_server_url.removesuffix("/v1"),),
+                        data_parallel_size=self._router_data_parallel_size,
                         host=self.host,
                         port=self.router_port,
                         startup_timeout_seconds=self.timeout_seconds,

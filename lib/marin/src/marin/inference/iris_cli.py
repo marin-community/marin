@@ -543,7 +543,7 @@ def main(
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
             extra_metric_families=extra_metric_families,
-            router=VllmRouterConfig(data_parallel_size or 1, router_timeout) if session_router else None,
+            router=VllmRouterConfig(request_timeout_seconds=router_timeout) if session_router else None,
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,

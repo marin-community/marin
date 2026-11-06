@@ -62,11 +62,11 @@ def resolve_tokenizer_revision(
 
 
 def validate_pipeline_args(args: tuple[str, ...]) -> None:
-    """Reject flags whose values must agree with the Iris gang geometry."""
+    """Reject flags owned by Iris serving geometry."""
     for arg in args:
         option = arg.partition("=")[0]
         if option in VLLM_TOPOLOGY_OPTIONS:
-            raise ValueError(f"pipeline parallelism owns {option}; remove it from extra args")
+            raise ValueError(f"serving geometry owns {option}; remove it from extra args")
 
 
 @dataclass(frozen=True)
@@ -284,20 +284,15 @@ class InferenceModelConfig:
     engine_kwargs: dict[str, Any]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class VllmRouterConfig:
-    """Released consistent-hash routing with no request retries.
+    """Released consistent-hash routing with no request retries."""
 
-    ``data_parallel_size`` counts ranks reachable behind each worker URL, including
-    remote ranks behind the leader's native global DP load balancer.
-    """
-
-    data_parallel_size: int = 1
     request_timeout_seconds: int = 14400
 
     def __post_init__(self) -> None:
-        if self.data_parallel_size < 1 or self.request_timeout_seconds < 1:
-            raise ValueError("router DP size and request timeout must be positive")
+        if self.request_timeout_seconds < 1:
+            raise ValueError("router request timeout must be positive")
 
 
 @dataclass(frozen=True)
@@ -497,16 +492,17 @@ class RemoteInferenceConfig:
             if self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
                 raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
-        if isinstance(self.engine, VllmEngineConfig) and self.engine.router is not None:
+        session_routing = isinstance(self.engine, VllmEngineConfig) and self.engine.router is not None
+        if session_routing:
             if self.instances != 1 or self.broker is not None:
                 raise ValueError("session routing requires one native vLLM group and no broker")
-            if geometry is not None and self.engine.router.data_parallel_size != geometry.data_parallel_size:
-                raise ValueError("router DP size must match the native serving geometry")
-        if geometry is not None and (geometry.task_count > 1 or geometry.data_parallel_size_local is not None):
+        if geometry is not None and (
+            geometry.task_count > 1 or geometry.data_parallel_size_local is not None or session_routing
+        ):
             if not isinstance(self.engine, VllmEngineConfig):
-                raise ValueError("multi-host GPU serving requires the vLLM backend")
+                raise ValueError("native GPU serving requires the vLLM backend")
             if self.instances != 1 or self.broker is not None:
-                raise ValueError("multi-host GPU serving requires one instance and no broker")
+                raise ValueError("native GPU serving requires one instance and no broker")
             if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
                 raise ValueError("model tensor_parallel_size must match serving geometry")
             validate_pipeline_args(self.engine.extra_args)

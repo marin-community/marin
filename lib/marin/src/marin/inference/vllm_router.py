@@ -53,6 +53,7 @@ def vllm_router(
     config: VllmRouterConfig,
     worker_urls: Sequence[str],
     *,
+    data_parallel_size: int,
     host: str = "127.0.0.1",
     port: int | None = None,
     startup_timeout_seconds: float = 600,
@@ -60,12 +61,15 @@ def vllm_router(
 ) -> Iterator[RunningVllmRouter]:
     """Start the pinned router and yield only after workers and routes are ready.
 
-    Worker URLs are HTTP roots, without ``/v1``. Each exposes the same number of
-    native DP ranks. The caller owns the workers; this context owns only the router.
+    Worker URLs are HTTP roots, without ``/v1``. Each exposes ``data_parallel_size``
+    native ranks, including remote ranks behind a global DP frontend.
+    The caller owns the workers; this context owns only the router.
     Logs flow to the job and remain in the reported directory after shutdown.
     """
     if not worker_urls:
         raise ValueError("vLLM Router requires at least one worker URL")
+    if data_parallel_size < 1:
+        raise ValueError("router data parallel size must be positive")
     port = available_port(host) if port is None else port
     log_dir = Path(tempfile.mkdtemp(prefix="vllm_router_"))
     command = (
@@ -84,7 +88,7 @@ def vllm_router(
         "--policy",
         "consistent_hash",
         "--intra-node-data-parallel-size",
-        str(config.data_parallel_size),
+        str(data_parallel_size),
         "--request-timeout-secs",
         str(config.request_timeout_seconds),
         "--disable-retries",
