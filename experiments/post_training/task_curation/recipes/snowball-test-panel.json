@@ -14,7 +14,7 @@
   },
   "name": "snowball-test-panel",
   "pass_rates": {
-    "uri": "s3://marin-us-east-02a/marin/users/atqamar/rlci-e12/2026.11.04/pass-rates-repaired/pass_rates.parquet",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/selection-inputs/snowball-test-panel/pass-rates/2026.11.04.2/pass_rates.parquet",
     "version": "2026.11.04.2",
     "rows": 1500,
     "model_revision": "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -27,7 +27,9 @@
       "family": "scientific_reasoning",
       "license": "unspecified by pinned card",
       "name": "evalchemy-math500",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:math500",
       "rows": 500,
       "format": "evaluation"
@@ -38,7 +40,9 @@
       "family": "scientific_reasoning",
       "license": "unspecified by pinned data",
       "name": "evalchemy-aime24",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:aime24",
       "rows": 30,
       "format": "evaluation"
@@ -49,7 +53,9 @@
       "family": "competitive_coding",
       "license": "Apache-2.0",
       "name": "evalchemy-humanevalplus",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:humanevalplus",
       "rows": 164,
       "format": "evaluation"
@@ -60,7 +66,9 @@
       "family": "competitive_coding",
       "license": "Apache-2.0",
       "name": "evalchemy-mbppplus",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:mbppplus",
       "rows": 378,
       "format": "evaluation"
@@ -71,7 +79,9 @@
       "family": "general",
       "license": "MIT",
       "name": "evalchemy-mmlu-pro",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:mmlu-pro",
       "rows": 12032,
       "format": "evaluation"
@@ -82,7 +92,9 @@
       "family": "general",
       "license": "CC-BY-4.0",
       "name": "evalchemy-gpqa-diamond",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:gpqa-diamond",
       "rows": 198,
       "format": "evaluation"
@@ -93,7 +105,10 @@
       "family": "agents",
       "license": "CC-BY-4.0",
       "name": "nemo-predicted-action",
-      "required_tags": ["eval", "tool-call-proxy"],
+      "required_tags": [
+        "eval",
+        "tool-call-proxy"
+      ],
       "source_id": "NeMo:predicted-action",
       "rows": 65559,
       "format": "normalized"
@@ -104,7 +119,9 @@
       "family": "structural",
       "license": "Apache-2.0",
       "name": "evalchemy-ifeval",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:ifeval",
       "rows": 541,
       "format": "evaluation"
@@ -115,7 +132,9 @@
       "family": "structural",
       "license": "unspecified by pinned card",
       "name": "evalchemy-ifbench",
-      "required_tags": ["eval"],
+      "required_tags": [
+        "eval"
+      ],
       "source_id": "Evalchemy:ifbench",
       "rows": 300,
       "format": "evaluation"
@@ -135,5 +154,5 @@
       "format": "task_spec"
     }
   ],
-  "version": "2026.11.04.2"
+  "version": "2026.11.06.1"
 }
