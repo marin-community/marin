@@ -121,11 +121,8 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
             segments = hax.named(jnp.broadcast_to(jnp.array([0, 0, 1, 1, -1, -1, -1, -1]), (8, 8)), axes)
             mask = AttentionMask.causal().with_segment_ids(segments, segments.rename({"position": "key_position"}))
             _, counts = eqx.filter_jit(lambda m: m.activations_with_stats(tokens, valid, attn_mask=mask))(capped)
+            # 32 valid tokens choose two experts; each layer admits 16 of the
+            # 64 assignments and drops 48, all at receivers.
             np.testing.assert_array_equal(counts.sender_dropped, np.zeros(3))
             np.testing.assert_array_equal(counts.receiver_dropped, np.full(3, 48))
             np.testing.assert_array_equal(counts.dropped, np.full(3, 48))
-            # 32 valid tokens choose two experts; each layer admits 16 of the
-            # 64 assignments. Three layers therefore drop 144, all at receivers.
-            assert int(counts.dropped.sum()) == 144
-            assert int(counts.sender_dropped.sum()) == 0
-            assert int(counts.receiver_dropped.sum()) == 144

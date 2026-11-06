@@ -546,7 +546,10 @@ class MoeForwardStats(eqx.Module):
 
     Backends mask invalid assignments before counting drops. Receiver losses are
     counted after sender selection, so their sum counts each lost assignment once.
-    Padding skips are not capacity drops.
+    Padding skips are not capacity drops, and padding does not consume capacity in
+    this forward. The unmasked training forward (``activations``,
+    ``compute_next_token_loss``) lets padding consume capacity, so these counts
+    describe it only at dropless capacity or on a batch with no padding.
     """
 
     routes: Array
@@ -889,6 +892,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         """Return hidden states, routes and raw per-call valid-assignment counts.
 
         Callers must sum the count arrays across microbatches for update totals.
+        ``token_valid`` excludes padding from capacity here; the training forward
+        passes no mask, so zero drops here prove it dropped nothing only at dropless
+        capacity or with no padding (see ``MoeForwardStats``).
         """
         if token_valid.axes != input_ids.axes or token_valid.dtype != jnp.bool_:
             raise ValueError("token_valid must be boolean with the token axes")
