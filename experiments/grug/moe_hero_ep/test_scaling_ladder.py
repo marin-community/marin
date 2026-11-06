@@ -428,3 +428,11 @@ def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(
         optimizer=dataclasses.replace(off.optimizer, schedule_extension=extension),
         stop_after_steps=HERO_SCHEDULE_STEPS + _EXTENSION_STEPS,
     )
+
+
+def test_hero_stop_step_is_not_a_periodic_eval_step():
+    # A periodic eval due at the stop step runs before the final save, so an eval failure there would lose
+    # the run's last steps. The forced eval after the final save still covers the stop step.
+    config = _hero_config()
+
+    assert config.stop_step % config.eval.steps_per_eval != 0
