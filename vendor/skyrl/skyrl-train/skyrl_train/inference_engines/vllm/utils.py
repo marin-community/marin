@@ -136,7 +136,7 @@ def ensure_token_ids_in_sse_chunk(sse_chunk: str) -> str:
 def apply_openai_sampling(
     body: Dict[str, Any], sampling_params: Dict[str, Any], validate_rollout_logprob_sampling: bool
 ) -> None:
-    """Fill missing request sampling fields and validate training probabilities."""
+    """Default unset request sampling fields and validate training probabilities."""
     defaults = {
         "temperature": sampling_params.get("temperature", 1.0),
         "top_p": sampling_params.get("top_p", 1.0),
@@ -144,7 +144,8 @@ def apply_openai_sampling(
         "min_p": sampling_params.get("min_p", 0.0),
     }
     for key, value in defaults.items():
-        body.setdefault(key, value)
+        if body.get(key) is None:
+            body[key] = value
     # Completion logprobs=0 requests sampled-token probabilities; False disables chat logprobs.
     logprobs = body.get("logprobs")
     if validate_rollout_logprob_sampling and logprobs is not None and logprobs is not False:

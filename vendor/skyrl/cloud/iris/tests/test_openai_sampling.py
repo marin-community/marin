@@ -27,13 +27,23 @@ def test_greedy_eval_request_overrides_training_defaults(logprobs: bool | None) 
     }
 
 
-def test_training_request_inherits_configured_sampling() -> None:
-    request = {"logprobs": 0}
+@pytest.mark.parametrize("unset_fields", [{}, {"temperature": None, "top_p": None, "top_k": None, "min_p": None}])
+def test_training_request_inherits_configured_sampling(unset_fields: dict[str, None]) -> None:
+    request = {"logprobs": 0, **unset_fields}
     training = {"temperature": 0.8, "top_p": 1.0, "top_k": -1, "min_p": 0.0}
 
     apply_openai_sampling(request, training, validate_rollout_logprob_sampling=True)
 
     assert request == {"logprobs": 0, "temperature": 0.8, "top_p": 1.0, "top_k": -1, "min_p": 0.0}
+
+
+def test_training_request_preserves_agent_sampling_without_logprob_validation() -> None:
+    request = {"temperature": 0.7, "top_p": 0.5, "logprobs": 0}
+    training = {"temperature": 1.0, "top_p": 1.0, "top_k": -1, "min_p": 0.0}
+
+    apply_openai_sampling(request, training, validate_rollout_logprob_sampling=False)
+
+    assert request == {"temperature": 0.7, "top_p": 0.5, "logprobs": 0, "top_k": -1, "min_p": 0.0}
 
 
 @pytest.mark.parametrize("override", [{"temperature": 0.7}, {"top_p": 0.5}])
