@@ -33,7 +33,9 @@ from marin.rl.skyrl import (
     materialize_role_plan_config,
     skyrl_step,
 )
-from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS
+from rolloutengine.models import MachineRuntimeSpec
+from shellbox.machine import Backend, NetworkPolicy
+from taskcompendium.examples.protocol_probes import PROBE_DATASET, PROBE_TURNS, ProtocolCheck
 
 from experiments.models import ModelConfig, download_model
 from experiments.post_training.async_rl import SNOWBALL_RECIPE
@@ -64,24 +66,24 @@ point and the released Snowball model."""
 DEFAULT_MODEL = "snowball-v0.1"
 CLUSTERS = ("cw-us-east-02a", "cw-rno2a")
 GPUS_PER_NODE = 8
-PROBE_ROWS = 4 * PROBE_VARIANTS
+PROBE_ROWS = len(ProtocolCheck) * PROBE_VARIANTS
 REQUEST_WINDOW_TOKENS = 8192
 MAX_NEW_TOKENS = 1024
 SEED = 17
 TOOL_PARSER = "hermes"
 """vLLM rejects requests that offer tools unless a tool-call parser is enabled; this family uses Hermes."""
-SHELLSIM_MACHINE = {
-    "backend": "shellsim",
-    "network": "deny",
-    "cpus": None,
-    "memory_mb": None,
-    "storage_mb": None,
-    "gpus": 0,
-    "user": None,
-    "startup_timeout": 60,
-    "cleanup_timeout": 60,
-}
-"""The file and tool probes' task machine, as a RolloutEngine ``MachineRuntimeSpec`` payload."""
+SHELLSIM_MACHINE = MachineRuntimeSpec(
+    backend=Backend.SHELLSIM,
+    network=NetworkPolicy.DENY,
+    cpus=None,
+    memory_mb=None,
+    storage_mb=None,
+    gpus=0,
+    user=None,
+    startup_timeout=60,
+    cleanup_timeout=60,
+)
+"""The file and tool probes' task machine."""
 
 
 def eval_config(thinking: bool) -> dict:
@@ -103,7 +105,7 @@ def eval_config(thinking: bool) -> dict:
             "local": {},
             "task_spec": {
                 "max_turns_by_dataset": {PROBE_DATASET: PROBE_TURNS},
-                "task_machine_by_dataset": {PROBE_DATASET: SHELLSIM_MACHINE},
+                "task_machine_by_dataset": {PROBE_DATASET: SHELLSIM_MACHINE.model_dump(mode="json")},
             },
         }
     }
