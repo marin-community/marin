@@ -418,6 +418,21 @@ def _hero_config():
     return step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
 
+def test_hero_extension_moves_only_the_stop_step_and_the_rate_past_the_schedule(monkeypatch):
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", None)
+    off = _hero_config()
+    extension = ScheduleExtension(steps=_EXTENSION_STEPS, final_lr_ratio=0.01)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_SCHEDULE_EXTENSION", extension)
+    on = _hero_config()
+
+    assert off.stop_after_steps == HERO_SCHEDULE_STEPS
+    assert on == dataclasses.replace(
+        off,
+        optimizer=dataclasses.replace(off.optimizer, schedule_extension=extension),
+        stop_after_steps=HERO_SCHEDULE_STEPS + _EXTENSION_STEPS,
+    )
+
+
 def test_hero_stop_step_is_not_a_periodic_eval_step():
     # A periodic eval due at the stop step runs before the final save, so an eval failure there would lose
     # the run's last steps. The forced eval after the final save still covers the stop step.
