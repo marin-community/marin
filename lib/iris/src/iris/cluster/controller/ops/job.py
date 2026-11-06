@@ -199,7 +199,6 @@ def insert_job_and_config(
     root_submitted_ms = effective_submission_ms
     # Not proto_to_json: JobTags fields have explicit presence, so it keeps a set empty string.
     tags = {field.name: value for field, value in request.tags.ListFields() if value}
-    tags_json = json.dumps(tags) if tags else None
     if job_id.parent is not None:
         parent_row = cur.execute(
             select(jobs_table.c.root_submitted_at_ms, jobs_table.c.submitting_user, job_config_table.c.tags_json)
@@ -214,8 +213,9 @@ def insert_job_and_config(
         # caller: a federated subtree stays attributed to the principal that
         # launched the root.
         submitting_user = parent_row.submitting_user
-        if tags_json is None:
-            tags_json = parent_row.tags_json
+        # Each tag the child leaves empty comes from its parent.
+        if parent_row.tags_json is not None:
+            tags = {**json.loads(parent_row.tags_json), **tags}
     elif submitting_user is None:
         # A root with no resolved principal is an identity-less direct/loopback
         # submit — the same case the submit-time resolver attributes to local_admin.
@@ -306,7 +306,7 @@ def insert_job_and_config(
         egress_allow_json=[format_egress_rule(rule) for rule in request.egress_allow],
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
-        tags_json=tags_json,
+        tags_json=json.dumps(tags) if tags else None,
     )
     controller_rows.record_job_submit(cur, job_id)
 

@@ -51,6 +51,7 @@ from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     MAX_JOB_DESCRIPTION_CHARS,
+    MAX_JOB_TAG_CHARS,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -1066,13 +1067,13 @@ Examples:
     "--project",
     type=str,
     default=None,
-    help="Job tag: the effort this job belongs to, for compute accounting. Child jobs inherit it.",
+    help=f"Job tag: the effort this job belongs to, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it.",
 )
 @click.option(
     "--category",
     type=str,
     default=None,
-    help="Job tag: the kind of work, for compute accounting. Child jobs inherit it. OPS.md suggests values.",
+    help=f"Job tag: the kind of work, up to {MAX_JOB_TAG_CHARS} characters. Child jobs inherit it. See OPS.md.",
 )
 @click.option(
     "--description",

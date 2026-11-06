@@ -331,7 +331,11 @@ def test_job_rows_carry_tags_and_children_inherit_them(state):
             "category": "pre-training",
             "description": "Sweep sizes.",
         },
-        "/test-user/train/eval": {"category": "evaluation"},
+        "/test-user/train/eval": {
+            "project": "tokenizer-sweep",
+            "category": "evaluation",
+            "description": "Sweep sizes.",
+        },
         "/test-user/untagged": None,
     }
 

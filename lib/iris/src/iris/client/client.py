@@ -987,7 +987,8 @@ class IrisClient:
                 under ALLOWLIST, so a launcher can declare them on every
                 cluster. An explicit ``egress_policy`` must be ALLOWLIST.
             tags: What the job is for (project, category, description), for
-                compute accounting. None on a child job means the parent's tags.
+                compute accounting. On a child job, each unset field comes from
+                the parent.
 
         Returns:
             Job handle for the submitted job
