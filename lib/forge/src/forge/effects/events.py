@@ -1,22 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
-import hashlib
-import json
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
-from enum import Enum, StrEnum
-from pathlib import PurePath
+from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 from typing import ClassVar, Generic, TypeVar
 
-from pydantic import BaseModel
-
-from forge.effects.issues import LogFailure
-
-BYTES_TAG = "__forge_bytes__"
-MAPPING_TAG = "__forge_mapping__"
+from forge.model.content_hash import (
+    BYTES_TAG as BYTES_TAG,
+)
+from forge.model.content_hash import (
+    MAPPING_TAG as MAPPING_TAG,
+)
+from forge.model.content_hash import (
+    canonical_digest as canonical_digest,
+)
+from forge.model.content_hash import (
+    json_value as json_value,
+)
 
 
 class ReplayPolicy(StrEnum):
@@ -51,38 +53,6 @@ class Event(Generic[T_co]):
 
 # Event registration is the sole module-state exception; logs never import classes.
 EVENT_TYPES: dict[str, type[Event[object]]] = {}
-
-
-def json_value(value: object) -> object:
-    """JSON boundary representation; binary payloads use a reversible tagged value."""
-    if isinstance(value, PurePath):
-        return str(value)
-    if isinstance(value, bytes):
-        return {BYTES_TAG: base64.b64encode(value).decode("ascii")}
-    if isinstance(value, Enum):
-        return json_value(value.value)
-    if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: json_value(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, BaseModel):
-        return json_value(value.model_dump(mode="python"))
-    if isinstance(value, Mapping):
-        return {MAPPING_TAG: {key: json_value(item) for key, item in value.items()}}
-    if isinstance(value, frozenset):
-        return sorted((json_value(item) for item in value), key=lambda item: json.dumps(item, sort_keys=True))
-    if isinstance(value, (tuple, list)):
-        return [json_value(item) for item in value]
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    raise LogFailure(f"Unsupported JSON value: {type(value).__qualname__}")
-
-
-def canonical_digest(value: object) -> str:
-    """Hash canonical JSON; mapping order is ignored and integral floats become integers."""
-    return hashlib.sha256(
-        json.dumps(json_value(value), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    ).hexdigest()
 
 
 def event_digest(event: Event[object]) -> str:
