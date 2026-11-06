@@ -70,25 +70,76 @@ down together. For the GCE hub:
 ```bash
 gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
   --tunnel-through-iap \
-  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "read execution report|slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
 ```
 
-Large `visibility_wait_ms` means the request waited for shared storage
-maintenance before it could query. Compare the timestamps with cache eviction
-and object cleanup. Cache removals release this lock between small batches so
-queued readers can proceed. Background warming uses only immediately available
-download slots; a broad query cannot leave an unbounded queue of cache fills
-after its deadline. Maintenance reads use cached files or read directly from
-object storage. A nonzero `required_fill_bytes` counter means a caller still
+Large `visibility_wait_ms` means the request waited for a structural storage
+change before it could query. Cache eviction pins and skips individual files
+used by active scans; it does not acquire the global visibility lock. Object
+compaction also updates its accounting view without queuing a visibility writer.
+Legacy file replacement and table deletion still require that lock.
+
+Query and FetchLogs RPCs have a ten-second default budget covering admission,
+visibility waits, snapshot/provider setup, execution, and response encoding. A
+shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
+ceiling. Each object snapshot carries an absolute deadline derived from that
+same snapshot's retention policy, starting before snapshot acquisition.
+Planning consumes this lifetime; a later policy change cannot extend the read.
+Query, FetchLogs, and local forwarding reads share this bound and guard their
+optional fills against cancellation.
+Optional background warming uses immediately available download slots and is
+cancelled when the request fails or times out. After a successful response,
+admitted fills can finish within the original request deadline. The allowance
+is at most 256 MiB and 64 objects
+per query, shared across tables and repeated scans. An object larger than the
+remaining allowance is skipped; smaller later objects may still fit.
+`query_byte_limit` counts these skipped objects. This allowance covers optional
+full-object cache fills rather than all remote query
+I/O. Uncached Parquet is scanned directly through GCS/S3 range reads.
+
+Index headers and requested sections use the unified object's `read_range`
+interface: resident ranges are read under cache-file pins, and misses go
+directly to GCS/S3 without filling a whole bundle. Object-backed plans use file
+descriptors from the captured catalog without listing objects or opening
+footers and bundles. Execution checks indexes as it reaches each file.
+DataFusion keeps one current file and one lookahead open per active partition;
+file preparation stops when downstream operators finish, including after an
+unordered LIMIT has enough exact matches. Global sorts and aggregates may
+still require all candidates. The Query RPC returns one collected response.
+
+Each file's optional index reads and parsing have up to 500 ms, capped by the read deadline.
+Later files get their own optional budget; already parsed cache entries remain
+usable after it expires. Preparation reads key sections first and skips other
+sections when a segment is already excluded. Cache-local I/O and parsing use
+bounded workers whose permits remain held until the actual work finishes,
+including after async cancellation. Each store has eight cache-read workers and
+an independent pool of eight cache-fill writers, so warming cannot occupy the
+read pool. Parsed indexes have eight workers shared by the index cache. Remote
+range reads rely on DataFusion's per-query file window rather than a separate
+store-wide request cap. Already-running filesystem work may finish.
+Parsed sections share the memory-bounded index cache. Source footers needed to
+map spans or exact postings to row groups also use this range interface.
+Object-backed Parquet scans, covering projections, and maintenance reads use
+the same interface, including coalesced range requests. DataFusion retains its
+parsed-footer cache and scan-byte counters. Legacy files still use their
+recorded filesystem paths.
+Same-column substring alternatives such as
+`contains(data, 'model cache') OR contains(data, 'download complete')` combine
+their trigram masks with OR. An alternative without a supported constraint
+keeps the source scan. An unavailable, corrupt, or slow index also keeps that scan;
+indexes remain optional derived state.
+
+Maintenance reads pin cached files or read directly from object storage without
+filling misses. A nonzero `required_fill_bytes` counter means a caller still
 forces a local file; inspect the remaining `local_path` callers.
-`query_byte_limit` counts objects skipped after the query's byte allowance is
-exhausted. The last admitted object can cross the allowance.
 
 When cache eviction remains high despite little query traffic, check ingestion
 and compaction activity; both write through to the cache. Compare `write_bytes`
-with `query_fill_bytes` in the activity summaries. Match `max_lock_hold_us` in
-sweep logs and `cleanup_max_lock_hold_us` in activity summaries against slow
-requests' `visibility_wait_ms` to check whether cleanup blocks readers.
+with `query_fill_bytes` in the activity summaries. `cleanup_ms` and
+`max_batch_us` in sweep logs, and `cleanup_time_us` and `cleanup_max_batch_us`
+in activity summaries, measure file reclamation work. A nonzero
+`remaining_excess_bytes` can reflect files pinned by active scans or staged
+objects awaiting upload. These files remain candidates for a later sweep.
 
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
@@ -116,16 +167,20 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
-`EXPLAIN` itself can be slow when planning reads large trigram sections. If
-`EXPLAIN ANALYZE` reports little scan time and few scanned bytes, compare its
-wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
-several indexed columns, Finelog checks range-constrained columns first and
-stops reading a segment's other index sections once its span mask is empty.
-Before loading trigram sections, bounded integer predicates also exclude cached
-local segments using complete Parquet min/max statistics. Missing source files
-or statistics retain the segment for the ordinary scan. The planner retains
-each segment's computed span mask through source planning, so a cache eviction
-does not cause a second index load for the same query.
+For ordinary object-backed scans, `EXPLAIN` performs no object I/O. Legacy
+filesystem scans still inspect local metadata. A required object missing when
+execution reaches it fails the query; a LIMIT that finishes earlier need not
+validate unread objects. Derived index failures retain the source scan.
+
+`read execution report` survives read failure and cancellation. Compare
+`phase`, `logical_plan_ms`, `physical_plan_ms`, and `execution_ms`, then
+`candidate_files`, `prepared_files`, `pruned_files`, and `source_opens`.
+`first_batch_ms` is the first nonempty engine result batch since context
+creation, before the unary RPC response is encoded. Source/index range byte
+and request counts describe requests through the unified interface, including
+cache hits; they do not measure only remote network traffic. Index cache hits
+and unavailable, timeout, corrupt, stale, or missing-bundle counters explain
+why pruning was declined. Several scans can share one request's counters.
 
 For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
 `key`. A time bound can therefore still require footer reads for old segments.

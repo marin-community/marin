@@ -76,6 +76,7 @@ from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
     AttemptStarted,
+    ContextWindowExceeded,
     ConversationStarted,
     GenerationLimitReached,
     Graded,
@@ -3763,3 +3764,51 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
     assert record.rollout.metrics == {"score": 1.0}
+
+
+async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():
+    async def agent(_context, complete):
+        messages = ({"role": "user", "content": "Return 12."},)
+        for _ in range(6):
+            response = await complete(Prompt(messages, {}))
+            messages = (*messages, response.message, {"role": "user", "content": "Continue."})
+
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}] * 6), harnesses={"agent": AgentHarness(agent)}
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=None))
+    assert len(record.rollout.conversations[-1].steps) == 6
+    assert record.rollout.stop_reason != "max_turns"
+    assert record.grade.reward == 1.0
+
+
+@pytest.mark.parametrize("compact", [False, True])
+async def test_context_rejection_allows_a_shorter_request_without_ending_the_attempt(compact):
+    first = ({"role": "user", "content": "Start."},)
+    replay = ReplayModel([{"role": "assistant", "content": "Working."}, {"role": "assistant", "content": "12"}])
+    rejected = []
+
+    async def model(request):
+        if request.messages[-1].get("content") == "Oversized tool output":
+            rejected.append(request)
+            raise ContextWindowExceeded("Maximum context length exceeded")
+        return await replay.complete(request)
+
+    async def agent(_context, complete):
+        turn = await complete(Prompt(first, {}))
+        with pytest.raises(ContextWindowExceeded):
+            await complete(Prompt((*first, turn.message, {"role": "user", "content": "Oversized tool output"}), {}))
+        history = (
+            ({"role": "user", "content": "Compacted history. Return 12."},)
+            if compact
+            else (*first, turn.message, {"role": "user", "content": "Short tool output"})
+        )
+        await complete(Prompt(history, {}))
+
+    result = await RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent", max_turns=2), model
+    )
+    assert len(rejected) == 1
+    assert result.grade.reward == 1.0
+    assert len(replay.requests) == 2
+    assert len(result.rollout.conversations) == (2 if compact else 1)
+    assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
