@@ -111,9 +111,7 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
-def preserve_hf_runtime_settings(
-    reloaded: LmConfig, requested: LmConfig, compute_dtype_overrides: dict[str, str] | None
-) -> LmConfig:
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig, fp32_fields: tuple[str, ...]) -> LmConfig:
     """Reapply the requested Snowball runtime settings after an HF config reload.
 
     The HF config is authoritative for every architecture field. The FP32 router dot,
@@ -125,8 +123,8 @@ def preserve_hf_runtime_settings(
         return reloaded
     if not isinstance(reloaded, SnowballConfig):
         raise ValueError("HF reload changed the Snowball model type")
-    if requested.router_dot_fp32 and compute_dtype_overrides != {"router_bias": "float32"}:
-        raise ValueError("FP32 router dot requires native FP32 router biases after HF reload")
+    if requested.router_dot_fp32 and "router_bias" not in fp32_fields:
+        raise ValueError("FP32 router dot requires trainer.fp32_fields to include router_bias after HF reload")
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
@@ -226,7 +224,7 @@ def main(config: TrainLmConfig):
             config.model = preserve_hf_runtime_settings(
                 converter.config_from_hf_config(converter.default_hf_config),
                 config.model,
-                config.trainer.compute_dtype_overrides,
+                config.trainer.fp32_fields,
             )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
