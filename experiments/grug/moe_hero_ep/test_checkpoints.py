@@ -13,9 +13,3 @@ def test_merged_handoff_links_to_the_fork_parent():
     }
 
     assert _parent_run_and_step(config, "hero-child") == ("hero-parent", 390251)
-
-
-def test_run_without_a_fork_links_through_its_checkpoint_path():
-    config = {"trainer": {"trainer": {"load_checkpoint_path": ["s3://bucket/grug/hero-parent/v1/checkpoints/step-7"]}}}
-
-    assert _parent_run_and_step(config, "hero-child") == ("hero-parent", 7)

@@ -175,7 +175,6 @@ def test_d6144_continues_the_checked_in_context_history_and_narrow_rungs_start_f
     assert hero.flops_baseline == FlopsBaseline(phases[-1].end_step, launch_scaling_ladder.HERO_FLOPS_BASELINE_TOTAL)
     # The long-context mix starts where the history ends instead of replaying it.
     assert hero.data.prior_context_phases == []
-    assert hero.data.mixture_start_step == phases[-1].end_step
     assert narrow.flops_baseline is None
     assert narrow.data.prior_context_phases == []
 

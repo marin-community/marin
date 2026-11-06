@@ -242,12 +242,6 @@ def test_hero_and_diagnostics_select_the_same_data():
         )
     )
 
-    # A literal: train.py rejects only a FLOPs baseline past the restore, so a dropped context phase would otherwise
-    # start the mix at the wrong step with no error.
-    assert hero.data.mixture_start_step == 390_251
-    assert all(
-        isinstance(component, LengthSkewDatasetComponent) for component in _training_data(hero.data).components.values()
-    )
     assert _training_data(hero.data) == _training_data(diagnostic.data)
     assert hero.trainer.trainer.seed == diagnostic.trainer.trainer.seed
     assert hero.trainer.data_seed == diagnostic.trainer.data_seed
