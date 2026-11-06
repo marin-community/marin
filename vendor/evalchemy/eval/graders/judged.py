@@ -11,7 +11,7 @@ from typing import Any
 
 from eval.contracts.eval_spec import EvalSpec, Grade, GraderSpec, JudgePlan, ModelRequest, RequestKind
 from eval.graders.answer_equivalence import JUDGE_PROMPT, JudgeLabel
-from eval.graders.simpleqa import SIMPLEQA_GRADER_TEMPLATE, _parse_simpleqa_judgment
+from eval.graders.simpleqa import SIMPLEQA_GRADER_TEMPLATE, SIMPLEQA_VERIFIED_GRADER_TEMPLATE, _parse_simpleqa_judgment
 from eval.contracts.failures import FailureCategory, MalformedJudgeResponse
 
 
@@ -119,9 +119,8 @@ def mixeval_fallback(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
                  "judge_fallback": "malformed_response_exhaustion", "judge_fallback_rng": "stable_item_v1"})
 
 
-def simpleqa(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
-
-    prompt = SIMPLEQA_GRADER_TEMPLATE.format(
+def _simpleqa_plan(template: str, spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
+    prompt = template.format(
         question=spec.doc["question"], target=spec.target, predicted_answer=str(responses[-1]),
     )
     return JudgePlan(
@@ -129,6 +128,14 @@ def simpleqa(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
         GraderSpec("simpleqa_label"),
         GraderSpec("judge_failed"),
     )
+
+
+def simpleqa(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
+    return _simpleqa_plan(SIMPLEQA_GRADER_TEMPLATE, spec, responses)
+
+
+def simpleqa_verified(spec: EvalSpec, responses: Sequence[Any]) -> JudgePlan:
+    return _simpleqa_plan(SIMPLEQA_VERIFIED_GRADER_TEMPLATE, spec, responses)
 
 def simpleqa_label(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
 

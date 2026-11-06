@@ -15,7 +15,7 @@ from eval.graders.swebench import swe_patch
 from eval.graders.alpaca import alpaca, alpaca_preference
 from eval.graders.math_specs import answer_number, boxed_math, gsm8k, jee, letter_choice, math_equivalence, matharena, mmlu_choice, nupa
 from eval.graders.programs import crux, live_code, program
-from eval.graders.judged import equivalence_judge, equivalence_label, judge_failed, simpleqa, simpleqa_label
+from eval.graders.judged import equivalence_judge, equivalence_label, judge_failed, simpleqa, simpleqa_label, simpleqa_verified
 from eval.graders.structured import nonce_similarity
 from eval.graders.graphwalks import graphwalks
 
@@ -36,7 +36,8 @@ GRADERS = {
     "answer_number": Grader(answer_number), "jee": Grader(jee), "nupa": Grader(nupa),
     # The shared worker runs canonical fork-based sandboxes off the driver loop.
     "program_suite": Grader(program_suite, ExecutionMode.SANDBOXED),
-    "simpleqa": Grader(simpleqa), "simpleqa_label": Grader(simpleqa_label),
+    "simpleqa": Grader(simpleqa), "simpleqa_verified": Grader(simpleqa_verified),
+    "simpleqa_label": Grader(simpleqa_label),
     "judge_failed": Grader(judge_failed),
     "instructions": Grader(instruction_following),
     "nonce_similarity": Grader(nonce_similarity), "crux": Grader(crux, ExecutionMode.PROCESS_ISOLATED),

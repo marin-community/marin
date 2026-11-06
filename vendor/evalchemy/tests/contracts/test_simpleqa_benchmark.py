@@ -4,7 +4,12 @@ import pytest
 
 from eval.chat_benchmarks.SimpleQA.eval_instruct import DATASET_SIZE, SimpleQABenchmark
 from eval.chat_benchmarks.SimpleQAMini.eval_instruct import MINI_DATASET_SIZE, SimpleQAMiniBenchmark
+from eval.chat_benchmarks.SimpleQAVerified.eval_instruct import (
+    DATASET_SIZE as VERIFIED_DATASET_SIZE,
+    SimpleQAVerifiedBenchmark,
+)
 from eval.contracts.eval_spec import SourceRef
+from eval.graders.simpleqa import SIMPLEQA_VERIFIED_GRADER_TEMPLATE
 from eval.sources.common import SourceOptions
 from tests.contracts.source_harness import FixedEndpoint, evaluate_source
 
@@ -26,6 +31,45 @@ def test_simpleqa_mini_uses_the_reference_seeded_subset():
     assert len(questions) == MINI_DATASET_SIZE
     assert [question["source_index"] for question in questions[:10]] == [3155, 3445, 331, 2121, 4188, 3980, 3317, 2484, 3904, 2933]
     assert len({question["source_index"] for question in questions}) == MINI_DATASET_SIZE
+
+
+@pytest.mark.data_integration
+def test_simpleqa_verified_loads_the_corrected_publisher_revision():
+    questions = SimpleQAVerifiedBenchmark().load_questions()
+
+    assert len(questions) == VERIFIED_DATASET_SIZE
+    # The publisher corrected this question on 2026-03-09; older mirrors still ask for the latitude.
+    lilongwe = next(question for question in questions if question["metadata"]["original_index"] == 55)
+    assert lilongwe["question"] == "What is the longitude of Lilongwe in decimal format?"
+
+
+def test_simpleqa_verified_grades_questions_with_the_verified_autorater():
+    source = SimpleQAVerifiedBenchmark()
+    rows = source.load_questions()
+    candidate = FixedEndpoint("candidate answer")
+    judge = FixedEndpoint(lambda request: "A" if rows[0]["question"] in request.prompt else "C")
+
+    metrics, samples = evaluate_source(
+        source,
+        SourceOptions("SimpleQAVerified", source.SOURCE),
+        candidate,
+        judges={"SimpleQAVerified": judge},
+    )
+
+    assert sorted(request.prompt[0]["content"] for request in candidate.requests) == sorted(
+        row["question"] for row in rows
+    )
+    assert sorted(request.prompt for request in judge.requests) == sorted(
+        SIMPLEQA_VERIFIED_GRADER_TEMPLATE.format(
+            question=row["question"], target=row["answer"], predicted_answer="candidate answer"
+        )
+        for row in rows
+    )
+    assert (metrics["correct_rate"], metrics["incorrect_rate"], metrics["not_attempted_rate"]) == (0.5, 0.0, 0.5)
+    assert {sample["doc"]["metadata"]["original_index"]: sample["judge_label"] for sample in samples} == {
+        5: "correct",
+        8: "not_attempted",
+    }
 
 
 @pytest.mark.parametrize("benchmark_class", [SimpleQABenchmark, SimpleQAMiniBenchmark])

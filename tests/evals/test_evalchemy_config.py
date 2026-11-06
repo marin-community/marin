@@ -281,7 +281,7 @@ def test_parent_rejects_endpoint_model_arg_overrides():
         _payload(_config(extra_model_args={"model": "other"}))
 
 
-@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench", "SimpleQAVerified"])
 def test_judged_task_requires_an_explicit_external_judge(task):
     with pytest.raises(ValueError, match="requires an explicit judge"):
         EvalchemyConfig(tasks=(task,))
@@ -291,9 +291,9 @@ def test_judged_task_requires_an_explicit_external_judge(task):
         model="judge-model",
         api_key=("env:JUDGE_KEY",),
     )
-    with pytest.raises(ValueError, match="only for a single FinanceBench"):
+    with pytest.raises(ValueError, match="only for a single task"):
         EvalchemyConfig(tasks=(task, "gsm8k"), judge=judge)
-    with pytest.raises(ValueError, match="only for a single FinanceBench"):
+    with pytest.raises(ValueError, match="only for a single task"):
         EvalchemyConfig(tasks=("gsm8k",), judge=judge)
 
 
@@ -322,7 +322,7 @@ def test_financebench_rejects_inline_judge_credentials(judge):
         EvalchemyConfig(tasks=("FinanceBench",), judge=judge)
 
 
-@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench", "SimpleQAVerified"])
 def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch, task):
     submitted = []
 
