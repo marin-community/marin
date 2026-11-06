@@ -12,14 +12,15 @@ from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
+from lib.forge.tests.stage_fakes import CandidateEngine, SolverEngine, solver_model
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.models import GradedRollout, Model, ModelRequest, ModelTurn, Rollout, TaskRolloutSpec
+from rolloutengine.models import GradedRollout, Model, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import EnvironmentRequirements
 from taskforge.llm.glm_client import EndpointSource
 
-from forge import arms, checkpoint, driver
+from forge import checkpoint, driver
 from forge.config import ForgeConfig
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
@@ -62,7 +63,7 @@ class RecordingEnv(FakeEnv):
 
 
 class Envs(EnvFactory):
-    def __init__(self, *, fail: bool = False, host_failure: bool = False) -> None:
+    def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.created: list[RecordingEnv] = []
         controls = (
@@ -75,7 +76,7 @@ class Envs(EnvFactory):
                 json.dumps([CONTROL.dump_python(c, mode="json") for c in controls]).encode()
             ),
         }
-        result = CommandResult(1 if host_failure else 0, "", "No space left on device" if host_failure else "", 0, False)
+        result = CommandResult(0, "", "", 0, False)
         self.commands = {"inspect": FakeCommand(result, {}), "write-draft": FakeCommand(result, writes)}
 
     @override
@@ -83,22 +84,6 @@ class Envs(EnvFactory):
         env = RecordingEnv(self.commands, self.fail)
         self.created.append(env)
         return env
-
-
-class GradeEngine(Engine):
-    @override
-    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        assert run_id is not None
-        if ":grade:" in run_id:
-            response = await model(ModelRequest((), {}))
-            reward = float(response.message["content"] == "12")
-        else:
-            reward = float(run_id.split(":")[-2] == "0")
-        return GradedRollout(Rollout(run_id, (), "stop"), GradeResult(Outcome.GRADED, reward, "fake grade"))
-
-
-async def solver(_request: ModelRequest) -> ModelTurn:
-    return ModelTurn({"role": "assistant", "content": "12"}, (), (), None, "stop")
 
 
 def call(name: str, arguments: Mapping[str, object], identity: str) -> Completion:
@@ -121,12 +106,11 @@ def script(arm: str) -> tuple[Completion, ...]:
 
 
 def resources(envs: Envs, responses: Sequence[Completion]) -> Resources:
-    engine = GradeEngine()
     return Resources(
         envs,
         FakeInference(responses),
-        RolloutResource(engine, solver, "solver"),
-        GradingResource(engine, "grader"),
+        RolloutResource(SolverEngine(2), solver_model, "solver"),
+        GradingResource(CandidateEngine(), "grader"),
         Clock(lambda: 1),
         Ids(lambda: "workpiece"),
         {},
@@ -199,7 +183,7 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
 async def test_validation_retry_budget_holds_without_restarting_author(proposal: TaskProposal) -> None:
     settings = config("S")
 
-    class UngradedEngine(GradeEngine):
+    class UngradedEngine(Engine):
         @override
         async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
             assert run_id is not None
@@ -215,8 +199,29 @@ async def test_validation_retry_budget_holds_without_restarting_author(proposal:
     assert stages == ["author", *[stage for _ in wp.decisions for stage in ("validate", "review")]]
 
 
+@pytest.fixture
+def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Namespace:
+    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
+    monkeypatch.setenv("GLM_API_KEY", "fake")
+    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
+    source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
+    source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
+    overlay.write_text('{"proposals.environments": ["container"]}')
+    return Namespace(
+        proposals=str(source),
+        policy=str(overlay),
+        arm="S",
+        output=str(tmp_path / "out"),
+        work_dir=str(tmp_path / "work"),
+        concurrency=2,
+        shard_index=0,
+        shard_count=1,
+        ranks=(),
+    )
+
+
 async def test_driver_persists_programming_failure_then_reraises(
-    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
     async def broken_runtime(
@@ -225,22 +230,11 @@ async def test_driver_persists_programming_failure_then_reraises(
         yield build_config(policy, arm, {}), resources(Envs(), ())
 
     monkeypatch.setattr(driver, "runtime", broken_runtime)
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
-    monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
-    source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
-    source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
-    overlay.write_text('{"proposals.environments": ["container"]}')
-    args = Namespace(
-        proposals=str(source),
-        policy=str(overlay),
-        arm="S",
-        output=str(tmp_path / "out"),
-        work_dir=str(tmp_path / "work"),
-    )
+    args = driver_args
+
     with pytest.raises(RuntimeError, match="exhaust"):
         await driver.one(args)
-    destination = tmp_path / "out" / driver.proposal_key(str(source))
+    destination = tmp_path / "out" / driver.proposal_key(args.proposals)
     result = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
     assert result.terminal == Terminal.HELD
     assert "bug:" in str(result.decisions[-1]) and "Traceback" in str(result.decisions[-1])
@@ -250,13 +244,13 @@ async def test_driver_persists_programming_failure_then_reraises(
     # An Iris retry has a fresh local directory, but must not rerun this held workpiece.
     args.work_dir = str(tmp_path / "retry-work")
     await driver.one(args)
-    assert (Path(args.work_dir) / driver.proposal_key(str(source)) / "events.jsonl").read_bytes() == (
+    assert (Path(args.work_dir) / driver.proposal_key(args.proposals) / "events.jsonl").read_bytes() == (
         destination / "events.jsonl"
     ).read_bytes()
 
 
 async def test_driver_resumes_published_partial_log_without_repeated_inference(
-    proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class InterruptedInference(FakeInference):
         @override
@@ -276,19 +270,8 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
         yield config(arm), next(attempts)
 
     monkeypatch.setattr(driver, "runtime", fake_runtime)
-    monkeypatch.setenv("GLM_BASE_URL", "http://fake/v1")
-    monkeypatch.setenv("GLM_API_KEY", "fake")
-    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
-    source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
-    source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
-    overlay.write_text('{"proposals.environments": ["container"]}')
-    args = Namespace(
-        proposals=str(source),
-        policy=str(overlay),
-        arm="S",
-        output=str(tmp_path / "out"),
-        work_dir=str(tmp_path / "first"),
-    )
+    args = driver_args
+
     monkeypatch.setattr(checkpoint, "CHECKPOINT_EVENTS", 1)
     final_publish = driver.publish
     # Simulate preemption: only periodic snapshots reach storage, not the finally upload.
@@ -296,7 +279,7 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     with pytest.raises(asyncio.CancelledError):
         await driver.one(args)
     monkeypatch.setattr(driver, "publish", final_publish)
-    destination = tmp_path / "out" / driver.proposal_key(str(source))
+    destination = tmp_path / "out" / driver.proposal_key(args.proposals)
     assert json.loads((destination / "status.json").read_text())["terminal"] is None
     args.work_dir = str(tmp_path / "second")
     await driver.one(args)
@@ -310,11 +293,10 @@ async def test_driver_resumes_published_partial_log_without_repeated_inference(
     assert (destination / "events.jsonl").read_bytes() == published
 
 
-@pytest.mark.parametrize("arm", ["S", "T"])
 @pytest.mark.parametrize("reason", tuple(StopReason))
-def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, arm: str, reason: StopReason) -> None:
-    settings = config(arm)
-    edge = arms.transitions(arm, settings.budget, settings.policy)[(Stage.AUTHOR, Stopped)]
+def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason: StopReason) -> None:
+    settings = config("S")
+    edge = settings.transitions[(Stage.AUTHOR, Stopped)]
     previous = Modify(("prior review",))
     wp = Workpiece(proposal.header.id, proposal).with_(decisions=(previous,))
     session = Conversation((), ())
@@ -360,26 +342,15 @@ async def test_stage_restart_stops_after_three_attempts_with_cause(
 @pytest.mark.parametrize("command", ["one", "run"])
 async def test_container_filter_skips_before_runtime_or_subprocess(
     proposal: TaskProposal,
+    driver_args: Namespace,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
     command: str,
 ) -> None:
-    source, overlay = tmp_path / "test.proposal.json", tmp_path / "policy.json"
-    source.write_bytes(TASK_PROPOSAL.dump_json(proposal))
-    overlay.write_text("{}")
-    args = Namespace(
-        proposals=str(source),
-        policy=str(overlay),
-        arm="S",
-        output=str(tmp_path / "out"),
-        work_dir=str(tmp_path / "work"),
-        concurrency=2,
-        shard_index=0,
-        shard_count=1,
-        ranks=(),
-    )
+    args = driver_args
+    Path(args.policy).write_text("{}")
 
     def unexpected(*args: object, **kwargs: object) -> None:
         pytest.fail("Filtered proposal must not start runtime or subprocess")

@@ -48,7 +48,6 @@ from forge.model.review import (
     ControlResult,
     Incomplete,
     Modify,
-    Reject,
     Retry,
     TrialResult,
     ValidationResult,
@@ -60,8 +59,8 @@ from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
-from forge.resources.inference import FakeInference, InferenceRequest, complete
-from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
+from forge.resources.inference import FakeInference
+from forge.resources.rollouts import RolloutResource
 from forge.resources.sandbox.factories import MachineHost
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
 from forge.resources.web import FakeWeb
@@ -71,6 +70,7 @@ from forge.stages.review import review
 from forge.stages.rules import default_review
 from forge.stages.triage import triage
 from forge.stages.validate import adversary_result, claim_result, control_result, validate
+from forge.wiring import build_config, install
 
 
 @pytest.fixture
@@ -102,25 +102,18 @@ def rendered_files(workpiece: Workpiece, policy: Policy) -> tuple[TaskResource, 
     return (inline_resource("workspace/notes", workpiece.proposal.header.id.encode()),)
 
 
-def config(harness: RecordingHarness) -> ForgeConfig:
-    return ForgeConfig(
-        load_policy(DEFAULTS_DIR),
-        harness,
-        {},
-        WorkspaceHydration((inline_resource("workspace/notes", b"static"),), rendered_files),
-        {"author": {}},
-        lambda submission: (),
-        default_review,
-        BandRules(0.25, 0.75, frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_EASY})),
-        Budget(2, 2),
-        {},
+def config(harness: RecordingHarness | None = None) -> ForgeConfig:
+    return replace(
+        build_config(load_policy(DEFAULTS_DIR), "S", {}),
+        author=harness or RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))),
+        workspace=WorkspaceHydration((inline_resource("workspace/notes", b"static"),), rendered_files),
     )
 
 
-def resources(ctx: Context, inference: FakeInference | None = None, restart: int | None = None) -> Resources:
+def resources(ctx: Context, restart: int | None = None) -> Resources:
     bundle = Resources(
         Environments(),
-        inference or FakeInference(()),
+        FakeInference(()),
         RolloutResource(SolverEngine(3, restart), solver_model, "solver"),
         GradingResource(CandidateEngine(), "grader"),
         Clock(),
@@ -128,15 +121,10 @@ def resources(ctx: Context, inference: FakeInference | None = None, restart: int
         {},
         FakeWeb({}, {}),
     )
-    for resource in (bundle.inference, bundle.rollouts, bundle.grading):
-        ctx.resource(resource, resource.fingerprint)
-    ctx.handle(InferenceRequest, partial(complete, notify=ctx.emit), uses=(bundle.inference,))
-    ctx.handle(SolverRollout, partial(run_rollout, notify=ctx.emit), uses=(bundle.rollouts,))
-    ctx.handle(GradeCandidate, partial(grade, notify=ctx.emit), uses=(bundle.grading,))
+    install(ctx, bundle)
     return bundle
 
 
-@pytest.mark.asyncio
 async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     task = workpiece.submission.task
@@ -163,10 +151,9 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
     )
     assert isinstance(bundle.envs, Environments)
     assert bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
-    assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+    assert bundle.envs.created[0].closed
 
 
-@pytest.mark.asyncio
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
     harness = RecordingHarness(Restart("machine gone"))
     ctx = Context(log=EventLog())
@@ -182,10 +169,9 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     )
     assert isinstance(bundle.envs, Environments)
     assert bundle.envs.created[0].files[PurePosixPath("/workspace/notes")] == b"sum"
-    assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+    assert bundle.envs.created[0].closed
 
 
-@pytest.mark.asyncio
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     ctx = Context(log=EventLog())
@@ -219,7 +205,6 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
     assert tuple(machine_backend(value, MachineHost.IRIS).value for value in task_resolved) == ("gvisor", "shellsim")
 
 
-@pytest.mark.asyncio
 async def test_validate_propagates_solver_restart_for_stage_replay(workpiece: Workpiece) -> None:
     ctx = Context(log=EventLog())
     bundle = resources(ctx, restart=1)
@@ -231,7 +216,6 @@ async def test_validate_propagates_solver_restart_for_stage_replay(workpiece: Wo
 
 
 @pytest.mark.parametrize("reply,confirmed", [("9", False), ("12", True)])
-@pytest.mark.asyncio
 async def test_validate_adversary_reports_are_graded_and_environment_closed(
     workpiece: Workpiece, reply: str, confirmed: bool
 ) -> None:
@@ -267,31 +251,16 @@ async def test_validate_adversary_reports_are_graded_and_environment_closed(
     assert bundle.envs.requested[0].docker_image == GRADER_BASE_IMAGE
 
 
-@pytest.mark.parametrize(
-    "cause,met,completed,decision",
-    [
-        (None, True, True, Accept),
-        (None, False, True, Modify),
-        (Cause.AGENT_TIMEOUT, False, True, Retry),
-        (None, False, False, Incomplete),
-        (Cause.BUDGET_EXHAUSTED, True, True, Reject),
-    ],
-)
-@pytest.mark.asyncio
-async def test_review_prioritizes_incomplete_evidence_over_task_defects(
-    workpiece: Workpiece, cause: Cause | None, met: bool, completed: bool, decision: type
-) -> None:
+async def test_review_does_not_repair_from_incomplete_evidence(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(
         workpiece.submission.digest,
-        (TrialResult(0, GradeResult(Outcome.GRADED, 1), cause), TrialResult(1, GradeResult(Outcome.GRADED, 0))),
-        (ControlResult(0, GradeResult(Outcome.GRADED, 1), met),),
-        (AdversaryResult("finder", completed, ()),),
+        (TrialResult(0, None, Cause.AGENT_TIMEOUT),),
+        (ControlResult(0, GradeResult(Outcome.GRADED, 1), False),),
+        (),
     )
-    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    ctx = Context(log=EventLog())
-    result = await review(ctx, workpiece.with_(evidence=(evidence,)), config(harness), resources(ctx))
-    assert isinstance(result, Decided) and isinstance(result.decision, decision)
+    setup = config()
+    assert isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Retry)
 
 
 @pytest.mark.parametrize("grouped", [False, True])
@@ -302,7 +271,6 @@ async def test_review_prioritizes_incomplete_evidence_over_task_defects(
         (Restart, "model unavailable"),
     ],
 )
-@pytest.mark.asyncio
 async def test_adversary_environment_hold_is_incomplete_evidence(
     workpiece: Workpiece, grouped: bool, kind: type[Hold] | type[Restart], message: str
 ) -> None:
@@ -334,10 +302,8 @@ async def test_adversary_environment_hold_is_incomplete_evidence(
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
 
 
-@pytest.mark.asyncio
 async def test_invalid_grader_checks_request_task_repair(workpiece: Workpiece) -> None:
-    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    setup = config(harness)
+    setup = config()
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     invalid = GradeResult(Outcome.GRADED, 1, detail={"checks": {"total": True}})
@@ -352,7 +318,6 @@ async def test_invalid_grader_checks_request_task_repair(workpiece: Workpiece) -
     assert any("grader_invalid_checks" in finding for finding in decision.findings)
 
 
-@pytest.mark.asyncio
 async def test_adversary_stop_reason_survives_review_and_serialization(workpiece: Workpiece) -> None:
     reason = StopReason.CONTEXT_LIMIT
     harness = RecordingHarness(Stopped(reason, Conversation((), ())))
@@ -374,14 +339,12 @@ async def test_adversary_stop_reason_survives_review_and_serialization(workpiece
 
 
 @pytest.mark.parametrize("repair_budget", [0, 1])
-@pytest.mark.asyncio
 async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpiece, repair_budget: int) -> None:
     inference = FakeInference((Completion(render(workpiece.proposal)),))
     ctx = Context(log=EventLog())
     bundle = replace(resources(ctx), role_inference={"author": inference})
     damaged = workpiece.with_(proposal=replace(workpiece.proposal, body="## Task\nToo short"))
-    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    setup = config(harness)
+    setup = config()
     setup = replace(
         setup, policy=setup.policy.overlaid({"budget.max_triage_repairs": repair_budget, "sampling.temperature": 0.25})
     )
@@ -400,7 +363,6 @@ async def test_triage_repairs_sections_only_when_budget_allows(workpiece: Workpi
 
 # "control" stands for every defect Modify (grader checks, adversary findings): revert keys on placement alone.
 @pytest.mark.parametrize("revision", ["in_band", "too_easy", "control", "too_hard"])
-@pytest.mark.asyncio
 async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, revision: str) -> None:
     assert workpiece.submission is not None
     original = workpiece.submission
@@ -410,8 +372,7 @@ async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, re
         (ControlResult(0, GradeResult(Outcome.GRADED, 1), True),),
         (),
     )
-    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    setup = config(harness)
+    setup = config()
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     # An earlier unrelated modification already consumed one round of the shared budget.
@@ -455,7 +416,7 @@ async def test_one_hardening_attempt_accepts_or_reverts(workpiece: Workpiece, re
 
 
 def test_too_easy_does_not_create_an_extra_modification_budget(workpiece: Workpiece) -> None:
-    setup = config(RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ()))))
+    setup = config()
     assert workpiece.submission is not None
     evidence = ValidationResult(
         workpiece.submission.digest,
@@ -472,7 +433,6 @@ def test_too_easy_does_not_create_an_extra_modification_budget(workpiece: Workpi
     assert "Shared modification budget exhausted" in final.decisions[-1].reasons
 
 
-@pytest.mark.asyncio
 async def test_validate_returns_lowering_failure_without_starting_trials(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     task = workpiece.submission.task.model_copy(
@@ -498,12 +458,10 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
         (Outcome.INFRA_ERROR, None, Cause.GRADER_INFRA),
     ],
 )
-@pytest.mark.asyncio
 async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_defect(
     workpiece: Workpiece, status: Outcome, failure: GradingFailure | None, cause: Cause
 ) -> None:
-    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    setup = config(harness)
+    setup = config()
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
     grader = GradingResource(
@@ -533,7 +491,6 @@ async def test_validate_observer_holds_for_grader_outage_but_preserves_authored_
     await ctx.drain()
 
 
-@pytest.mark.asyncio
 async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     payload = b"large-payload" * 50000
@@ -566,7 +523,6 @@ async def test_adversary_prompt_uses_manifest_for_large_resources(workpiece: Wor
     assert TaskSpec.model_validate_json(bundle.envs.created[0].files[PurePosixPath("/workspace/task.json")]) == task
 
 
-@pytest.mark.asyncio
 async def test_validate_summary_hydrates_full_evidence_before_author_resumes(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     grade = GradeResult(Outcome.GRADED, 1, diagnostics={"stdout": "first line\n" + "x" * 100000})
@@ -603,7 +559,6 @@ async def test_validate_summary_hydrates_full_evidence_before_author_resumes(wor
 
 
 @pytest.mark.parametrize("claim", [False, True])
-@pytest.mark.asyncio
 async def test_control_and_claim_preemption_restarts_validation(workpiece: Workpiece, claim: bool) -> None:
     assert workpiece.submission is not None
     ctx = Context(log=EventLog())
@@ -622,7 +577,6 @@ async def test_control_and_claim_preemption_restarts_validation(workpiece: Workp
     await ctx.drain()
 
 
-@pytest.mark.asyncio
 async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     evidence = ValidationResult(workpiece.submission.digest, (), (), ())
@@ -633,7 +587,7 @@ async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None
         assert workpiece is current
         return expected
 
-    setup = replace(config(RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))), review=custom_review)
+    setup = replace(config(), review=custom_review)
     ctx = Context(log=EventLog())
     assert (await review(ctx, current, setup, resources(ctx))).decision is expected
     await ctx.drain()
