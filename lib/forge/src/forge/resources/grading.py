@@ -7,7 +7,7 @@ import base64
 import json
 import shlex
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from typing import ClassVar
 
@@ -19,7 +19,6 @@ from taskcompendium.runtime.resources import resource_bytes
 from forge.effects.events import Event, Fingerprint, ReplayPolicy, event_digest
 from forge.model.controls import Candidate
 from forge.resources.execution import Notify, retry_effect
-from forge.resources.grade_health import check_timeout
 from forge.resources.rollouts import Engine, interruption
 from forge.resources.sandbox.images import DEFAULT_MODE
 
@@ -107,8 +106,9 @@ class GradingResource:
                 result = await engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
             except RolloutInterrupted as error:
                 raise interruption(error) from error
-            check_timeout(result.grade, spec.task)
             if result.grade.failure != GradingFailure.TIMEOUT or attempt == 1:
+                if event.fresh_verifier:
+                    return replace(result.grade, diagnostics={**result.grade.diagnostics, "verifier_fresh": True})
                 return result.grade
         raise RuntimeError("Candidate grading produced no result")
 

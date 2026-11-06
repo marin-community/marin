@@ -19,7 +19,6 @@ from forge.effects.events import Resolved
 from forge.effects.issues import Hold
 from forge.model.review import Cause
 from forge.model.verdict import grader_checks
-from forge.resources.grade_health import check_timeout
 
 TASK_DEFECTS = frozenset(
     {
@@ -38,7 +37,6 @@ TASK_DEFECTS = frozenset(
 
 
 def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | None:
-    check_timeout(grade, task)
     try:
         grader_checks(grade)
     except ValueError:

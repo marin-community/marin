@@ -16,7 +16,7 @@ from forge.resources.grading import GradingResource
 from forge.resources.ids import Ids
 from forge.resources.inference import InferenceClient
 from forge.resources.rollouts import RolloutResource
-from forge.resources.verifier import VerifierPool
+from forge.resources.verifier import RoundVerifier
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +31,7 @@ class Resources:
     web: WebClient
     role_inference: Mapping[str, InferenceClient] = field(default_factory=dict)
 
-    verifiers: VerifierPool | None = None
+    verifiers: RoundVerifier | None = None
 
     async def close_round(self) -> None:
         if self.verifiers is not None:

@@ -2,13 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import json
-import os
-import re
-import shlex
-import signal
-import subprocess
-import sys
 import time
 from dataclasses import replace
 from functools import partial
@@ -16,9 +9,7 @@ from pathlib import Path
 from typing import override
 
 import pytest
-from iris.rpc import controller_pb2
 from lib.forge.tests.resources.test_rollouts_grading import FakeEngine
-from lib.shellbox.tests.test_iris_machine import local_machine
 from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
@@ -51,7 +42,7 @@ from forge.model.controls import Candidate, RewardBand
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.rollouts import RolloutResource, SolverRollout
 from forge.resources.sandbox.factories import MachineHost, shellsim_factory
-from forge.resources.verifier import PROCESS_RESET, VerifierEngine, VerifierFactory, VerifierLease, VerifierPool
+from forge.resources.verifier import RoundVerifier
 from forge.stages.validate import claim_result
 
 SCRIPT = b"""
@@ -86,6 +77,17 @@ class CountedMachine(Machine):
     async def download(self, source: str, target: Path) -> None:
         await self.machine.download(source, target)
 
+    async def reset(self) -> None:
+        await self.machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "rm -rf /app /workspace /tests /tmp /custom /rootfile; mkdir -p /app /workspace /tests /tmp",
+                )
+            )
+        )
+
     @override
     async def close(self) -> None:
         self.closed = True
@@ -114,12 +116,10 @@ class CountedFactory(MachineFactory):
         return machine
 
 
-def setup(factory: CountedFactory) -> tuple[VerifierPool, GradingResource]:
-    pool = VerifierPool(5)
-    engine = rollout_engine(
-        {"shellsim": factory, "verifier:shellsim": VerifierFactory(pool, factory)}, command_timeout=1
-    )
-    return pool, GradingResource(VerifierEngine(engine), "test", VerifierEngine(engine, fresh=True))
+def setup(factory: CountedFactory) -> tuple[RoundVerifier, GradingResource]:
+    engine = rollout_engine({"shellsim": factory}, command_timeout=1)
+    holder = RoundVerifier(engine, 5)
+    return holder, GradingResource(holder, "test", engine)
 
 
 def event(script: bytes = SCRIPT) -> GradeCandidate:
@@ -206,7 +206,6 @@ async def test_fresh_confirmation_and_replay_require_no_shared_machine_state() -
         await ctx.drain()
         assert first.met and first.grade is not None
         assert first.grade.diagnostics["verifier_fresh"] is True
-        assert first.grade.diagnostics["verifier_lease"] == 2
         assert len(factory.machines) == 2 and factory.machines[1].closed
         await pool.close()
         replay = Context(log=EventLog(replay_from=log.records))
@@ -267,29 +266,6 @@ async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
     assert len(shared.run_ids) == len(fresh.run_ids) == 1
 
 
-def test_process_cleanup_preserves_supervisor_and_current_exec_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    # PID 2 was recycled: matching its old PID alone must not preserve the leaked process.
-    # The active Python reset (92), timeout wrapper (91), and exec shell (90)
-    # are all ancestors of the cleanup command and must survive it.
-    processes = {1: (0, "100"), 2: (1, "999"), 3: (1, "300"), 90: (1, "900"), 91: (90, "910"), 92: (91, "920")}
-    killed = []
-
-    def stat(path: Path, *args: object, **kwargs: object) -> str:
-        pid = int(path.parent.name)
-        parent, started = processes[pid]
-        fields = ["S", str(parent), *(["0"] * 17), started]
-        return f"{pid} (command with spaces) " + " ".join(fields)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(Path, "glob", lambda path, pattern: iter(Path(f"/proc/{pid}/stat") for pid in processes))
-        patch.setattr(Path, "read_text", stat)
-        patch.setattr(os, "getpid", lambda: 92)
-        patch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
-        patch.setattr(sys, "argv", ["reset", json.dumps({"1": "100", "2": "200"})])
-        exec(PROCESS_RESET, {})
-    assert killed == [(2, signal.SIGKILL), (3, signal.SIGKILL)]
-
-
 async def test_candidate_files_and_staged_roots_are_replaced_between_grades() -> None:
     script = b"""
 from pathlib import Path
@@ -320,55 +296,33 @@ print(int(clean and Path('/custom/output').read_text() == answer and Path('/root
         await pool.close()
 
 
-async def test_reset_preserves_iris_capture_files_and_runtime_directory(tmp_path: Path) -> None:
-    class SandboxRpc:
-        def exec_in_container(
-            self, request: controller_pb2.Controller.ExecInContainerRequest, timeout_ms: int
-        ) -> controller_pb2.Controller.ExecInContainerResponse:
-            # Execute the real Iris capture/readback scripts against isolated host
-            # paths. No cleanup command may touch the host's actual /tmp or roots.
-            if request.command[-1] == "id -u && id -un":
-                return controller_pb2.Controller.ExecInContainerResponse(exit_code=0, stdout="0\nroot\n")
-            command = [
-                re.sub(r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda match: str(tmp_path / match.group(1)), part)
-                for part in request.command
-            ]
-            command[-1] = f"export PATH={shlex.quote(str(tmp_path / 'bin'))}:$PATH\n" + command[-1]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-            return controller_pb2.Controller.ExecInContainerResponse(
-                exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr
-            )
-
-    for name in ("tmp", "workspace", "tests", "app"):
-        (tmp_path / name).mkdir()
-    # Model mount points: removing their contents is allowed, unlinking a root is not.
-    binary = tmp_path / "bin"
-    binary.mkdir()
-    protected = "|".join(shlex.quote(str(tmp_path / name)) for name in ("tmp", "workspace", "tests", "app"))
-    (binary / "rm").write_text(
-        f'#!/bin/sh\nfor target do\ncase "$target" in {protected}) '
-        'echo "rm: Device or resource busy" >&2; exit 1;; esac\ndone\nexec /bin/rm "$@"\n'
-    )
-    (binary / "rm").chmod(0o755)
-    inodes = {name: (tmp_path / name).stat().st_ino for name in ("tmp", "workspace", "tests", "app")}
-    runtime = tmp_path / "tmp/.shellbox"
-    runtime.mkdir()
-    (runtime / "state").write_text("runtime")
-    (tmp_path / "tmp/.shellbox-stale-out").write_text("capture")
-    (tmp_path / "tmp/candidate-leftover").write_text("remove")
-    (tmp_path / "workspace/previous").write_text("remove")
-    machine, _ = local_machine(tmp_path, rpc=SandboxRpc())
-    pool = VerifierPool(5)
-    lease = VerifierLease(pool, machine, Backend.GVISOR, replace(machine.spec, workdir="/workspace"), False)
+async def test_backend_without_reset_is_recreated() -> None:
+    engine = rollout_engine({"shellsim": shellsim_factory()}, command_timeout=1)
+    holder = RoundVerifier(engine, 5)
+    resource = GradingResource(holder, "test")
     try:
-        await lease.reset()
-        assert (await lease.run(Command(("printf", "after reset"), cwd="/workspace"))).stdout == b"after reset"
-        assert (runtime / "state").read_text() == "runtime"
-        assert (tmp_path / "tmp/.shellbox-stale-out").read_text() == "capture"
-        assert not (tmp_path / "tmp/candidate-leftover").exists()
-        assert not (tmp_path / "workspace/previous").exists()
-        assert all((tmp_path / name).stat().st_ino == inode for name, inode in inodes.items())
-        await lease.reset()
-        assert (await lease.run(Command(("printf", "second reset"), cwd="/workspace"))).stdout == b"second reset"
+        assert (await resource.grade(event())).reward == 1
+        original = holder.machine
+        assert original is not None
+        assert (await resource.grade(event())).reward == 1
+        assert holder.machine is not original
+        with pytest.raises(RuntimeError):
+            await original.run(Command(("true",)))
     finally:
-        await machine.close()
+        await holder.close()
+
+
+async def test_dead_machine_during_reset_is_recreated(monkeypatch: pytest.MonkeyPatch) -> None:
+    factory = CountedFactory()
+    holder, resource = setup(factory)
+    try:
+        assert (await resource.grade(event())).reward == 1
+
+        async def lost() -> None:
+            raise MachineTerminated("lost before reset")
+
+        monkeypatch.setattr(factory.machines[0], "reset", lost)
+        assert (await resource.grade(event())).reward == 1
+        assert len(factory.machines) == 2 and factory.machines[0].closed
+    finally:
+        await holder.close()

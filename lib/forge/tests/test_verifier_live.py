@@ -10,6 +10,14 @@ import time
 import traceback
 from pathlib import Path
 
+import pytest
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
+from shellbox.machine import MachineSpec
+from taskcompendium.models import AnswerType, PlainText, Source, StdoutReward
+from taskcompendium.runtime.resources import inline_resource
+
 import forge
 from forge.effects.issues import Restart
 from forge.lowering import (
@@ -25,13 +33,7 @@ from forge.model.controls import Candidate
 from forge.policy import load_policy
 from forge.resources.grading import GradeCandidate, GradingResource
 from forge.resources.sandbox.images import GRADER_BASE_IMAGE
-from forge.resources.verifier import VerifierEngine, VerifierFactory, VerifierPool
-from rigging.filesystem.factory import open_url
-from rigging.filesystem.s3_compat import configure_coreweave_s3
-from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
-from shellbox.machine import MachineSpec
-from taskcompendium.models import AnswerType, PlainText, Source, StdoutReward
-from taskcompendium.runtime.resources import inline_resource
+from forge.resources.verifier import RoundVerifier
 
 SCRIPT = b"""
 from pathlib import Path
@@ -62,12 +64,18 @@ class Factory(IrisMachineFactory):
         return machine
 
 
-async def main() -> None:
+@pytest.mark.cluster
+@pytest.mark.timeout(1200)
+@pytest.mark.skipif(
+    not all(os.environ.get(key) for key in ("IRIS_CONTROLLER_URL", "CW_KEY_ID", "CW_KEY_SECRET", "PROBE_OUTPUT")),
+    reason="requires a live Iris job, storage credentials, and artifact destination",
+)
+async def test_verifier_reuse_and_replacement() -> None:
     configure_coreweave_s3()
     factory = Factory()
-    pool = VerifierPool(60)
-    engine = rollout_engine({"gvisor": factory, "verifier:gvisor": VerifierFactory(pool, factory)}, command_timeout=30)
-    resource = GradingResource(VerifierEngine(engine), "live-probe")
+    engine = rollout_engine({"gvisor": factory}, command_timeout=30)
+    pool = RoundVerifier(engine, 60)
+    resource = GradingResource(pool, "live-probe")
     policy = load_policy(Path(forge.__file__).parent / "policy/defaults")
     settings = lowering_settings(policy)
     output = os.environ["PROBE_OUTPUT"]
@@ -153,7 +161,3 @@ async def main() -> None:
         raise
     finally:
         await pool.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

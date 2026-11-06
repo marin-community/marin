@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import override
 
 import pytest
+from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, ModelRequest, ModelTurn, Rollout, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -40,7 +41,7 @@ from forge.resources.grading import GradingResource
 from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference, InferenceRequest
 from forge.resources.rollouts import Engine, RolloutResource
-from forge.resources.verifier import VerifierPool
+from forge.resources.verifier import RoundVerifier
 from forge.wiring import build_config
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)
@@ -173,9 +174,9 @@ def needs_revision(result: ValidationResult, band: BandRules) -> Decision:
 
 
 async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
-    class RoundPool(VerifierPool):
+    class RoundPool(RoundVerifier):
         def __init__(self) -> None:
-            super().__init__(5)
+            super().__init__(RolloutEngine({}, {}), 5)
             self.closes = 0
 
         @override

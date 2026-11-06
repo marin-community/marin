@@ -11,7 +11,6 @@ from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, Rollo
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
 from forge.effects.issues import Restart, Transient
 from forge.resources.execution import Notify, exec_machine_lost, exec_setup_failed, retry_effect
-from forge.resources.grade_health import check_timeout
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +56,6 @@ class RolloutResource:
             result = await self.engine.run_task(
                 event.spec, self.model, run_id=f"{event.spec.task.id}:{event.trial}:{event.attempt}"
             )
-            check_timeout(result.grade, event.spec.task)
             return result
         except RolloutInterrupted as error:
             raise interruption(error) from error

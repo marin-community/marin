@@ -20,6 +20,7 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
+from shellbox.machine import MachineTerminated
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -178,16 +179,10 @@ async def test_grading_retries_pre_command_websocket_setup_failures(failures: in
 
 @pytest.mark.parametrize("solver", [False, True])
 async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> None:
-    cut = GradeResult(
-        Outcome.INFRA_ERROR,
-        None,
-        failure=GradingFailure.TIMEOUT,
-        diagnostics={"grader_elapsed_seconds": 63, "grader_timeout_seconds": 600, "exit_code": 124},
-    )
+    cut = RolloutInterrupted(Rollout("cut", (), "interrupted"), RolloutOperation.GRADE)
+    cut.__cause__ = MachineTerminated("Iris command cut after 63s before 600s budget")
     success = GradeResult(Outcome.GRADED, 1)
-    engine = FakeEngine(
-        (GradedRollout(Rollout("cut", (), "stop"), cut), GradedRollout(Rollout("ok", (), "stop"), success))
-    )
+    engine = FakeEngine((cut, GradedRollout(Rollout("ok", (), "stop"), success)))
     ctx = Context(log=EventLog())
     spec = rollout_spec(arithmetic_task())
     if solver:
