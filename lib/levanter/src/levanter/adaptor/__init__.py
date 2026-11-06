@@ -117,9 +117,8 @@ def _install_full_model_export_hook(
     trainer,
     converter: HFCheckpointConverter | None,
     export: AdaptorExportConfig,
-    dtype_overrides: dict[str, str] | None,
 ) -> None:
-    """Register the HF export of a complete model, with per-tensor storage dtype overrides."""
+    """Register the HF export of a complete model; the trainer's fp32 fields are exported in float32."""
     if export.peft_save_path is not None or export.merged_hf_save_path is not None:
         raise ValueError("peft_save_path and merged_hf_save_path require adapter.type: lora.")
 
@@ -139,7 +138,7 @@ def _install_full_model_export_hook(
             save_dtype=save_dtype,
             generation_config=export.generation_config,
             chat_template=export.chat_template,
-            dtype_overrides=dtype_overrides,
+            fp32_fields=trainer.config.fp32_fields,
         ),
         every=export.hf_save_steps,
     )
@@ -169,7 +168,7 @@ class NoAdaptorConfig(AdaptorConfig):
         export: AdaptorExportConfig,
     ) -> None:
         del tokenizer
-        _install_full_model_export_hook(trainer=trainer, converter=converter, export=export, dtype_overrides=None)
+        _install_full_model_export_hook(trainer=trainer, converter=converter, export=export)
 
 
 @AdaptorConfig.register_subclass("frozen_parameters")
@@ -182,7 +181,6 @@ class FrozenParameterAdaptorConfig(AdaptorConfig):
     """
 
     frozen_field_names: tuple[str, ...]
-    hf_save_dtype_overrides: dict[str, str] | None = None
     hf_config_overrides: dict | None = None
 
     def apply(self, model, *, key, axis_mapping=None):
@@ -224,9 +222,7 @@ class FrozenParameterAdaptorConfig(AdaptorConfig):
             if converter is None:
                 raise ValueError("HF config overrides require an HF checkpoint converter")
             converter = converter.with_config_overrides(self.hf_config_overrides)
-        _install_full_model_export_hook(
-            trainer=trainer, converter=converter, export=export, dtype_overrides=self.hf_save_dtype_overrides
-        )
+        _install_full_model_export_hook(trainer=trainer, converter=converter, export=export)
 
 
 @AdaptorConfig.register_subclass("lora")

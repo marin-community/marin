@@ -15,7 +15,6 @@ import tempfile
 import time
 import urllib.parse
 import warnings
-from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -55,6 +54,7 @@ from tqdm_loggable.auto import tqdm
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
+from levanter.fp32_fields import cast_floating
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -491,14 +491,15 @@ def _to_state_dict_with_dtype(
     model: ModelWithHfSerializationMixin,
     dtype,
     subset: tuple[str, ...] | None,
-    dtype_overrides: Mapping[str, str] | None = None,
+    fp32_fields: tuple[str, ...] = (),
 ) -> StateDict:
     """
-    Convert a model to a torch-compatible state dict, optionally subsetting to a given set of keys.
-
-    Floating-point arrays are converted to ``dtype`` when it is given. ``dtype_overrides`` maps exact state-dict keys
-    to their own dtype; those keys are converted to that dtype even when ``dtype`` is None.
+    Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
+    and optionally subsetting to a given set of keys. Model fields named in ``fp32_fields`` are exported in float32.
     """
+    if fp32_fields:
+        model = cast_floating(model, dtype, fp32_fields)
+        dtype = None
     # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
     # we don't want to do that here because we want to keep things as jax arrays so we can eval_shape and control
     # sharding
@@ -515,11 +516,13 @@ def _to_state_dict_with_dtype(
             out[k] = state_dict[k]
         state_dict = out
 
-    if dtype is not None or dtype_overrides:
+    if dtype is not None:
+        logger.info(f"Converting floating-point arrays in state_dict to {dtype}")
         for k, v in state_dict.items():
-            target_dtype = jnp.dtype(dtype_overrides[k]) if dtype_overrides and k in dtype_overrides else dtype
-            if target_dtype is not None and jnp.issubdtype(v.dtype, jnp.floating):
-                state_dict[k] = v.astype(target_dtype)
+            if jnp.issubdtype(v.dtype, jnp.floating):
+                state_dict[k] = v.astype(dtype)
+            else:
+                logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
     return state_dict
 
@@ -1097,7 +1100,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
         chat_template: Optional[str] = None,
-        dtype_overrides: Mapping[str, str] | None = None,
+        fp32_fields: tuple[str, ...] = (),
         **hf_upload_kwargs,
     ):
         """
@@ -1119,8 +1122,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
-        :param dtype_overrides: per-state-dict-key floating-point storage dtypes, overriding dtype.
-            Useful for retaining native float32 buffers in an otherwise bfloat16 checkpoint.
+        :param fp32_fields: model attribute names (matched at any depth) exported in float32 regardless of dtype
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
@@ -1153,9 +1155,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, dtype_overrides)
-        if dtype_overrides and (unknown := set(dtype_overrides) - set(state_dict_shape)):
-            raise ValueError(f"Storage dtype overrides reference unknown tensors: {sorted(unknown)}")
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, fp32_fields)
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1226,7 +1226,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, dtype_overrides),
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, fp32_fields),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
@@ -1400,7 +1400,7 @@ def save_hf_checkpoint_callback(
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
-    dtype_overrides: Mapping[str, str] | None = None,
+    fp32_fields: tuple[str, ...] = (),
     **hf_upload_kwargs,
 ):
     """
@@ -1412,7 +1412,7 @@ def save_hf_checkpoint_callback(
     :param upload_to_hf:
     :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
     (written to both tokenizer_config.json and chat_template.jinja)
-    :param dtype_overrides: per-state-dict-key storage dtypes that override save_dtype
+    :param fp32_fields: model attribute names exported in float32 regardless of save_dtype
     :param hf_upload_kwargs:
     :return:
     """
@@ -1433,7 +1433,7 @@ def save_hf_checkpoint_callback(
             dtype=save_dtype,
             generation_config=generation_config,
             chat_template=chat_template,
-            dtype_overrides=dtype_overrides,
+            fp32_fields=fp32_fields,
             **my_upload_kwargs,
         )
 
