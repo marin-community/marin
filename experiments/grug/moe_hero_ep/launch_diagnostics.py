@@ -283,7 +283,8 @@ def build_diagnostic_run(
                     enable_hlo_proto=True,
                 ),
             ),
-            load_checkpoint_path=restore_from,
+            # DIAGNOSTIC ONLY: search the run's own saves first, as the production ladder does.
+            load_checkpoint_path=[checkpoint_path, restore_from] if checkpoint_path and restore_from else restore_from,
             load_checkpoint=True if restore_from else None,
             tracker=WandbConfig(
                 save_code=False,
