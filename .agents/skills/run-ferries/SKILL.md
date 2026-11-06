@@ -41,6 +41,7 @@ If objective is ambiguous, ask before editing.
 - Keep canary stable; only change it for explicit reliability fixes, and only when diagnosing/fixing a concrete failure mode.
 - Canary launches usually do not require a PR if the script/config is unchanged.
 - If canary fails, treat as urgent infrastructure/training-health triage.
+- To find the commit that moved TPU canary MFU, follow "Canary ferry: bisect an MFU change" in `experiments/ferries/OPS.md`. Submit bisection runs to Iris at `--priority batch`; never use `gh workflow run`, which can cancel the scheduled canary.
 - Canary is run-only by default (W&B + issue updates); no sealing tag or run-closure PR in the normal path.
 
 ### Daily
