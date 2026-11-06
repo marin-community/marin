@@ -90,7 +90,7 @@ class GlmInference(InferenceClient):
             raise Restart("GLM transport exhausted its retry or hold budget", _retries(error.attempts)) from error
         except ModelRequestRejected as error:
             if error.status == 400 and "maximum context length" in error.body.lower():
-                raise ContextExceeded(error.body[:500]) from error
+                raise ContextExceeded(error.body) from error
             decision = Transient if error.status in RETRYABLE_STATUSES else Hold
             detail = f": {error.body[:500]}" if decision is Hold else ""
             raise decision(

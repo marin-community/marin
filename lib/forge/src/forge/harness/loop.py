@@ -48,7 +48,7 @@ class AgenticHarness(Harness):
     async def run(
         self, ctx: Context, session: Conversation, env: Env, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
-        prompt_tokens, empty_completions = 0, 0
+        prompt_tokens, empty_completions, turns = 0, 0, 0
         schemas = tuple(tool.schema for tool in tools.values())
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
@@ -57,11 +57,17 @@ class AgenticHarness(Harness):
             while True:
                 await ctx.check(Hold)
                 if prompt_tokens >= self.max_prompt_tokens:
-                    return Stopped(StopReason.CONTEXT_LIMIT, session)
+                    return Stopped(
+                        StopReason.CONTEXT_LIMIT,
+                        session,
+                        f"estimated prompt {prompt_tokens} tokens reaches model window {self.max_prompt_tokens}",
+                        turns,
+                    )
+                turns += 1
                 try:
                     result = await ctx.emit(InferenceRequest(session.messages, schemas, self.sampling))
-                except ContextExceeded:
-                    return Stopped(StopReason.CONTEXT_LIMIT, session)
+                except ContextExceeded as error:
+                    return Stopped(StopReason.CONTEXT_LIMIT, session, str(error), turns)
                 # Provider prompt_tokens already includes the cached portion.
                 prompt_tokens = result.usage.prompt_tokens + result.usage.completion_tokens
                 session = Conversation(
@@ -92,7 +98,7 @@ class AgenticHarness(Harness):
                     if isinstance(outcome, ReturnRequest):
                         return Returned(outcome.tool, outcome.payload, session)
                     if isinstance(outcome, FinishRequest):
-                        return Stopped(StopReason.FINISHED, session)
+                        return Stopped(StopReason.FINISHED, session, outcome.reason, turns)
                     content = outcome.content
                     if len(content) > self.output_chars:
                         path = PurePosixPath(".tool-output") / f"{canonical_digest((call.id, content))}.txt"
@@ -100,7 +106,7 @@ class AgenticHarness(Harness):
                         await ctx.emit(WriteFile(path, data))
                         marker = (
                             f"\n[Full output saved to {path}: {len(content)} characters, {len(data)} bytes. "
-                            "Use read_file with offset and limit to read slices.]"
+                            "Use read_file with byte offset and limit to read slices.]"
                         )
                         content = content[: self.output_chars] + marker
                     # Estimate only appended text; the provider counted the prior prompt and reply.

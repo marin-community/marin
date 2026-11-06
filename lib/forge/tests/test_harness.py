@@ -463,13 +463,17 @@ async def test_repaired_task_machine_allows_file_controls_to_leave_the_tool(name
 
 
 async def test_provider_context_overflow_preserves_the_last_completed_conversation() -> None:
-    client = FakeInference((call("shell", {"command": "task"}, "1"), ContextExceeded("maximum context length")))
+    client = FakeInference(
+        (call("shell", {"command": "task"}, "1"), ContextExceeded("maximum context length: requested 383788 tokens"))
+    )
     ctx = Context(log=EventLog())
     result = await AgenticHarness(262144, Sampling(), "use tools", 20000).run(
         ctx, Conversation((Message("user", "build"),), ()), environment(ctx), client, {"shell": ShellTool()}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
+    assert result.turns == 2
+    assert "requested 383788 tokens" in result.summary
     assert result.session.messages == client.requests[1].messages
     assert result.session.messages[-1].role == "tool"
     assert result.session.messages[-1].tool_call_id == "1"
@@ -581,3 +585,36 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
     await replay.drain()
     assert not replay_client.requests
     assert replay_env.files == env.files
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        IsADirectoryError("directory"),
+        FileNotFoundError("missing"),
+        NotADirectoryError("parent"),
+        PermissionError("denied"),
+    ],
+)
+async def test_write_path_errors_return_feedback(failure: OSError) -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+
+    async def fail_write(event: WriteFile) -> None:
+        raise failure
+
+    ctx.handle(WriteFile, fail_write)
+    result = await WriteFileTool()(ctx, {"path": "/bad/path", "content": "data"}, env)
+    await ctx.drain()
+    assert isinstance(result, ToolResult) and "/bad/path" in result.content
+
+
+async def test_read_file_ranges_are_bytes_before_text_or_base64_decoding() -> None:
+    ctx = Context(log=EventLog())
+    env = environment(ctx)
+    await ctx.emit(WriteFile(PurePosixPath("unicode"), "éXYZ".encode()))
+    text = await ReadFileTool()(ctx, {"path": "unicode", "offset": 2, "limit": 2}, env)
+    binary = await ReadFileTool()(ctx, {"path": "unicode", "offset": 0, "limit": 2, "base64": True}, env)
+    await ctx.drain()
+    assert text == ToolResult("XY")
+    assert binary == ToolResult("w6k=")

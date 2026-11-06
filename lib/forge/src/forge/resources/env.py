@@ -14,7 +14,7 @@ from typing import ClassVar, Protocol, override
 
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
-from shellbox.machine import DEFAULT_WORKDIR, Command, ExitReason, Machine, MachineFactory, MachineTerminated
+from shellbox.machine import DEFAULT_WORKDIR, Command, ExitReason, FileReader, Machine, MachineFactory, MachineTerminated
 from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 
@@ -50,6 +50,8 @@ class WriteFile(Event[None]):
 class ReadFile(Event[bytes]):
     result_type: ClassVar[object] = bytes
     path: PurePosixPath
+    offset: int = 0
+    limit: int | None = None
 
 
 type Mutation = Resolved[CommandResult] | Resolved[None]
@@ -58,7 +60,7 @@ type Mutation = Resolved[CommandResult] | Resolved[None]
 class Env(Protocol):
     def fingerprint(self) -> Fingerprint: ...
     async def run(self, cmd: str, *, timeout: float) -> CommandResult: ...
-    async def read(self, path: PurePosixPath) -> bytes: ...
+    async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes: ...
     async def write(self, path: PurePosixPath, data: bytes) -> None: ...
     async def restore(self, events: Sequence[Mutation]) -> None:
         """Replay mutations, excluding ReadFile; mismatch Notes leave the log authoritative.
@@ -151,7 +153,14 @@ class ShellboxEnv(_RecordedEnv):
                 raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
             if "is a directory" in detail.lower():
                 raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path) if path else detail) from error
-            if isinstance(error, SimulationError) and "no such file or directory" in detail.lower():
+            if path is not None:
+                if "not a directory" in detail.lower():
+                    raise NotADirectoryError(errno.ENOTDIR, "Not a directory", str(path)) from error
+                if "permission denied" in detail.lower():
+                    raise PermissionError(errno.EACCES, "Permission denied", str(path)) from error
+            if (
+                path is not None or isinstance(error, SimulationError)
+            ) and "no such file or directory" in detail.lower():
                 missing = str(path) if path is not None else detail.partition("No such file or directory: ")[2] or detail
                 raise FileNotFoundError(errno.ENOENT, "No such file or directory", missing) from error
             raise
@@ -177,12 +186,18 @@ class ShellboxEnv(_RecordedEnv):
         return value
 
     @override
-    async def read(self, path: PurePosixPath) -> bytes:
+    async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes:
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
         async with self._operation(path):
+            if isinstance(self.machine, FileReader):
+                return await self.machine.read_file(str(self.workdir / path), offset=offset, limit=limit)
             with TemporaryDirectory() as directory:
                 target = Path(directory) / "file"
                 await self.machine.download(str(self.workdir / path), target)
-                return target.read_bytes()
+                with target.open("rb") as source:
+                    source.seek(offset)
+                    return source.read() if limit is None else source.read(limit)
 
     @override
     async def write(self, path: PurePosixPath, data: bytes) -> None:
@@ -257,9 +272,11 @@ class FakeEnv(_RecordedEnv):
         return scripted.result
 
     @override
-    async def read(self, path: PurePosixPath) -> bytes:
+    async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes:
         self._check_open()
-        return self.files[path]
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        return self.files[path][offset : None if limit is None else offset + limit]
 
     @override
     async def write(self, path: PurePosixPath, data: bytes) -> None:
@@ -277,4 +294,4 @@ async def write_file(event: WriteFile, env: Env, *, notify: Notify) -> None:
 
 
 async def read_file(event: ReadFile, env: Env, *, notify: Notify) -> bytes:
-    return await retry_effect(event, lambda: env.read(event.path), notify)
+    return await retry_effect(event, lambda: env.read(event.path, offset=event.offset, limit=event.limit), notify)
