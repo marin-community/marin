@@ -52,7 +52,7 @@ def _record_start(counter: str) -> int:
 def _serve() -> None:
     port = int(sys.argv[sys.argv.index("--port") + 1])
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--data-parallel-size", type=int, default=1)
+    parser.add_argument("--data-parallel-size", "--data_parallel_size", "-dp", type=int, default=1)
     native, _ = parser.parse_known_args()
 
     class Handler(BaseHTTPRequestHandler):

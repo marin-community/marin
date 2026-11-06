@@ -42,6 +42,7 @@ from marin.external_dependencies import (
 )
 from marin.inference.config import (
     STANDARD_VLLM_METRIC_FAMILIES,
+    VLLM_DATA_PARALLEL_SIZE_FLAGS,
     VLLM_METRIC_PREFIX,
     WORKER_PYTHON_VERSION,
     InferenceModelConfig,
@@ -777,7 +778,7 @@ def _get_first_model_id(server_url: str) -> str:
 def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
     """Read the native ranks reachable behind vLLM's global internal DP frontend."""
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--data-parallel-size", type=int, default=1)
+    parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=1)
     parser.add_argument("--data-parallel-hybrid-lb", action="store_true")
     parser.add_argument("--data-parallel-external-lb", action="store_true")
     topology, _ = parser.parse_known_args(extra_cli_args)
