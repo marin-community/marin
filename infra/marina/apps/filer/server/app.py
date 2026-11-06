@@ -58,7 +58,6 @@ class FavoriteRequest(BaseModel):
 
 
 def migrate(connection: Connection) -> None:
-    """Store favorites for each verified Marina user."""
     connection.execute(
         text(
             """CREATE TABLE IF NOT EXISTS favorites (
