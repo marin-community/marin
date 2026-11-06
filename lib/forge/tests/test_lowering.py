@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from typing import override
 
 import pytest
+from rolloutengine.machines import _machine_spec
 from rolloutengine.models import RolloutLimits, TaskRolloutSpec
-from rolloutengine.test_support import arithmetic_task, rollout_limits
+from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
 from taskcompendium.models import AnswerType, CommandSemantics, EnvironmentRequirements, PlainText, Source, StdoutReward
 from verifyit.spec import ExactSpec
@@ -16,6 +17,7 @@ from forge.lowering import (
     LoweringSettings,
     answer_grader,
     assemble,
+    host_requirements,
     lower,
     lower_with_settings,
     machine,
@@ -122,3 +124,14 @@ def test_missing_machine_error_names_the_author_environment_fix() -> None:
     repaired = task.model_copy(update={"environment_requirements": requirements(image=None)})
     spec = lower_with_settings(repaired, settings, {"shellsim": AvailableFactory(Backend.SHELLSIM)})
     assert spec.task_machine is not None and spec.task_machine.backend == Backend.SHELLSIM
+
+
+@pytest.mark.parametrize("directory", [None, "/custom"])
+def test_missing_workdir_resolves_before_machine_creation(directory: str | None) -> None:
+    declared = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_BASE_IMAGE, working_directory=directory
+    )
+    resolved = host_requirements(declared, {})
+    assert resolved.working_directory == (directory or "/workspace")
+    assert _machine_spec(resolved, machine_runtime(backend="gvisor")).workdir == (directory or "/workspace")
+    assert _machine_spec(declared, machine_runtime(backend="gvisor")).workdir == (directory or "/workspace")

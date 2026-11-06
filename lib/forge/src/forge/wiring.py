@@ -22,7 +22,7 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, TaskResource
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.rollout_model import model_turn
 
@@ -51,7 +51,8 @@ from forge.resources.clock import Clock, Now, now
 from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids, NewId, new_id
-from forge.resources.inference import GlmInference, InferenceRequest, complete
+from forge.resources.inference import CompletionBackend, GlmInference, InferenceRequest, complete
+from forge.resources.provider import EndpointLimitedClient, WaitingBackend
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
@@ -126,14 +127,14 @@ class Environments(EnvFactory):
         return await ShellboxEnvFactory(factory, runtime, cleanup, logging.info).create(requirements)
 
 
-async def solver_turn(client: GlmClient, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:
+async def solver_turn(client: CompletionBackend, sampling: LLMPolicy, request: ModelRequest) -> ModelTurn:
     if request.continuation is not None or request.prompt_token_ids is not None:
         raise ValueError("GLM solver requires messages trace")
     return model_turn(await client.complete(request.messages, sampling, request.options))
 
 
 def build_resources(
-    policy: Policy, client: GlmClient, factories: Mapping[str, MachineFactory], web: WebClient
+    policy: Policy, client: CompletionBackend, factories: Mapping[str, MachineFactory], web: WebClient
 ) -> Resources:
     settings = lowering_settings(policy)
     command_timeout = policy.setting("solver.command_timeout", float)
@@ -221,17 +222,30 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
     )
 
 
+def provider_policy(policy: Policy) -> Policy:
+    """Resolve trial deadlines so availability waits cannot exhaust them first."""
+    window = policy.setting("provider.unavailable_wait", float)
+    turn = max(policy.setting("solver.turn_timeout", float), window + policy.setting("provider.stall_timeout", float))
+    attempt = max(policy.setting("solver.attempt_timeout", float), 2 * turn)
+    resolved = policy.overlaid({"solver.turn_timeout": turn, "solver.attempt_timeout": attempt})
+    for key in ("provider.unavailable_wait", "solver.turn_timeout", "solver.attempt_timeout"):
+        print(f"POLICY {key} declared={policy.setting(key, float)} resolved={resolved.setting(key, float)}", flush=True)
+    return resolved
+
+
 @asynccontextmanager
 async def runtime(
     policy: Policy, arm: str, source: EndpointSource, parallel_api_key: str
 ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
-    provider = TypeAdapter(LLMProviderConfig).validate_python(
-        {
-            key.removeprefix("provider."): value
-            for key, value in policy.entries.items()
-            if key.startswith("provider.") and key != "provider.context_tokens"
-        }
-    )
+    policy = provider_policy(policy)
+    provider_fields = {
+        key.removeprefix("provider."): value
+        for key, value in policy.entries.items()
+        if key.startswith("provider.")
+        and key not in ("provider.context_tokens", "provider.unavailable_wait", "provider.max_attempts")
+    }
+    # The wrapper owns both busy retries and empty-pool waits under one deadline.
+    provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "max_attempts": 1, "hold_timeout": 0})
     print(f"GLM {type(source).__name__} resolved {source.current().base_url}", flush=True)
     host = MachineHost(policy.setting("runtime.host", str))
     # Source: acceptance-measure taskforge/sandbox/factories.py; driver.py controller-url env.
@@ -249,7 +263,14 @@ async def runtime(
         factories["local"] = local_factory()
     headers = {"x-api-key": parallel_api_key}
     async with (
-        GlmClient(source, provider) as client,
+        EndpointLimitedClient(source, provider) as client,
         httpx.AsyncClient(base_url="https://api.parallel.ai/v1/", headers=headers, timeout=60) as http,
     ):
-        yield build_config(policy, arm, factories), build_resources(policy, client, factories, ParallelWeb(http))
+        waiting = WaitingBackend(
+            client,
+            policy.setting("provider.unavailable_wait", float),
+            provider.backoff_initial,
+            provider.backoff_maximum,
+            provider.backoff_factor,
+        )
+        yield build_config(policy, arm, factories), build_resources(policy, waiting, factories, ParallelWeb(http))

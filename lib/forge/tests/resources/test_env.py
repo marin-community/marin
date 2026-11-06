@@ -294,3 +294,21 @@ async def test_machine_startup_websocket_failure_is_transient(monkeypatch: pytes
     with pytest.raises(Transient) as caught:
         await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
     assert caught.value.__cause__ is failure
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        SimulationError("Is a directory: /app"),
+        RuntimeError("Iris command failed: Is a directory"),
+        IsADirectoryError("temporary download directory"),
+    ],
+)
+async def test_directory_read_names_requested_path_without_retry(failure: Exception) -> None:
+    machine = MemoryMachine()
+    machine.failure = failure
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    with pytest.raises(IsADirectoryError) as caught:
+        await read_file(ReadFile(PurePosixPath("/app")), env, notify=Notes())
+    assert caught.value.filename == "/app"
+    assert machine.calls == 1

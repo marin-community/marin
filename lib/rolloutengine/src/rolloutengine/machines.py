@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 
 from shellbox.image import RegistryImage
 from shellbox.machine import (
+    DEFAULT_WORKDIR,
     Backend,
     Command,
     ExecutionRequirements,
@@ -85,11 +86,7 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
     return MachineSpec(
         source=source,
-        workdir=(
-            requirements.working_directory
-            if requirements.working_directory is not None
-            else "" if requirements.docker_image else "/workspace"
-        ),
+        workdir=requirements.working_directory or DEFAULT_WORKDIR,
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,

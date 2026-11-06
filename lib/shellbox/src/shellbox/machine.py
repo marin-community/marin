@@ -10,6 +10,7 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
+DEFAULT_WORKDIR = "/workspace"
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
@@ -150,7 +151,7 @@ class MachineSpec:
     """
 
     source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | PackageSpec | HostImage
-    workdir: str = "/workspace"
+    workdir: str = DEFAULT_WORKDIR
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
     memory_mb: int | None = None
