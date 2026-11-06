@@ -11,20 +11,19 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.evaluation.spec import ChoiceLikelihood
-from taskcompendium.importers.checkpoint_harness import (
-    CheckpointTemplate,
-    read_checkpoint_file,
-    read_humaneval_fewshot,
-)
+from taskcompendium.importers.evalchemy.code import read_humaneval_fewshot
+from taskcompendium.importers.evalchemy.commonsense import commonsense_qa_template, copa_template, wsc_template
+from taskcompendium.importers.evalchemy.reasoning import agieval_template, gpqa_likelihood_template
 from taskcompendium.importers.evaluation_harness import HarnessTemplate, compile_choice_documents
+from taskcompendium.importers.fewshot import read_choice_file
 from taskcompendium.pipeline.inputs import ConversionContext
 
 
 @pytest.mark.parametrize(
-    "family,document,expected",
+    "template,document,expected",
     [
         (
-            "wsc273",
+            wsc_template(),
             {
                 "text": "Alice thanked Beth because she helped.",
                 "pronoun": "she",
@@ -35,7 +34,7 @@ from taskcompendium.pipeline.inputs import ConversionContext
             [("Alice thanked Beth because Alice", "  helped."), ("Alice thanked Beth because Beth", "  helped.")],
         ),
         (
-            "copa",
+            copa_template(),
             {
                 "premise": "It rained.",
                 "question": "effect",
@@ -47,13 +46,13 @@ from taskcompendium.pipeline.inputs import ConversionContext
         ),
     ],
 )
-def test_checkpoint_multiple_choice_preserves_legacy_request_delimiters(tmp_path, family, document, expected):
+def test_checkpoint_multiple_choice_preserves_legacy_request_delimiters(tmp_path, template, document, expected):
     path = tmp_path / "source.parquet"
     pq.write_table(pa.Table.from_pylist([document]), path)
-    (row,) = read_checkpoint_file(
+    (row,) = read_choice_file(
         StoragePath(str(path)),
         ConversionContext(inputs={}, grader_environment=None),
-        template=CheckpointTemplate(family),
+        template=template,
     )
     operation = ChoiceLikelihood.model_validate(row["operation"])
     assert [(request.context, request.continuation) for request in operation.requests] == expected
@@ -73,10 +72,10 @@ def test_checkpoint_gpqa_cleans_answers_before_shuffling_and_selecting_gold(tmp_
         writer = csv.DictWriter(stream, fieldnames=list(document))
         writer.writeheader()
         writer.writerow(document)
-    (row,) = read_checkpoint_file(
+    (row,) = read_choice_file(
         StoragePath(str(path)),
         ConversionContext(inputs={}, grader_environment=None),
-        template=CheckpointTemplate("leaderboard_gpqa"),
+        template=gpqa_likelihood_template(),
     )
     operation = ChoiceLikelihood.model_validate(row["operation"])
     assert operation.gold == (3,)
@@ -128,10 +127,10 @@ def test_checkpoint_fewshots_use_split_configuration_instead_of_pool_identity(tm
     path = tmp_path / "source.parquet"
     pq.write_table(pa.Table.from_pylist(documents), path)
     rows = list(
-        read_checkpoint_file(
+        read_choice_file(
             StoragePath(str(path)),
             ConversionContext(inputs={}, grader_environment=None),
-            template=CheckpointTemplate(family, shots=2),
+            template=commonsense_qa_template(2) if family == "commonsense_qa" else agieval_template(2),
         )
     )
     assert [row["fewshot_indices"] for row in rows[:3]] == expected

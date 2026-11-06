@@ -18,7 +18,7 @@ from rigging.timing import Duration
 from rolloutengine.models import RolloutLimits
 
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import RunStatus
+from marin.evaluation.records import CuratedSettings, RunStatus
 from marin.evaluation.runner import (
     BACKEND_POLL_SECONDS,
     EvaluationError,
@@ -41,33 +41,12 @@ from marin.evaluation.task_worker import (
 )
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import InferenceBackendState
-from marin.rollouts.evaluation import EvaluationRunConfig, JudgeIdentity, ModelIdentity
-
-DEFAULT_EVALUATION_CONCURRENCY = 64
+from marin.rollouts.evaluation import EvaluationRunConfig, ModelIdentity
 
 
-@dataclass(frozen=True)
-class CuratedRunSettings:
-    model: ModelConfig
-    max_tokens: int | None
-    source_limit: int | None
-    seed: int | None
-    judge: JudgeIdentity | None
-
-    def record_json(self) -> str:
-        return json.dumps(
-            {
-                "max_tokens": self.max_tokens,
-                "source_limit": self.source_limit,
-                "seed": self.seed,
-                "judge": self.judge.model_dump(mode="json") if self.judge is not None else None,
-                "concurrency": self.model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
-            },
-            sort_keys=True,
-        )
-
-
-def runtime_config(settings: CuratedRunSettings, session: RemoteInferenceSession) -> EvaluationRunConfig:
+def runtime_config(
+    model: ModelConfig, settings: CuratedSettings, session: RemoteInferenceSession
+) -> EvaluationRunConfig:
     """Read the running server's context limit before admitting any evaluation rows."""
     endpoint = session.model.endpoint
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -77,7 +56,6 @@ def runtime_config(settings: CuratedRunSettings, session: RemoteInferenceSession
     context = (served.model_extra or {}).get("max_model_len")
     if not isinstance(context, int) or context < 2:
         raise ValueError(f"Server {endpoint.model} did not report a usable max_model_len")
-    model = settings.model
     assert model.effective_tokenizer_revision is not None
     return EvaluationRunConfig(
         model=ModelIdentity(
@@ -92,7 +70,7 @@ def runtime_config(settings: CuratedRunSettings, session: RemoteInferenceSession
         generation_extra_body={key: json.loads(value) for key, value in model.generation.extra_gen_kwargs.items()},
         chat_template_kwargs=dict(model.generation.chat_template_kwargs),
         thinking_off_template_kwargs=dict(model.generation.thinking_off_template_kwargs),
-        concurrency=model.evaluation_num_concurrent or DEFAULT_EVALUATION_CONCURRENCY,
+        concurrency=settings.concurrency,
         source_limit=settings.source_limit,
         seed=settings.seed,
         judge=settings.judge,
@@ -114,7 +92,8 @@ class CuratedExecutor:
     """Execute raw attempts; summary computation belongs to Evaldash."""
 
     datasets: tuple[str, ...]
-    settings: CuratedRunSettings
+    model: ModelConfig
+    settings: CuratedSettings
     judge_endpoint: str | None = None
 
     def __call__(
@@ -139,7 +118,7 @@ class CuratedExecutor:
                         JUDGE_API_KEY: judge.model.endpoint.api_key or "local-judge",
                     }
                 )
-        config = runtime_config(self.settings, session)
+        config = runtime_config(self.model, self.settings, session)
         job = iris_ctx().client.submit(
             entrypoint=Entrypoint.from_callable(
                 run_worker, self.datasets, output_dir, execution_config(config), DEFAULT_MAX_ATTEMPTS

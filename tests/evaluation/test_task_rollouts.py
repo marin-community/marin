@@ -13,12 +13,12 @@ import pytest
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, sample_from_archive_row
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from marin.evaluation.records import JudgeIdentity
 from marin.rollouts.evaluation import (
     ATTEMPTS_TABLE,
     RUN_OBJECT,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
-    JudgeIdentity,
     ModelIdentity,
     run_evaluation,
 )
@@ -177,6 +177,37 @@ async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, pu
         await run_evaluation(
             published_corpora, output, run_config.model_copy(update={"source_limit": 1}), model, machine_factories={}
         )
+
+
+@pytest.mark.asyncio
+async def test_driver_resumes_partial_archive_after_request_concurrency_changes(tmp_path, published_corpora, run_config):
+    calls = 0
+    recovered = False
+
+    async def model(_request):
+        nonlocal calls
+        calls += 1
+        if not recovered and calls > 1:
+            raise RuntimeError("interrupted transport")
+        return ModelTurn({"role": "assistant", "content": "red"}, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+    output = str(tmp_path / "results")
+    with pytest.raises(ExceptionGroup):
+        await run_evaluation(
+            published_corpora, output, run_config.model_copy(update={"concurrency": 1}), model, machine_factories={}
+        )
+    saved = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
+    successful = [row for row in saved if row["grading"]["score"] == 1]
+    assert len(successful) == 1
+    completed = successful[0]
+    recovered = True
+    await run_evaluation(
+        published_corpora, output, run_config.model_copy(update={"concurrency": 3}), model, machine_factories={}
+    )
+    samples = list(ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE))
+    assert sum(row["grading"]["score"] == 1 for row in samples) == 8
+    assert sum((row["doc_id"], row["trial_id"]) == (completed["doc_id"], completed["trial_id"]) for row in samples) == 1
+    assert calls == 9
 
 
 def convert_mixed_row(row: RawRow, _context: ConversionContext):

@@ -43,7 +43,7 @@ def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch,
     spec = LaunchSpec(
         model=ModelConfig(name="test-model", location="org/test-model"),
         evals=(),
-        curated_definitions=(CuratedDefinition("math500", ("evalchemy-math500",)),),
+        curated_definitions=(CuratedDefinition(name="math500", sources=("evalchemy-math500",)),),
         harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x8",
