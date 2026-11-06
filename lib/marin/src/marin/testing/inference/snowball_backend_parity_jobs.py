@@ -12,6 +12,8 @@ task 0 owns pipeline stage 0 and task 1 owns pipeline stage 1.
 """
 
 import dataclasses
+import hashlib
+import json
 import logging
 import re
 from collections import Counter
@@ -26,8 +28,10 @@ import requests
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_vllm import (
@@ -49,11 +53,23 @@ from marin.testing.inference.backend_parity import (
 from marin.testing.inference.snowball import (
     BATCH_SIZE,
     MAX_PROBABILITY_ERROR,
+    PROMPT_FIXTURE_SHA256,
     SNOWBALL,
+    VLLM_POSITION_REFERENCE_PREFIX,
     RepresentativeCase,
     RepresentativeGolden,
     pad_prompt_batch,
     read_prompt_fixture,
+    read_representative_goldens,
+)
+from marin.testing.inference.snowball_position_parity import (
+    MIN_PROB,
+    REFERENCE_TOP_K,
+    CasePositionReference,
+    PositionReference,
+    ReferenceMetadata,
+    case_reference_from_prompt_logprobs,
+    position_reference_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,9 +92,11 @@ GRUG_NUM_LAYERS = 26
 # and exact same-rank recomputation, so its representative-only bound is scoped
 # to that measured serving behavior.
 VLLM_MAX_PROBABILITY_ERROR = 0.125
+# A prompt-log-prob response for a 32K prompt carries every position's top-k; allow it time to compute and transfer.
+POSITION_REFERENCE_READ_TIMEOUT = 30 * 60.0
 
 
-def _with_attention_implementation(model: SnowballLMHeadModel, implementation: str) -> SnowballLMHeadModel:
+def with_attention_implementation(model: SnowballLMHeadModel, implementation: str) -> SnowballLMHeadModel:
     """Reuse loaded arrays with a different static Snowball attention implementation."""
     config = dataclasses.replace(model.config, attention_implementation=implementation)
     blocks = tuple(
@@ -196,7 +214,7 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
         assert model.transformer.token_embed.dtype == jnp.bfloat16
         assert loaded.trainer.data_axis_size == BATCH_SIZE
         assert loaded.tokenizer.eos_token_id is not None
-        reference_model = _with_attention_implementation(model, "reference")
+        reference_model = with_attention_implementation(model, "reference")
         logger.info("Levanter compilation cache: %s", jax.config.jax_compilation_cache_dir)
 
         @hax.named_jit(axis_resources=loaded.trainer.compute_axis_mapping)
@@ -321,15 +339,8 @@ def _request_vllm_wave(
     return [future.result() for future in as_completed(futures)]
 
 
-def score_vllm_against_goldens(
-    goldens: tuple[RepresentativeGolden, ...],
-    attention_backend: str,
-    pipeline_parallel_size: int,
-) -> None:
-    """Run one task in the vLLM gang; the leader scores rank-pinned prompts."""
-    prompt_fixture = read_prompt_fixture(goldens)
-
-    spec = ModelSpec(
+def _vllm_spec(pipeline_parallel_size: int) -> ModelSpec:
+    return ModelSpec(
         weights=SNOWBALL.export_uri,
         api_model=SNOWBALL.model_name,
         num_chips=GPU_COUNT * pipeline_parallel_size,
@@ -339,7 +350,10 @@ def score_vllm_against_goldens(
         max_model_len=MAX_MODEL_LEN,
         chat_template_content=None,
     )
-    backend = VllmBackend(
+
+
+def _vllm_backend(attention_backend: str) -> VllmBackend:
+    return VllmBackend(
         VllmEngineConfig(
             launcher=VllmLauncherType.CUDA,
             source=VllmSource.MARIN_FORK,
@@ -359,6 +373,17 @@ def score_vllm_against_goldens(
             ),
         ),
     )
+
+
+def score_vllm_against_goldens(
+    goldens: tuple[RepresentativeGolden, ...],
+    attention_backend: str,
+    pipeline_parallel_size: int,
+) -> None:
+    """Run one task in the vLLM gang; the leader scores rank-pinned prompts."""
+    prompt_fixture = read_prompt_fixture(goldens)
+    spec = _vllm_spec(pipeline_parallel_size)
+    backend = _vllm_backend(attention_backend)
     parities: list[NextTokenParity] = []
     with iris_vllm_launch(
         pipeline_parallel_size=pipeline_parallel_size,
@@ -466,3 +491,100 @@ def score_vllm_against_goldens(
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
             return
+
+
+def _request_vllm_prompt_logprobs(
+    completions_url: str,
+    model_id: str,
+    case: RepresentativeCase,
+    rank: int,
+) -> CasePositionReference:
+    context = f"case={case.id} rank={rank}"
+    try:
+        response = requests.post(
+            completions_url,
+            headers={"X-data-parallel-rank": str(rank), "X-Request-Id": f"position-reference-{case.id}"},
+            json={
+                "model": model_id,
+                "prompt": list(case.prompt_token_ids),
+                "add_special_tokens": False,
+                "temperature": 0.0,
+                "max_tokens": 1,
+                "prompt_logprobs": REFERENCE_TOP_K,
+                "return_tokens_as_token_ids": True,
+                "return_token_ids": True,
+            },
+            timeout=(HTTP_CONNECT_TIMEOUT, POSITION_REFERENCE_READ_TIMEOUT),
+        )
+        response.raise_for_status()
+        (choice,) = response.json()["choices"]
+        assert choice["prompt_token_ids"] == list(case.prompt_token_ids)
+        return case_reference_from_prompt_logprobs(case.id, case.prompt_token_ids, choice["prompt_logprobs"])
+    except Exception as error:
+        error.add_note(context)
+        raise
+
+
+def write_vllm_position_reference(output_uri: str, attention_backend: str) -> None:
+    """Score every position of the representative prompts through vLLM and write the position reference.
+
+    One H100x8 task, the serving check's PP=1 topology (DP=8, EP=8, TP=1), one prompt pinned to each
+    data-parallel rank per wave. Writes the reference JSON to ``output_uri`` and logs its sha256 and the
+    content-addressed URL the owner stages it at; it uploads nothing public itself.
+    """
+    prompt_fixture = read_prompt_fixture(read_representative_goldens())
+    spec = _vllm_spec(1)
+    backend = _vllm_backend(attention_backend)
+    cases: dict[str, CasePositionReference] = {}
+    with iris_vllm_launch(pipeline_parallel_size=1, tensor_parallel_size=1, data_parallel_size=GPU_COUNT) as launch:
+        assert launch.is_leader
+        with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
+            environment.wait_until_ready()
+            _wait_for_exact_vllm_topology(
+                environment.logs, check_alive=environment.check_alive, task_index=0, pipeline_parallel_size=1
+            )
+            completions_url = f"{environment.server_url}/completions"
+            with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
+                for wave, batch in enumerate(prompt_fixture.batches):
+                    logger.info(
+                        "vLLM position wave %d/%d: max_tokens=%d",
+                        wave + 1,
+                        len(prompt_fixture.batches),
+                        batch.max_tokens,
+                    )
+                    futures = [
+                        executor.submit(_request_vllm_prompt_logprobs, completions_url, spec.api_model, case, rank)
+                        for rank, case in enumerate(batch.cases)
+                    ]
+                    for future in as_completed(futures):
+                        case = future.result()
+                        cases[case.id] = case
+    reference = PositionReference(
+        metadata=ReferenceMetadata(
+            vllm_version=VLLM_GPU_RELEASE.version,
+            vllm_commit=VLLM_GPU_RELEASE.source_commit,
+            vllm_release_tag=VLLM_GPU_RELEASE.release_tag,
+            tensor_parallel_size=1,
+            data_parallel_size=GPU_COUNT,
+            pipeline_parallel_size=1,
+            expert_parallel=True,
+            attention_backend=attention_backend,
+            model_uri=SNOWBALL.export_uri,
+            model_sha256=SNOWBALL.export_sha256,
+            prompt_fixture_sha256=PROMPT_FIXTURE_SHA256,
+            top_k=REFERENCE_TOP_K,
+            min_prob=MIN_PROB,
+        ),
+        cases=tuple(cases[case.id] for case in prompt_fixture.cases),
+    )
+    payload = (json.dumps(position_reference_payload(reference), sort_keys=True, separators=(",", ":")) + "\n").encode()
+    sha256 = hashlib.sha256(payload).hexdigest()
+    StoragePath(output_uri).write_bytes(payload)
+    logger.info(
+        "vLLM position reference: written=%s bytes=%d sha256=%s stage_at=%s/%s.json",
+        output_uri,
+        len(payload),
+        sha256,
+        VLLM_POSITION_REFERENCE_PREFIX,
+        sha256,
+    )

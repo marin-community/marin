@@ -3,6 +3,7 @@
 
 """Snowball model identity and representative inference goldens."""
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.testing.inference.backend_parity import TokenScore
+from marin.testing.inference.snowball_position_parity import PositionReference, parse_position_reference
 
 BATCH_SIZE = 8
 TOP_K = 25
@@ -23,10 +25,19 @@ _RESOURCES = Path(__file__).parent / "resources"
 _REPRESENTATIVE_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_representative_eval_golden.json"
 # The exact checkpoint snapshot was reproduced on two H100 nodes with JAX 0.11.1 and CUTLASS DSL 4.6.2.
 _CHECKPOINT_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_current_fa4_golden.json"
-_PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
+PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
 _PROMPT_FIXTURE_URL = (
     "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-prompts/"
-    f"{_PROMPT_FIXTURE_SHA256}.json"
+    f"{PROMPT_FIXTURE_SHA256}.json"
+)
+# vLLM's per-position prompt log-probs for the representative prompts, content-addressed like the prompt
+# fixture and read over HTTPS without credentials. The June golden above came from the native Grug checkpoint
+# forward, not from vLLM, so it is not this reference.
+# TODO: the owner stages the file written by tests/cluster/vllm/generate_snowball_position_reference.py at
+# VLLM_POSITION_REFERENCE_PREFIX/<sha256>.json and pins its sha256 here. Empty means not staged yet.
+VLLM_POSITION_REFERENCE_SHA256 = ""
+VLLM_POSITION_REFERENCE_PREFIX = (
+    "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-position-logprobs"
 )
 
 
@@ -134,6 +145,21 @@ def read_prompt_fixture(
         cases=cases,
         batches=_prompt_batches(cases),
     )
+
+
+def vllm_position_reference_url() -> str:
+    if not VLLM_POSITION_REFERENCE_SHA256:
+        raise RuntimeError("The vLLM position reference is not staged; VLLM_POSITION_REFERENCE_SHA256 is empty")
+    return f"{VLLM_POSITION_REFERENCE_PREFIX}/{VLLM_POSITION_REFERENCE_SHA256}.json"
+
+
+def read_vllm_position_reference() -> PositionReference:
+    """Read the pinned vLLM per-position reference and check its bytes against the pinned sha256."""
+    payload = StoragePath(vllm_position_reference_url()).read_bytes()
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != VLLM_POSITION_REFERENCE_SHA256:
+        raise ValueError(f"vLLM position reference sha256 {actual}, pinned {VLLM_POSITION_REFERENCE_SHA256}")
+    return parse_position_reference(json.loads(payload))
 
 
 def _prompt_batches(cases: tuple[RepresentativeCase, ...]) -> tuple[PromptBatch, ...]:

@@ -54,3 +54,37 @@ then selects these tests; `--import-mode=importlib` is re-added because `-o addo
 drops it and the `tests.cluster.*` imports need it. `--timeout=0` disables the 60s
 per-test cap (a separate `timeout` ini that `-o addopts=` does not clear) for the
 TPU smokes, which carry no per-test timeout marker; the vLLM e2es set their own.
+
+## Snowball training-forward parity
+
+`vllm/test_snowball_training_parity.py` scores the model the training path builds, not the inference load path.
+It loads the Snowball HF export as `train_lm` does (HF config reload, `preserve_hf_runtime_settings`,
+`fp32_fields=("router_bias",)`, `p=f32,c=bf16`), takes the trainer's compute view and runs a forward-only pass on
+one H100x8 node with an expert-parallel mesh (data 2 x expert 4). The runtime settings are the identity recipe's:
+dropless MoE capacity, FP32 router dot, FP32 combine, FP32 activations and `torch_order` attention (FA4 for the
+16K and 32K prompt buckets, where `torch_order` cannot fit). Every position of the 64 representative prompts is
+compared with a stored vLLM reference. Each prompt category, and the positions past the 2,048-token window, must
+have p99 <= 0.70 and max <= 3.5 nats of absolute log-prob difference over vLLM's top-20 tokens above p = 1e-3.
+Every layer must drop zero valid MoE assignments.
+
+The reference is a content-addressed public file, pinned by `VLLM_POSITION_REFERENCE_SHA256` in
+`lib/marin/src/marin/testing/inference/snowball.py`. It records the vLLM release and commit, the parallel layout,
+the attention backend and the model sha256, so a stale reference can be told apart from a regression. Until the
+sha is pinned the test skips. To make one, submit the generator, then copy the written file to the URL its log
+prints and pin the sha:
+
+```bash
+uv run python tests/cluster/vllm/generate_snowball_position_reference.py \
+  --output s3://marin-us-east-02a/<scratch>/snowball-position-reference.json --run
+```
+
+Run the check by hand:
+
+```bash
+uv run pytest tests/cluster/vllm/test_snowball_training_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
+```
+
+It is not on a schedule. Whether it joins the Snowball vLLM parity workflow, and how often, is an owner decision.
+The workflow selects tests with `-k "$SELECTOR"` over one test file; adding this check means a
+`workflow_dispatch` input (off by default) that adds this file and its `--include` to the submitted pytest command.
