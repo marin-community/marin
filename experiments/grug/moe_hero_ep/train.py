@@ -1399,10 +1399,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.add_hook(hook, every=interval)
 
             # Baseline point at the start of the loss curve. The periodic cadence first fires at
-            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # `steps_per_eval` (step 500 on the hero), thus a fresh run gets no early point.
             # These run after the first optimization step, not before it: the first train step
             # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # step 2 instead of first at step 500. `every=1` is the only interval that covers
             # the first step, and `_first_step_only` makes the hook fire once. A resumed run
             # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
             # is 0 there, so the point lands at step 0 on the curve.

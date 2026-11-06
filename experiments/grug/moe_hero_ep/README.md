@@ -1,7 +1,7 @@
 # Grug MoE EP Hero
 
-This self-contained variant is the selected EP64 configuration for GB200 NVL72. Each
-data-parallel rack uses one 64-device expert mesh. The separate pipeline variant
+This self-contained variant is the selected configuration for GB200 NVL72. Each
+data-parallel rack uses 16 expert shards of 4 context shards. The separate pipeline variant
 lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 
 ## Configuration
