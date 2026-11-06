@@ -1234,7 +1234,10 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
             dump.write_text("".join(json.dumps(answer) + "\n" for answer in answers if answer["task_id"] != "task-0"))
             with pytest.raises(RuntimeError) as caught:
                 run(replace(summary, name=summary.name + "/missing-task"))
-            assert "every panel task" in str(caught.value.__cause__)
+            cause = caught.value
+            while cause.__cause__ is not None:
+                cause = cause.__cause__
+            assert isinstance(cause, ValueError) and "every panel task" in str(cause)
         finally:
             dump.write_bytes(full_dump)
         rates = pq.read_table(Path(summary.path()) / "pass_rates.parquet").to_pylist()
