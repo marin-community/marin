@@ -157,8 +157,37 @@ class VerifierLease(Machine):
     async def reset(self) -> None:
         if self.baseline:
             await self.checked(Command(("python3", "-c", PROCESS_RESET, self.baseline), cwd="/", user="0", timeout=30))
-        roots = tuple(sorted(self.roots))
+        roots = tuple(sorted(self.roots - {"/tmp"}))
         await self.checked(Command(("rm", "-rf", "--", *roots), cwd="/", user="0", timeout=30))
+        # Iris captures this very command under /tmp/.shellbox-*. Preserve both
+        # its current capture prefix and a dedicated runtime directory if present.
+        await self.checked(
+            Command(
+                (
+                    "find",
+                    "/tmp",
+                    "-mindepth",
+                    "1",
+                    "-maxdepth",
+                    "1",
+                    "!",
+                    "-name",
+                    ".shellbox-*",
+                    "!",
+                    "-name",
+                    ".shellbox",
+                    "-exec",
+                    "rm",
+                    "-rf",
+                    "--",
+                    "{}",
+                    "+",
+                ),
+                cwd="/",
+                user="0",
+                timeout=30,
+            )
+        )
         await self.checked(
             Command(("mkdir", "-p", *sorted(RESET_ROOTS), self.spec.workdir), cwd="/", user="0", timeout=30)
         )

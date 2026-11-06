@@ -4,7 +4,9 @@
 import asyncio
 import json
 import os
+import re
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import replace
@@ -13,7 +15,9 @@ from pathlib import Path
 from typing import override
 
 import pytest
+from iris.rpc import controller_pb2
 from lib.forge.tests.resources.test_rollouts_grading import FakeEngine
+from lib.shellbox.tests.test_iris_machine import local_machine
 from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
@@ -46,7 +50,7 @@ from forge.model.controls import Candidate, RewardBand
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.rollouts import RolloutResource, SolverRollout
 from forge.resources.sandbox.factories import MachineHost, shellsim_factory
-from forge.resources.verifier import PROCESS_RESET, VerifierEngine, VerifierFactory, VerifierPool
+from forge.resources.verifier import PROCESS_RESET, VerifierEngine, VerifierFactory, VerifierLease, VerifierPool
 from forge.stages.validate import claim_result
 
 SCRIPT = b"""
@@ -250,7 +254,9 @@ async def test_fresh_adversary_result_overrides_shared_confirmation() -> None:
 
 def test_process_cleanup_preserves_supervisor_and_current_exec_only(monkeypatch: pytest.MonkeyPatch) -> None:
     # PID 2 was recycled: matching its old PID alone must not preserve the leaked process.
-    processes = {1: (0, "100"), 2: (1, "999"), 3: (1, "300"), 90: (1, "900"), 91: (90, "910")}
+    # The active Python reset (92), timeout wrapper (91), and exec shell (90)
+    # are all ancestors of the cleanup command and must survive it.
+    processes = {1: (0, "100"), 2: (1, "999"), 3: (1, "300"), 90: (1, "900"), 91: (90, "910"), 92: (91, "920")}
     killed = []
 
     def stat(path: Path, *args: object, **kwargs: object) -> str:
@@ -262,7 +268,7 @@ def test_process_cleanup_preserves_supervisor_and_current_exec_only(monkeypatch:
     with monkeypatch.context() as patch:
         patch.setattr(Path, "glob", lambda path, pattern: iter(Path(f"/proc/{pid}/stat") for pid in processes))
         patch.setattr(Path, "read_text", stat)
-        patch.setattr(os, "getpid", lambda: 91)
+        patch.setattr(os, "getpid", lambda: 92)
         patch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
         patch.setattr(sys, "argv", ["reset", json.dumps({"1": "100", "2": "200"})])
         exec(PROCESS_RESET, {})
@@ -297,3 +303,45 @@ print(int(clean and Path('/custom/output').read_text() == answer and Path('/root
         assert sum(not machine.closed for machine in factory.machines) == 1
     finally:
         await pool.close()
+
+
+async def test_reset_preserves_iris_capture_files_and_runtime_directory(tmp_path: Path) -> None:
+    class SandboxRpc:
+        def exec_in_container(
+            self, request: controller_pb2.Controller.ExecInContainerRequest, timeout_ms: int
+        ) -> controller_pb2.Controller.ExecInContainerResponse:
+            # Execute the real Iris capture/readback scripts against isolated host
+            # paths. No cleanup command may touch the host's actual /tmp or roots.
+            if request.command[-1] == "id -u && id -un":
+                return controller_pb2.Controller.ExecInContainerResponse(exit_code=0, stdout="0\nroot\n")
+            command = [
+                re.sub(r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda match: str(tmp_path / match.group(1)), part)
+                for part in request.command
+            ]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            return controller_pb2.Controller.ExecInContainerResponse(
+                exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr
+            )
+
+    for name in ("tmp", "workspace", "tests", "app"):
+        (tmp_path / name).mkdir()
+    runtime = tmp_path / "tmp/.shellbox"
+    runtime.mkdir()
+    (runtime / "state").write_text("runtime")
+    (tmp_path / "tmp/.shellbox-stale-out").write_text("capture")
+    (tmp_path / "tmp/candidate-leftover").write_text("remove")
+    (tmp_path / "workspace/previous").write_text("remove")
+    machine, _ = local_machine(tmp_path, rpc=SandboxRpc())
+    pool = VerifierPool(5)
+    lease = VerifierLease(pool, machine, Backend.GVISOR, replace(machine.spec, workdir="/workspace"), False)
+    try:
+        await lease.reset()
+        assert (await lease.run(Command(("printf", "after reset"), cwd="/workspace"))).stdout == b"after reset"
+        assert (runtime / "state").read_text() == "runtime"
+        assert (tmp_path / "tmp/.shellbox-stale-out").read_text() == "capture"
+        assert not (tmp_path / "tmp/candidate-leftover").exists()
+        assert not (tmp_path / "workspace/previous").exists()
+        await lease.reset()
+        assert (await lease.run(Command(("printf", "second reset"), cwd="/workspace"))).stdout == b"second reset"
+    finally:
+        await machine.close()
