@@ -639,8 +639,9 @@ def _make_memgrow_hook() -> Callable[..., None]:
     """DIAGNOSTIC ONLY: sample the pool often and optionally trim it or lower its release threshold.
 
     `MEMGROW_TRIM_EVERY=N` trims the pool's free blocks every N steps. `MEMGROW_THRESHOLD_MARGIN_GIB=M`
-    sets the release threshold to the observed XLA peak plus M, two steps into the run. Both run after
-    the step's buffers are ready, so the arena's free has been issued.
+    sets the release threshold to the observed XLA peak plus M, two steps into the run. A trim first
+    waits for the step's buffers, so the arena's free has been issued. The baseline never waits, so it
+    keeps the training loop's normal dispatch timing.
     """
     trim_every = int(os.environ.get("MEMGROW_TRIM_EVERY", "0"))
     trim_only_after = int(os.environ.get("MEMGROW_TRIM_ONCE_AFTER", "0"))
@@ -652,16 +653,15 @@ def _make_memgrow_hook() -> Callable[..., None]:
         step = int(step_info.step)
         first_step = step if first_step is None else first_step
         elapsed_steps = step - first_step
-        jax.block_until_ready(step_info.state)
         if elapsed_steps < 12 or step % 4 == 0:
             log_device_memory_breakdown(f"after_step:{step}")
         try:
             if margin is not None and elapsed_steps == 2:
                 peak = jax.local_devices()[0].memory_stats()["peak_bytes_in_use"]
                 set_release_threshold(f"{step}", peak + int(float(margin) * 1024**3))
-            if trim_only_after and elapsed_steps == trim_only_after:
-                trim_default_pool(f"{step}")
-            if trim_every and elapsed_steps >= 2 and elapsed_steps % trim_every == 0:
+            trim_once = trim_only_after and elapsed_steps == trim_only_after
+            if trim_once or (trim_every and elapsed_steps >= 2 and elapsed_steps % trim_every == 0):
+                jax.block_until_ready(step_info.state)
                 trim_default_pool(f"{step}")
         except Exception:
             # A failed pool call must not take down the arm: the DEVMEM series shows it had no effect.
