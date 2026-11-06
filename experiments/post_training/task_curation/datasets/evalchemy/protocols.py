@@ -37,6 +37,8 @@ from experiments.post_training.task_curation.evaluation import EvalDataset, cura
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+CHECKPOINT_PROTOCOL_VERSION = "2026.11.05.3"
+
 
 def checkpoint_choice_source(
     name: str,
@@ -49,7 +51,6 @@ def checkpoint_choice_source(
     subject: str = "",
 ) -> RlDataSource[EvalDataset]:
     """Bind a family's explicit prompt and normalization policies to a curated corpus."""
-    version = "2026.11.05.3"
     policy = template.fewshot
     return RlDataSource(
         info=SourceInfo(
@@ -70,12 +71,12 @@ def checkpoint_choice_source(
                     else {}
                 ),
                 convert=partial(convert_choice_document, benchmark=benchmark),
-                version=version,
+                version=CHECKPOINT_PROTOCOL_VERSION,
                 intended_use=IntendedUse.EVAL,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=version,
+                version=CHECKPOINT_PROTOCOL_VERSION,
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
@@ -191,7 +192,6 @@ def fewshot_generation_source(
     grader: Environment,
 ) -> RlDataSource[EvalDataset]:
     """Bind a family's compiled demonstrations, scorer and sampling protocol."""
-    version = "2026.11.05.3"
     return RlDataSource(
         info=SourceInfo(
             id="Checkpoint:" + name,
@@ -206,13 +206,13 @@ def fewshot_generation_source(
                 name="checkpoint-" + name,
                 source=replace(source, read=partial(read_generation_file, template=template)),
                 convert=partial(convert_generation, scorer=scorer),
-                version=version + "-" + scorer_revision(scorer),
+                version=CHECKPOINT_PROTOCOL_VERSION + "-" + scorer_revision(scorer),
                 intended_use=IntendedUse.EVAL,
                 grader=grader,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=version,
+                version=CHECKPOINT_PROTOCOL_VERSION,
                 operation=OperationKind.TEXT_GENERATION,
                 sampling=sampling,
                 trials=TrialPolicy(count=1, seed=None),

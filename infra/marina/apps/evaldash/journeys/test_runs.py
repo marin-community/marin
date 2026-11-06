@@ -57,7 +57,7 @@ def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey
 
     assert "gsm8k-0shot" in unquote(journey.page.url)
     journey.page.reload(wait_until="domcontentloaded")
-    assert picker.input_value() == "gsm8k-0shot"
+    expect(picker).to_have_value("gsm8k-0shot")
 
 
 def test_panel_cohort_survives_reload_and_navigation_to_compare(journey: Journey) -> None:

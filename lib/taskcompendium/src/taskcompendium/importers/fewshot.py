@@ -18,7 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.spec import ChoiceLikelihood, LikelihoodRequest
 from taskcompendium.importers.evalchemy.grader import source_package
-from taskcompendium.importers.evaluation_harness import FEWSHOT_SEED, ChoiceDocument, parquet_documents
+from taskcompendium.importers.evaluation_harness import FEWSHOT_SEED, ChoiceDocument, parquet_documents, sample_indices
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
@@ -78,9 +78,8 @@ def pinned_prompts() -> dict[str, Any]:
 def fewshot_indices(policy: FewshotPolicy, pool: Sequence[Document], document: Document, random: Random) -> list[int]:
     if policy.sampling is FewshotSampling.FIRST:
         return list(range(policy.shots))
-    exclude = policy.sampling is FewshotSampling.EXCLUDE_CURRENT and policy.shots > 0
-    indices = random.sample(range(len(pool)), policy.shots + int(exclude))
-    return [index for index in indices if pool[index] != document][: policy.shots] if exclude else indices
+    excluded_document = document if policy.sampling is FewshotSampling.EXCLUDE_CURRENT else None
+    return sample_indices(random, pool, policy.shots, excluded_document)
 
 
 def source_documents(path: StoragePath) -> list[dict[str, Any]]:
@@ -101,7 +100,7 @@ def fewshot_pool(policy: FewshotPolicy, documents: Sequence[Document], context: 
 def read_choice_file(
     path: StoragePath, context: ConversionContext, *, template: ChoiceTemplate
 ) -> Iterator[dict[str, Any]]:
-    """Advance preparation and sampling RNGs once per source row before selection."""
+    """Compile source rows into choice-likelihood requests and their few-shot evidence."""
     documents = source_documents(path)
     policy = template.fewshot
     pool = fewshot_pool(policy, documents, context)
