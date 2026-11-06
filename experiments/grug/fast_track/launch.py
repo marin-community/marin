@@ -10,6 +10,7 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 """
 
 import dataclasses
+import json
 import math
 import os
 import shlex
@@ -29,7 +30,7 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -39,7 +40,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -310,18 +311,47 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
+@dataclasses.dataclass(frozen=True)
+class TrainMix:
+    """A second flat train cache that gets ``share`` of the training tokens; the main cache gets the rest."""
+
+    cache_dir: str
+    share: float
+
+    def __post_init__(self):
+        if not 0.0 < self.share <= 1.0:
+            raise ValueError(f"mix share must be in (0, 1], got {self.share}")
+
+
+def _manifest_validation_components(manifest_path: str) -> dict[str, DatasetComponent]:
+    """Validation components from a prebuilt-cache manifest (the Data Belay's Eval Policy answer-BPB tasks).
+
+    The manifest names each component, its root (the cache is its ``validation`` split) and the cache's token and
+    loss-weight fields.
+    """
+    manifest = json.loads(StoragePath(manifest_path).read_text())
+    fmt = PrebuiltLmDatasetFormat(input_ids_key=manifest["input_ids_key"], loss_weights_key=manifest["loss_weights_key"])
+    return {
+        entry["name"]: DatasetComponent(source=None, cache_dir=entry["cache_dir"], format=fmt, tags=[entry["name"]])
+        for entry in manifest["components"]
+    }
+
+
 def _flat_cache_data_config(
     *,
     ctx: StepContext,
     validation,
     tokenizer: str,
     train_cache_dir: str,
+    mix: TrainMix | None = None,
+    eval_manifest: str | None = None,
 ) -> LmDataConfig:
     """Straight-through single-source training on one pre-built flat cache (tokenizer-ablation runs).
 
     Mirrors the Harrier config's validation wiring, but trains on a single pre-tokenized cache at
     constant weight -- no mixture phases, no simulated epoching. ``validation`` sets are folded in as
-    zero-weight components (built as executor deps, tokenized with the same ``tokenizer``).
+    zero-weight components (built as executor deps, tokenized with the same ``tokenizer``). ``mix`` adds a second
+    flat cache, ``mix``, at a constant share of the batches; it repeats from its start if it runs out.
     """
     components = {
         "train": DatasetComponent(
@@ -332,14 +362,22 @@ def _flat_cache_data_config(
             flat_cache=True,
         )
     }
+    weights = {"train": 1.0}
+    if mix is not None:
+        components["mix"] = DatasetComponent(
+            source=None, cache_dir=mix.cache_dir, format=TextLmDatasetFormat(), tags=["mix"], flat_cache=True
+        )
+        weights = {"train": 1.0 - mix.share, "mix": mix.share}
     if ctx.is_fingerprint:
         val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
     else:
         val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+    if eval_manifest is not None:
+        val_components |= _manifest_validation_components(eval_manifest)
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with the training component: {sorted(collisions)}")
-    train_weights = {"train": 1.0, **{name: 0.0 for name in val_components}}
+    train_weights = {**weights, **{name: 0.0 for name in val_components}}
     return LmDataConfig(
         tokenizer=tokenizer,
         cache_dir=None,
@@ -390,6 +428,8 @@ def build_h100_ladder_run(
     nodes: int | None = None,
     expert_axis_size: int | None = None,
     output_path: str | None = None,
+    mix: TrainMix | None = None,
+    eval_manifest: str | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -545,7 +585,12 @@ def build_h100_ladder_run(
             ),
         )
         data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+            ctx=ctx,
+            validation=validation,
+            tokenizer=tokenizer,
+            train_cache_dir=train_cache_dir,
+            mix=mix,
+            eval_manifest=eval_manifest,
         )
         return GrugRunConfig(
             model=model,
@@ -838,6 +883,22 @@ def _layer_skip_rule(
     help=f"Flat train cache. {V16384_CACHE_DIR} holds the same tokens document-shuffled (the s7l and track baselines).",
 )
 @click.option(
+    "--mix-cache",
+    default=None,
+    help="Second flat train cache that gets --mix-share of the training tokens (the Data Belay's new data).",
+)
+@click.option(
+    "--mix-share",
+    type=float,
+    default=None,
+    help="Share of the training tokens from --mix-cache, in (0, 1].",
+)
+@click.option(
+    "--eval-manifest",
+    default=None,
+    help="Manifest of extra prebuilt validation caches (the Data Belay's Eval Policy answer-BPB tasks).",
+)
+@click.option(
     "--expert-axis-size",
     type=click.IntRange(min=1),
     default=None,
@@ -921,6 +982,9 @@ def main(
     nodes: int | None,
     expert_axis_size: int | None,
     train_cache: str,
+    mix_cache: str | None,
+    mix_share: float | None,
+    eval_manifest: str | None,
     output_path: str | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -929,6 +993,9 @@ def main(
     submit: bool,
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
+    if (mix_cache is None) != (mix_share is None):
+        raise click.UsageError("--mix-cache and --mix-share go together")
+    mix = TrainMix(mix_cache, mix_share) if mix_cache is not None and mix_share is not None else None
     if submit:
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     return build_h100_ladder_run(
@@ -969,6 +1036,8 @@ def main(
         expert_axis_size=expert_axis_size,
         train_cache_dir=train_cache,
         output_path=output_path,
+        mix=mix,
+        eval_manifest=eval_manifest,
     )
 
 
