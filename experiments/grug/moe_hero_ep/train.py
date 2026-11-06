@@ -72,7 +72,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
-from experiments.grug.moe_hero_ep.device_memory_probe import log_device_memory_breakdown
+from experiments.grug.moe_hero_ep.device_memory_probe import log_device_memory_breakdown, squeeze_device_free_memory
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -1431,6 +1431,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
         state_callbacks.add_hook(lambda step_info: _log_hbm_diag("after_step", int(step_info.step)), every=20)
+        squeeze_after_step = 390258  # DIAGNOSTIC ONLY: a run past this step cannot grow its pool.
+
+        def squeeze_once(step_info):
+            if int(step_info.step) == squeeze_after_step:
+                squeeze_device_free_memory()
+
+        state_callbacks.add_hook(squeeze_once, every=1)
+        state_callbacks.add_hook(lambda step_info: log_device_memory_breakdown(f"s:{int(step_info.step)}"), every=5)
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_hooks: list[Callable[..., None]] = []

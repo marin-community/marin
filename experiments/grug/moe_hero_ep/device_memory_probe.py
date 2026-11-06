@@ -112,3 +112,34 @@ def log_device_memory_breakdown(tag: str) -> None:
             device.local_hardware_id,
             breakdown.describe(),
         )
+
+
+_SQUEEZE_MARGIN = 8 * 1024**2
+_squeeze_handles: list[int] = []
+
+
+def squeeze_device_free_memory() -> None:
+    """DIAGNOSTIC ONLY: hold nearly all free device memory outside the pool, so the pool cannot grow."""
+    from cuda.bindings import driver
+
+    for device in jax.local_devices():
+        _checked(driver.cuInit(0))
+        cu_device = _checked(driver.cuDeviceGet(device.local_hardware_id))
+        context = _checked(driver.cuDevicePrimaryCtxRetain(cu_device))
+        _checked(driver.cuCtxPushCurrent(context))
+        try:
+            chunk = 1024**3
+            while chunk >= 2 * 1024**2:
+                free, _ = _checked(driver.cuMemGetInfo())
+                if int(free) <= _SQUEEZE_MARGIN + chunk:
+                    chunk //= 2
+                    continue
+                err, ptr = driver.cuMemAlloc(chunk)
+                if int(err) != 0:
+                    chunk //= 2
+                    continue
+                _squeeze_handles.append(int(ptr))
+        finally:
+            _checked(driver.cuCtxPopCurrent())
+    logger.info("SQUEEZE done process=%d allocations=%d", jax.process_index(), len(_squeeze_handles))
+    log_device_memory_breakdown("after_squeeze")
