@@ -178,6 +178,8 @@ class IrisMachine:
 
     async def _download_bytes(self, source: str, limit: int | None = None) -> tuple[bytes, bool]:
         quoted = shlex.quote(source)
+        if (await self._script(f"test -e {quoted}")).exit_code == 1:
+            raise FileNotFoundError(source)
         size = int((await self._checked(f"wc -c < {quoted}")).strip())
         count = size if limit is None else min(size, limit)
         chunks = []

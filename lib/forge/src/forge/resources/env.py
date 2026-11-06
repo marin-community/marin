@@ -126,8 +126,11 @@ class _RecordedEnv(Env):
 class ShellboxEnv(_RecordedEnv):
     """An owned Shellbox machine; nonzero command exits remain ordinary results."""
 
-    def __init__(self, machine: Machine, image: str, notify: Notify, owned: AsyncExitStack) -> None:
+    def __init__(
+        self, machine: Machine, image: str, notify: Notify, owned: AsyncExitStack, workdir: str = "/workspace"
+    ) -> None:
         self.machine, self.owned = machine, owned
+        self.workdir = PurePosixPath(workdir)
         super().__init__(image, notify)
 
     @asynccontextmanager
@@ -141,7 +144,7 @@ class ShellboxEnv(_RecordedEnv):
             detail = str(error)
             if detail.startswith("ShellSim terminated: ") or detail == "Machine is closed":
                 raise Hold(f"environment terminated: {detail.removeprefix('ShellSim terminated: ')}") from error
-            if "no such file or directory" in detail.lower() or "could not find the file" in detail.lower():
+            if isinstance(error, SimulationError) and "no such file or directory" in detail.lower():
                 missing = str(path) if path is not None else detail.partition("No such file or directory: ")[2] or detail
                 raise FileNotFoundError(errno.ENOENT, "No such file or directory", missing) from error
             raise
@@ -171,7 +174,7 @@ class ShellboxEnv(_RecordedEnv):
         async with self._operation(path):
             with TemporaryDirectory() as directory:
                 target = Path(directory) / "file"
-                await self.machine.download(str(path), target)
+                await self.machine.download(str(self.workdir / path), target)
                 return target.read_bytes()
 
     @override
@@ -180,7 +183,7 @@ class ShellboxEnv(_RecordedEnv):
             with TemporaryDirectory() as directory:
                 source = Path(directory) / "file"
                 source.write_bytes(data)
-                await self.machine.upload(source, str(path))
+                await self.machine.upload(source, str(self.workdir / path))
         self._record_write(path, data)
 
     @override
@@ -214,7 +217,7 @@ class ShellboxEnvFactory(EnvFactory):
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = canonical_digest((requirements, self.runtime))
-        return ShellboxEnv(machine, image, self.notify, owned)
+        return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or "/workspace")
 
 
 @dataclass(frozen=True, slots=True)

@@ -42,6 +42,11 @@ class GvisorMachine(DockerMachine):
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
+        exists = await docker("exec", "--user", "0", self.name, "test", "-e", source)
+        if exists.exit_code == 1:
+            raise FileNotFoundError(source)
+        if exists.exit_code:
+            raise RuntimeError(exists.stderr.decode(errors="replace"))
         probe = await docker("exec", "--user", "0", self.name, "test", "-d", source)
         if probe.exit_code == 0:
             result = await docker("exec", "--user", "0", self.name, "tar", "-cf", "-", "-C", source, ".")

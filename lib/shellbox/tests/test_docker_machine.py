@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.docker.machine import DockerCommandResult, DockerMachine, DockerMachineFactory, docker
-from shellbox.backends.gvisor.machine import GvisorMachineFactory
+from shellbox.backends.gvisor.machine import GvisorMachine, GvisorMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec
 
@@ -198,6 +198,8 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
     async def docker(*args, **_kwargs):
         if args[0] == "exec":
             assert args[1:3] == ("--user", "0")
+            if args[4:6] == ("test", "-e"):
+                return DockerCommandResult(0 if (container / args[6].lstrip("/")).exists() else 1, b"", b"")
             if args[4] == "chmod":
                 (container / args[6].lstrip("/")).chmod(int(args[5], 8))
             else:
@@ -504,3 +506,20 @@ def test_docker_removed_workdir_is_an_exited_result_and_the_machine_stays_reusab
             await machine.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", ["docker", "gvisor"])
+@pytest.mark.parametrize("exit_code", [1, 125])
+def test_download_distinguishes_missing_file_from_exec_failure(tmp_path, monkeypatch, backend, exit_code):
+    calls = []
+
+    async def execute(*args, **kwargs):
+        calls.append(args)
+        return DockerCommandResult(exit_code, b"", b"container unavailable")
+
+    monkeypatch.setattr(f"shellbox.backends.{backend}.machine.docker", execute)
+    cls = DockerMachine if backend == "docker" else GvisorMachine
+    machine = cls("container", MachineSpec(DockerImage("fixture")))
+    with pytest.raises(FileNotFoundError if exit_code == 1 else RuntimeError):
+        asyncio.run(machine.download("/missing.py", tmp_path / "download"))
+    assert calls == [("exec", "--user", "0", "container", "test", "-e", "/missing.py")]
