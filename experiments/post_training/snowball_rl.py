@@ -553,10 +553,8 @@ def build_run(
     for name in evaluations:
         selected.setdefault(name, presets.EVALUATIONS[name])
     if init is not None:
-        selected = {
-            name: replace(evaluation, at_start=True) if index == 0 else evaluation
-            for index, (name, evaluation) in enumerate(selected.items())
-        }
+        primary = next(iter(selected))
+        selected[primary] = replace(selected[primary], at_start=True)
     chosen = tuple(selected.values())
     generating = preset.recipe.layout.role_plan.generate_only
     if preset.focus == presets.Focus.TRAIN and len(chosen) > 1:

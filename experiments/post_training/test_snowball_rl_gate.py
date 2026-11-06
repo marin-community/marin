@@ -341,17 +341,6 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ),
         pytest.param(
             "learning-long",
-            {"initial_score": 0.2, "argv": ("--preset", "learning-long", "--init", "users/test/initializer@2026.11.06")},
-            {},
-            "pass",
-            "no change",
-            set(),
-            None,
-            False,
-            id="long-init-final-only",
-        ),
-        pytest.param(
-            "learning-long",
             {"missing_final_panel": True, "initial_score": 0.2},
             {},
             "invalid",

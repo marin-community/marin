@@ -399,27 +399,22 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         full_task = tasks[0].model_copy(update={"task": tasks[0].task.model_copy(update={"id": "full-panel-only"})})
         full_panel = root / "data/full-panel.parquet"
         write_tasks(full_panel, [full_task])
-        OmegaConf.update(
-            cfg,
-            "trainer.callbacks",
-            [
-                {
-                    "type": "evaluation",
-                    "eval_steps": 3 if resume else 2,
-                    "eval_on_train_end": False,
-                    "additional_evaluations": {
-                        "full_panel": {
-                            "data_files": [str(full_panel)],
-                            "schedule": "final",
-                            "n_samples_per_prompt": 1,
-                            "sampling_params": {"temperature": 0.0, "seed": 42},
-                        }
-                    },
+        cfg.trainer.callbacks = [
+            {
+                "type": "evaluation",
+                "eval_steps": 3 if resume else 2,
+                "eval_on_train_end": False,
+                "additional_evaluations": {
+                    "full_panel": {
+                        "data_files": [str(full_panel)],
+                        "schedule": "final",
+                        "n_samples_per_prompt": 1,
+                        "sampling_params": {"temperature": 0.0, "seed": 42},
+                    }
                 },
-                {"type": "checkpoint", "save_steps": steps},
-            ],
-            force_add=True,
-        )
+            },
+            {"type": "checkpoint", "save_steps": steps},
+        ]
         records = run_process(forkserver_context, root, cfg, runner=run_tracked_cat_count)
         final_metrics = [row for row in records if "eval/full_panel/all/num_attempted" in row]
         assert [row["step"] for row in final_metrics] == ([2, 4] if resume else [2])

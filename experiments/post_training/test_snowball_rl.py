@@ -295,30 +295,16 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": "770b2ac4",
-        "data-short": "f2cb9dae",
-        "speed-medium": "f8e77acd",
-        "learning-medium": "796fdf74",
-        "speed-long": "5a20d9a8",
-    }
-    expected_envelopes = {
-        "speed-short": "0335d15c",
-        "data-short": "729855c5",
-        "speed-medium": "72953642",
-        "learning-medium": "60fd95c3",
-        "speed-long": "f9d97e72",
-    }
-    expected_fingerprints = {
-        "speed-short": "2093a4fd",
-        "data-short": "50e0b730",
-        "speed-medium": "340dd45e",
-        "learning-medium": "7af0ece3",
-        "speed-long": "0b72b45a",
+        "speed-short": ("770b2ac4", "0335d15c", "2093a4fd"),
+        "data-short": ("f2cb9dae", "729855c5", "50e0b730"),
+        "speed-medium": ("f8e77acd", "72953642", "340dd45e"),
+        "learning-medium": ("796fdf74", "60fd95c3", "7af0ece3"),
+        "speed-long": ("5a20d9a8", "f9d97e72", "0b72b45a"),
     }
     paths = []
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
-        assert step.fingerprint() == expected_fingerprints[name]
+        assert step.fingerprint() == expected[name][2]
         path = tmp_path / f"{name}.yaml"
         _render(step, path)
         paths.append(str(path))
@@ -342,12 +328,14 @@ print(json.dumps([
     assert {
         name: fingerprint_hash(json.dumps(config.pop("envelope"), sort_keys=True))
         for name, config in zip(expected, configs, strict=True)
-    } == expected_envelopes
+    } == {name: hashes[1] for name, hashes in expected.items()}
     actual = {
         name: fingerprint_hash(json.dumps(config, sort_keys=True))
         for name, config in zip(expected, configs, strict=True)
     }
-    assert actual == expected, "Gated config changed. Top-level key hashes: " + json.dumps(
+    assert actual == {
+        name: hashes[0] for name, hashes in expected.items()
+    }, "Gated config changed. Top-level key hashes: " + json.dumps(
         {
             name: {
                 section: {key: fingerprint_hash(json.dumps(value, sort_keys=True)) for key, value in values.items()}

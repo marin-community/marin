@@ -330,12 +330,9 @@ def recorded_runs(selection, tmp_path, monkeypatch, publication_transport, reque
                 launch["inputs"]["evaluation_data"][evaluation.name] = [descriptor]
             else:
                 launch["inputs"]["validation_data"] = [descriptor]
-            evaluation_sessions = (
-                sessions
-                if index == 0 or preset.recipe.layout.role_plan.generate_only
-                else {step: average for step, average in sessions.items() if step != 0}
-            )
-            for step, average in evaluation_sessions.items():
+            for step, average in sessions.items():
+                if index and not preset.recipe.layout.role_plan.generate_only and step == 0:
+                    continue
                 failed_answers = initial_unscored if step == 0 else quality_unscored if index else unscored
                 rows = answers or [
                     answer(
