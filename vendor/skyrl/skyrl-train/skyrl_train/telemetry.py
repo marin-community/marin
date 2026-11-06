@@ -338,6 +338,19 @@ def record_generated_work(work: GeneratedWork, weights_step: int) -> None:
         )
 
 
+def record_consumed_staleness(
+    uids: Sequence[str], staleness: Sequence[int], response_tokens: Sequence[int], *, step: int
+) -> None:
+    """Record selected sequence and token counts once per consumed group."""
+    counts: dict[str, dict[str, int]] = {}
+    for uid, steps, token_count in zip(uids, staleness, response_tokens, strict=True):
+        group = counts.setdefault(uid, {"staleness": steps, "groups": 1, "sequences": 0, "response_tokens": 0})
+        group["sequences"] += 1
+        group["response_tokens"] += int(token_count)
+    for group in counts.values():
+        record_event("consumed_staleness", group, attributes={"role": TRAINER_ROLE, "step": str(step)})
+
+
 def record_rollout_staleness(stalenesses: Sequence[int], step: int) -> None:
     """How far behind the consuming step each admitted group's policy was.
 

@@ -11,6 +11,8 @@ from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
+from skyrl_train.batch_metrics import reward_metrics
+from skyrl_train.rollouts.buffer import RowFacts
 
 
 class RecordedRows:
@@ -129,3 +131,40 @@ def test_verified_closure_trainer_preserves_rollouts_and_trains_verified_repairs
     assert batch["rollout_logprobs"] is None
     assert batch["student_topk_indices"][batch["ftpo_chosen_mask"]].tolist() == [candidates[1]]
     assert trainer.all_metrics["ftpo/selected_boundaries"] == 1
+
+
+@pytest.mark.parametrize(
+    ("rewards", "responses", "expected", "domain_mean", "verification"),
+    [
+        ([1e16, 1.0, -1e16], [[1], [1], [1]], 1.0 / 3.0, 0.0, None),
+        ([[1e16, 1.0, -1e16], [2e16, 1.0, -2e16]], [[1, 2, 3], [1, 2, 3]], 1.0, 1.0, None),
+        (
+            [[float("inf"), -float("inf")], [1.0]],
+            [[1, 2], [1]],
+            1.0,
+            1.0,
+            [VerificationResult.skipped("row did not grade"), VerificationResult.verified(1.0)],
+        ),
+    ],
+    ids=["scalar", "token", "ungraded"],
+)
+def test_reward_mean_uses_compensated_totals_without_changing_domain_arithmetic(
+    rewards, responses, expected, domain_mean, verification
+):
+    count = len(responses)
+    batch = {
+        "prompt_token_ids": [[0]] * count,
+        "response_ids": responses,
+        "rewards": rewards,
+        "loss_masks": [[1] * len(row) for row in responses],
+        "data_sources": ["alpha"] * count,
+    }
+    if verification is not None:
+        batch["verification_results"] = verification
+        batch["loss_masks"][0] = [0] * len(responses[0])
+    facts = tuple(
+        RowFacts.from_batch({key: [values[index]] for key, values in batch.items()}) for index in range(count)
+    )
+    metrics = reward_metrics(facts, [str(index) for index in range(count)], n_samples_per_prompt=1)
+    assert metrics["reward/avg_raw_reward"] == expected
+    assert metrics["reward/domain/alpha/avg_raw_reward"] == domain_mean
