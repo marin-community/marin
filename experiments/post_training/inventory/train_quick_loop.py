@@ -104,17 +104,6 @@ def training_recipe(steps: int) -> dict:
     return config
 
 
-def sft_model() -> ArtifactHfModel:
-    """The pinned Datakit SFT weights that each quick-loop run starts from."""
-    model = ArtifactStep.adopt(
-        f"models/snowball-datakit-sft-{MODEL_REVISION}",
-        MODEL_VERSION,
-        MODEL_URI,
-        kind=LevanterCheckpoint,
-    )
-    return ArtifactHfModel(step=model, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
-
-
 def build_run(
     version: str,
     *,
@@ -123,13 +112,24 @@ def build_run(
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
+    model = ArtifactStep.adopt(
+        f"models/snowball-datakit-sft-{MODEL_REVISION}",
+        MODEL_VERSION,
+        MODEL_URI,
+        kind=LevanterCheckpoint,
+    )
     plan = SNOWBALL_RECIPE.role_plan
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
             config_yaml=yaml.safe_dump(training_recipe(steps), sort_keys=False),
-            model=sft_model(),
+            model=ArtifactHfModel(
+                step=model,
+                tokenizer_uri=MODEL_ID,
+                tokenizer_revision=MODEL_REVISION,
+                relative_path="",
+            ),
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
