@@ -65,6 +65,13 @@ policy. It trades host memory and device-to-host/host-to-device copies for GPU
 headroom; update time can increase. It cannot be combined with Megatron's other
 activation-offload modes.
 
+## Batch assembly
+
+The driver builds training batches by default. Use `--set +trainer.batch_builder=worker` with `experiments.post_training.async_rl` to build slices on policy workers.
+Workers retain their slices through the policy forward and training update.
+Unsupported settings raise `ValueError` naming the setting.
+`timing/load_worker_batch` measures reading shared groups and assembling slices; sharing finishes before this timer.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
