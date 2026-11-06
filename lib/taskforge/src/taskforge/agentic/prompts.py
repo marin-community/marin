@@ -185,23 +185,27 @@ the task.
 A task is a TaskSpec: a prompt, optional files for the solver, an answer format, and a grader with the reference \
 answer.
 {solver_machine}
-- The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
-verifyit spec made with taskcompendium.grader.verifyit_package, for example a NumericSpec or an ExactSpec. When the \
-proposal's grader design needs a judgment of prose, use a JudgeSpec, and leave its model empty: the later step \
-chooses the judge. The solver never sees the grader or its reference answer.
-- Graders with an environment, keyword graders, other answer types, and tools other than the shell are not \
-supported.
+- The solver answers with its final message. The answer type is "text", "number" or "json". The solver never sees \
+the grader or its reference answer.
+- The grader follows the proposal's grader design. /workspace/reference/grader_examples.py has one complete, \
+working TaskSpec for each common kind: a number, an exact text, a JSON object, an option letter, a judge of prose, \
+and a Python script grader that runs in its own Linux machine with its expected values in resources.verifier. Copy \
+the function of the kind that you need into your build program and change its data. For a judge, leave the model \
+empty: the later step chooses it. Keyword graders and tools other than the shell are not supported.
+- These files are all the reference that you need: /workspace/reference/grader_examples.py, \
+/workspace/example_build.py, /workspace/reference/verifyit_specs.md and /workspace/reference/taskspec.schema.json. \
+Do not read the source of the installed libraries.
 
 # How to build it
 
 - Your shell runs in a Linux sandbox with no network. It has Python 3 with taskcompendium and verifyit, but no jq: \
 use Python for JSON. A command returns at most {shell_output_kib} KiB of output: send long output to a file.
 - Write one build program, for example build.py, that runs as `python3 build.py <task id> <output path>` and \
-writes the TaskSpec. /workspace/example_build.py is a complete example. /workspace/reference/verifyit_specs.md \
-lists the graders, and /workspace/reference/taskspec.schema.json is the TaskSpec schema.
+writes the TaskSpec with the task id that it gets.
 - Derive all the task's data and randomness from the task id, and compute the reference answer in the program. \
-Every task id must give a valid task with different data, and the reference answers of different ids must vary. \
-Never put the answer, or a file or a command that gives it, in the prompt or in the solver's files.
+Every task id must give a valid task with different data, and the reference answers of different ids must vary: \
+for options, put the correct one at a position drawn from the id. Never put the answer, or a file or a command \
+that gives it, in the prompt or in the solver's files.
 - Run the program for one task id, then call submit with the TaskSpec's path and the program's path.
 
 # Tools
@@ -211,12 +215,13 @@ task again from its id and valid tasks with varied answers from other ids. It ne
 problems, fix only those and submit again. The session ends when submit accepts the task.
 - finish: stop, with a report, only when the proposal cannot become a task with these tools.
 
-Work fast: use few turns, and do not explore beyond what the build needs.
+Work fast: you have at most {turns} turns. Use few of them, and do not explore beyond what the build needs.
 """
 
 NO_SOLVER_MACHINE = """\
-- A solver model gets only the prompt: no shell and no files. Such a task declares no capabilities, no \
-package_spec and no resources.worker files."""
+- A solver model gets only the prompt: no shell and no files. Such a task keeps environment_requirements empty, \
+EnvironmentRequirements() with no capabilities, package_spec or working_directory, and has no resources.worker \
+files, as the examples in /workspace/reference/grader_examples.py do."""
 """The description of the solver's machine for a proposal whose solver_machine is "none"."""
 
 DRAFT_USER_PROMPT = "Build the task of the proposal {proposal_id} in /workspace/proposal.json."

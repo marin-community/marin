@@ -56,8 +56,10 @@ from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
     FunctionDefinition,
+    Grader,
     InlineFile,
     ProviderRequirement,
+    ScriptGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
@@ -602,7 +604,8 @@ class ToolSession:
         def problems(variant: TaskSpec) -> list[str]:
             return _unsupported(variant, self.tools.solver_engine, self.config) + malformed_files(variant)
 
-        return await program_problems(self.machine, program, task, problems, self.config.command_timeout)
+        timeout = self.config.command_timeout
+        return await program_problems(self.machine, program, task, problems, timeout, max_answer_share=MAX_ANSWER_SHARE)
 
     async def _snapshot(self) -> bytes:
         return await workspace_snapshot(self.machine)
@@ -813,33 +816,53 @@ def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
 
 
 def solver_spec(
-    task: TaskSpec, backend: str, limits: RolloutLimits, judge: JudgeConnection | None = None
+    task: TaskSpec,
+    backend: str,
+    limits: RolloutLimits,
+    *,
+    judge: JudgeConnection | None = None,
+    verifier_backend: str | None = None,
 ) -> TaskRolloutSpec:
-    """A solver attempt of ``task`` on a machine of ``backend``, when the task needs one."""
+    """A solver attempt of ``task`` on a machine of ``backend``, when the task needs one. A grader that runs in an
+    environment gets a verifier machine of ``verifier_backend``; without one, ``RolloutEngine.check`` refuses it."""
+    verifier = None
+    if verifier_backend is not None and grades_on_machine(task.grader):
+        verifier = machine_runtime(verifier_backend)
     return TaskRolloutSpec(
         task=task,
         harness=SOLVER_HARNESS,
         task_machine=machine_runtime(backend) if needs_machine(task) else None,
-        verifier_machine=None,
+        verifier_machine=verifier,
         limits=limits,
         trace=TraceMode.MESSAGES,
         judge_connection=judge if grades_with_judge(task.grader) else None,
     )
 
 
-GraderRule = Callable[[VerifyitGrader], list[str]]
-"""The problems of a verifyit grader without an environment that a kind of session refuses."""
+def grades_on_machine(grader: Grader) -> bool:
+    """Whether ``grader`` runs in a verifier machine: a script grader, or a verifyit grader with an environment
+    that is not a judge, which the engine runs on the host."""
+    if isinstance(grader, ScriptGrader):
+        return True
+    return isinstance(grader, VerifyitGrader) and grader.environment is not None and not grades_with_judge(grader)
 
 
-def in_process_grader_problems(grader: VerifyitGrader) -> list[str]:
-    """The rule of the agentic tools, which grade on the host with no model: no judge and no keyword grader."""
+GraderRule = Callable[[Grader], list[str]]
+"""The problems of a grader that a kind of session refuses. A ``TypeError`` or ``ValueError`` is an invalid grader."""
+
+
+def in_process_grader_problems(grader: Grader) -> list[str]:
+    """The rule of the agentic tools, which grade on the host with no model: a verifyit grader without an
+    environment, and no judge or keyword grader."""
+    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
+        return ["The grader must be a verifyit grader without an environment"]
     if grades_with_judge(grader):
         return ["Judge graders are not supported"]
     return keyword_grader_problems(grader)
 
 
-def keyword_grader_problems(grader: VerifyitGrader) -> list[str]:
-    if not _grades_keywords(grader):
+def keyword_grader_problems(grader: Grader) -> list[str]:
+    if not isinstance(grader, VerifyitGrader) or grader.environment is not None or not _grades_keywords(grader):
         return []
     return [
         "Keyword graders are not supported: a correct paraphrase fails and an answer that only repeats the words "
@@ -865,14 +888,10 @@ def unsupported(
     problems = []
     if task.answer_type not in ANSWER_TYPES:
         problems.append(f"The answer type must be one of {sorted(ANSWER_TYPES)}, not {task.answer_type}")
-    grader = task.grader
-    if not isinstance(grader, VerifyitGrader) or grader.environment is not None:
-        problems.append("The grader must be a verifyit grader without an environment")
-    else:
-        try:
-            problems += grader_rule(grader)
-        except (TypeError, ValueError) as error:
-            problems.append(f"The grader is invalid: {error}")
+    try:
+        problems += grader_rule(task.grader)
+    except (TypeError, ValueError) as error:
+        problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
     if needs_machine(task) and requirements.command_semantics != semantics:
         problems.append(f"A task with a shell or files must use command_semantics {semantics}")
@@ -947,9 +966,12 @@ async def program_problems(
     task: TaskSpec,
     task_problems: Callable[[TaskSpec], list[str]],
     timeout: float,
+    *,
+    max_answer_share: float,
 ) -> list[str]:
     """Why ``program`` is not the build program of ``task``: it must write ``task`` again from its id, and from
-    other ids, tasks without ``task_problems`` whose reference answers vary."""
+    other ids, tasks without ``task_problems`` whose reference answers vary: at most ``max_answer_share`` of them
+    have one reference answer."""
     try:
         again = await build_task(machine, program, task.id, timeout)
         variants = [
@@ -965,9 +987,9 @@ async def program_problems(
             return [f"{program} with the task id {expected!r} writes a task with the id {variant.id!r}"]
     if any(content_digest(variant) == content_digest(task) for variant in variants):
         return [f"{program} writes the same task for another task id; derive the task's data from the id"]
-    answers = Counter(_reference(variant) for variant in variants)
+    answers = Counter(reference_answer(variant) for variant in variants)
     answer, count = answers.most_common(1)[0]
-    if count > MAX_ANSWER_SHARE * VARIANTS:
+    if count > max_answer_share * VARIANTS:
         return [
             f"{count} of {VARIANTS} tasks that {program} writes for other ids have the same reference answer "
             f"(grader {answer}), so a policy that guesses it passes too often. Draw the data so that the answers "
@@ -1036,12 +1058,17 @@ def malformed_files(task: TaskSpec) -> list[str]:
     return problems
 
 
-def _reference(task: TaskSpec) -> str:
-    """The reference answer of ``task``'s grader, as one string: its mode and parameters."""
+def reference_answer(task: TaskSpec) -> str:
+    """The reference answer of ``task``'s grader, as one string: the grader and the digest of its own files, where
+    a script grader or a grader with an environment keeps its expected values."""
     grader = task.grader
-    if not isinstance(grader, VerifyitGrader):
-        return ""
-    return json.dumps({"mode": grader.mode, **grader.parameters}, sort_keys=True, default=str)
+    if isinstance(grader, VerifyitGrader):
+        reference: dict[str, Any] = {"mode": grader.mode, **grader.parameters}
+    else:
+        reference = grader.model_dump(mode="json")
+    if task.resources.verifier:
+        reference["verifier_files"] = digest([resource.model_dump(mode="json") for resource in task.resources.verifier])
+    return json.dumps(reference, sort_keys=True, default=str)
 
 
 def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, Any]:

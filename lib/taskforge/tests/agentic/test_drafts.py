@@ -8,6 +8,7 @@ import json
 import shlex
 import tarfile
 import urllib.request
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -21,8 +22,10 @@ from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
 
 from taskforge.agentic import example_build
-from taskforge.agentic.drafts import DraftConfig, DraftProposal, draft_task
+from taskforge.agentic.drafts import DRAFT_MAX_ANSWER_SHARE, DraftConfig, DraftProposal, DraftTools, draft_task
+from taskforge.agentic.grader_examples import EXAMPLES
 from taskforge.agentic.instances import task_instances
+from taskforge.agentic.tools import VARIANT_SUFFIX, VARIANTS, reference_answer
 
 PROPOSAL_ID = "d01.example.stock-ledger/3"
 TASK_ID = "ledger--00"
@@ -109,11 +112,25 @@ class ScriptedAgent:
         return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(10, 1))
 
 
+@dataclass(frozen=True)
+class LinuxFactory:
+    """Stands in for bubblewrap, which needs namespaces that a test host may not have: it accepts every
+    environment and starts no machine. ``submit`` only checks a grader's machine, and never starts one."""
+
+    backend: Backend = Backend.LOCAL
+
+    def check_environment(self, requirements, spec) -> None:
+        pass
+
+    async def create(self, spec):
+        raise AssertionError("submit starts no grader machine")
+
+
 def config(agent: ScriptedAgent) -> DraftConfig:
     return DraftConfig(
         agent_model=agent,
         workspace_factory=ShellSimMachineFactory(),
-        solver_factories={Backend.SHELLSIM: ShellSimMachineFactory()},
+        solver_factories={Backend.SHELLSIM: ShellSimMachineFactory(), Backend.LOCAL: LinuxFactory()},
         judge=JudgeConnection("http://judge.invalid/v1", "unused", default_model="deepseek"),
         agent_limits=LIMITS,
         solver_limits=LIMITS,
@@ -158,3 +175,14 @@ async def test_a_draft_may_grade_with_a_judge_that_it_does_not_call():
     # The accepting reply ends the session, so the trace does not keep it.
     assert (result.failure, result.submits) == (None, 1)
     assert result.draft is not None and result.draft.task == judged
+
+
+@pytest.mark.parametrize("kind", sorted(EXAMPLES))
+def test_the_grader_examples_of_the_agent_pass_the_draft_checks(kind: str):
+    tools = DraftTools(proposal(solver_machine="none"), config(ScriptedAgent([])))
+    tasks = [EXAMPLES[kind](f"example{VARIANT_SUFFIX}{k}") for k in range(VARIANTS)]
+
+    assert [tools.problems(task) for task in tasks] == [[]] * VARIANTS
+    # The program check refuses ids whose reference answers repeat too often.
+    [(_, repeats)] = Counter(reference_answer(task) for task in tasks).most_common(1)
+    assert repeats <= DRAFT_MAX_ANSWER_SHARE * VARIANTS

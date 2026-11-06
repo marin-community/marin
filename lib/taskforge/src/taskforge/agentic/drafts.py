@@ -13,6 +13,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError, validate_call
@@ -25,6 +26,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FunctionDefinition,
+    Grader,
     NoGrader,
     PlainText,
     ProviderRequirement,
@@ -36,6 +38,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.modes.grade_judge import JudgeConnection
 
+from taskforge.agentic import grader_examples
 from taskforge.agentic.agent import SHELL_OUTPUT_BYTES, example_program, verifyit_reference
 from taskforge.agentic.prompts import DRAFT_PROMPT, DRAFT_USER_PROMPT, NO_SOLVER_MACHINE, SOLVER_MACHINES
 from taskforge.agentic.tools import (
@@ -57,8 +60,15 @@ from taskforge.agentic.tools import (
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "1"
+DRAFT_REVISION = "2"
 """The revision of the draft agent task in the ``Source`` of each session."""
+DRAFT_MAX_ANSWER_SHARE = 0.625
+"""The largest share of the variants of a draft's program that can have one reference answer. It is looser than
+the agentic tools' share, so that a task with a small answer space passes: 8 random variants of a four-option task
+put 6 on one letter about 1% of the time. The later validation step judges whether such a task is worth training
+on."""
+VERIFIER_BACKEND = Backend.LOCAL
+"""The machines of graders that run in an environment: a bubblewrap sandbox that installs the grader's packages."""
 
 
 class Environment(StrEnum):
@@ -126,7 +136,8 @@ class DraftConfig:
     """The agent's machine: a ``LocalMachineFactory`` (bubblewrap) whose mounts give its shell Python with
     taskcompendium and verifyit."""
     solver_factories: Mapping[Backend, MachineFactory]
-    """The solver machines that ``RolloutEngine.check`` checks a task against, by backend. No solver runs."""
+    """The solver machines that ``RolloutEngine.check`` checks a task against, by backend, with the
+    ``VERIFIER_BACKEND`` machines of graders that run in an environment. No solver or grader runs."""
     judge: JudgeConnection
     """The judge that a judge grader would use. ``check`` needs it, and no draft calls it."""
     agent_limits: RolloutLimits
@@ -198,8 +209,9 @@ class DraftTools:
         self.config = config
         backend = proposal.solver_backend
         self.backend = backend
+        backends = {backend, VERIFIER_BACKEND}
         self.solver_engine = RolloutEngine(
-            {backend: config.solver_factories[backend]},
+            {name: config.solver_factories[name] for name in backends},
             {SOLVER_HARNESS: ShellHarness(command_timeout=config.command_timeout)},
         )
         self.draft: Draft | None = None
@@ -215,10 +227,19 @@ class DraftTools:
         return DraftSession(self, context.machine)
 
     def problems(self, task: TaskSpec) -> list[str]:
-        """What keeps ``task`` from being a draft: the checks of the agentic tools, with judge graders allowed."""
-        spec = solver_spec(task, self.backend, self.config.solver_limits, self.config.judge)
+        """What keeps ``task`` from being a draft: the checks of the agentic tools, with judges, script graders and
+        graders with an environment allowed."""
+        limits = self.config.solver_limits
+        spec = solver_spec(task, self.backend, limits, judge=self.config.judge, verifier_backend=VERIFIER_BACKEND)
         semantics = COMMAND_SEMANTICS[self.backend]
-        return unsupported(task, self.solver_engine, spec, semantics, keyword_grader_problems) + malformed_files(task)
+        return unsupported(task, self.solver_engine, spec, semantics, draft_grader_problems) + malformed_files(task)
+
+
+def draft_grader_problems(grader: Grader) -> list[str]:
+    """The grader rule of drafts: any grader but none, and no keyword grader."""
+    if isinstance(grader, NoGrader):
+        return ["The task needs a grader"]
+    return keyword_grader_problems(grader)
 
 
 class DraftSession:
@@ -251,7 +272,9 @@ class DraftSession:
         task = await read_task(self.machine, path, timeout)
         problems = self.tools.problems(task)
         if not problems:
-            problems = await program_problems(self.machine, program, task, self.tools.problems, timeout)
+            problems = await program_problems(
+                self.machine, program, task, self.tools.problems, timeout, max_answer_share=DRAFT_MAX_ANSWER_SHARE
+            )
         if problems:
             return _reply({"accepted": False, "problems": problems})
         self.tools.draft = Draft(task, program, await workspace_snapshot(self.machine))
@@ -271,7 +294,7 @@ async def draft_task(proposal: DraftProposal, config: DraftConfig) -> DraftResul
     workspace = config.workspace_factory
     engine = RolloutEngine({workspace.backend: workspace}, {DRAFT_HARNESS: harness})
     spec = TaskRolloutSpec(
-        task=draft_agent_task(proposal, workspace.backend),
+        task=draft_agent_task(proposal, workspace.backend, config.agent_limits),
         harness=DRAFT_HARNESS,
         task_machine=machine_runtime(workspace.backend),
         verifier_machine=None,
@@ -287,11 +310,13 @@ async def draft_task(proposal: DraftProposal, config: DraftConfig) -> DraftResul
     return DraftResult(proposal, tools.draft, tools.report, rollout, rollout_tokens(rollout), tools.submits, failure)
 
 
-def draft_agent_task(proposal: DraftProposal, workspace_backend: Backend) -> TaskSpec:
+def draft_agent_task(proposal: DraftProposal, workspace_backend: Backend, agent_limits: RolloutLimits) -> TaskSpec:
     """The agent's own task: the prompts, and a workspace with the proposal, the example program and the schema."""
     backend = proposal.solver_backend
     machine = NO_SOLVER_MACHINE if proposal.solver_machine is SolverMachine.NONE else SOLVER_MACHINES[backend]
-    system = DRAFT_PROMPT.format(solver_machine=machine, shell_output_kib=SHELL_OUTPUT_BYTES // 1024)
+    system = DRAFT_PROMPT.format(
+        solver_machine=machine, shell_output_kib=SHELL_OUTPUT_BYTES // 1024, turns=agent_limits.max_turns
+    )
     workspace = WORKDIR.relative_to("/")
     files = (
         inline_resource(f"{workspace}/proposal.json", proposal.document.encode()),
@@ -300,6 +325,7 @@ def draft_agent_task(proposal: DraftProposal, workspace_backend: Backend) -> Tas
             f"{workspace}/reference/taskspec.schema.json", json.dumps(TaskSpec.model_json_schema(), indent=1).encode()
         ),
         inline_resource(f"{workspace}/reference/verifyit_specs.md", verifyit_reference().encode()),
+        inline_resource(f"{workspace}/reference/grader_examples.py", Path(grader_examples.__file__).read_bytes()),
     )
     return TaskSpec(
         id=f"taskforge-draft-{proposal.task_id}",
