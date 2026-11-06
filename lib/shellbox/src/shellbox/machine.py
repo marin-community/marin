@@ -232,6 +232,13 @@ class Machine(Protocol):
     async def close(self) -> None: ...
 
 
+@runtime_checkable
+class FileReader(Protocol):
+    """Optional byte-range reads that reject directories without downloading them."""
+
+    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes: ...
+
+
 class MachineFactory(Protocol):
     """Check execution support and create a fresh machine from declared software."""
 

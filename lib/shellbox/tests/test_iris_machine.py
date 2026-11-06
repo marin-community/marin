@@ -458,13 +458,19 @@ def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("exit_code", [124, 137])
-def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, exit_code):
+@pytest.mark.parametrize("elapsed", [10, 30])
+def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, exit_code, elapsed):
     machine, job = local_machine(tmp_path)
     machine._timeout_available = True
     scripts = []
+    deadlines = []
+    now = [0.0]
+    monkeypatch.setattr(iris_backend, "time", SimpleNamespace(monotonic=lambda: now[0]))
 
     async def script(text, timeout=None):
         scripts.append(text)
+        deadlines.append(timeout)
+        now[0] += elapsed if "timeout -k" in text else 0
         return iris_backend.ExecOutput(exit_code if "timeout -k" in text else 0, "", "")
 
     async def download(path, limit=None):
@@ -476,12 +482,13 @@ def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, 
     async def scenario():
         command = Command(("sh", "-c", "printf 'partial output'; sleep 90"), timeout=30)
         result = await machine.run(command)
-        assert result.reason == ExitReason.TIMED_OUT
+        assert result.reason == (ExitReason.TIMED_OUT if elapsed >= 30 else ExitReason.EXITED)
         assert result.exit_code == exit_code
         assert result.stdout == b"partial output" and result.stderr == b"diagnostic"
         assert not job.cancelled
         assert (await machine.run(Command(("true",)))).reason == ExitReason.EXITED
         assert not job.cancelled
+        assert deadlines[0] == 30 + iris_backend.RPC_PADDING_SECONDS
         timed = shlex.split(scripts[0].splitlines()[-1])
         assert timed[:6] == ["timeout", "-k", "5", "30s", "sh", "-c"]
         assert shlex.split(timed[6]) == list(command.argv)
@@ -534,3 +541,51 @@ def test_oom_termination_reports_effective_memory_request(tmp_path, memory_mb):
     machine.spec = replace(machine.spec, memory_mb=memory_mb)
     with pytest.raises(MachineTerminated, match=f"memory request: {memory_mb or 2048} MiB"):
         asyncio.run(machine.run(Command(("true",))))
+
+
+@pytest.mark.parametrize("timeout", [None, 180.1])
+def test_exec_rpc_sends_explicit_deadline_instead_of_controller_default(tmp_path, timeout):
+    machine, _ = local_machine(tmp_path)
+    requests = []
+
+    class Rpc:
+        def exec_in_container(self, request, timeout_ms):
+            requests.append((request.timeout_seconds, timeout_ms))
+            return SimpleNamespace(exit_code=0, stdout="ok", stderr="", error="")
+
+    machine.rpc = Rpc()
+    assert machine._exec_sync(["true"], timeout).stdout == "ok"
+    expected = iris_backend.DEFAULT_JOB_TTL if timeout is None else 181
+    assert requests == [(expected, (expected + iris_backend.RPC_PADDING_SECONDS) * 1000)]
+    asyncio.run(machine.close())
+
+
+def test_ranged_file_reads_transfer_only_slice_and_reject_directories(tmp_path):
+    class RecordingRpc(LocalRpc):
+        def __init__(self):
+            self.scripts = []
+
+        def exec_in_container(self, request, timeout_ms):
+            self.scripts.append(request.command[-1])
+            return super().exec_in_container(request, timeout_ms)
+
+    rpc = RecordingRpc()
+    machine, _ = local_machine(tmp_path, rpc=rpc)
+    path = tmp_path / "large.bin"
+    path.write_bytes(b"a" * 1_000_000 + b"slice" + b"z" * 1_000_000)
+
+    async def scenario():
+        assert await machine.read_file(str(path), offset=1_000_000, limit=5) == b"slice"
+        transfers = [script for script in rpc.scripts if "tail -c" in script]
+        assert len(transfers) == 1 and "tail -c +1000001" in transfers[0] and "head -c 5" in transfers[0]
+        assert await machine.read_file(str(path), offset=3_000_000, limit=5) == b""
+        rpc.scripts.clear()
+        with pytest.raises(IsADirectoryError):
+            await machine.read_file(str(tmp_path))
+        assert len(rpc.scripts) == 1 and "test -d" in rpc.scripts[0]
+        assert not any("tar " in script or "tail -c" in script for script in rpc.scripts)
+        with pytest.raises(FileNotFoundError):
+            await machine.read_file(str(tmp_path / "absent"), limit=5)
+        await machine.close()
+
+    asyncio.run(scenario())

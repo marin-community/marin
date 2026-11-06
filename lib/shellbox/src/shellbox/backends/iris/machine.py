@@ -114,11 +114,11 @@ class IrisMachine:
         self._in_flight: dict[str, list[str]] = {}
 
     def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
-        seconds = math.ceil(timeout) if timeout is not None else -1
+        seconds = math.ceil(timeout) if timeout is not None else DEFAULT_JOB_TTL
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
         )
-        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
+        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000
 
         def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
             # A timed-out ``run`` closes the machine while this thread may still be retrying.
@@ -177,18 +177,38 @@ class IrisMachine:
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
             await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
 
-    async def _download_bytes(self, source: str, limit: int | None = None) -> tuple[bytes, bool]:
+    async def _download_bytes(self, source: str, limit: int | None = None, *, offset: int = 0) -> tuple[bytes, bool]:
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("File offset and limit must be nonnegative")
         quoted = shlex.quote(source)
-        if (await self._script(f"test -e {quoted}")).exit_code == 1:
+        probe = await self._script(
+            f"if test -d {quoted}; then exit 2; elif test -e {quoted}; then exit 0; else exit 1; fi"
+        )
+        if probe.exit_code == 2:
+            raise IsADirectoryError(source)
+        if probe.exit_code == 1:
             raise FileNotFoundError(source)
+        if probe.exit_code:
+            raise OSError(f"Cannot inspect {source}: {probe.stderr or probe.stdout}")
         size = int((await self._checked(f"wc -c < {quoted}")).strip())
-        count = size if limit is None else min(size, limit)
+        remaining = max(0, size - offset)
+        count = remaining if limit is None else min(remaining, limit)
         chunks = []
-        for offset in range(0, count, TRANSFER_CHUNK_BYTES):
-            length = min(TRANSFER_CHUNK_BYTES, count - offset)
-            encoded = await self._checked(f"tail -c +{offset + 1} {quoted} | head -c {length} | base64")
+        for position in range(offset, offset + count, TRANSFER_CHUNK_BYTES):
+            length = min(TRANSFER_CHUNK_BYTES, offset + count - position)
+            encoded = await self._checked(f"tail -c +{position + 1} {quoted} | head -c {length} | base64")
             chunks.append(base64.b64decode(encoded))
-        return b"".join(chunks), size > count
+        return b"".join(chunks), remaining > count
+
+    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes:
+        """Read only the requested byte range, rejecting directories before transfer."""
+        try:
+            data, _ = await self._download_bytes(path, limit, offset=offset)
+        except RuntimeError as error:
+            if str(error).startswith("Iris command failed ("):
+                raise OSError(str(error)) from error
+            raise
+        return data
 
     async def _user_identity(self) -> tuple[str, str]:
         """The ``(uid, name)`` the container runs commands as; Iris exec cannot switch users."""
@@ -228,15 +248,19 @@ class IrisMachine:
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
-            backstop = command.timeout
+            started = time.monotonic()
+            backstop = command.timeout if command.timeout is not None else DEFAULT_JOB_TTL
             if timed_command:
                 assert command.timeout is not None
                 backstop = command.timeout + RPC_PADDING_SECONDS
-            response = await asyncio.wait_for(self._script(script), timeout=backstop)
+            rpc_timeout = (command.timeout if command.timeout is not None else DEFAULT_JOB_TTL) + RPC_PADDING_SECONDS
+            response = await asyncio.wait_for(self._script(script, timeout=rpc_timeout), timeout=backstop)
+            elapsed = time.monotonic() - started
             stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
             stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
             # GNU timeout returns 137 if its kill-after escalation was needed.
-            reason = ExitReason.TIMED_OUT if timed_command and response.exit_code in (124, 137) else ExitReason.EXITED
+            expired = timed_command and command.timeout is not None and elapsed >= command.timeout
+            reason = ExitReason.TIMED_OUT if expired and response.exit_code in (124, 137) else ExitReason.EXITED
             return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
         except TimeoutError:
             await self.close()
