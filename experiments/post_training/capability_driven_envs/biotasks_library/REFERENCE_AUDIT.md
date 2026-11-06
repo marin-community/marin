@@ -62,6 +62,20 @@ These audit outputs include private solver-visible task data and must stay priva
   Sample2 has counts 8, 8, 4 (proportions 0.4, 0.4, 0.2), not three equal
   proportions; Shannon entropy is **1.0549**, as frozen, not `ln(3)`.
 
+## Subsequent v2 first-wave findings
+
+An offline review of 12 models × 247 provisional v2 tasks independently
+confirmed **four additional erroneous references** among the 245 originally
+GLM-audit-confirmed items: `microarray_preprocessing`, `cigar_arithmetic`,
+`variance_stabilizing_transformation`, and `alpha_diversity_metrics`. The last
+also mislabels a nonstandard Hill q=2 formula. These remain **unchanged in v2**
+and must be excluded from validated item scoring until corrected under new IDs.
+Seventeen other tasks have repeated identical nonreference candidates but are
+not yet independently adjudicated. See
+[OPENROUTER_FIRST_WAVE_REVIEW.md](OPENROUTER_FIRST_WAVE_REVIEW.md) for task IDs,
+independent arithmetic, and separate path/format findings. The two earlier
+verified v1 fixes and all frozen scores are unchanged.
+
 ## Required before recalibration or IRT
 
 1. Build deterministic, task-family-specific recomputations for the disputed

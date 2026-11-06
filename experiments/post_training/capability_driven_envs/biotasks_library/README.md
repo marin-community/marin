@@ -121,11 +121,11 @@ an official IRT panel on disputed items. See
 [OPENROUTER_DESIGN.md](OPENROUTER_DESIGN.md) for the experiment gate, provider
 pinning, metadata and budget requirements. The **one-task, twelve-model**
 diagnostic has completed; its results and remaining blockers are in
-[OPENROUTER_FIRST12_RESULTS.md](OPENROUTER_FIRST12_RESULTS.md). No full-bank
-OpenRouter panel has launched. The subsequent **247-task × 12-model first
-wave** and selective upstream-rate-limit recovery are documented in
-[OPENROUTER_FIRST_WAVE_RESULTS.md](OPENROUTER_FIRST_WAVE_RESULTS.md). This
-provisional response matrix is not yet IRT-ready.
+[OPENROUTER_FIRST12_RESULTS.md](OPENROUTER_FIRST12_RESULTS.md). The subsequent
+**247-task × 12-model first wave** and selective upstream-rate-limit recovery are documented in
+[OPENROUTER_FIRST_WAVE_RESULTS.md](OPENROUTER_FIRST_WAVE_RESULTS.md). The
+[offline review](OPENROUTER_FIRST_WAVE_REVIEW.md) found wrong task references
+and systematic path/format problems; this provisional matrix is not IRT-ready.
 
 ## GLM OpenAI-compatible solver calibration
 
