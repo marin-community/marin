@@ -7,14 +7,14 @@ import json
 import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Protocol, cast, override
 from urllib.parse import unquote, urlsplit
 
 from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
-from rigging.filesystem.factory import open_url
+from rigging.filesystem.factory import open_url, url_to_fs
 
 from forge.effects.events import (
     BYTES_TAG,
@@ -49,26 +49,44 @@ class Sink(Protocol):
     async def write(self, records: Sequence[Record]) -> None: ...
 
 
-def _encode(event: Event[object]) -> dict[str, Any]:
-    payload = cast(dict[str, Any], json_value(event))
-    if isinstance(event, (Resolved, Retrying)):
-        payload["request"] = _encode(event.request)
+EVENT_TAG = "__forge_event__"
+
+
+def _encode(event: Event[object], sequence: int = 0, known: dict[str, int] | None = None) -> dict[str, Any]:
+    key = event_digest(event)
+    if known is not None and key in known and known[key] < sequence:
+        return {"ref": key}
+    if known is not None:
+        known.setdefault(key, sequence)
+    payload = {
+        item.name: (
+            {EVENT_TAG: _encode(value, sequence, known) if known is not None else {"ref": event_digest(value)}}
+            if isinstance(value := getattr(event, item.name), Event)
+            else json_value(value)
+        )
+        for item in fields(event)
+        if item.metadata.get("serialize", True)
+    }
     return {"type": f"{type(event).__module__}.{type(event).__qualname__}", "payload": payload}
 
 
-def _restore(value: Any) -> Any:
+def _restore(value: Any, known: dict[str, Event[object]]) -> Any:
     if isinstance(value, dict):
+        if set(value) == {EVENT_TAG}:
+            return _decode(value[EVENT_TAG], known)
         if set(value) == {MAPPING_TAG}:
-            return {key: _restore(item) for key, item in value[MAPPING_TAG].items()}
+            return {key: _restore(item, known) for key, item in value[MAPPING_TAG].items()}
         if set(value) == {BYTES_TAG}:
             return base64.b64decode(value[BYTES_TAG], validate=True)
-        return {key: _restore(item) for key, item in value.items()}
+        return {key: _restore(item, known) for key, item in value.items()}
     if isinstance(value, list):
-        return [_restore(item) for item in value]
+        return [_restore(item, known) for item in value]
     return value
 
 
-def _decode(data: Mapping[str, Any]) -> Event[object]:
+def _decode(data: Mapping[str, Any], known: dict[str, Event[object]]) -> Event[object]:
+    if "ref" in data:
+        return known[data["ref"]]
     cls = EVENT_TYPES[data["type"]]
     payload = data["payload"]
     if cls is StageCompleted and "refs" in payload:
@@ -77,25 +95,28 @@ def _decode(data: Mapping[str, Any]) -> Event[object]:
         payload.update(round=int(refs.get("round", 0)), terminal=(refs.get("terminal") or "").lower() or None)
         if payload["stage"] == "driver":
             payload["stage"] = None
+    if cls in (Resolved, Retrying) and EVENT_TAG not in payload["request"]:
+        payload = {**payload, "request": {EVENT_TAG: payload["request"]}}
+    restored = _restore(payload, known)
     if cls is Resolved:
-        request = _decode(payload["request"])
-        value = TypeAdapter(cast(Any, request.result_type)).validate_python(_restore(payload["value"]))
-        fingerprints = TypeAdapter(tuple[Fingerprint, ...]).validate_python(payload["fingerprints"])
-        return Resolved(request, fingerprints, value, payload["replayed"])
-    if cls is Retrying:
-        return Retrying(_decode(payload["request"]), payload["attempt"], payload["cause"])
-    return TypeAdapter(cls).validate_python(_restore(payload))
+        request = restored["request"]
+        value = TypeAdapter(cast(Any, request.result_type)).validate_python(restored["value"])
+        fingerprints = TypeAdapter(tuple[Fingerprint, ...]).validate_python(restored["fingerprints"])
+        event = Resolved(request, fingerprints, value, restored["replayed"])
+    elif cls is Retrying:
+        event = Retrying(restored["request"], restored["attempt"], restored["cause"])
+    else:
+        event = TypeAdapter(cls).validate_python(restored)
+    known[event_digest(event)] = event
+    return event
 
 
 @dataclass(frozen=True, slots=True)
 class JsonlSink(Sink):
-    """Append new records locally; object-store URLs atomically replace a snapshot.
-
-    A sink has one writer. Retried local batches skip complete records and repair
-    a torn final line; object stores that cannot append copy their prior records.
-    """
+    """Single-writer log: local append or immutable object-store batches."""
 
     path: str
+    _known: dict[str, int] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @override
     async def write(self, records: Sequence[Record]) -> None:
@@ -107,7 +128,11 @@ class JsonlSink(Sink):
     def _line(self, record: Record) -> bytes:
         return (
             json.dumps(
-                {"sequence": record.sequence, "wall_time": record.wall_time, "event": _encode(record.event)},
+                {
+                    "sequence": record.sequence,
+                    "wall_time": record.wall_time,
+                    "event": _encode(record.event, record.sequence, self._known),
+                },
                 sort_keys=True,
                 allow_nan=False,
             )
@@ -147,17 +172,43 @@ class JsonlSink(Sink):
                 output.flush()
                 os.fsync(output.fileno())
             return
-        try:
-            previous = self._read()
-        except FileNotFoundError:
-            previous = ()
-        combined = (*previous, *(record for record in records if record.sequence > len(previous)))
-        if any(record.sequence != index for index, record in enumerate(combined, 1)):
-            raise LogFailure("Cannot replace an incomplete event stream")
-        with atomic_rename(self.path) as temporary:
+        if records:
+            self.append_bytes(b"".join(self._line(record) for record in records))
+
+    def append_bytes(self, data: bytes) -> None:
+        """Publish an immutable batch; retrying its last sequence replaces the same key."""
+        last = json.loads(data.splitlines()[-1])["sequence"]
+        path = f"{self.path}.parts/{last:012d}.jsonl"
+        with atomic_rename(path) as temporary:
             with open_url(temporary, "wb") as output:
-                for record in combined:
-                    output.write(self._line(record))
+                output.write(data)
+
+    def read_bytes(self) -> bytes:
+        """Read a final/legacy snapshot and any subsequently appended batches."""
+        try:
+            with open_url(self.path, "rb") as source:
+                content = source.read()
+            if urlsplit(self.path).scheme in ("", "file"):
+                content = content[: content.rfind(b"\n") + 1]
+        except FileNotFoundError:
+            content = b""
+        lines = content.splitlines(keepends=True)
+        last = json.loads(lines[-1])["sequence"] if lines else 0
+        fs, prefix = url_to_fs(f"{self.path}.parts")
+        for path in sorted(fs.glob(f"{prefix}/*.jsonl")):
+            if int(Path(path).stem) <= last:
+                continue
+            with fs.open(path, "rb") as source:
+                for line in source:
+                    sequence = json.loads(line)["sequence"]
+                    if sequence > last:
+                        if sequence != last + 1:
+                            raise LogFailure("Log sequence is incomplete or out of order")
+                        lines.append(line)
+                        last = sequence
+        if not lines:
+            raise FileNotFoundError(self.path)
+        return b"".join(lines)
 
     async def read(self) -> tuple[Record, ...]:
         try:
@@ -166,14 +217,15 @@ class JsonlSink(Sink):
             raise LogFailure("Cannot decode the event stream") from error
 
     def _read(self) -> tuple[Record, ...]:
-        with open_url(self.path, "rt") as source:
-            content = source.read()
-            if urlsplit(self.path).scheme in ("", "file"):
-                content = content[: content.rfind("\n") + 1]
-            records = tuple(
-                Record(row["sequence"], row["wall_time"], _decode(row["event"]))
-                for row in (json.loads(line) for line in content.splitlines())
-            )
+        known: dict[str, Event[object]] = {}
+        decoded = []
+        for line in self.read_bytes().splitlines():
+            row = json.loads(line)
+            previous = set(known)
+            event = _decode(row["event"], known)
+            self._known.update({key: row["sequence"] for key in known.keys() - previous})
+            decoded.append(Record(row["sequence"], row["wall_time"], event))
+        records = tuple(decoded)
         if any(record.sequence != index for index, record in enumerate(records, 1)):
             raise LogFailure("Log sequence is incomplete or out of order")
         return records

@@ -134,7 +134,7 @@ async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() 
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
-    assert [m.tool_call_id for m in client.requests[1].messages if m.role == "tool"] == ["1", "2", "3"]
+    assert [m.tool_call_id for m in client.requests[1].conversation if m.role == "tool"] == ["1", "2", "3"]
     assert result.session.messages[-1].tool_calls[0].id == "4"
 
 
@@ -250,7 +250,7 @@ async def test_web_and_error_results_are_saved_before_the_next_inference() -> No
     )
     await ctx.drain()
     assert isinstance(result, Stopped)
-    outputs = [message for message in client.requests[1].messages if message.role == "tool"]
+    outputs = [message for message in client.requests[1].conversation if message.role == "tool"]
     assert [message.tool_call_id for message in outputs] == ["1", "2", "3"]
     originals = ("s" * 10000, "f" * 10000, "Unknown tool: " + "unknown" * 100)
     assert len(env.files) == 3
@@ -378,7 +378,7 @@ async def test_provider_context_overflow_preserves_the_last_completed_conversati
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
     assert result.turns == 2
     assert "requested 383788 tokens" in result.summary
-    assert result.session.messages == client.requests[1].messages
+    assert result.session.messages == client.requests[1].conversation
     assert result.session.messages[-1].role == "tool"
     assert result.session.messages[-1].tool_call_id == "1"
 
@@ -479,7 +479,7 @@ async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_pa
     assert len(saved) == 1
     path, data = saved[0]
     assert json.loads(data)["stdout"] == "task ready"
-    assert str(path) in client.requests[1].messages[-1].content
+    assert str(path) in client.requests[1].conversation[-1].content
     assert ".." not in path.parts
     replay = Context(log=EventLog(replay_from=await sink.read()))
     replay_env = environment(replay)
@@ -557,7 +557,7 @@ async def test_mixed_validate_turn_answers_every_call_before_retry() -> None:
     await ctx.drain()
     assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)
     assert isinstance(result, Returned)
-    replies = [message for message in client.requests[1].messages if message.role == "tool"]
+    replies = [message for message in client.requests[1].conversation if message.role == "tool"]
     assert [message.tool_call_id for message in replies] == ["a", "b"]
     assert "called alone" in replies[0].content
     assert result.session.messages[-1].tool_calls[0].id == "c"

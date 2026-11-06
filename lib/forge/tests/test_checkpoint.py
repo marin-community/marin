@@ -42,7 +42,7 @@ async def test_partial_checkpoint_on_event_count_or_timer(
         assert await asyncio.to_thread(uploaded.wait, 2)
     status = json.loads((destination / "status.json").read_bytes())
     assert status == {"terminal": None, "upload_started_at": 123.0}
-    assert (destination / "events.jsonl").read_bytes() == Path(local.path).read_bytes()
+    assert JsonlSink(str(destination / "events.jsonl")).read_bytes() == Path(local.path).read_bytes()
     assert not list(destination.glob("*.tmp.*"))
 
 
@@ -72,3 +72,20 @@ async def test_cancelled_checkpoint_drains_upload_before_final_publication(
         with pytest.raises(asyncio.CancelledError):
             await record
     assert (destination / "status.json").exists()
+
+
+async def test_checkpoints_upload_only_new_bytes_and_recover_without_final_snapshot(tmp_path: Path) -> None:
+    destination = tmp_path / "published"
+    local = JsonlSink(str(tmp_path / "events.jsonl"))
+    sink = CheckpointSink(local, str(destination), b"{}")
+    log = EventLog(sink=sink)
+    await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
+    await sink._upload()
+    first = next(destination.glob("events.jsonl.parts/*.jsonl"))
+    original = first.read_bytes()
+    await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
+    await sink._upload()
+    parts = sorted(destination.glob("events.jsonl.parts/*.jsonl"))
+    assert len(parts) == 2 and first.read_bytes() == original
+    assert sum(part.stat().st_size for part in parts) == Path(local.path).stat().st_size
+    assert await JsonlSink(str(destination / "events.jsonl")).read() == log.records

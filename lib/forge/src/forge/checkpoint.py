@@ -25,6 +25,7 @@ class CheckpointSink(Sink):
     def __init__(self, local: JsonlSink, destination: str, workpiece: bytes) -> None:
         self.local, self.destination, self.workpiece = local, destination, workpiece
         self.pending = 0
+        self.offset = Path(local.path).stat().st_size if Path(local.path).exists() else 0
         self.lock = asyncio.Lock()
         self.timer: asyncio.Task[None] | None = None
 
@@ -45,7 +46,8 @@ class CheckpointSink(Sink):
 
     def _publish(self, events: bytes) -> None:
         status = json.dumps({"terminal": None, "upload_started_at": time.time()}).encode()
-        for name, data in (("events.jsonl", events), ("workpiece.json", self.workpiece), ("status.json", status)):
+        JsonlSink(prefix_join(self.destination, "events.jsonl")).append_bytes(events)
+        for name, data in (("workpiece.json", self.workpiece), ("status.json", status)):
             with atomic_rename(prefix_join(self.destination, name)) as temporary:
                 with open_url(temporary, "wb") as target:
                     target.write(data)
@@ -53,7 +55,9 @@ class CheckpointSink(Sink):
     async def _upload(self) -> None:
         if not self.pending:
             return
-        events = Path(self.local.path).read_bytes()
+        with Path(self.local.path).open("rb") as source:
+            source.seek(self.offset)
+            events = source.read()
         upload = asyncio.create_task(asyncio.to_thread(self._publish, events))
         try:
             await asyncio.shield(upload)
@@ -61,6 +65,7 @@ class CheckpointSink(Sink):
             # A thread cannot be cancelled: drain it before final publication can begin.
             await upload
             raise
+        self.offset += len(events)
         self.pending = 0
 
     async def _periodic(self, stop: asyncio.Event) -> None:

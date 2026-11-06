@@ -27,7 +27,11 @@ def json_value(value: object) -> object:
     if isinstance(value, Enum):
         return json_value(value.value)
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: json_value(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: json_value(getattr(value, field.name))
+            for field in fields(value)
+            if field.metadata.get("serialize", True)
+        }
     if isinstance(value, BaseModel):
         return json_value(value.model_dump(mode="python"))
     if isinstance(value, Mapping):

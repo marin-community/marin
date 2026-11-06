@@ -54,6 +54,8 @@ class AgenticHarness(Harness):
         self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
         prompt_tokens, empty_completions, turns = 0, 0, 0
+        previous: InferenceRequest | None = None
+        consumed = 0
         schemas = tuple(tool.schema for tool in tools.values())
         session = Conversation(session.messages, schemas)
         async with ctx.scope("harness"):
@@ -70,7 +72,9 @@ class AgenticHarness(Harness):
                     )
                 turns += 1
                 try:
-                    result = await ctx.emit(InferenceRequest(session.messages, schemas, self.sampling))
+                    request = InferenceRequest(session.messages[consumed:], schemas, self.sampling, previous)
+                    result = await ctx.emit(request)
+                    previous, consumed = request, len(session.messages)
                 except ContextExceeded as error:
                     return Stopped(StopReason.CONTEXT_LIMIT, session, str(error), turns)
                 # Provider prompt_tokens already includes the cached portion.

@@ -4,7 +4,7 @@
 """Forge values at the boundary of the existing GLM transport and continuation engine."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import ClassVar, Protocol, override
 
 from taskforge.llm.client import RETRYABLE_STATUSES, Attempt, AttemptOutcome, ModelRequestRejected, ModelUnavailable
@@ -27,6 +27,27 @@ class InferenceRequest(Event[Completion]):
     messages: tuple[Message, ...]
     tools: tuple[ToolSchema, ...]
     sampling: LLMPolicy
+    previous: "InferenceRequest | None" = None
+    _history: str = field(default="", init=False, repr=False, compare=False, metadata={"serialize": False})
+
+    def __post_init__(self) -> None:
+        history = self.previous._history if self.previous is not None else ""
+        for message in self.messages:
+            history = digest((history, message))
+        object.__setattr__(self, "_history", history)
+
+    @override
+    def identity(self) -> object:
+        return (self._history, self.tools, self.sampling)
+
+    @property
+    def conversation(self) -> tuple[Message, ...]:
+        turns = []
+        turn: InferenceRequest | None = self
+        while turn is not None:
+            turns.append(turn.messages)
+            turn = turn.previous
+        return tuple(message for messages in reversed(turns) for message in messages)
 
 
 class InferenceClient(Protocol):
@@ -81,7 +102,9 @@ class GlmInference(InferenceClient):
             ]
         }
         try:
-            result = await self.client.complete(tuple(_message(message) for message in request.messages), policy, fields)
+            result = await self.client.complete(
+                tuple(_message(message) for message in request.conversation), policy, fields
+            )
         except ModelUnavailable as error:
             raise Restart("GLM transport exhausted its retry or hold budget", _retries(error.attempts)) from error
         except ModelRequestRejected as error:

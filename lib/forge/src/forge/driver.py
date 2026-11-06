@@ -84,7 +84,8 @@ def recover(workdir: Path, destination: str) -> Status | None:
         return None
     status = TypeAdapter(Status).validate_json(status_bytes)
     snapshot = {"status.json": status_bytes}
-    for name in ("events.jsonl", "workpiece.json"):
+    snapshot["events.jsonl"] = JsonlSink(prefix_join(destination, "events.jsonl")).read_bytes()
+    for name in ("workpiece.json",):
         with open_url(prefix_join(destination, name), "rb") as source:
             snapshot[name] = source.read()
     for name, data in snapshot.items():

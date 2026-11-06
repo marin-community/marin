@@ -8,12 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from taskforge.llm.policy import LLMPolicy
 
-from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, Retrying, StageCompleted
+from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, Retrying, StageCompleted, event_digest
 from forge.effects.issues import LogFailure
 from forge.effects.log import EventLog, JsonlSink, Record, Status, fold
+from forge.model.llm import Completion, Message, Role
 from forge.model.stage import Stage
 from forge.model.workpiece import Terminal
+from forge.resources.inference import InferenceRequest
 
 from .effect_fakes import Answer, Choices, FlakySink, PausedSink, Query, Timed
 
@@ -110,7 +113,7 @@ async def test_log_retries_only_unwritten_records_and_retains_failed_batch() -> 
     assert tuple(record.event for record in sink.records) == (Note("retained"), Note("next"), Note("last"))
 
 
-async def test_object_store_sink_replaces_snapshot_with_old_and_new_records() -> None:
+async def test_object_store_sink_appends_batches_and_retries_idempotently() -> None:
     sink = JsonlSink("memory://forge-test/append.jsonl")
     first = Record(1, 1.0, Note("first"))
     second = Record(2, 2.0, Note("second"))
@@ -166,3 +169,23 @@ async def test_legacy_progress_resumes_nonterminal_stages_and_distinguishes_held
     assert status.terminal is Terminal.HELD and not status.finished
     await log.record(StageCompleted(Stage.REVIEW, "cfg", "Accept", 2, Terminal.ACCEPTED))
     assert fold(tuple(record.event for record in await sink.read())).finished
+
+
+async def test_conversation_logs_each_turn_once_and_replays_legacy_full_requests(tmp_path: Path) -> None:
+
+    sink = JsonlSink(str(tmp_path / "conversation.jsonl"))
+    log = EventLog(sink=sink)
+    prefix = "long-system-prompt-" * 1000
+    first = InferenceRequest((Message(Role.SYSTEM, prefix),), (), LLMPolicy())
+    second = InferenceRequest((Message(Role.USER, "follow-up"),), (), LLMPolicy(), first)
+    for request in (first, second):
+        await log.record(request)
+        await log.record(Resolved(request, (), Completion("reply")))
+    content = sink.read_bytes().decode()
+    assert content.count(prefix) == 1
+    assert content.count("follow-up") == 1
+    resumed = EventLog(replay_from=await JsonlSink(sink.path).read())
+    legacy = InferenceRequest(second.conversation, (), LLMPolicy())
+    assert event_digest(legacy) == event_digest(second)
+    assert resumed.lookup(legacy, ()) == Completion("reply")
+    assert resumed.resolved()[-1].request == second

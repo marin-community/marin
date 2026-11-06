@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import ClassVar, Generic, TypeVar
 
@@ -46,6 +46,14 @@ class Event(Generic[T_co]):
     """
 
     result_type: ClassVar[object] = type(None)
+    _digest: str | None = field(default=None, init=False, repr=False, compare=False, metadata={"serialize": False})
+
+    def identity(self) -> object:
+        return {
+            item.name: event_digest(value) if isinstance(value := getattr(self, item.name), Event) else value
+            for item in fields(self)
+            if item.metadata.get("serialize", True)
+        }
 
     def __init_subclass__(cls) -> None:
         EVENT_TYPES[f"{cls.__module__}.{cls.__qualname__}"] = cls
@@ -56,7 +64,12 @@ EVENT_TYPES: dict[str, type[Event[object]]] = {}
 
 
 def event_digest(event: Event[object]) -> str:
-    return digest((f"{type(event).__module__}.{type(event).__qualname__}", event))
+    if event._digest is None:
+        object.__setattr__(
+            event, "_digest", digest((f"{type(event).__module__}.{type(event).__qualname__}", event.identity()))
+        )
+    assert event._digest is not None
+    return event._digest
 
 
 @dataclass(frozen=True, slots=True)
