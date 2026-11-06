@@ -52,7 +52,7 @@ from experiments.post_training.task_curation.inventory import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-PRESET_REVISION = "2026.10.27"
+PRESET_REVISION = "2026.11.06"
 RUN_PREFIX = "checkpoints/snowball-rl"
 TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
 # Fraction of a native panel that must be scored before its scores count.
@@ -94,7 +94,6 @@ class Gap(StrEnum):
     NO_IMAGE_SANDBOX = "no-image-sandbox"
     NO_GRADING_TIMER = "no-grading-timer"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
-    EVAL_USES_TRAINING_SAMPLING = "eval-uses-training-sampling"
 
 
 class EvalHarness(StrEnum):
@@ -226,7 +225,11 @@ class PanelEvaluator:
             eval_sampling_params={
                 "temperature": 0.0 if evaluation.answers == 1 else 1.0,
                 "top_p": 1.0,
-                "logprobs": None if config["trainer"]["algorithm"]["off_policy_correction"] == "tis" else 0,
+                "logprobs": (
+                    None
+                    if evaluation.answers == 1 or config["trainer"]["algorithm"]["off_policy_correction"] == "tis"
+                    else 0
+                ),
                 "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
             },
         )
@@ -418,7 +421,7 @@ _LEARNING_MEDIUM = Preset(
     evaluations=(EVALUATIONS["panel-910"],),
     guards=(Metric("panel-910/family_mean", True),),
     reported=(*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
-    gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
+    gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
 )
 PRESETS = MappingProxyType(
@@ -521,7 +524,7 @@ PRESETS = MappingProxyType(
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
-                gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
+                gaps=_GAPS,
             ),
         )
     }
