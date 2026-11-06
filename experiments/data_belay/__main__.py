@@ -14,17 +14,18 @@ from levanter.tokenizers import load_tokenizer
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.belay.config import H100_CLUSTER
 from experiments.data_belay.answer_bpb import ANSWER_BPB_ROOT, build_answer_bpb
 from experiments.data_belay.answer_bpb import MANIFEST_NAME as ANSWER_BPB_MANIFEST
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
 from experiments.data_belay.judge import HARM_LIMITS, judge
-from experiments.data_belay.prepare import build_cache, plan_cache
+from experiments.data_belay.prepare import build_cache, cache_share, plan_cache
 from experiments.data_belay.results import CONTROL_SEEDS, arm_metrics, control_run_id, treatment_run_id
 from experiments.data_belay.rungs import DATA_BELAY_RUNGS, ladder_tokens
 from experiments.grug.fast_track import belay_tracks
 from experiments.grug.fast_track.launch import V16384_TOKENIZER
 
-CLUSTER = "cw-us-east-02a"
+CLUSTER = H100_CLUSTER
 MARIN_PREFIX = "s3://marin-us-east-02a/marin"
 PRIORITY = "batch"
 
@@ -131,7 +132,7 @@ def prepare(
     report = _intake(repo, revision, config_name, split, text_field, share)
     if not report.passed:
         raise click.ClickException(f"intake did not pass: license {report.license_verdict}, needs {report.needs}")
-    plan = plan_cache(report, max(need.new_tokens for need in report.needs))
+    plan = plan_cache(report, max(need.new_tokens for need in report.needs), V16384_TOKENIZER)
     click.echo(f"plan: {len(plan.files)} files, about {plan.estimated_tokens:,} tokens -> {plan.train_cache}")
     manifest = build_cache(report, plan, V16384_TOKENIZER)
     click.echo(f"cache: {plan.train_cache} {manifest['stats']}")
@@ -156,8 +157,7 @@ def build_answer_bpb_command(root: str) -> None:
 @click.option(
     "--candidate", default=None, help="Candidate name for the run id, e.g. finemath-p20; omit for the control."
 )
-@click.option("--mix-cache", default=None, help="The candidate's flat train cache, from `prepare`.")
-@click.option("--mix-share", type=float, default=None)
+@click.option("--mix-cache", default=None, help="The candidate's flat train cache, from `prepare`; it sets the share.")
 @click.option("--num-steps", type=int, default=None, help="Smoke run of this many steps; the run id gets -smoke<N>.")
 @click.option("--submit", is_flag=True, help=f"Submit to {CLUSTER}; without it, print the plan.")
 def train(
@@ -165,20 +165,21 @@ def train(
     seed: int,
     candidate: str | None,
     mix_cache: str | None,
-    mix_share: float | None,
     num_steps: int | None,
     submit: bool,
 ) -> None:
     """Train one arm on the Belay `vanilla` Track: the control, or the base cache mixed with a candidate's cache."""
-    if (candidate is None) != (mix_cache is None) or (mix_cache is None) != (mix_share is None):
-        raise click.UsageError("a candidate needs --candidate, --mix-cache and --mix-share; the control takes none")
+    if (candidate is None) != (mix_cache is None):
+        raise click.UsageError("a candidate needs --candidate and --mix-cache; the control takes neither")
     run_id = control_run_id(rung, seed) if candidate is None else treatment_run_id(rung, candidate, seed)
     if num_steps is not None:
         run_id += f"-smoke{num_steps}"
     args = ["--track", "vanilla", "--size", rung, "--run-id", run_id, "--seed", str(seed)]
     args += ["--eval-manifest", prefix_join(ANSWER_BPB_ROOT, ANSWER_BPB_MANIFEST)]
     if mix_cache is not None:
-        args += ["--mix-cache", mix_cache, "--mix-share", str(mix_share)]
+        configure_coreweave_s3()
+        # The share the cache was sized and intake-checked for, so the epochs stay within the check.
+        args += ["--mix-cache", mix_cache, "--mix-share", str(cache_share(mix_cache))]
     if num_steps is not None:
         args += ["--num-steps", str(num_steps)]
     if submit:

@@ -19,6 +19,7 @@ import random
 from datasets import load_dataset_builder
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.processing.tokenize._core import FileEntry, drop_sidecars, glob_with_sizes
+from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -64,7 +65,7 @@ def select_files(files: list[FileEntry], tokens_per_byte: float, need_tokens: in
     return chosen
 
 
-def plan_cache(report: IntakeReport, need_tokens: int, seed: int = SAMPLE_SEED) -> CachePlan:
+def plan_cache(report: IntakeReport, need_tokens: int, tokenizer: str, seed: int = SAMPLE_SEED) -> CachePlan:
     """Choose the files for ``report``'s dataset and the cache path that names them."""
     data_files = load_dataset_builder(report.repo, report.config, revision=report.revision).config.data_files
     files = drop_sidecars(glob_with_sizes(list(data_files[report.split])))
@@ -75,7 +76,7 @@ def plan_cache(report: IntakeReport, need_tokens: int, seed: int = SAMPLE_SEED) 
     paths = tuple(sorted(f.path for f in chosen))
     max_rows = math.ceil(FILE_MARGIN * need_tokens / report.sample.tokens_per_row)
     identity = json.dumps(
-        {"files": paths, "max_rows": max_rows, "text_field": report.text_field, "tokenizer": "hero-bpe-v16384"},
+        {"files": paths, "max_rows": max_rows, "text_field": report.text_field, "tokenizer": tokenizer},
         sort_keys=True,
     )
     digest = hashlib.sha256(identity.encode()).hexdigest()[:10]
@@ -98,8 +99,15 @@ def build_cache(report: IntakeReport, plan: CachePlan, tokenizer: str) -> dict:
         sample_count=plan.max_rows,
     )
     tokenize(config)
-    stats = json.loads(StoragePath(prefix_join(plan.train_cache, ".stats.json")).read_text())
+    stats = dataclasses.asdict(read_tokenized_cache_stats(plan.cache_path, "train"))
     manifest = {"intake": json.loads(report.to_json()), "plan": dataclasses.asdict(plan), "stats": stats}
     StoragePath(prefix_join(plan.cache_path, MANIFEST_NAME)).write_text(json.dumps(manifest, indent=2))
     logger.info("cache %s: %s", plan.train_cache, stats)
     return manifest
+
+
+def cache_share(train_cache: str) -> float:
+    """The share that ``train_cache`` was prepared and intake-checked for, from its manifest."""
+    cache_path = train_cache.rstrip("/").removesuffix("/train")
+    manifest = json.loads(StoragePath(prefix_join(cache_path, MANIFEST_NAME)).read_text())
+    return float(manifest["intake"]["share"])

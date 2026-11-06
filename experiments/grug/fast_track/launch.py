@@ -330,6 +330,8 @@ def _manifest_validation_components(manifest_path: str) -> dict[str, DatasetComp
     loss-weight fields.
     """
     manifest = json.loads(StoragePath(manifest_path).read_text())
+    if manifest["seq_len"] != SEQ_LEN:
+        raise ValueError(f"{manifest_path} packs {manifest['seq_len']}-token rows; the ladder trains on {SEQ_LEN}")
     fmt = PrebuiltLmDatasetFormat(input_ids_key=manifest["input_ids_key"], loss_weights_key=manifest["loss_weights_key"])
     return {
         entry["name"]: DatasetComponent(source=None, cache_dir=entry["cache_dir"], format=fmt, tags=[entry["name"]])
@@ -346,12 +348,12 @@ def _flat_cache_data_config(
     mix: TrainMix | None = None,
     eval_manifest: str | None = None,
 ) -> LmDataConfig:
-    """Straight-through single-source training on one pre-built flat cache (tokenizer-ablation runs).
+    """Straight-through training on one pre-built flat cache, or two at constant shares (``mix``).
 
-    Mirrors the Harrier config's validation wiring, but trains on a single pre-tokenized cache at
-    constant weight -- no mixture phases, no simulated epoching. ``validation`` sets are folded in as
-    zero-weight components (built as executor deps, tokenized with the same ``tokenizer``). ``mix`` adds a second
-    flat cache, ``mix``, at a constant share of the batches; it repeats from its start if it runs out.
+    Mirrors the Harrier config's validation wiring, with constant weights -- no mixture phases, no simulated
+    epoching. ``mix`` adds a second flat cache at a constant share of the batches; it repeats from its start if it
+    runs out. ``validation`` sets are folded in as zero-weight components (built as executor deps, tokenized with the
+    same ``tokenizer``), and so are the prebuilt caches that ``eval_manifest`` lists.
     """
     components = {
         "train": DatasetComponent(

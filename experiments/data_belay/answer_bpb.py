@@ -29,12 +29,13 @@ from levanter.tokenizers import MarinTokenizer
 from marin.processing.tokenize.store_builder import write_stats_json
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.grug.fast_track.launch import SEQ_LEN
+
 logger = logging.getLogger(__name__)
 
 ANSWER_BPB_VERSION = "eval-policy-answer-bpb-v1"
 ANSWER_BPB_ROOT = f"s3://marin-us-east-02a/marin/data_belay/eval/{ANSWER_BPB_VERSION}"
 MANIFEST_NAME = "manifest.json"
-SEQ_LEN = 4096
 # A fixed seeded sample of a larger task keeps one run's eval to a few minutes.
 MAX_EXAMPLES_PER_TASK = 2000
 SAMPLE_SEED = 0
@@ -220,6 +221,11 @@ TASKS = (
 )
 
 
+def task_component_name(task: AnswerTask) -> str:
+    """Validation component name: the run logs the task's BPB and the macro BPB of its group and of all tasks."""
+    return f"eval_policy/{task.group}/{task.name}"
+
+
 def task_examples(task: AnswerTask) -> list[AnswerExample]:
     """The task's examples: all of them, or a seeded sample of ``MAX_EXAMPLES_PER_TASK`` in dataset order."""
     rows = load_dataset(task.repo, task.config, split=task.split, revision=task.revision)
@@ -281,7 +287,7 @@ class TaskCache:
     """One task's validation cache, as the launcher's ``--eval-manifest`` reads it."""
 
     name: str
-    """Component name ``eval_policy/<group>/<task>``: the run logs task BPB and group and overall macro BPB."""
+    """Component name, from ``task_component_name``."""
     cache_dir: str
     """Component root; the cache itself is its ``validation`` split."""
     examples: int
@@ -301,7 +307,7 @@ def build_task_cache(task: AnswerTask, tokenizer: MarinTokenizer, root: str) -> 
     answer_tokens = int(sum(sum(weights) for _, weights in kept))
     dropped = len(encoded) - len(kept)
     logger.info("%s: %d examples (%d dropped), %d answer tokens", task.name, len(kept), dropped, answer_tokens)
-    return TaskCache(f"eval_policy/{task.group}/{task.name}", cache_dir, len(kept), dropped, answer_tokens)
+    return TaskCache(task_component_name(task), cache_dir, len(kept), dropped, answer_tokens)
 
 
 def build_answer_bpb(tokenizer: MarinTokenizer, root: str = ANSWER_BPB_ROOT) -> list[TaskCache]:

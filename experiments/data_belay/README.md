@@ -2,7 +2,7 @@
 
 The Data Belay tests whether a Hugging Face dataset improves Marin's held-out evals. It gives the dataset a share
 `p` of the training tokens of the Belay `vanilla` Track and compares the result with a control that trains on the
-same number of base tokens.
+same number of tokens, all from the base cache.
 
 | Arm | Training tokens at rung budget `B` |
 |---|---|
@@ -23,10 +23,11 @@ B check --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2
 # 2. Tokenize a seeded sample of the dataset's files into a cache (an Iris CPU job).
 B prepare --dataset HuggingFaceTB/finemath --config finemath-4plus --share 0.2 --submit
 
-# 3. Train each seed of the treatment; the run id is dbelay-<rung>-<candidate>-s<seed>.
+# 3. Train each seed of the treatment; the run id is dbelay-<rung>-<candidate>-s<seed>, and the share is the one
+#    the cache was prepared for.
 #    The control (no --candidate) runs once per rung and seed, for the seeds in results.CONTROL_SEEDS.
 B train --rung d512 --seed 0 --candidate finemath-p20 \
-    --mix-cache s3://marin-us-east-02a/marin/data_belay/caches/<...>/train --mix-share 0.2 --submit
+    --mix-cache s3://marin-us-east-02a/marin/data_belay/caches/<...>/train --submit
 
 # 4. Verdict against the shared control, or against another candidate at the same seeds.
 B report --rung d512 --candidate finemath-p20 --seeds 0,1,2

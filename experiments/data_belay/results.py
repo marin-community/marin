@@ -5,9 +5,9 @@
 
 import wandb
 
+from experiments.belay.config import CONFIG
 from experiments.data_belay.judge import GROUP_METRICS
 
-WANDB_PATH = "marin-community/marin_moe"
 # Seeds of the shared control runs at each rung; every candidate at the rung is compared with all of them.
 CONTROL_SEEDS = {"d512": (0, 1, 2, 3, 4, 5), "d768": (0, 1, 2), "d1024": (0, 1, 2)}
 
@@ -22,7 +22,7 @@ def treatment_run_id(rung: str, candidate: str, seed: int) -> str:
 
 def run_metrics(run_id: str) -> dict[str, float]:
     """Each group's macro BPB from a finished run; raises if the run did not finish or lacks a group."""
-    run = wandb.Api().run(f"{WANDB_PATH}/{run_id}")
+    run = wandb.Api().run(f"{CONFIG.wandb_project}/{run_id}")
     if run.state != "finished":
         raise ValueError(f"run {run_id} is {run.state}, not finished")
     missing = [key for keys in GROUP_METRICS.values() for key in keys if key not in run.summary]

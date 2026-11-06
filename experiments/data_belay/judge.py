@@ -27,20 +27,27 @@ from enum import StrEnum
 
 from scipy import stats
 
+from experiments.data_belay.answer_bpb import TASKS, TaskGroup, task_component_name
+
+# BoolQ is logged but left out of the verdict: its one-token yes/no answer measures the model's prior for "yes", whose
+# BPB varied 10.7% between control seeds at d512 (PIQA and WinoGrande: 0.6%).
+EXCLUDED_TASKS = frozenset({"boolq"})
 # Each group's BPB is the mean of these W&B summary keys.
 GROUP_METRICS = {
     "paloma": ("eval/paloma/macro_bpb",),
     "uncheatable": ("eval/uncheatable_eval/macro_bpb",),
-    "knowledge": tuple(f"eval/eval_policy/knowledge/{task}/bpb" for task in ("mmlu_pro", "trivia_qa", "truthful_qa")),
-    # BoolQ is logged but left out: its one-token yes/no answer measures the model's prior for "yes", whose BPB
-    # varied 10.7% between control seeds at d512 (PIQA and WinoGrande: 0.6%).
-    "commonsense": tuple(f"eval/eval_policy/commonsense/{task}/bpb" for task in ("piqa", "winogrande")),
-    "math": tuple(f"eval/eval_policy/math/{task}/bpb" for task in ("gsm8k", "math500")),
-    "code": tuple(f"eval/eval_policy/code/{task}/bpb" for task in ("humaneval_plus", "mbpp_plus", "cruxeval_o")),
+    **{
+        str(group): tuple(
+            f"eval/{task_component_name(task)}/bpb"
+            for task in TASKS
+            if task.group is group and task.name not in EXCLUDED_TASKS
+        )
+        for group in TaskGroup
+    },
 }
 CONFIDENCE = 0.95
 # Relative BPB increase past which a group counts as harmed: 1%, or 2.5 seed SDs where the seeds vary more, so that
-# 3 treatment seeds against 4 control seeds can call a group neutral. The SDs are from the d512 control, seeds 0-3
+# 3 seeds per arm can call a group neutral. The SDs are from the first four d512 control seeds
 # (dbelay-d512-control-s0..s3): Paloma 0.45%, Uncheatable 0.54%, knowledge 0.92%, commonsense 0.40%, math 1.06%,
 # code 1.22%.
 HARM_LIMITS = {
