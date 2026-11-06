@@ -3,8 +3,9 @@
 This adapter evaluates the original 5,200 questions from
 [GenomeQA](https://arxiv.org/abs/2604.05774). Marin issue
 [#10981](https://github.com/marin-community/marin/issues/10981) records the
-protocol choices and alternatives. Registry availability does not admit the
-benchmark into Marin's official evaluation policy.
+protocol choices and alternatives. The task is available through the native
+Evalchemy CLI; it is not registered in Marin's launcher or official evaluation
+policy.
 
 `GenomeQA` loads the pinned HF `binary` and `mcq` files.
 It does not run tools, retrieve context, shuffle options, or
@@ -20,7 +21,9 @@ Generation uses one response, temperature 0.7, top-p 0.95, and a 16,384-token
 cap. Conflicting settings fail before generation. Full-prompt context preflight
 requires the served tokenizer and context length; inputs are never truncated or
 filtered to fit. Provider reasoning-budget semantics and effective wire settings
-must still be checked before a live evaluation. Thinking effort is model-specific.
+must still be checked before a live evaluation. For an API backend, configure
+`tokenizer_backend=huggingface` and the served model tokenizer explicitly; the
+default `none` cannot perform this preflight. Thinking effort is model-specific.
 
 The grader reuses shared final-content selection and thinking-marker cleanup,
 then applies a GenomeQA-specific letter parser to the last `### Answer` section.
@@ -48,10 +51,11 @@ drops can leave aggregates over fewer graded questions. Inspect expected,
 generated, and graded counts before reporting a complete benchmark score.
 No GenomeQA-specific runtime policy is added.
 
-Dashboard subtask columns and public sample-access restrictions are follow-up
-work in #10981. Keep GenomeQA runs out of public dashboard records until those
-restrictions are in place. This adapter PR does not change Marin ingestion or
-dashboard code.
+Marin launcher registration, dashboard subtask columns, and public sample-access
+restrictions are follow-up work in #10981. Launcher registration is deferred
+because launcher results enter the dashboard sample browser. Keep native-run
+artifacts out of public dashboard records until those restrictions are in place.
+This adapter PR does not change Marin ingestion or dashboard code.
 
 The dataset and repository have no declared reuse license. Fetching them at
 runtime does not settle their use terms. No upstream code, prompt, or questions

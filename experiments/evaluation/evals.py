@@ -54,12 +54,7 @@ _DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
 # Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
 _HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
 # MRCR loads tiktoken's o200k_base encoding, which tiktoken downloads at import.
-_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType(
-    {
-        "mrcr": ("openaipublic.blob.core.windows.net",),
-        "genomeqa": ("raw.githubusercontent.com",),
-    }
-)
+_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType({"mrcr": ("openaipublic.blob.core.windows.net",)})
 
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
@@ -364,7 +359,6 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "ifbench",
     "mrcr",
     "graphwalks",
-    "genomeqa",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
