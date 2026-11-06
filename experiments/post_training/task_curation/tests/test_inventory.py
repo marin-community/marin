@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.inventory import (
     AAII_CATEGORIES,
     FULL_VALIDATION_FILENAME,
+    HELDOUT_BLEND,
     HELDOUT_FAMILIES,
     STRUCTURAL_FAMILY,
     TASK_MANIFEST_FILENAME,
@@ -233,7 +234,7 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
     settings = recipe(tmp_path).model_copy(
         update={
-            "sources": {BLENDS["rlvr1"][dataset].id: family for dataset, family in components.items()},
+            "sources": {BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in components.items()},
             "family_limits": {family: 1 for family in components.values()},
         }
     )
