@@ -35,7 +35,11 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.timing import Timestamp
 from scipy.stats import t
+from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
+from taskcompendium.models import Source
+from taskcompendium.pipeline.models import RawRow
+from verifyit.spec import ExactSpec
 
 from experiments.post_training import snowball_pass_rates
 from experiments.post_training import snowball_rl as snowball
@@ -57,6 +61,24 @@ def _answer(task, score, *, low=0, high=1, status="verified", tokens=1, error=No
     return {"task_id": task, "response_token_ids": [1] * tokens, "exception_type": error, "verification": verification}
 
 
+def _task_parquet(path, identifiers):
+    template = answer_task(
+        RawRow("template", Source(dataset="fixture", revision="1", row="template", importer_revision="1"), {}),
+        prompt="Reply yes.",
+        spec=ExactSpec(expected=("yes",)),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {presets.TASK_SPEC_COLUMN: template.model_copy(update={"id": item}).model_dump_json()}
+                for item in identifiers
+            ]
+        ),
+        path,
+    )
+
+
 @pytest.fixture
 def recorded_runs(selection, tmp_path, monkeypatch):
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
@@ -72,6 +94,12 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         for i in range(910)
     ]
     pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
+    test_panel = Path(presets.selection_artifact(presets.DEFAULT_TEST_PANEL).path())
+    full_tasks = [{**tasks[0 if i == 0 else 1], "task_id": f"task-{i}"} for i in range(1500)]
+    pq.write_table(pa.Table.from_pylist(full_tasks), test_panel / presets.TASK_MANIFEST_FILENAME)
+    for directory, manifest in ((panel, tasks), (test_panel, full_tasks)):
+        for filename, selected in (("full_validation", manifest), ("validation", manifest[:100])):
+            _task_parquet(directory / f"{filename}.parquet", [row["task_id"] for row in selected])
     rates = tmp_path / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION / "pass_rates.parquet"
     rates.parent.mkdir(parents=True)
     revision = presets.MODEL_REVISION
@@ -86,6 +114,11 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         for i in range(910)
     ]
     pq.write_table(pa.Table.from_pylist(rows), rates)
+    panel_rates = tmp_path / "test-panel-rates" / scoring.PASS_RATES_FILENAME
+    panel_rates.parent.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist([{**rows[i % len(rows)], "task_id": f"task-{i}"} for i in range(1500)]), panel_rates
+    )
 
     def write(
         preset,
@@ -110,6 +143,10 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         missing_receipt=False,
         unresolved_receipt=False,
         first_panel_task="task-0",
+        quality_unscored=0,
+        quality_metrics=None,
+        initial_unscored=0,
+        source_first_task="task-0",
     ):
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
@@ -167,13 +204,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 row["generate/wall_seconds"] = 1.0
             if step != omit_step:
                 _json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
-        run_panel = panel
-        if first_panel_task != "task-0":
-            run_panel = root / "heldout"
-            run_panel.mkdir()
-            manifest = [{**row, "task_id": first_panel_task} if row["task_id"] == "task-0" else row for row in tasks]
-            pq.write_table(pa.Table.from_pylist(manifest), run_panel / presets.TASK_MANIFEST_FILENAME)
-        launch = {"inputs": {"validation_data": [{"uri": str(run_panel)}]}}
+        launch = {"inputs": {"validation_data": [], "evaluation_data": {}}}
         if unresolved_receipt:
             launch |= {
                 "artifacts": {"attempts_root": str(root / "attempts")},
@@ -191,34 +222,90 @@ def recorded_runs(selection, tmp_path, monkeypatch):
 
             monkeypatch.setattr(adapter, "connect_controller", endpoint)
             monkeypatch.setattr(adapter, "rpc_client", rpc)
-        if not missing_receipt:
-            _json(root / "resolved-launch.yaml", {"config": launch})
         sessions = {-1 if preset.updates == 0 else preset.updates: score}
         sessions |= {0: initial_score} if initial_score is not None else {}
-        for evaluation in preset.evaluations:
+        for index, evaluation in enumerate(preset.evaluations):
+            selected = evaluation.tasks(selection, presets.default_selection())
+            run_panel = Path(selected.path())
+            if first_panel_task != "task-0":
+                original = pq.read_table(run_panel / presets.TASK_MANIFEST_FILENAME).to_pylist()
+                run_panel = root / f"heldout-{evaluation.name}"
+                run_panel.mkdir()
+                manifest = [
+                    {**row, "task_id": first_panel_task} if row["task_id"] == "task-0" else row for row in original
+                ]
+                pq.write_table(pa.Table.from_pylist(manifest), run_panel / presets.TASK_MANIFEST_FILENAME)
+                _task_parquet(run_panel / f"{evaluation.file}.parquet", [row["task_id"] for row in manifest])
+            count = evaluation.sample or presets.selection_summary(selected)[f"{evaluation.file}_rows"]
+            identifiers = [
+                f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" if i else first_panel_task
+                for i in range(count)
+            ]
+            if evaluation.sample is not None:
+                run_panel = root / f"input-{evaluation.name}"
+                _task_parquet(run_panel / f"{evaluation.file}.parquet", identifiers)
+            elif source_first_task != "task-0":
+                manifest = pq.read_table(run_panel / presets.TASK_MANIFEST_FILENAME).to_pylist()
+                run_panel = root / f"recorded-{evaluation.name}"
+                run_panel.mkdir()
+                pq.write_table(
+                    pa.Table.from_pylist([*manifest, {**manifest[0], "task_id": source_first_task}]),
+                    run_panel / presets.TASK_MANIFEST_FILENAME,
+                )
+                _task_parquet(run_panel / f"{evaluation.file}.parquet", [source_first_task, *identifiers[1:]])
+            descriptor = {
+                "uri": str(run_panel),
+                "relative_path": f"{evaluation.file}.parquet",
+                "kind": "directory",
+                "identity": f"{selected.name}@{selected.version}",
+                "local_path": str(run_panel),
+            }
+            if index:
+                launch["inputs"]["evaluation_data"][evaluation.name] = [descriptor]
+            else:
+                launch["inputs"]["validation_data"] = [descriptor]
             for step, average in sessions.items():
+                failed_answers = initial_unscored if step == 0 else quality_unscored if index else unscored
                 rows = answers or [
                     _answer(
-                        f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" if i else first_panel_task,
+                        identifier,
                         (float(i < mixed and attempt == 0) if evaluation.file == "train" else average),
-                        tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed else 1,
-                        error="GraderUnavailable" if i < unscored else None,
+                        tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed and index == 0 else 1,
+                        error="GraderUnavailable" if i < failed_answers else None,
                     )
-                    for i in range(
-                        (evaluation.sample or presets.selection_summary(selection)["full_validation_rows"]) - drop_task
-                    )
+                    for i, identifier in enumerate(identifiers[: len(identifiers) - drop_task])
                     for attempt in range(evaluation.answers)
                 ]
                 session = "eval_only" if step == -1 else f"global_step_{step}_evals"
-                path = root / "exports/dumped_evals" / session / "panel.jsonl"
+                export = root / "exports" / evaluation.name if index else root / "exports"
+                path = export / "dumped_evals" / session / "panel.jsonl"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("".join(json.dumps(row) + "\n" for row in rows[:1] * duplicate_task + rows))
+                rows = rows[:1] * duplicate_task + rows
+                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+                if evaluation.file != "train":
+                    metric_step = 0 if step == -1 else step
+                    metric_path = root / f"exports/metrics/step-{metric_step:06d}.json"
+                    if metric_step != omit_step:
+                        outcome_prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
+                        counts = {outcome_prefix + outcome: 0 for outcome in (*Outcome, "rollout_failure")}
+                        failures = sum(bool(row.get("exception_type")) for row in rows)
+                        counts.update(
+                            {outcome_prefix + "graded": len(rows) - failures, outcome_prefix + "unavailable": failures}
+                        )
+                        previous = json.loads(metric_path.read_text()) if metric_path.exists() else {}
+                        updated = previous | counts | (quality_metrics or {})
+                        for key, value in (quality_metrics or {}).items():
+                            if value is None:
+                                del updated[key]
+                        _json(metric_path, updated)
+        if not missing_receipt:
+            _json(root / "resolved-launch.yaml", {"config": launch})
         return root
 
     return write
 
 
-def controls(write, preset, *, constant=False, fault=None):
+def controls(write, preset, *, constant=False, fault=None, common_fault=None):
     pin = gate.CONTROLS[preset][0]
     return [
         write(
@@ -227,7 +314,7 @@ def controls(write, preset, *, constant=False, fault=None):
             speed=100.0 + (0 if constant else i),
             score=0.49 + 0.01 * i,
             mixed=128 + i,
-            **(fault if i == 0 and fault else {}),
+            **((common_fault or {}) | (fault if i == 0 and fault else {})),
         )
         for i in range(pin.runs)
     ]
@@ -446,8 +533,15 @@ BROKEN = {
     "argv": ("snowball", "--init", "users/test/missing@2026.10.27"),
 }
 BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_fraction"} | {
-    f"panel-910/{name}"
-    for name in ("batch_finished", "panel_scored_fraction", "initial/batch_finished", "initial/panel_scored_fraction")
+    f"test_panel/{name}"
+    for name in (
+        "batch_finished",
+        "panel_scored_fraction",
+        "grader_error_fraction",
+        "initial/batch_finished",
+        "initial/panel_scored_fraction",
+        "initial/grader_error_fraction",
+    )
 }
 
 
@@ -493,7 +587,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             id="candidate-and-control-evaluation-revisions-differ",
         ),
-        ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"panel-910/batch_finished"}, None),
+        ("learning-medium", {"drop_task": True}, {}, "invalid", None, {"test_panel/batch_finished"}, None),
         (
             "speed-medium",
             {"metrics": {"policy/mismatch/staleness0/selected_tokens": 0}},
@@ -527,6 +621,121 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             (0.01, 0.02),
         ),
         ("speed-short", {}, {}, "pass", "no change", set(), None),
+        pytest.param(
+            "speed-short", {"quality_unscored": 15}, {}, "pass", "no change", set(), (0.01, 0.01), id="quality-boundary"
+        ),
+        pytest.param(
+            "speed-short",
+            {"quality_unscored": 16},
+            {},
+            "fail",
+            "regression",
+            {"test_panel/panel_scored_fraction", "test_panel/grader_error_fraction"},
+            (16 / 1500, 16 / 1500),
+            id="quality-failure",
+        ),
+        pytest.param(
+            "speed-short",
+            {"quality_unscored": 12, "quality_metrics": {"eval/test_panel/all/outcome/rollout_failure": 12}},
+            {},
+            "invalid",
+            None,
+            {"test_panel/grader_error_fraction"},
+            (0.008, 0.016),
+            id="quality-ambiguous",
+        ),
+        pytest.param(
+            "speed-short",
+            {"quality_metrics": {"eval/test_panel/all/outcome/invalid_task": None}},
+            {},
+            "invalid",
+            None,
+            {"test_panel/grader_error_fraction"},
+            (0, 1),
+            id="quality-missing-counter",
+        ),
+        pytest.param(
+            "speed-short",
+            {"quality_metrics": {"eval/test_panel/all/outcome/graded": float("nan")}},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="quality-malformed-counter",
+        ),
+        pytest.param(
+            "speed-short",
+            {
+                "quality_unscored": 1,
+                "quality_metrics": {
+                    "eval/test_panel/all/outcome/infra_error": True,
+                    "eval/test_panel/all/outcome/unavailable": 0,
+                },
+            },
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="quality-boolean-counter",
+        ),
+        pytest.param(
+            "speed-short",
+            {
+                "quality_unscored": 12,
+                "quality_metrics": {
+                    "eval/test_panel/all/outcome/graded": 3000,
+                    "eval/test_panel/all/outcome/rollout_failure": 12,
+                },
+            },
+            {},
+            "invalid",
+            None,
+            {"test_panel/grader_error_fraction"},
+            (0, 1),
+            id="quality-inflated-denominator",
+        ),
+        pytest.param(
+            "speed-short",
+            {},
+            {"fault": {"quality_unscored": 16}},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="quality-control-failure",
+        ),
+        pytest.param(
+            "speed-short",
+            {"source_first_task": "selected-only"},
+            {"common_fault": {"source_first_task": "selected-only"}},
+            "invalid",
+            None,
+            {"test_panel/batch_finished"},
+            None,
+            id="quality-wrong-membership",
+        ),
+        pytest.param(
+            "learning-medium",
+            {"initial_score": 0.3, "initial_unscored": 16, "argv": ("--init", "tests/initializer@2026.11.04")},
+            {},
+            "fail",
+            "regression",
+            {"test_panel/initial/panel_scored_fraction", "test_panel/initial/grader_error_fraction"},
+            None,
+            id="initial-quality-failure",
+        ),
+        pytest.param(
+            "learning-medium",
+            {"initial_score": 0.3, "unscored": 16, "argv": ("--init", "tests/initializer@2026.11.04")},
+            {},
+            "fail",
+            "regression",
+            {"test_panel/panel_scored_fraction", "test_panel/grader_error_fraction"},
+            None,
+            id="final-quality-failure",
+        ),
         ("speed-medium", {"missing_receipt": True}, {}, "invalid", None, set(), None),
         ("speed-medium", {"unresolved_receipt": True}, {}, "invalid", None, set(), None),
     ],
@@ -538,14 +747,30 @@ def test_rescore_reports_candidate_and_control_contracts(
         monkeypatch.setitem(gate.CONTROLS, preset, (gate.ControlPin(preset, "09026fd100", presets.PRESET_REVISION, 4),))
     controls(recorded_runs, preset, **control_fault)
     source = recorded_runs(preset, f"users/test/{preset}", score=0.495, **fault)
+    if preset == "speed-short" and not fault and not control_fault:
+        monkeypatch.setattr(presets, "DEFAULT_SELECTION_VERSION", "2099.01.01")
+        _json(Path(presets.default_selection().path()) / "summary.json", {"full_validation_rows": 73})
     report = rescore(
         preset, "--candidate", f"users/test/{preset}" + ("@" + fault["version"] if "version" in fault else "")
     )
     assert (report["verdict"], report["label"]) == (verdict, label), report
     assert {row["name"] for row in report["invariants"] if not row["holds"]} == failed, report
-    error = next((row for row in report["invariants"] if row["name"] == "grader_error_fraction"), {})
+    error_name = "test_panel/grader_error_fraction" if preset == "speed-short" else "grader_error_fraction"
+    error = next((row for row in report["invariants"] if row["name"] == error_name), {})
     assert bounds is None or (error["lower_bound"], error["upper_bound"]) == bounds
     assert Path(report["report"]).with_suffix(".md").exists()
+    if preset == "speed-short" and report["guards"]:
+        throughput = next(row for row in report["guards"] if row["metric"] == "generate/tokens_per_second_per_gpu")
+        assert throughput["passes"]
+        fixed = next(row for row in report["invariants"] if row["name"] == "fixed_reply_tokens")
+        assert fixed["holds"]
+        if not fault and not control_fault:
+            coverage = next(row for row in report["invariants"] if row["name"] == "test_panel/panel_scored_fraction")
+            finished = next(row for row in report["invariants"] if row["name"] == "test_panel/batch_finished")
+            assert coverage["value"] == 1.0
+            assert finished["value"] == finished["limit"]
+    if preset == "speed-short" and control_fault:
+        assert "control has" in report["reason"]
     if preset == "speed-long":
         assert {row["metric"] for row in report["guards"]} == {
             "speed/update_seconds",
@@ -566,15 +791,17 @@ def test_rescore_reports_candidate_and_control_contracts(
 
 
 def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, selection, tmp_path):
-    panel = Path(selection.path())
+    panel = Path(presets.selection_artifact(presets.DEFAULT_TEST_PANEL).path())
     summary = json.loads((panel / "summary.json").read_text())
+    summary["recipe"]["pass_rates"]["rows"] = 6
     _json(panel / "summary.json", summary | {"full_validation_rows": 6})
     tasks = [
         {"task_id": f"task-{i}", "family": "ab"[i // 3], "aaii_category": "xy"[i // 3], "agentic": bool(i % 2)}
         for i in range(6)
     ]
     pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
-    path = next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet"))
+    _task_parquet(panel / "full_validation.parquet", [row["task_id"] for row in tasks])
+    path = Path(summary["recipe"]["pass_rates"]["uri"])
     pq.write_table(pq.read_table(path).slice(0, 6), path)
     for i in range(4):
         pin = gate.CONTROLS["learning-medium"][0]
@@ -600,7 +827,7 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     rows = {row["metric"]: row for row in report["reported"]}
     for dimension, category in (("aaii_category", "x"), ("family", "a")):
         for band, value, initial in (("hard", 0.2, 0.05), ("learnable", 0.4, 0.5), ("easy", 0.8, 0.95)):
-            cell = rows[f"panel-910/{dimension}/{category}/difficulty/{band}/mean"]
+            cell = rows[f"test_panel/{dimension}/{category}/difficulty/{band}/mean"]
             assert tuple(
                 cell[key] for key in ("run", "initializer", "tasks", "control_min", "control_max")
             ) == pytest.approx((value, initial, 1, 0.49, 0.52))
@@ -608,25 +835,25 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
                 t.ppf(1 - 0.025 / 6, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
             )
             assert cell["change"] == ("better" if band == "easy" else "worse")
-    agentic = rows["panel-910/agentic/true/mean"]
+    agentic = rows["test_panel/agentic/true/mean"]
     assert (agentic["run"], agentic["initializer"], agentic["tasks"]) == pytest.approx((1.4 / 3, 0.5, 3))
-    assert rows["panel-910/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
+    assert rows["test_panel/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
     assert agentic["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 5, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
     # A declared metric keeps k = 1 inside a breakdown table; constant controls leave a detail row unavailable.
-    assert rows["panel-910/mean"]["tolerance"] == pytest.approx(
+    assert rows["test_panel/mean"]["tolerance"] == pytest.approx(
         t.ppf(0.975, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
     )
-    assert rows["panel-910/scored_fraction"]["change"] == "unavailable"
+    assert rows["test_panel/scored_fraction"]["change"] == "unavailable"
     recorded_runs("learning-medium", "users/test/initial", answers=answers, initial_score=0.3)
     initial = {row["metric"]: row for row in rescore("learning-medium", "--candidate", "users/test/initial")["reported"]}
-    for key in ("panel-910/agentic/true/mean", "panel-910/family/a/mean", "panel-910/difficulty/hard/mean"):
+    for key in ("test_panel/agentic/true/mean", "test_panel/family/a/mean", "test_panel/difficulty/hard/mean"):
         assert initial[key]["tolerance"] == pytest.approx(rows[key]["tolerance"])
-    assert initial["panel-910/mean/initial"]["change"] == "unavailable"
+    assert initial["test_panel/mean/initial"]["change"] == "unavailable"
     assert (report["verdict"], report["label"]) == ("pass", "no change")
     assert rows["generate/std_num_tokens"]["change"] == "better"
     assert rows["reward/domain/shared/avg_raw_reward"]["change"] == "better"
     assert not {"reward/domain/candidate-only/avg_raw_reward", "async/rejected_rate"} & rows.keys()
-    assert not {"panel-910/family_mean", "panel-910/mixed_fraction", "panel-910/all_wrong_fraction"} & rows.keys()
+    assert not {"test_panel/family_mean", "test_panel/mixed_fraction", "test_panel/all_wrong_fraction"} & rows.keys()
     partial = [
         _answer(f"task-{i}", value, error="Unavailable" if i == 0 else None)
         for i, value in enumerate((0.2, 0.4, 0.8, 0.1, 0.5, 0.9))
@@ -638,11 +865,16 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
         for path in (first, second)
     )
     multi = run(gate.gate_step(presets.PRESETS["learning-medium"], candidates, inputs=gate.GateInputs()))[0]
-    category = next(row for row in multi.reported if row.metric == "panel-910/aaii_category/x/mean")
+    category = next(row for row in multi.reported if row.metric == "test_panel/aaii_category/x/mean")
     assert category.tasks is None and category.initializer == pytest.approx(0.6125)
     assert category.run == pytest.approx(8 / 15)
     markdown = Path(report["report"]).with_suffix(".md").read_text()
-    assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
+    assert "## Breakdown" in markdown and "### test_panel: aaii_category x difficulty" in markdown
+    wrong_rates = pq.read_table(path).to_pylist()
+    wrong_rates[0]["task_id"] = "different-panel"
+    pq.write_table(pa.Table.from_pylist(wrong_rates), path)
+    with pytest.raises(scoring.InvalidComparison, match="pass-rate panel"):
+        gate.validate_candidate(presets.PRESETS["learning-medium"], ["test_panel/mean>=control"], control=False)
 
 
 def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs):
@@ -652,16 +884,16 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
     gate.validate_candidate(speed, ["speed/update_seconds<=120", VLLM + "<=control"], control=False)
     gate.validate_candidate(
         learning,
-        ["panel-910/aaii_category/coding/mean>=control", "panel-910/family/large/difficulty/hard/mean>=0"],
+        ["test_panel/aaii_category/coding/mean>=control", "test_panel/family/large/difficulty/hard/mean>=0"],
         control=False,
     )
     for preset, requirement, kwargs in (
         (presets.PRESETS["speed-short"], "typo>=0", {}),
-        (learning, "panel-910/aaii_category/codng/mean>=control", {}),
+        (learning, "test_panel/aaii_category/codng/mean>=control", {}),
         # Every fixture task is non-agentic, so the panel has no agentic split.
-        (learning, "panel-910/agentic/false/mean>=0", {}),
-        (presets.PRESETS["train-long"], "panel-910/mean>=0", {}),
-        (learning, "panel-910/mean>=0", {"control": True}),
+        (learning, "test_panel/agentic/false/mean>=0", {}),
+        (presets.PRESETS["train-long"], "test_panel/mean>=0", {}),
+        (learning, "test_panel/mean>=0", {"control": True}),
         (learning, "invalid", {}),
     ):
         with pytest.raises(click.BadParameter):
@@ -720,9 +952,9 @@ def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded
         "--candidate",
         "users/test/repeated",
         "--require",
-        "panel-910/family_mean>=control",
+        "test_panel/family_mean>=control",
         "--require",
-        "panel-910/family_mean>=control",
+        "test_panel/family_mean>=control",
     )
     assert duplicate["verdict"] == "fail" and len(duplicate["guards"]) == 1
 
@@ -852,7 +1084,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert all(key in markdown for key in timers)
     assert rescore(preset, "--candidate", built.runs[0].name)["run"] == report["run"]
     settings = {key: json.loads(value) for key, _, value in (item.partition("=") for item in report["run"]["settings"])}
-    gains = [row["run"] for row in report["reported"] if row["metric"] == "panel-910/mean/gain"]
+    gains = [row["run"] for row in report["reported"] if row["metric"] == "test_panel/mean/gain"]
     assert (settings, report["run"]["tasks"], report["run"]["init"], gains) == expected
     assert [(row["name"], row["holds"]) for row in report["invariants"] if row["name"].startswith("require/")] == [
         ("require/" + REQUIREMENT.split("<=")[0], True)
@@ -1046,6 +1278,8 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         _answer("mixed", 1),
         _answer("mixed", None, status="error", error="TimeoutError"),
         _answer("stem", 0),
+        _answer("mixed", None, status="error"),
+        {key: value for key, value in _answer("mixed", 1).items() if key != "verification"},
     ]
     families = {
         "mixed": ("structural", "format"),
@@ -1057,15 +1291,36 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     ]
     (tmp_path / "selection").mkdir()
     pq.write_table(pa.Table.from_pylist(manifest), tmp_path / "selection" / presets.TASK_MANIFEST_FILENAME)
+    quality = tmp_path / "quality"
+    quality.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist([{"task_id": "heldout", "family": "general", "aaii_category": "general"}]),
+        quality / presets.TASK_MANIFEST_FILENAME,
+    )
     _json(
         tmp_path / "resolved-launch.yaml",
-        {"config": {"inputs": {"validation_data": [{"uri": str(tmp_path / "selection")}]}}},
+        {
+            "config": {
+                "inputs": {
+                    "validation_data": [{"uri": str(tmp_path / "selection")}],
+                    "evaluation_data": {"test_panel": [{"uri": str(quality)}]},
+                }
+            }
+        },
     )
     for session in ("global_step_25_evals", "eval_only"):
         directory = tmp_path / "exports/dumped_evals" / session
         directory.mkdir(parents=True)
         (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
+    _json(tmp_path / "exports/test_panel/dumped_evals/eval_only/quality.jsonl", _answer("heldout", 0.75))
+    quality_scores = scoring.panel_scores(
+        presets.EVALUATIONS["test_panel"], str(tmp_path), scoring.evaluation_answers(str(tmp_path))
+    )
+    assert [(row["item"], row["family"], row["step"]) for row in quality_scores.to_pylist()] == [
+        ("heldout", "general", -1)
+    ]
+    assert scoring.evaluation_statistics(quality_scores)["test_panel/family_mean"] == 0.75
     scores = scoring.panel_scores(presets.EVALUATIONS["panel-100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
@@ -1074,6 +1329,8 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         ("mixed", 1, True, 1.0),
         ("mixed", 2, False, 0.0),
         ("stem", 0, True, 0.0),
+        ("mixed", 3, False, 0.0),
+        ("mixed", 4, False, 0.0),
     ]
     statistics = scoring.evaluation_statistics(pa.Table.from_pylist(final, schema=scores.schema))
     expected = {
@@ -1083,7 +1340,7 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         "all_right_fraction": 0,
         "all_wrong_fraction": 2 / 3,
     }
-    expected |= {"scored_fraction": 0.8, "aaii_category/format/mean": 0.5}
+    expected |= {"scored_fraction": 4 / 7, "aaii_category/format/mean": 0.5}
     assert {key: statistics["panel-100/" + key] for key in expected} == pytest.approx(expected)
 
 

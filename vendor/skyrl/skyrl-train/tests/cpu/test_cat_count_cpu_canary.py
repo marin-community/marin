@@ -7,6 +7,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from multiprocessing.context import ForkServerContext
+from types import SimpleNamespace
 
 import fsspec
 import pytest
@@ -20,6 +21,8 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from verifyit.spec import ExactSpec
 from skyrl_train.evaluate import evaluation_dump_dir
+from skyrl_train.entrypoints import main_generate
+from skyrl_train.callbacks.builtin import EvaluationCallback
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_gym.envs.cat_count.reward import TARGET_WORD
@@ -29,6 +32,16 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 from skyrl_train.io import io
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.inference_engines.vllm.stats import (
+    IntervalReadMode,
+    VLLMCumulativeStats,
+    VLLMCurrentStats,
+    VLLMEngineStatsSnapshot,
+    VLLMIntervalStats,
+)
+from rolloutengine import engine as rollout_engine
+from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
+from skyrl_train.rollouts.workers import WorkerShard
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
 from tests.cpu.task_specs import lowered_task, text_task
@@ -41,7 +54,7 @@ from tests.cpu.tiny_training.cat_count import (
     run_tracked_cat_count,
 )
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
-from tests.cpu.tiny_training.experiment import read_metrics
+from tests.cpu.tiny_training.experiment import TinyGenerateExp, read_metrics
 
 pytestmark = pytest.mark.slow
 
@@ -399,9 +412,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
-        assert all(
-            row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training
-        )
+        assert all(row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training)
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
@@ -426,7 +437,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, monkeypatch
 ):
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
@@ -495,6 +506,126 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         assert all(math.isfinite(metrics[f"{raw}/{stat}"]) for stat in ("mean", "p50", "p95", "max"))
     assert metrics["timing/grading/mean"] > 0
     assert metrics["timing/setup/max"] == 0
+
+    panel = root / "data" / "quality.parquet"
+    quality = task(3, "quality-only", {})
+    quality = quality.model_copy(
+        update={
+            "task": quality.task.model_copy(
+                update={"grader": verifyit_package(ExactSpec(expected=("cat cat cat",))).grader}
+            )
+        }
+    )
+    write_tasks(panel, [quality])
+    clock = SimpleNamespace(value=0.0, tick=3.0)
+    monkeypatch.setattr(main_generate, "time", SimpleNamespace(perf_counter=lambda: clock.value))
+
+    def monotonic():
+        value = clock.value
+        clock.value += clock.tick
+        return value
+
+    monkeypatch.setattr(rollout_engine, "time", SimpleNamespace(monotonic=monotonic))
+    cfg.trajectory_runner.max_concurrent_tasks = 1
+    cfg.environment.task_sessions.max_verifier_workers = 0
+
+    class RecordedInferenceEngine:
+        def __init__(self, tokenizer, index):
+            self.tokenizer, self.index = tokenizer, index
+            self.tokens = self.finished = 0
+
+        async def tokenize(self, request):
+            return {
+                "tokens": self.tokenizer.apply_chat_template(
+                    request["json"]["messages"], tokenize=True, add_generation_prompt=True, return_dict=False
+                )
+            }
+
+        async def chat_completion(self, request):
+            count = request["json"]["max_completion_tokens"]
+            clock.tick = 103.0 if count == 3 else 3.0
+            clock.value += clock.tick
+            response = [self.tokenizer.encode("cat", add_special_tokens=False)[0]] * count
+            self.tokens += count
+            self.finished += 1
+            return {
+                "usage": {"completion_tokens": count},
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": self.tokenizer.decode(response)},
+                        "token_ids": response,
+                        "finish_reason": "length",
+                        "logprobs": None,
+                    }
+                ],
+            }
+
+        async def get_stats(self, read_mode=IntervalReadMode.RESET):
+            snapshot = VLLMEngineStatsSnapshot(
+                engine_id=str(self.index),
+                timestamp=clock.value,
+                current=VLLMCurrentStats(),
+                cumulative=VLLMCumulativeStats(generation_tokens=self.tokens),
+                interval=VLLMIntervalStats(finished_requests=self.finished),
+            )
+            if read_mode is IntervalReadMode.RESET:
+                self.finished = 0
+            return snapshot
+
+    services = []
+
+    class RecordedGenerateExp(TinyGenerateExp):
+        def create_inference_engine_client(self, *, operation):
+            service = InferenceEngineClient(
+                [RecordedInferenceEngine(self.tokenizer, index) for index in range(2)], self.tokenizer, self.cfg
+            )
+            services.append(service)
+            return service
+
+        def get_trajectory_runner(self, config, tokenizer, inference_engine_client):
+            return TaskRolloutWorkerSpec.from_config(
+                config, inference_engine_client.engines, sessions=self.sessions
+            ).build(tokenizer, WorkerShard(0, 1))
+
+    primary = None
+    for profiles in (
+        {},
+        {
+            "quality": {
+                "data_files": [str(panel)],
+                "n_samples_per_prompt": 1,
+                "sampling_params": {"temperature": 0.0, "max_generate_length": 3},
+            }
+        },
+    ):
+        clock.value, clock.tick = 0.0, 3.0
+        probe_root = root / ("profiled" if profiles else "primary")
+        probe_cfg = OmegaConf.merge(
+            cfg,
+            {
+                "trainer": {
+                    "export_path": str(probe_root),
+                    "callbacks": [{"type": "evaluation", "additional_evaluations": profiles}],
+                }
+            },
+        )
+        result = RecordedGenerateExp(probe_cfg).run()
+        remaining = asyncio.run(services[-1].get_stats(IntervalReadMode.PEEK))
+        assert sum(engine.interval.finished_requests for engine in remaining.engines) == int(bool(profiles))
+        primary_values = {key: value for key, value in result.items() if key.startswith(("generate/", "timing/"))}
+        if not profiles:
+            primary = primary_values
+            continue
+        assert primary_values == primary
+        assert result["eval/quality/all/response_tokens"] == 3
+        assert result["eval/quality/all/avg_verifier_score"] == 1.0
+        assert result["eval/quality/all/avg_score"] == 0.9
+        assert result["eval/quality/all/timing/grading/mean"] == 103.0
+        dump = Path(evaluation_dump_dir(str(probe_root / "quality"), None)) / "train.jsonl"
+        assert [json.loads(line)["task_id"] for line in dump.read_text().splitlines()] == ["quality-only"]
+    with pytest.raises(ValueError, match="dataset-selecting"):
+        EvaluationCallback(additional_evaluations={"quality": {"data_files": [str(panel)]}})
 
 
 @pytest.mark.nightly

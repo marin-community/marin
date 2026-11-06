@@ -134,6 +134,7 @@ from skyrl_train.utils.utils import (
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 from skyrl_train.metric_names import PROMPTS_DROPPED_TOO_LONG_METRIC
+from skyrl_train.evaluation_profiles import EvaluationProfile, evaluation_profile_config
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
@@ -523,14 +524,9 @@ class RayPPOTrainer:
         evaluation_pool: EvaluationPool | None = None,
     ) -> Dict[str, float]:
         """Evaluate the current policy with optional sampling overrides and a named output directory."""
-        overrides = {"generator": {}, "trainer": {}}
-        if n_samples_per_prompt is not None:
-            overrides["generator"]["eval_n_samples_per_prompt"] = n_samples_per_prompt
-        if val_set_name is not None:
-            overrides["trainer"]["export_path"] = join_resource_path(self.cfg.trainer.export_path, val_set_name)
-        cfg = OmegaConf.merge(self.cfg, overrides)
-        for key, value in (sampling_params or {}).items():
-            OmegaConf.update(cfg, f"generator.eval_sampling_params.{key}", value, force_add=True)
+        cfg = evaluation_profile_config(
+            self.cfg, EvaluationProfile(sampling_params=sampling_params, n_samples_per_prompt=n_samples_per_prompt), val_set_name
+        )
         evaluator = evaluate_step_wise if cfg.trainer.step_wise_training else evaluate
         session = nullcontext(evaluation_pool) if evaluation_pool is not None else self._evaluation_session()
         async with session as pool:

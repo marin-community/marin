@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Type
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+from skyrl_train.evaluation_profiles import parse_evaluation_profiles
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
@@ -169,12 +170,6 @@ class DistillationTokenBudgetCallback(TrainerCallback):
             )
             control.should_training_stop = True
         return control
-
-
-@dataclass(frozen=True)
-class EvaluationSamplingConfig:
-    sampling_params: Dict[str, Any] | None = None
-    n_samples_per_prompt: int | None = None
 
 
 @dataclass(frozen=True)
@@ -329,15 +324,13 @@ class EvaluationCallback(TrainerCallback):
         self.eval_steps = eval_steps
         self.eval_on_train_end = eval_on_train_end
         self.eval_before_train = eval_before_train
-        self.additional_evaluations = {
-            name: EvaluationSamplingConfig(**parameters) for name, parameters in (additional_evaluations or {}).items()
-        }
+        self.additional_evaluations = parse_evaluation_profiles(additional_evaluations)
+        if any(profile.data_files is not None for profile in self.additional_evaluations.values()):
+            raise ValueError("dataset-selecting evaluation profiles require the generate entrypoint")
         self.metric_groups = metric_groups or {}
         self.stop_when = {name: EvaluationStopConfig(**value) for name, value in (stop_when or {}).items()}
         self._initial_values: Dict[str, float] = {}
         self._initial_step: int | None = None
-        if any(not name.isidentifier() for name in self.additional_evaluations):
-            raise ValueError("additional evaluation names must be identifiers")
         if any(not keys for keys in self.metric_groups.values()):
             raise ValueError("evaluation metric groups must be nonempty")
 

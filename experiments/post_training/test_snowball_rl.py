@@ -79,6 +79,13 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                 paths.append(str(path))
                 if index == 0:
                     launches[name] = document
+    default_learning = snowball.build_run(presets.PRESETS["learning-medium"])
+    for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
+        retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
+        assert retained.runs[0].name != default_learning.runs[0].name
+        path = tmp_path / f"{label}-weights.yaml"
+        _render(retained.runs[0], path, runtime=True)
+        paths.append(str(path))
     off_boundary = snowball.build_run(
         presets.PRESETS["train-long"], layout=presets.P40, settings=(presets.parse_setting("trainer.max_steps=2"),)
     ).runs[0]
@@ -108,43 +115,101 @@ import asyncio, json, sys
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
+from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
+from skyrl_train.inference_engines.inference_engine_client import AccumulatedResponse, _prepare_retry_request
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
-configs = [load_launch_config(path) for path in sys.argv[1:]]
+from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_evaluation_profiles
 
-async def check_panel_request(config):
-    sampling = OmegaConf.to_container(config.skyrl.generator.eval_sampling_params, resolve=True)
-    training = OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True)
-    class Endpoint:
-        model_name = "fixture"
-        tokenizer = SimpleNamespace(
-            eos_token_id=2, decode=lambda *args, **kwargs: "ok", encode=lambda *args, **kwargs: []
-        )
-        async def tokenize(self, request):
-            return {"tokens": [7]}
-        async def chat_completion(self, request):
-            body = request["json"]
-            apply_openai_sampling(body, training, validate_rollout_logprob_sampling=True)
-            assert body["temperature"] == sampling["temperature"]
-            return {"choices": [{
-                "token_ids": [1], "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"
-            }]}
-    await DirectModelClient(Endpoint()).generate({
-        "prompts": [[{"role": "user", "content": "Return ok."}]],
-        "chat_completion_params": [{}], "sampling_params": sampling,
+continuations = (
+    AccumulatedResponse(),
+    AccumulatedResponse(content="partial", token_ids=[3], completion_tokens=1, route_prompt_ids=[1, 2]),
+)
+
+class InferenceService:
+    model_name = "fixture"
+    tokenizer = SimpleNamespace(eos_token_id=99, decode=lambda *args, **kwargs: "answer")
+
+    def __init__(self, overrides, validate):
+        self.overrides, self.validate = overrides, validate
+
+    async def tokenize(self, request):
+        return {"tokens": [1, 2]}
+
+    async def chat_completion(self, request):
+        original = request["json"]
+        for accumulated in continuations:
+            body = _prepare_retry_request(
+                original, accumulated, "assistant", original["max_completion_tokens"], "max_completion_tokens"
+            )
+            apply_openai_sampling(body, self.overrides, self.validate)
+            assert body["temperature"] == original["temperature"]
+            assert body["max_completion_tokens"] == original["max_completion_tokens"] - accumulated.completion_tokens
+        self.body = dict(original)
+        apply_openai_sampling(self.body, self.overrides, self.validate)
+        return {"choices": [{
+            "message": {"role": "assistant", "content": "answer"},
+            "token_ids": [3], "finish_reason": "stop",
+            "logprobs": {"content": [{"logprob": -0.1}]} if body.get("logprobs") else None,
+        }]}
+
+async def native_request(parameters, overrides, validate):
+    service = InferenceService(overrides, validate)
+    output = await DirectModelClient(service).generate({
+        "prompts": [[{"role": "user", "content": "question"}]],
+        "chat_completion_params": [{}], "sampling_params": parameters,
     })
+    assert output["response_ids"] == [[3]]
+    if parameters.get("logprobs") is not None:
+        assert output["response_logprobs"] == [[-0.1]]
+    return {key: service.body.get(key) for key in (
+        "temperature", "max_completion_tokens", "ignore_eos", "seed", "logprobs",
+    )}
 
-for config in configs:
-    if config.inputs.validation_data:
-        asyncio.run(check_panel_request(config))
+configs = [load_launch_config(path) for path in sys.argv[1:]]
+training = next(config for config in configs if config.runtime.training_type is not None)
+parameters = get_vllm_sampling_params(training.skyrl.generator.sampling_params)
+parameters["min_tokens"] = 0
+accepted = asyncio.run(native_request(parameters, {"temperature": 1.0}, True))
+assert accepted["temperature"] == 1.0 and accepted["logprobs"] is True
+for change in ({"min_tokens": 1}, {"temperature": 0.0}):
+    try:
+        asyncio.run(native_request(parameters | change, {"temperature": 1.0}, True))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"invalid native behavior-logprob sampling accepted: {change}")
+external = {
+    "messages": [{"role": "user", "content": "question"}], "temperature": 0.0,
+    "top_p": 1.0, "top_k": -1, "min_p": 0.0, "logprobs": False, "max_tokens": 8192,
+}
+for accumulated in continuations:
+    body = _prepare_retry_request(external, accumulated, "assistant", 8192, "max_tokens")
+    apply_openai_sampling(body, {"temperature": 0.7, "top_p": 0.9, "top_k": 8, "min_p": 0.2}, True)
+    assert tuple(body[key] for key in ("temperature", "top_p", "top_k", "min_p")) == (0.0, 1.0, -1, 0.0)
+    assert body["max_tokens"] == 8192 - accumulated.completion_tokens
+omitted = {"temperature": 0.0}
+apply_openai_sampling(omitted, {"temperature": 1.0, "top_p": 0.9}, False)
+assert omitted["temperature"] == 0.0 and omitted["top_p"] == 0.9
+
+def quality_request(config):
+    if not config.inputs.get("evaluation_data"):
+        return None
+    profile = parse_evaluation_profiles(config.skyrl.trainer.callbacks[0].additional_evaluations)["test_panel"]
+    merged = evaluation_profile_config(config.skyrl, profile, "test_panel")
+    assert config.inputs.validation_data[0].identity != config.inputs.evaluation_data.test_panel[0].identity
+    return asyncio.run(native_request(get_vllm_sampling_params(merged.generator.eval_sampling_params),
+                                     {"temperature": 1.0}, True))
+
 print(json.dumps([{
-    "name": config.run.id, "entrypoint": config.runtime.entrypoint,
+    "path": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
     "validation": bool(config.inputs.validation_data),
     "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
     "window": config.skyrl.generator.engine_init_kwargs.max_model_len,
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
     "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
+    "quality_wire": quality_request(config),
     "fixed": config.skyrl.generator.eval_sampling_params.ignore_eos or config.skyrl.generator.sampling_params.ignore_eos,
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
@@ -154,13 +219,27 @@ print(json.dumps([{
     "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
-    "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
-} for config in configs]))
+    "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
+        if config.runtime.training_type is not None else [],
+    "wire": asyncio.run(native_request(
+        get_vllm_sampling_params(config.skyrl.generator.eval_sampling_params),
+        OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True),
+        True,
+    )) if config.inputs.validation_data else None,
+} for path, config in zip(sys.argv[1:], configs, strict=True)]))
 """,
         paths,
     )
     assert len(rows) == len(paths)
+    greedy_wire = {
+        "temperature": 0.0,
+        "max_completion_tokens": 8192,
+        "ignore_eos": False,
+        "seed": presets.SEED,
+        "logprobs": None,
+    }
     for row in rows:
+        assert row["tools"] == "hermes"
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
         name = row["name"]
         if "speed-short-" in name or "data-short-" in name:
@@ -169,12 +248,25 @@ print(json.dumps([{
             assert row["eval_interval"] > 0 and row["validation"], row
             expected = 2048 if "speed-short-" in name else 1024
             assert row["admission"] == expected, row
+        if "speed-short-" in name:
+            assert row["quality_wire"] == greedy_wire
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
+        if "learning-medium-" in name or "/control/learning-medium-" in name:
+            saved = row["path"].endswith(("kept-weights.yaml", "control-weights.yaml"))
+            assert row["export_hf"] == saved
+            assert ("hf_model_save" in row["callbacks"]) == saved
         if "speed-long-" in name:
             assert not row["validation"] and not row["export_hf"]
         if row["fixed"]:
             assert not row["overlong_filtering"], row
+        if row["wire"] is not None:
+            if row["training"]:
+                assert row["wire"] == greedy_wire
+            else:
+                assert row["wire"]["temperature"] == 1.0
+                assert row["wire"]["max_completion_tokens"] == (4096 if "speed-short-" in name else 8192)
+                assert row["wire"]["ignore_eos"] == ("speed-short-" in name)
         if row["training"] and row["validation"]:
             assert "evaluation" in row["callbacks"], row
             if "best_checkpoint" in row["callbacks"]:
@@ -192,22 +284,31 @@ print(json.dumps([{
             settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
         )
     execution = next(value for value in changed.runtime_args.values() if isinstance(value, adapter.IrisSkyRLExecution))
-    assert presets.JUDGE_KEY in execution.required_env_vars
+    assert presets.JUDGE_KEY not in execution.required_env_vars
+    summary = Path(selection.path()) / "summary.json"
+    content = json.loads(summary.read_text())
+    content["grader_kind_counts"]["train"]["remote_judge"] = 1
+    summary.write_text(json.dumps(content))
+    with pytest.raises(click.BadParameter, match="AI-judge"):
+        snowball.build_run(presets.PRESETS["learning-medium"])
 
 
 @pytest.mark.timeout(180)
 def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     summary = (Path(selection.path()) / "summary.json").read_text()
+    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
     monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
     (
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
+    (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": "6fdc7a6d",
-        "data-short": "ca281169",
-        "speed-medium": "22a2b760",
-        "learning-medium": "4a0c6aac",
-        "speed-long": "e81929f4",
+        "speed-short": "c5b41166",
+        "data-short": "628bab85",
+        "speed-medium": "3a9adfc0",
+        "learning-medium": "409e180c",
+        "speed-long": "b538134e",
     }
     paths = []
     for name in expected:
@@ -247,7 +348,7 @@ print(json.dumps([
     )
 
 
-def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
+def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path):
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
     long = presets.PRESETS["train-long"]
@@ -264,11 +365,20 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     ]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
+    panel_name, panel_version = presets.DEFAULT_TEST_PANEL.split("@")
+    new_panel = tmp_path / panel_name / "2026.11.05"
+    new_panel.mkdir(parents=True)
+    (new_panel / "summary.json").write_bytes((tmp_path / panel_name / panel_version / "summary.json").read_bytes())
+    changed_panel = replace(
+        learning,
+        evaluations=tuple(replace(evaluation, source=f"{panel_name}@2026.11.05") for evaluation in learning.evaluations),
+    )
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
         (name(), name(init=initializer)),
         (name(long), name(long, layout=presets.P40)),
+        (name(), name(changed_panel)),
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(

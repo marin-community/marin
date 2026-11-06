@@ -687,6 +687,7 @@ class TaskLocalSkyRLValues:
     terminal_bench_data: tuple[str, ...]
     policy_model_path: str | None = None
     draft_model_uri: str | None = None
+    evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 TASK_LOCAL_SKYRL_PATHS = MappingProxyType(
@@ -917,5 +918,17 @@ def apply_task_local_values(config: DictConfig, values: TaskLocalSkyRLValues) ->
             continue
         for path in paths:
             OmegaConf.update(updated, path, list(value) if isinstance(value, tuple) else value, force_add=False)
+    for name, data_files in values.evaluation_data:
+        profiles = [
+            profile
+            for callback in updated.trainer.get("callbacks") or []
+            if callback.get("type") == "evaluation"
+            for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
+            if profile_name == name
+        ]
+        if not profiles:
+            raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
+        for profile in profiles:
+            OmegaConf.update(profile, "data_files", list(data_files), force_add=True)
     OmegaConf.resolve(updated)
     return updated

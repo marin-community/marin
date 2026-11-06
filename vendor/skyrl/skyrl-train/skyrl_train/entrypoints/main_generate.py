@@ -13,6 +13,7 @@ from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
 
+from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_evaluation_profiles
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import (
     BasePPOExp,
@@ -127,6 +128,24 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 )
                 results["generate/vllm/generation_tokens"] = generated_tokens
                 results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / num_rollout_gpus(self.cfg)
+            for callback in self.cfg.trainer.get("callbacks") or []:
+                if callback.get("type") != "evaluation":
+                    continue
+                for name, profile in parse_evaluation_profiles(callback.get("additional_evaluations")).items():
+                    profile_cfg = evaluation_profile_config(self.cfg, profile, name)
+                    dataset = self.eval_dataset if profile.data_files is None else self.get_eval_dataset(profile.data_files)
+                    if dataset is None:
+                        raise ValueError(f"evaluation profile {name} requires a dataset")
+                    profile_results = await evaluate(
+                        eval_dataloader=build_eval_dataloader(profile_cfg, dataset),
+                        trajectory_runner=trajectory_runner,
+                        cfg=profile_cfg,
+                        global_step=None,
+                        tokenizer=self.tokenizer,
+                        val_set_name=name,
+                        trajectory_sink=trajectory_sink,
+                    )
+                    results.update({f"eval/{name}/{key.removeprefix('eval/')}": value for key, value in profile_results.items()})
         finally:
             try:
                 await trajectory_runner.shutdown()

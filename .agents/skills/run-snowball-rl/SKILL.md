@@ -18,16 +18,16 @@ belong to `launch-rl`; job inspection and logs belong to `use-iris`; object-stor
 - Stage new source files: untracked files under `experiments/`, `lib/`, or `vendor/` are refused. The
   run name contains the working tree's hash, so changed code gets a new run and never reuses an old
   result.
-- Set credentials before the dry run, which checks them: `TOGETHER_API_KEY` whenever the training
-  selection has judge-graded tasks (every preset except speed-short with the default selection), and
-  `WANDB_API_KEY` at submission. `WANDB_ENTITY` selects the W&B team; unset uses `marin-community`.
+- Selections must contain no AI-judge-graded tasks. The default training selection is
+  `snowball-100k@2026.11.04.1`. Set `WANDB_API_KEY` at submission; `WANDB_ENTITY` selects the W&B
+  team, falling back to `marin-community`.
 - Print the plan without `--run`:
 
   ```bash
   uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
   ```
 
-  The output lists the inputs, allocation, `budget_estimate` (minutes and H100-hours), guards,
+  A valid plan lists the inputs, allocation, `budget_estimate` (minutes and H100-hours), guards,
   reported metrics, known gaps, and each run's `output` path. Invalid settings fail here, before any
   GPU work. `--version dev` satisfies the launcher interface; Snowball steps use the fixed
   `PRESET_REVISION`.
@@ -38,7 +38,7 @@ belong to `launch-rl`; job inspection and logs belong to `use-iris`; object-stor
 - `--run` submits and exits 0 once the submission is accepted. Read the result later by running the
   same command without `--run`, from the same source tree: any edit to a tracked file changes the run
   name, and the command then shows `state: not built` for a new run.
-- `--run --wait` polls until the coordinator finishes: about 10 minutes for speed-short and data-short,
+- `--run --wait` polls until the coordinator finishes: about 15 minutes for speed-short and data-short,
   35–120 minutes for the medium presets, and hours to days for train-long, so run it in the
   background. It exits 0 for `pass` or a finished train-long, 1 for `fail`, 2 for `invalid`, and 3
   when a submission error, a failed coordinator, or missing evidence prevents a verdict.
@@ -70,9 +70,14 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
   `generator.sampling_params`.
 - The `--require ...<=0` bound above holds every replicate to zero mismatch, for a change that claims
   exact numerics.
-- speed-long has no control pin, so a candidate prints `invalid` and exits 2 before any GPU work. The
-  message includes the command that collects four control replicates. Report this to the person;
+- A preset without a matching control pin prints `invalid` and exits 2 before any GPU work. The
+  message includes the command that collects its control replicates. Report this to the person;
   collect controls only when they ask (see "Never").
+- speed-short measures its fixed-length throughput pass, then evaluates the full test panel greedily
+  in the same engine job. The quality pass retains the throughput engine's arithmetic and cache
+  settings; it runs without batch-invariant arithmetic. Its throughput and quality guards both count.
+  Read `test_panel/panel_scored_fraction` and `test_panel/grader_error_fraction` in the Invariants
+  table to identify quality-stage failures.
 - Every preset reports `timing/grading/*` and `timing/setup/*`. They can change the label to
   `regression` or `trade-off`; they do not change the verdict.
 
@@ -86,15 +91,16 @@ you need and read under the run's `output` path:
 - `exports/dumped_evals/<session>/<data source>.jsonl`, where `<session>` is `global_step_<N>_evals`
   for an evaluation after update N, or `eval_only` for data-short. Each line is one answer with
   `task_id`, `input_prompt`, `output_response`, `score`, `stop_reason`, and `verification`.
-- learning-medium and data-medium write the 910-task panel after update 25, and also at update 0 with
-  `--init`; train-long writes the 100-task panel at update 0 and every 10 updates.
+- learning-medium and data-medium write the 1,500-task `test_panel` after update 25, and also at update 0
+  with `--init`; train-long writes the 100-task `fast_panel` at update 0 and every 10 updates.
+- speed-short's quality answers are under
+  `exports/test_panel/dumped_evals/eval_only/<data source>.jsonl`; its primary throughput answers are
+  forced to 4,096 tokens.
 - data-short writes four answers from the pinned SFT model to each of 256 tasks sampled from its
-  `--tasks` selection, in 10–15 minutes on 8 H100. `--tasks snowball-100k@2026.11.04` samples the
+  `--tasks` selection, in 10–15 minutes on 8 H100. `--tasks snowball-100k@2026.11.04.1` samples the
   default training tasks.
-- Do not read speed-short answers as reasoning: every reply is forced to exactly 4,096 tokens, so the
-  text continues after the model's end of sequence.
 
-Panel answers use the training sampling settings (gap `eval-uses-training-sampling` in the guide).
+Named panels use seeded greedy decoding and natural replies up to `EVAL_REPLY_TOKENS` (8,192).
 `--require` accepts any key the gate computes for control r0: a step-file metric over the measured
 window, or a panel slice. It refuses other keys before launch.
 
@@ -111,8 +117,8 @@ window, or a panel slice. It refuses other keys before launch.
      --tasks NAME@VERSION --version dev --run
    ```
 
-- data-short measures the fraction of tasks with both correct and incorrect answers: the tasks that
-  give RLOO-N a learning signal.
+- data-short measures the fraction of tasks with both correct and incorrect answers to screen a
+  candidate selection.
 - data-medium trains learning-medium's recipe on the selection and uses learning-medium's controls.
 - Data presets refuse `--set`. A task-sampling change runs on learning-medium. `data.shuffle` is in the
   base config; `data.sampling.*` is not, so it takes `+`, for example
@@ -120,21 +126,32 @@ window, or a panel slice. It refuses other keys before launch.
 
 ### Evaluation
 
-- learning-medium and data-medium evaluate a fixed 910-task panel, and train-long a fixed 100-task
-  panel. A different panel changes the preset, which needs a new `PRESET_REVISION` and new controls.
-- No preset evaluates weights without training. `--preset learning-medium --init NAME@VERSION`
+- The default evaluation artifact is `snowball-test-panel@2026.11.04.2`: 1,500 full tasks and a
+  100-task fast subset, with source parts recorded in its recipe and manifest. learning-medium and
+  data-medium use the full panel; train-long uses the fast subset.
+  Its recipe pins the initializer pass-rate artifact used for difficulty and reference-score rows;
+  the standalone `snowball_pass_rates` command measures the development panel.
+- `--preset learning-medium --init NAME@VERSION`
   evaluates the initial weights at update 0 and the trained weights after update 25; the report's
   "initial weights" Breakdown table holds the update-0 scores.
 - Gate on a slice of the panel:
 
   ```bash
   uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
-    --require 'panel-910/aaii_category/coding/mean>=control' --version dev --run
+    --require 'test_panel/aaii_category/coding/mean>=control' --version dev --run
   ```
 
-  Slice keys are `panel-910/family/<family>/mean`, `panel-910/aaii_category/<category>/mean`, and
-  `panel-910/difficulty/<easy|learnable|hard>/mean`; the `slice` column of a finished report's
+  Slice keys include `test_panel/family/<family>/mean` and `test_panel/aaii_category/<category>/mean`;
+  the `slice` column of a finished report's
   Breakdown tables lists the exact names.
+- Learning-medium/data-medium controls retain their final HF weights. Candidates retain them with `--keep-weights`:
+
+  ```bash
+  uv run python -m experiments.post_training.snowball_rl --preset learning-medium \
+    --keep-weights --version dev --run
+  ```
+
+  Kept HF exports have no expiry and can initialize another learning or train-long run with `--init`.
 - Re-score one finished replicate on CPU with added requirements or baselines, without GPU work:
 
   ```bash
@@ -159,10 +176,14 @@ uv run python -m experiments.post_training.snowball_rl --preset learning-medium 
 - `--baseline NAME@VERSION` adds a table comparing the run with earlier finished runs of the same
   preset and `PRESET_REVISION`; the verdict still uses the controls. `NAME@VERSION` is a run's `name`
   and `version` from its status block; give `--baseline` once per replicate.
-- `--init NAME@VERSION` on learning-medium or train-long starts from another model or a finished
-  train-long export.
+- `--init NAME@VERSION` on learning-medium or train-long starts from a published model artifact or a
+  retained HF export.
 - train-long is the release loop: checkpoints, periodic panel evaluation, and an HF export, with no
   verdict. `--layout p40` runs it on 40 H100.
+
+Learning-medium and data-medium score the same greedy test panel at update 0 and after update 25.
+The run’s own update-0 dump supplies its publication baseline; the pass-rate artifact supplies
+initializer statistics by slice. `--baseline` compares separate completed runs in the gate report.
 
 ## Record the experiment
 
