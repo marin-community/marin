@@ -1,17 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One minimal evaluation task per agent protocol.
+"""Minimal evaluation tasks for agent protocols, with a chosen number of variants per protocol.
 
-Each answer is a nonce derived from the task id, so a model cannot guess it without following the
-protocol: writing the answer file, running the shell tool, or fetching the declared page, so the
-ordinary reward is the protocol result.
+Each answer is a nonce derived from the task id. A model gets it only by following the protocol
+(writing the answer file, running the shell tool, or fetching the declared page), so the reward is
+the protocol result.
 """
 
 import hashlib
 from enum import StrEnum
-
-from verifyit.spec import DEFAULT_WORKSPACE, ExactSpec
 
 from taskcompendium.fetch import FETCH_TOOL, HttpPage, fetch_requirement
 from taskcompendium.grader import verifyit_package
@@ -29,6 +27,7 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.runtime.resources import inline_resource
+from verifyit.spec import DEFAULT_WORKSPACE, ExactSpec
 
 
 class ProtocolCheck(StrEnum):
@@ -39,13 +38,14 @@ class ProtocolCheck(StrEnum):
 
 PROBE_DATASET = "protocol-probes"
 PROBE_REVISION = "1"
-WORKDIR = DEFAULT_WORKSPACE
-ANSWER_PATH = f"{WORKDIR}/answer.txt"
+ANSWER_PATH = f"{DEFAULT_WORKSPACE}/answer.txt"
 NONCE_FILE = "probe/nonce"
 PROBE_URL = "https://protocol-probe.invalid/token"
 FETCH_REQUIREMENT = "web"
 TASK_ENVIRONMENT = EnvironmentRequirements(
-    command_semantics=CommandSemantics.SHELL_SIMULATOR, capabilities=("shell", "filesystem"), working_directory=WORKDIR
+    command_semantics=CommandSemantics.SHELL_SIMULATOR,
+    capabilities=("shell", "filesystem"),
+    working_directory=DEFAULT_WORKSPACE,
 )
 """The file and tool probes run in a shell simulator; the URL probe needs no machine."""
 COMMAND_TOOL = FunctionDefinition(
@@ -65,11 +65,6 @@ def probe_nonce(task_id: str) -> str:
     return hashlib.sha256(f"{PROBE_DATASET}/{task_id}".encode()).hexdigest()[:16]
 
 
-def probe_check(task: TaskSpec) -> ProtocolCheck:
-    """The check a probe task exercises, from its id ``<check>-<variant>``."""
-    return ProtocolCheck(task.id.rsplit("-", 1)[0])
-
-
 def _task(
     task_id: str,
     instruction: str,
@@ -77,11 +72,9 @@ def _task(
     *,
     grader_environment: EnvironmentRequirements | None = None,
     answer_type: AnswerType = AnswerType.TEXT,
-    output_paths: tuple[str, ...] = (),
-    interaction_tools: tuple[FunctionDefinition, ...] = (),
-    tool_bindings: dict[str, ShellToolBinding] | None = None,
-    resources: ResourceGroups | None = None,
+    **fields,
 ) -> TaskSpec:
+    """A probe task whose answer is ``task_id``'s nonce; ``fields`` sets its tools, outputs and resources."""
     expected = probe_nonce(task_id)
     spec = ExactSpec((expected,), output=ANSWER_PATH) if answer_type == AnswerType.FILE else ExactSpec((expected,))
     package = verifyit_package(spec, environment=grader_environment)
@@ -89,21 +82,16 @@ def _task(
         id=task_id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction.format(nonce=expected)),)),
         environment_requirements=environment,
-        interaction_tools=interaction_tools,
-        tool_bindings=tool_bindings or {},
-        output_paths=output_paths,
         answer_type=answer_type,
         answer_format=PlainText(),
         grader=package.grader,
         source=Source(dataset=PROBE_DATASET, revision=PROBE_REVISION, row=task_id, importer_revision=PROBE_REVISION),
-        resources=resources or ResourceGroups(),
+        **fields,
     )
 
 
 def probe_tasks(*, grader_environment: EnvironmentRequirements, variants: int) -> tuple[TaskSpec, ...]:
     """``variants`` tasks per protocol check, each with its own nonce; ``grader_environment`` grades the answer file."""
-    if variants < 1:
-        raise ValueError("At least one variant per check is required")
     tasks = []
     for index in range(variants):
         tool_id = f"{ProtocolCheck.TOOL_EXECUTION}-{index}"

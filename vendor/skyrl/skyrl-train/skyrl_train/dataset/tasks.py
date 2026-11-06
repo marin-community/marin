@@ -189,9 +189,8 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     config = environment_configs["task_spec"]
     harness = config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
     session = {**config["session"], "task_session": harness}
-    max_turns = config["max_turns_by_dataset"].get(task.source.dataset)
-    if max_turns is not None:
-        session["max_turns"] = int(max_turns)
+    if task.source.dataset in config["max_turns_by_dataset"]:
+        session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
     machine = config["task_machine_by_dataset"].get(task.source.dataset)
     task_machine = (
         MachineRuntimeSpec.model_validate(machine)

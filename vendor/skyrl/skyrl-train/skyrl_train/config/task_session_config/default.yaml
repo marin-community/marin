@@ -21,8 +21,7 @@ task_spec:
   default_harness: shellbox
   harness_by_dataset:
     structure-closure: assistant_prefix
-  # A dataset's rows may take more turns than canonical rows get by default, and a task machine for
-  # the rows that need one.
+  # Per-dataset overrides of session.max_turns, and the task machine for rows that need one.
   max_turns_by_dataset: {}
   task_machine_by_dataset: {}
   session:
