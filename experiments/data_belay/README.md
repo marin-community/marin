@@ -49,7 +49,9 @@ Every run logs, at its end:
 
 The Eval Policy groups are the BPB of the gold answer after the prompt, on the non-agentic benchmarks of the Marin
 Eval Policy (marin#10197): small ladder models score near chance on the benchmarks themselves. `B build-answer-bpb`
-writes these caches; GPQA is left out because its dataset is gated.
+writes these caches; GPQA is left out because its dataset is gated. The verdict averages each Eval Policy group's
+task BPBs (`eval/eval_policy/<group>/<task>/bpb`) and leaves out BoolQ, which is logged: its one-token yes/no answer
+varied 10.7% between control seeds.
 
 ## Verdict
 
@@ -89,6 +91,6 @@ runs are `dbelay-<rung>-<candidate>-s<seed>` in W&B `marin-community/marin_moe`.
 - No contamination scan yet: a gain on one eval set alone needs a check for leakage.
 - The sample is whole files, so a dataset with few large files is sampled coarsely, and one file tokenizes on one
   worker.
-- A seed sets both the model init and the data order. FineWeb-Edu runs varied about 1% between seeds on Paloma, twice
-  as much as the control.
+- A seed sets both the model init and the data order. FineWeb-Edu runs varied 1.0% between seeds on Paloma, almost
+  three times as much as the control (0.38%).
 - Text datasets only: the text field must be a string.
