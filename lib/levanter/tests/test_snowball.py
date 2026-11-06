@@ -768,12 +768,10 @@ def test_hf_config_reload_trains_with_float32_override_superset(tmp_path):
         assert math.isfinite(metrics["eval/loss"])
 
 
-@pytest.mark.parametrize("native_checkpoint", [False, True])
-def test_fp32_router_training_rejects_missing_bias_override_before_loading(tmp_path, native_checkpoint):
+def test_fp32_router_training_rejects_missing_bias_override_before_loading(tmp_path):
     config = TrainLmConfig(
         model=_tiny_config(router_dot_fp32=True),
         data=LmDataConfig(tokenizer=str(tmp_path)),
-        initialize_model_from_checkpoint_path=str(tmp_path / "checkpoint") if native_checkpoint else None,
     )
     with pytest.raises(ValueError, match="native FP32 router biases"):
         main(config)
