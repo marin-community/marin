@@ -425,8 +425,8 @@ class DirectModelClient:
             stop_reason = choice["finish_reason"]
             semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
             if len(semantic_ids) != len(response_ids):
-                eos_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
-                text = text.removesuffix(eos_text)
+                terminator_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+                text = text.removesuffix(terminator_text)
                 if message.get("content") is not None:
                     message = {**message, "content": text}
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
