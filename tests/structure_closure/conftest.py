@@ -7,7 +7,7 @@ import pytest
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.structure_closure.benchmark import task_cases
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import task_cases
 
 
 @pytest.fixture

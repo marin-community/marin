@@ -11,13 +11,13 @@ from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from verifyit.closure_scoring import ClosureFormat, score_closure
 
-from experiments.post_training.structure_closure.benchmark import (
+from experiments.post_training.structure_closure.token_data import ToolPrompt, prepare_tokens, tokenized_case_record
+from experiments.post_training.structure_closure.tool_prompt_probe import main as probe_main
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
     ClosureCase,
     Family,
     task_cases,
 )
-from experiments.post_training.structure_closure.token_data import ToolPrompt, prepare_tokens, tokenized_case_record
-from experiments.post_training.structure_closure.tool_prompt_probe import main as probe_main
 
 
 def test_native_tool_prompts_preserve_content_and_continuation_controls(tokenizer):

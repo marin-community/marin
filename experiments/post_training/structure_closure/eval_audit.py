@@ -14,6 +14,7 @@ from pathlib import Path
 
 from verifyit.closure_scoring import (
     CLOSURE_REGION_SCORER,
+    SNOWBALL_TURN_END_MARKERS,
     ClosureFormat,
     ContinuationOutcome,
     closure_response_content,
@@ -22,15 +23,13 @@ from verifyit.closure_scoring import (
 )
 from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
 
-from experiments.post_training.structure_closure.benchmark import (
+from experiments.post_training.structure_closure.token_data import LOCAL_TOKEN_ROUNDTRIP_PASSED, TokenizedCaseRecord
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
     CONTINUE_REQUIRED,
     ESCAPE_CONTINUE_REQUIRED,
     TASK_ID_PREFIX,
     VALUE_CONTINUE_REQUIRED,
 )
-from experiments.post_training.structure_closure.token_data import LOCAL_TOKEN_ROUNDTRIP_PASSED, TokenizedCaseRecord
-
-SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
 
 class UidSource(StrEnum):

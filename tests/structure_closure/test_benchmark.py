@@ -7,8 +7,13 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from experiments.post_training.structure_closure.benchmark import Family, score_case, syntax_state, task_cases
-from experiments.post_training.structure_closure.training_prefixes import prepare_training_prefixes
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
+    Family,
+    score_case,
+    syntax_state,
+    task_cases,
+)
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.prefixes import prepare_training_prefixes
 
 
 def test_reference_continuations_cover_each_family_and_preserve_content():

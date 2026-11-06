@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from verifyit.closure_scoring import (
     CLOSURE_REGION_SCORER,
+    SNOWBALL_TURN_END_MARKERS,
     ClosureFormat,
     closure_response_content,
     closure_state,
@@ -22,9 +23,6 @@ from skyrl_gym.task_records import TaskTransition, episode_prompt
 from skyrl_gym.source_task import session_parameters
 
 STRUCTURE_CLOSURE_SESSION = "structure_closure"
-SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
-
-
 class ClosurePrompt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

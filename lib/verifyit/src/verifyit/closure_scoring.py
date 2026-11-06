@@ -20,6 +20,7 @@ from verifyit.structure_closure import (
 from verifyit.tool_call_markup import JSON_WHITESPACE, THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
 CLOSURE_REGION_SCORER = "closure_region_v1"
+SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 _STRUCTURAL_CLOSERS = frozenset((TOOL_CLOSE, THINK_CLOSE, "}", "]", '"'))
 
 
