@@ -58,6 +58,7 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import subprocess
@@ -113,6 +114,8 @@ from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
 )
+
+logger = logging.getLogger(__name__)
 
 # Iris limit for one Snowball run, coordinator and job alike.
 RUN_TIMEOUT_HOURS = 72
@@ -520,7 +523,8 @@ def _grafana_links(
         return {}
     try:
         job = client.job_status(JobName.from_wire(receipt.result.iris_job_id))
-    except Exception:
+    except Exception as error:
+        logger.warning("Could not read Iris timing for %s: %s", receipt.result.iris_job_id, error)
         return {}
     if job.started_at is None or (job.state in TERMINAL_JOB_STATES and job.finished_at is None):
         return {}
@@ -577,7 +581,8 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                 lookup_started = True
                 try:
                     client = stack.enter_context(_iris_client())
-                except Exception:
+                except Exception as error:
+                    logger.warning("Could not connect to Iris for status links: %s", error)
                     client = None
             grafana = _grafana_links(client, preset, receipt, execution.cluster)
             state = (

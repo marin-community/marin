@@ -40,6 +40,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rolloutengine.models import TASK_TIMING_KEYS
 from taskcompendium.models import TaskSpec, grades_with_judge
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
@@ -368,8 +369,8 @@ _GAPS = (
 )
 _PANEL = EVALUATIONS["panel-100"]
 _TIMER_REPORTS = tuple(
-    Metric(f"timing/{phase}/{statistic}", False)
-    for phase in ("grading", "setup")
+    Metric(f"{phase}/{statistic}", False)
+    for phase in sorted(TASK_TIMING_KEYS)
     for statistic in ("mean", "p50", "p95", "max")
 )
 _MISMATCH_REPORTS = tuple(
