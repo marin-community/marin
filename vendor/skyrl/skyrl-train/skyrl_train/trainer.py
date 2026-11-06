@@ -20,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
+from skyrl_train.config.utils import model_expert_count
 from collections import defaultdict, deque
 
 import numpy as np
@@ -153,7 +154,9 @@ from skyrl_train.hf_export_schema import (
     HFUploadMode,
     TRAINER_STATE_FILENAME,
 )
+from typing import Callable
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
+from marinskyrl.runtime_options import BatchBuilder
 from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input
 from skyrl_train.batch_metrics import (
     install_correction,
@@ -164,6 +167,7 @@ from skyrl_train.batch_metrics import (
     rollout_staleness_metrics,
     token_staleness_metrics,
 )
+from skyrl_train.batch_source import BatchSummary, WorkerBatchStep
 from skyrl_train.rollouts.buffer import RowFacts
 from skyrl_train.telemetry import record_consumed_staleness
 from skyrl_train.trajectory_runners.trajectory_processing import token_reward_rows
@@ -240,6 +244,7 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
+        self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -1182,17 +1187,17 @@ class RayPPOTrainer:
         self,
         *,
         epoch: int,
-        training_input: TrainingInputBatch,
+        summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
-        self.all_metrics.update(training_input.metadata["consumed_stop_metrics"])
+        self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
-            record_consumed_work(consumed_work(training_input), step=self.global_step)
+            record_consumed_work(summary.work, step=self.global_step)
         logger.info(
             "Optimizer step completed: step={} epoch={} sequences={} duration_seconds={:.3f}",
             self.global_step,
             epoch,
-            len(training_input["sequences"]),
+            summary.batch_size,
             duration_seconds,
         )
 
@@ -1218,7 +1223,9 @@ class RayPPOTrainer:
                 self.global_step, self.loaded_checkpoint_path = self.load_checkpoints()
             logger.info(f"Resumed training from global_step {self.global_step}")
             if self._restored_rollout_state is not None:
-                await self.context.load_state_dict(self._restored_rollout_state)
+                await self.context.load_state_dict(
+                    self._restored_rollout_state, rebuild_row_facts=self.batch_builder is BatchBuilder.WORKER
+                )
                 self._restored_rollout_state = None
                 restored_data = True
 
@@ -1375,13 +1382,13 @@ class RayPPOTrainer:
         )
 
     def _update_step_performance_metrics(
-        self, training_input: TrainingInputBatch, *, core_seconds: float, cycle_started: float
+        self, summary: BatchSummary, *, core_seconds: float, cycle_started: float
     ) -> None:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
         generator = self.cfg.generator
-        consumed = consumed_work(training_input)
+        consumed = summary.work
         self.all_metrics.update(
             async_step_metrics(
                 core_seconds=core_seconds,
@@ -1406,27 +1413,49 @@ class RayPPOTrainer:
         await self._begin_speculator_capture(step)
         await self.context.publish(step)
 
-    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> TrainingInputBatch:
-        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return the batch."""
+    @asynccontextmanager
+    async def _admission_window(self, step_wall: StepWallTime):
         step_wall.start("group_admission")
         logger.info(
             "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size
         )
         with (
-            Timer("wait_for_generation_buffer", self.all_timings) as rollout_wait_timer,
+            Timer("wait_for_generation_buffer", self.all_timings),
             critical_phase("rollout_or_inference_wait", self.global_step),
             async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
         ):
+            yield
+        await self._seal_speculator_capture()
+        await self._start_speculator_update()
+
+    @asynccontextmanager
+    async def _training_window(self, step_wall: StepWallTime):
+        step_wall.start("training_preparation")
+        with (
+            Timer("run_training", self.all_timings),
+            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
+        ):
+            yield
+
+    @asynccontextmanager
+    async def _policy_training_window(self, step_wall: StepWallTime | None):
+        if step_wall is not None:
+            step_wall.start("policy_training")
+        with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
+            yield
+
+    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return its work summary."""
+        if self.batch_builder is BatchBuilder.WORKER:
+            return await self._train_loaded_step(epoch, step_wall)
+        async with self._admission_window(step_wall):
             groups, metadata = await self.context.next_batch(
                 stall_timeout=admission_stall_timeout(
-                    recent_step_times=self._step_time_history,
-                    timeout_override=self.group_admission_stall_timeout,
+                    recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
                 ),
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
-        self.all_metrics.update(metadata.metrics)
-        await self._seal_speculator_capture()
-        await self._start_speculator_update()
+            self.all_metrics.update(metadata.metrics)
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
             if self._expert_block_sync is not None:
@@ -1446,18 +1475,74 @@ class RayPPOTrainer:
         training_input = await asyncio.to_thread(self.convert_rollout_groups_to_training_input, groups, facts=facts)
         if scored_distillation is not None:
             self._attach_teacher_evidence(training_input, scored_distillation)
-        self._log_rollout_batch_completed(groups, duration_seconds=rollout_wait_timer.duration)
+        responses = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+        self._log_rollout_batch_completed(
+            groups=len(groups),
+            sequences=len(responses),
+            response_tokens=sum(map(len, responses)),
+            duration_seconds=self.all_timings["wait_for_generation_buffer"],
+        )
 
-        step_wall.start("training_preparation")
-        with (
-            Timer("run_training", self.all_timings),
-            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
-        ):
+        async with self._training_window(step_wall):
             status = await self._run_training(training_input, step_wall=step_wall)
+        summary = BatchSummary(
+            consumed_work(training_input),
+            training_input.metadata["consumed_stop_metrics"],
+            (),
+            training_input.batch_size,
+        )
+        return await self._finish_train_step(epoch, step_wall, status, summary)
+
+    async def _train_loaded_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        source = WorkerBatchStep(
+            context=self.context,
+            policy=self.policy_model,
+            cfg=self.cfg,
+            pad_token_id=self.tokenizer.pad_token_id,
+            num_experts=self._resolve_num_experts() if moe_router_replay_requested(self.cfg) else None,
+        )
+        async with self._admission_window(step_wall):
+            self.all_metrics.update(
+                await source.admit(
+                    stall_timeout=admission_stall_timeout(
+                        recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
+                    )
+                )
+            )
+        step_wall.start("batch_assembly")
+        metrics, load_duration = await source.prepare(global_step=self.global_step)
+        self.all_metrics.update(metrics)
+        self.all_timings["load_worker_batch"] = load_duration
+        plan = source.admitted_plan
+        self._log_rollout_batch_completed(
+            groups=len(plan.facts),
+            sequences=len(plan.uids),
+            response_tokens=sum(int(group.response_len.sum()) for group in plan.facts),
+            duration_seconds=self.all_timings["wait_for_generation_buffer"],
+        )
+        async with self._training_window(step_wall):
+            await self._drain_policy_event_loops()
+            with Timer("fwd_logprobs_values_reward", self.all_timings):
+                self.all_metrics.update(await source.prepare_training())
+            async with self._policy_training_window(step_wall):
+                status, cache_refs = await asyncio.to_thread(
+                    self._train_policy,
+                    lambda: self.policy_model.async_run_ray_method("pass_through", "train_loaded", plan.global_step),
+                )
+                await self.context.wait(asyncio.gather(*cache_refs))
+            self._finish_policy_update(status)
+            await source.unload()
+        summary = source.summary()
+        self._current_step_rewards = list(summary.callback_rewards)
+        return await self._finish_train_step(epoch, step_wall, status, summary)
+
+    async def _finish_train_step(
+        self, epoch: int, step_wall: StepWallTime, status: dict, summary: BatchSummary
+    ) -> BatchSummary:
         step_wall.start("group_bookkeeping")
         self._log_optimizer_step_completed(
             epoch=epoch,
-            training_input=training_input,
+            summary=summary,
             duration_seconds=self.all_timings["train_critic_and_policy"],
         )
 
@@ -1468,7 +1553,7 @@ class RayPPOTrainer:
 
         logger.info(status)
         self.all_metrics.update({"trainer/epoch": epoch, "trainer/global_step": self.global_step})
-        return training_input
+        return summary
 
     def _attach_teacher_evidence(
         self, training_input: TrainingInputBatch, scored_distillation: tuple[RoutedScoredDistillationBatch, ...]
@@ -1488,15 +1573,16 @@ class RayPPOTrainer:
             }
         )
 
-    def _log_rollout_batch_completed(self, groups: List[RolloutGroup], *, duration_seconds: float) -> None:
-        response_ids = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+    def _log_rollout_batch_completed(
+        self, *, groups: int, sequences: int, response_tokens: int, duration_seconds: float
+    ) -> None:
         logger.info(
             "Rollout batch completed: step={} groups={} trajectories={} response_tokens={} staleness_mean={:.3f} "
             "staleness_max={} duration_seconds={:.3f}",
             self.global_step,
-            len(groups),
-            len(response_ids),
-            sum(len(response) for response in response_ids),
+            groups,
+            sequences,
+            response_tokens,
             self.all_metrics["async/staleness_mean"],
             self.all_metrics["async/staleness_max"],
             duration_seconds,
@@ -1596,18 +1682,9 @@ class RayPPOTrainer:
             with Timer("dump_data_batch", self.all_timings):
                 self.dump_data(training_input, file_name=f"global_step_{self.global_step}_training_input")
 
-        if step_wall is not None:
-            step_wall.start("policy_training")
-        with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
+        async with self._policy_training_window(step_wall):
             status = await asyncio.to_thread(self.train_critic_and_policy, training_input)
-        self._policy_version_step = self.global_step
-
-        ftpo = ftpo_config(self.cfg.trainer.algorithm)
-        if ftpo is not None and ftpo.early_stopping_chosen_win is not None:
-            win_rate = status.get("ftpo/chosen_win")
-            if win_rate is not None and win_rate >= ftpo.early_stopping_chosen_win:
-                self._ftpo_stopped = True
-                self._control.should_training_stop = True
+        self._finish_policy_update(status)
         return status
 
     def _group_for_teacher_scoring(self, group: RolloutGroup) -> TrajectoryBatch:
@@ -1704,6 +1781,16 @@ class RayPPOTrainer:
                 step=self.global_step,
             )
         return training_input
+
+    def _finish_policy_update(self, status: dict) -> None:
+        """Advance the policy version and apply the configured FTPO stopping rule."""
+        self._policy_version_step = self.global_step
+        ftpo = ftpo_config(self.cfg.trainer.algorithm)
+        if ftpo is not None and ftpo.early_stopping_chosen_win is not None:
+            win_rate = status.get("ftpo/chosen_win")
+            if win_rate is not None and win_rate >= ftpo.early_stopping_chosen_win:
+                self._ftpo_stopped = True
+                self._control.should_training_stop = True
 
     def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
         """
@@ -2022,18 +2109,7 @@ class RayPPOTrainer:
                 trust_remote_code=True,
                 revision=self.cfg.trainer.policy.model.get("revision"),
             )
-            # Some families nest the expert count under a text/decoder sub-config.
-            candidates = [hf_config, getattr(hf_config, "text_config", None)]
-            for cfg_obj in candidates:
-                if cfg_obj is None:
-                    continue
-                for attr in ("num_experts", "num_local_experts", "n_routed_experts"):
-                    val = getattr(cfg_obj, attr, None)
-                    if isinstance(val, int) and val > 0:
-                        num_experts = val
-                        break
-                if num_experts is not None:
-                    break
+            num_experts = model_expert_count(hf_config)
         except Exception as e:  # noqa: BLE001 — config load is best-effort; fallback is safe
             logger.warning(
                 f"Could not resolve num_experts from policy model config for the "
@@ -2735,48 +2811,30 @@ class RayPPOTrainer:
         Run the training step for the policy and critic models (this is overlapped if colocate_all is False).
         """
         data.metadata["global_step"] = self.global_step
-        if self.colocate_all:
-            if self.critic_model is not None:
-                with Timer("critic_train", self.all_timings):
-                    self.critic_model.backload_to_gpu()
-                    critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
-                    critic_statuses = collect_actor_results(
-                        self.critic_model.actor_infos,
-                        critic_refs,
-                        operation="critic ppo_train",
-                    )
-                    self.critic_model.offload_to_cpu()
-            with Timer("policy_train", self.all_timings):
-                self.policy_model.backload_to_gpu()
-                policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
-                policy_statuses = collect_actor_results(
-                    self.policy_model.actor_infos,
-                    policy_refs,
-                    operation="policy ppo_train",
+        if not self.colocate_all:
+            status, cache_refs = self._train_policy(
+                lambda: self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
+            )
+            ray.get(cache_refs)
+            return status
+        if self.critic_model is not None:
+            with Timer("critic_train", self.all_timings):
+                self.critic_model.backload_to_gpu()
+                critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
+                critic_statuses = collect_actor_results(
+                    self.critic_model.actor_infos,
+                    critic_refs,
+                    operation="critic ppo_train",
                 )
-        else:
-            if self.cfg.trainer.offload_optimizer_during_rollouts:
-                with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
-                    self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=False)
-            if self.critic_model is not None:
-                with Timer("policy_critic_overlap_train", self.all_timings):
-                    policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
-                    critic_refs = self.critic_model.async_run_ray_method("mesh", "ppo_train", data)
-                    all_statuses = collect_actor_results(
-                        self.policy_model.actor_infos + self.critic_model.actor_infos,
-                        policy_refs + critic_refs,
-                        operation="policy and critic ppo_train",
-                    )
-                    policy_statuses = all_statuses[: len(policy_refs)]
-                    critic_statuses = all_statuses[len(policy_refs) :]
-            else:
-                with Timer("policy_train", self.all_timings):
-                    policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
-                    policy_statuses = collect_actor_results(
-                        self.policy_model.actor_infos,
-                        policy_refs,
-                        operation="policy ppo_train",
-                    )
+                self.critic_model.offload_to_cpu()
+        with Timer("policy_train", self.all_timings):
+            self.policy_model.backload_to_gpu()
+            policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
+            policy_statuses = collect_actor_results(
+                self.policy_model.actor_infos,
+                policy_refs,
+                operation="policy ppo_train",
+            )
 
         empty_cache_refs = []
         if self.critic_model is not None:
@@ -2792,6 +2850,16 @@ class RayPPOTrainer:
         ray.get(empty_cache_refs)
 
         return policy_status
+
+    def _train_policy(self, dispatch: Callable[[], List[ObjectRef]]) -> tuple[dict, List[ObjectRef]]:
+        if self.cfg.trainer.offload_optimizer_during_rollouts:
+            with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
+                self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=False)
+        with Timer("policy_train", self.all_timings):
+            outputs = collect_actor_results(self.policy_model.actor_infos, dispatch(), operation="policy training")
+        status = outputs[0].metadata["train_status"]
+        self.all_metrics.update({f"policy/{key}": value for key, value in status.items()})
+        return status, self.policy_model.async_run_ray_method("pass_through", "empty_cache")
 
     def _get_dp_group_models(self, rank: int, model_type: str = ""):
         model = getattr(self, model_type)
