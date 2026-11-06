@@ -129,6 +129,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
             row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
             row |= {metric.key: 0.0 for metric in preset.reported if metric.key.startswith("timing/step_wall/")}
             row |= {
+                "attempt_id": "recorded-attempt",
                 "generate/outcome/graded": 512.0,
                 "loss/policy_loss": 0.01,
                 "policy/raw_grad_norm": 1.0,

@@ -321,7 +321,7 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
     ]
     values = {}
     declared = {metric.key: metric for metric in (*preset.guards, *preset.reported)}
-    extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys()
+    extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys() - {"step", "attempt_id"}
     for metric in (*declared.values(), *(presets.Metric(key, True) for key in sorted(extra))):
         if metric.key.startswith("startup/"):
             first = next((row[metric.key] for _, row in sorted(metrics.items()) if metric.key in row), None)
