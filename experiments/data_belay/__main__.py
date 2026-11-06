@@ -16,7 +16,9 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.data_belay.answer_bpb import ANSWER_BPB_ROOT, build_answer_bpb
 from experiments.data_belay.answer_bpb import MANIFEST_NAME as ANSWER_BPB_MANIFEST
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
+from experiments.data_belay.judge import HARM_LIMITS, judge
 from experiments.data_belay.prepare import build_cache, plan_cache
+from experiments.data_belay.results import arm_metrics, control_run_id, treatment_run_id
 from experiments.data_belay.rungs import DATA_BELAY_RUNGS, ladder_tokens
 from experiments.grug.fast_track import belay_tracks
 from experiments.grug.fast_track.launch import V16384_TOKENIZER
@@ -173,6 +175,27 @@ def train(
     if submit:
         args += ["--submit", "--target-cluster", CLUSTER, "--priority", PRIORITY]
     belay_tracks.main(args)
+
+
+@cli.command()
+@click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
+@click.option("--candidate", required=True, help="Candidate name in the treatment run ids, e.g. finemath-p20.")
+@click.option("--seeds", default="0,1,2", show_default=True, help="Treatment seeds.")
+@click.option("--control-seeds", default="0,1,2,3", show_default=True)
+def report(rung: str, candidate: str, seeds: str, control_seeds: str) -> None:
+    """Verdict and per-group BPB change of a candidate against the shared control."""
+    control = arm_metrics([control_run_id(rung, int(s)) for s in control_seeds.split(",")])
+    treatment = arm_metrics([treatment_run_id(rung, candidate, int(s)) for s in seeds.split(",")])
+    verdict, deltas = judge(control, treatment, HARM_LIMITS)
+    click.echo(f"{candidate} at {rung}: {verdict}")
+    click.echo("| group | control BPB | treatment BPB | Δ | 95% interval | harm limit |")
+    click.echo("|---|---:|---:|---:|---|---:|")
+    for d in deltas:
+        c, t = control[d.group], treatment[d.group]
+        click.echo(
+            f"| {d.group} | {sum(c) / len(c):.4f} | {sum(t) / len(t):.4f} | {d.delta:+.2%} | "
+            f"[{d.low:+.2%}, {d.high:+.2%}] | {d.harm_limit:.1%} |"
+        )
 
 
 if __name__ == "__main__":
