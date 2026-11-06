@@ -450,7 +450,7 @@ production recipe. It reads the Harrier 2026.08.18 data unless `--long-context-s
 long-context mix. Its stop step, evaluation, and checkpoint policy stay independent from the production run.
 
 The default 25-step diagnostic uses simulated epoching. Set `--schedule-steps 390251` to use the raw
-production mixture. The diagnostic default now matches the production watch and 890 GB RAM request.
+Harrier mixture. The diagnostic default now matches the production watch and 890 GB RAM request.
 
 A diagnostic uses `HERO_SCHEDULE_EXTENSION`, and with `--schedule-steps 390251`, `--num-steps` can reach its last step.
 The heuristic scales from the diagnostic's own batch, so one rack runs the same ratios at 0.69 times the 11-rack hero's
@@ -510,7 +510,7 @@ hero model and training step from `main` daily on one rack through `launch_diagn
 It leaves out `gate_router_weight_decay`, which the production `launch_scaling_ladder.py` applies and which is 0
 past the schedule. The canary restores the pinned permanent checkpoint `step-390251` and trains 35 updates on the
 long-context mix with a fixed seed. One dropless eval
-runs after the last update. A healthy run holds the rack for about 20 minutes. The diagnostic does
+runs after the last update. A healthy run holds the rack for more than 20 minutes: 35 updates take about 17 minutes at 29 s/step, before restore, compile, and eval. The diagnostic does
 not exercise cross-rack collectives or checkpoint recovery.
 
 The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
@@ -554,13 +554,13 @@ the profile. Automatic PGLE (`JAX_ENABLE_PGLE`) stays off: with one process per 
 ### Long-context diagnostics
 
 For 262,144-token sequences on one rack, use `--seq-len 262144 --batch-size 16
---context-axis-size 4 --expert-axis-size 16 --qk-mult 1.84`. This keeps 4,194,304
+--context-axis-size 4 --expert-axis-size 16`. This keeps 4,194,304
 tokens per step, matching the 4K/batch-1024 diagnostic. FA4 gathers K/V within each
 context group; the residual stream and parameter storage remain context-sharded.
 The short convolution exchanges a left halo across sequence shards.
 
 The 4K control uses `--seq-len 4096 --batch-size 1024 --context-axis-size 1
---expert-axis-size 64 --qk-mult 1.3`. Use the same checkpoint and `--schedule-steps`
+--expert-axis-size 64 --qk-mult 1.3 --qk-mult-long-scale 1`. Use the same checkpoint and `--schedule-steps`
 for the 4K control and 262K probe. The 262K mesh and batch are the launcher's defaults. `--num-steps` is an
 absolute stop step and must exceed the checkpoint step. Record MFU, elapsed step
 time, peak memory, and routing drops after warmup. A throughput probe alone does
