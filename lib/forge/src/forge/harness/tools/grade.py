@@ -14,14 +14,13 @@ from taskcompendium.runtime.resources import inline_resource
 from forge.effects.context import Context
 from forge.harness.protocol import ToolResult
 from forge.harness.tools.base import ValidatedTool
-from forge.lowering import LoweringSettings, lower
+from forge.lowering import LoweringSettings, lower_with_settings
 from forge.model.content_hash import pretty_json
 from forge.model.controls import Candidate
 from forge.model.serialization import TASK_SPEC
 from forge.model.verdict import grader_checks
 from forge.resources.env import Env, ReadFile
 from forge.resources.grading import GradeCandidate
-from forge.resources.sandbox.factories import grading_environment
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,16 +53,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
         try:
             task = TASK_SPEC.validate_json(await ctx.emit(ReadFile(PurePosixPath(self.task_path))))
             candidate = await read_candidate(ctx, args)
-            spec = lower(
-                task,
-                host=self.settings.host,
-                task_machine=(
-                    self.settings.task_machine if "shell" in task.environment_requirements.capabilities else None
-                ),
-                verifier_machine=self.settings.verifier_machine if grading_environment(task) is not None else None,
-                limits=self.settings.limits,
-                factories=self.factories,
-            )
+            spec = lower_with_settings(task, self.settings, self.factories)
         except (ValidationError, ValueError, NotImplementedError, FileNotFoundError, KeyError) as error:
             return ToolResult(f"Cannot grade draft: {error}")
         result = await ctx.emit(GradeCandidate(spec, candidate))
