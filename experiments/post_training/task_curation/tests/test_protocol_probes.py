@@ -1,12 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-
 import pytest
 from rolloutengine.harness.fetch import FetchProvider
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.test_support import SHELL, ReplayModel, engine, machine_runtime, rollout_spec
+from rolloutengine.test_support import (
+    SHELL,
+    ReplayModel,
+    engine,
+    machine_runtime,
+    rollout_spec,
+    tool_call,
+    tool_observations,
+)
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.fetch import FETCH_ACTION_INTERFACE, HttpPage, NetworkFailure, fetch_requirement
@@ -29,18 +35,8 @@ TASKS = {task.id: task for task in probe_tasks(grader_environment=ENVIRONMENT, v
 FETCH_HARNESS = {SHELL: ShellHarness(command_timeout=None, tools={FETCH_ACTION_INTERFACE: FetchProvider()})}
 
 
-def tool_call(name: str, arguments: dict, call_id: str = "call-0") -> dict:
-    function = {"name": name, "arguments": json.dumps(arguments)}
-    return {"role": "assistant", "tool_calls": [{"id": call_id, "type": "function", "function": function}]}
-
-
 def reply(content: str) -> dict:
     return {"role": "assistant", "content": content}
-
-
-def tool_observations(graded) -> list[dict]:
-    messages = graded.rollout.conversations[0].messages
-    return [json.loads(message["content"]) for message in messages if message["role"] == "tool"]
 
 
 TOOL_TASK = TASKS[f"{ProtocolCheck.TOOL_EXECUTION}-0"]
@@ -50,7 +46,10 @@ TOOL_TASK = TASKS[f"{ProtocolCheck.TOOL_EXECUTION}-0"]
     "turns,reward",
     [
         pytest.param(
-            [tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}), reply(probe_nonce(TOOL_TASK.id))],
+            [
+                tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}, call_id="run"),
+                reply(probe_nonce(TOOL_TASK.id)),
+            ],
             1.0,
             id="executed",
         ),
@@ -83,7 +82,7 @@ async def test_url_probe_serves_declared_pages_as_observations(page, observation
         )
         task = task.model_copy(update={"environment_requirements": environment})
     answer = probe_nonce(task.id) if page is None else "The page could not be retrieved."
-    model = ReplayModel([tool_call("fetch_url", {"url": PROBE_URL}), reply(answer)])
+    model = ReplayModel([tool_call("fetch_url", {"url": PROBE_URL}, call_id="fetch"), reply(answer)])
 
     graded = await engine(model, harnesses=FETCH_HARNESS).run_task(rollout_spec(task))
 

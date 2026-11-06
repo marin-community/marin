@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One minimal evaluation task per agent protocol.
+"""Minimal evaluation tasks for agent protocols, with a chosen number of variants per protocol.
 
 Each answer is a nonce derived from the task id. A model gets it only by following the protocol
 (writing the answer file, running the shell tool, or fetching the declared page), so the reward is
