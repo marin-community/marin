@@ -10,7 +10,8 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
   (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
-  1.66, times 1.108 on the global layers (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
+  1.66, with global-layer queries past 65536 keys scaled by (1 + 0.1 ln(n/65536))^2, up to 2.15 at 262K (1.3 at 4K,
+  1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
   shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are
@@ -423,7 +424,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default: the hero's 1.108, which gives 1.84 from 1.66) |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default 1) |
 | `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + 0.1 * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
