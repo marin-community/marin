@@ -52,7 +52,7 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeImplementation,
 )
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _axis_names, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -542,20 +542,41 @@ def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
     return Mesh(devices, names, axis_types=train_mesh.axis_types)
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
+    """Rename a training PartitionSpec for ``expert_collapsed_eval_mesh(train_mesh)``.
 
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
+    At training ``data`` size one, ``expert`` becomes the eval ``data`` axis and training ``data``
+    drops out, so every device keeps the shard it already holds. Otherwise the spec is unchanged:
+    a leaf sharded on ``expert`` without ``data`` lands replicated and the move transfers it.
     """
+    if train_mesh.shape["data"] != 1:
+        return spec
+
+    def rename(entry):
+        renamed = tuple("data" if name == "expert" else name for name in _axis_names(entry) if name != "data")
+        if not renamed:
+            return None
+        return renamed if len(renamed) > 1 else renamed[0]
+
+    return P(*(rename(entry) for entry in spec))
+
+
+def _move_tree_to_eval_mesh(tree, train_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    The move must not need a collective when training ``data`` has size one. A collective here runs
+    on a communicator training does not hold, and that communicator's NCCL buffers stay outside the
+    allocator pool for the life of the process, taking room the next train step's arena needs. The
+    model's own ``reshard`` calls fix the layout inside the forward, so any valid placement on the
+    eval mesh suffices. Non-array leaves pass through.
+    """
+    eval_mesh = expert_collapsed_eval_mesh(train_mesh)
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
         spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
+        return jax.device_put(leaf, NamedSharding(eval_mesh, _expert_folded_spec(spec, train_mesh)))
 
     return jax.tree.map(move, tree)
 
@@ -1371,10 +1392,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                    # the expert axis lands replicated, and the copy is much larger than the
-                    # train-mesh params. The train step needs almost the whole device budget for
-                    # its temporary buffer, thus this copy must die before the next step.
+                    # `model` must stay a local. In a multi-process run the move copies each leaf,
+                    # also when the leaf stays on its devices. The copy adds to the train-mesh
+                    # params, and the train step needs almost the whole device budget for its
+                    # temporary buffer, thus this copy must die before the next step.
                     with (
                         callbacks.progress_event_scope(
                             step.emit_event,
@@ -1383,7 +1404,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _move_tree_to_eval_mesh(step.model, mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
