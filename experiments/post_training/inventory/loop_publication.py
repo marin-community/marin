@@ -59,7 +59,7 @@ def run_recorded_loop(config: LoopRunConfig) -> SkyRLRun:
         try:
             publish_summary(
                 PublicationConfig(
-                    summary_uri=prefix_join(config.skyrl.output.export_root, "loop-result.json"),
+                    summary_uri=prefix_join(config.skyrl.output.export_root, RESULT_FILENAME),
                     receipt_uri=prefix_join(config.skyrl.output.export_root, "loop-publication.json"),
                 )
             )
@@ -72,7 +72,7 @@ def _native_identity(path: str) -> tuple[str, str]:
     receipt = read_skyrl_launch_receipt(path)
     if receipt is None:
         raise ValueError(f"Publication requires a recorded native attempt: {path}")
-    identity = tuple(receipt.config["run"][key] for key in ("id", "attempt_id"))
+    identity = tuple(receipt.config.get("run", {}).get(key) for key in ("id", "attempt_id"))
     if not all(isinstance(value, str) and value for value in identity):
         raise ValueError(f"Publication requires native run and attempt IDs: {path}")
     return identity
@@ -274,7 +274,7 @@ def publication_step(
 
     def build_config(ctx: StepContext) -> PublicationConfig:
         return PublicationConfig(
-            summary_uri=prefix_join(ctx.artifact_path(training), "exports/loop-result.json"),
+            summary_uri=prefix_join(ctx.artifact_path(training), f"exports/{RESULT_FILENAME}"),
             receipt_uri=prefix_join(ctx.output_path, "publication.json"),
         )
 

@@ -89,6 +89,7 @@ from iris.rpc import job_pb2
 from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.rl.cli import submit_or_run
@@ -120,6 +121,7 @@ from rigging.provenance import Provenance, git_output
 from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
+from experiments.post_training.inventory import loop_publication
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
@@ -708,7 +710,21 @@ def _completed_update(path: str, *, generating: bool) -> int | None:
     return None
 
 
+def _completed_gate(run: SnowballRun, preset: presets.Preset) -> ArtifactStep | None:
+    if run.gate is None:
+        return None
+    config = run.gate.build_config(StepContext.for_fingerprint(run.gate.runtime_args, run.gate.deps))
+    return snowball_rl_gate.gate_step(preset, run.runs, inputs=config["inputs"])
+
+
+def _publications(run: SnowballRun, preset: presets.Preset) -> tuple[ArtifactStep, ...]:
+    if run.gate is None or preset.recipe.layout.role_plan.generate_only or preset.focus == presets.Focus.SPEED:
+        return ()
+    return tuple(loop_publication.publication_step(training, gate=run.gate) for training in run.runs)
+
+
 def _status(run: SnowballRun, preset: presets.Preset) -> dict:
+    run = replace(run, gate=_completed_gate(run, preset))
     rows = []
     planned = []
     with ExitStack() as stack:
@@ -788,6 +804,18 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
                 ("experiments/post_training", "lib/marin/src/marin/rl", "lib/taskcompendium", "vendor/skyrl"),
             )
             verdict["rl_path_changes_since_control"] = changes
+            try:
+                publications = _publications(run, preset)
+            except (ValueError, FileNotFoundError) as error:
+                logger.warning("Could not read publication identity: %s", error)
+                publications = ()
+            for row, publication in zip(rows, publications, strict=False):
+                receipt_path = (
+                    StoragePath(publication.path(presets.artifact_prefix(preset.recipe.layout.cluster)))
+                    / "publication.json"
+                )
+                if presets.exists(receipt_path):
+                    row["rl_progress_url"] = json.loads(presets.read_text(receipt_path))["url"]
             if reason:
                 verdict["rl_path_changes_reason"] = reason
         else:
@@ -854,13 +882,29 @@ def _run_command(function: Callable) -> click.Command:
 
         def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
             try:
-                job = submit_or_run(
-                    "experiments.post_training.snowball_rl",
-                    handles,
-                    max_concurrent,
-                    os.environ,
-                    extra_env_vars=(_WANDB_ENTITY_ENV,),
-                )
+                if get_job_info() is None:
+                    job = submit_or_run(
+                        "experiments.post_training.snowball_rl",
+                        handles,
+                        max_concurrent,
+                        os.environ,
+                        extra_env_vars=(_WANDB_ENTITY_ENV,),
+                    )
+                else:
+                    native = tuple(step for step in handles if step.artifact_type is SkyRLRun)
+                    build_artifacts(*native, max_concurrent=max_concurrent)
+                    planned = SnowballRun(
+                        native,
+                        next((step for step in handles if step.artifact_type is snowball_rl_gate.GateReport), None),
+                    )
+                    preset = presets.PRESETS[kwargs["preset_name"]]
+                    completed = replace(planned, gate=_completed_gate(planned, preset))
+                    if completed.gate is not None:
+                        build_artifacts(completed.gate, max_concurrent=max_concurrent)
+                    publications = _publications(completed, preset)
+                    if publications:
+                        build_artifacts(*publications, max_concurrent=max_concurrent)
+                    job = None
                 if wait and job is not None:
                     preset = presets.PRESETS[kwargs["preset_name"]]
                     if kwargs.get("rescore_panel"):
