@@ -367,7 +367,7 @@ def build_ladder_run(
     )
     schedule_extension = HERO_SCHEDULE_EXTENSION if hero else None
     stop_step = num_steps + schedule_extension.steps if schedule_extension is not None else num_steps
-    stop_step = 390261  # STOP TEST ONLY: 10 steps past the handoff, not a multiple of the eval interval.
+    stop_step = 390253  # STOP TEST ONLY: 2 steps past the handoff, not a multiple of the eval interval.
     optimizer = dataclasses.replace(
         optimizer, gate_router_weight_decay=gate_router_weight_decay, schedule_extension=schedule_extension
     )
