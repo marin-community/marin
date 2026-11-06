@@ -79,11 +79,7 @@ def hero_config(request: dict, attention: str, moe: str) -> GrugModelConfig:
 
 
 def restore_hero_bf16(request: dict, config: GrugModelConfig, mesh: jax.sharding.Mesh) -> Transformer:
-    """Read native weights directly into BF16 shards without a full FP32 copy.
-
-    The existing export reader verifies checkpoint metadata and tensor shapes.
-    Router bias receives the same pending update as the pinned export.
-    """
+    """Restore BF16 checkpoint weights and the export's pending router-bias update."""
     checkpoint = request["checkpoint"]
     reader = CpuCheckpointWeights(
         CpuExportConfig(
@@ -161,7 +157,7 @@ def score_hero(
 
 
 def score_snowball(
-    predictions: tuple[Prediction, ...], weights: str, revision: str, attention: str, router_weights: Path
+    predictions: tuple[Prediction, ...], weights: str, revision: str, attention: str, moe: str, router_weights: Path
 ) -> np.ndarray:
     spec = ModelSpec(
         weights=weights,
@@ -177,7 +173,7 @@ def score_snowball(
     rows = []
     batch_size = jax.device_count()
     with LevanterBackend(LevanterEngineConfig()).load_model(
-        spec, config_overrides={"attention_implementation": attention, "moe_implementation": "sonic"}
+        spec, config_overrides={"attention_implementation": attention, "moe_implementation": moe}
     ) as loaded:
         assert isinstance(loaded.model, SnowballLMHeadModel)
         model = restore_snowball_routers(loaded.model, router_weights, weights, revision)
@@ -237,7 +233,7 @@ def main() -> None:
         weights = request["checkpoint"]
     else:
         assert args.weights and args.revision and args.router_weights
-        scores = score_snowball(predictions, args.weights, args.revision, args.attention, args.router_weights)
+        scores = score_snowball(predictions, args.weights, args.revision, args.attention, args.moe, args.router_weights)
         weights = {"uri": args.weights, "revision": None if "://" in args.weights else args.revision}
         if "://" in args.weights:
             weights["source_revision"] = args.revision

@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -8,8 +10,10 @@ import numpy as np
 from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from safetensors.numpy import save_file
 
 from experiments.evaluation.grug_parity.reference import restore_hero_bf16
+from experiments.evaluation.grug_parity.snowball_routers import extract
 from experiments.evaluation.grug_parity.snowball_routers import restore as restore_snowball_routers
 from experiments.grug.moe_hero_ep.ops.test_export_vllm import native_fixture
 
@@ -55,18 +59,19 @@ def test_snowball_reference_preserves_fp32_expert_selection(tmp_path):
         weight = np.zeros((2, 16), dtype=np.float32)
         weight[:, 0] = [1.0001, 1.0002]
         path = tmp_path / "routers.npz"
-        np.savez(
-            path,
-            **{"model.layers.0.mlp.router.weight": weight, "model.layers.0.mlp.router.bias": np.zeros(2, np.float32)},
-            source_weights="fixture",
-            source_revision="pinned",
+        tensors = {"model.layers.0.mlp.router.weight": weight, "model.layers.0.mlp.router.bias": np.zeros(2, np.float32)}
+        save_file(tensors, tmp_path / "model.safetensors")
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {name: "model.safetensors" for name in tensors}})
         )
+        source = tmp_path.as_uri() + "/"
+        extract(source, "pinned", path)
         rounded = eqx.tree_at(
             lambda item: item.transformer.blocks[0].mlp.router,
             rounded,
             jnp.asarray(weight.T, dtype=jnp.bfloat16),
         )
-        restored = restore_snowball_routers(rounded, path, "fixture", "pinned")
+        restored = restore_snowball_routers(rounded, path, source, "pinned")
         inputs = jnp.zeros((1, 1, 16), dtype=jnp.bfloat16).at[0, 0, 0].set(1)
         expected = restored.transformer.blocks[0].mlp.expert_mlp(
             inputs.reshape(1, 16),

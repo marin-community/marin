@@ -12,23 +12,23 @@ from pathlib import Path
 from typing import cast
 
 import equinox as eqx
-import fsspec
 import jax
 import numpy as np
 from levanter.compat.hf_checkpoints import _convert_to_hf_url
 from levanter.models.snowball import SnowballLMHeadModel
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 
 def extract(weights: str, revision: str, output: Path) -> None:
     """Read only router byte ranges from the pinned safetensors snapshot."""
-    source = weights if "://" in weights else _convert_to_hf_url(weights, revision)
-    fs, prefix = fsspec.core.url_to_fs(source)
-    index = json.loads(fs.cat_file(prefix + "/model.safetensors.index.json"))
+    source = StoragePath(weights if "://" in weights else _convert_to_hf_url(weights, revision))
+    index = json.loads((source / "model.safetensors.index.json").read_text())
     names = sorted(name for name in index["weight_map"] if ".mlp.router." in name)
 
     def read(name):
-        path = prefix + "/" + index["weight_map"][name]
+        fs, path = url_to_fs(str(source / index["weight_map"][name]))
         length = struct.unpack("<Q", cast(bytes, fs.cat_file(path, start=0, end=8)))[0]
         header = json.loads(fs.cat_file(path, start=8, end=8 + length))
         entry = header[name]
@@ -43,9 +43,7 @@ def extract(weights: str, revision: str, output: Path) -> None:
     np.savez_compressed(output, **arrays, source_weights=weights, source_revision=revision)
 
 
-def restore(
-    model: SnowballLMHeadModel, path: Path, weights: str, revision: str
-) -> SnowballLMHeadModel:
+def restore(model: SnowballLMHeadModel, path: Path, weights: str, revision: str) -> SnowballLMHeadModel:
     """Restore authoritative router values without rounding them through BF16."""
     replacements = []
     with np.load(path) as archive:
