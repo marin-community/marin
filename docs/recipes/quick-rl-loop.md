@@ -50,9 +50,10 @@ The worker sequence limit was 1,024; prefix caching stayed off, while TRITON
 attention, 8,192-token chunked prefill and compilation/CUDA graphs stayed enabled.
 
 This candidate used vLLM `02872a7e55304d288e52fdb906923551b9517501` plus
-the [three IEEE FP32 Triton dot corrections](patches/grug-ieee-fp32-20261105.patch)
-in `batch_invariant.py`, with
-these native TorchInductor settings:
+the [three IEEE FP32 Triton dot corrections](https://github.com/marin-community/vllm/commit/bf31042cab99d9d15eb5aa321d37c82fe4bcaf72)
+in `batch_invariant.py`, now tracked in
+[vLLM #117](https://github.com/marin-community/vllm/pull/117), with these native
+TorchInductor settings:
 
 ```yaml
 generator:
@@ -98,9 +99,13 @@ metadata lookup returned HTTP 502. That failed attempt was preserved. The clean
 four-pass qualification above included a bounded retry for read-only snapshot
 metadata GET on HTTP 502/503/504; it did not retry grading, creation POSTs, or
 failed tasks, or change startup deadlines. The
-[lookup retry patch](patches/daytona-snapshot-get-20261105.patch) applies to Marin
-`a2f550d966551876535540063017f85cee01473e`; the resulting `machine.py` SHA256 is
+[lookup retry source change](https://github.com/marin-community/marin/commit/8e3f072f01c06b9fe843c3d16ede1bbfc60a54aa)
+is tracked in [#11003](https://github.com/marin-community/marin/pull/11003).
+The qualification used the same retry behavior on Marin
+`a2f550d966551876535540063017f85cee01473e`, with `machine.py` SHA256
 `42218ba65d5eb62e1ef951197c3e743271928c7b064086848c9e53687c90258a`.
+The source PR preserves newer cancellation cleanup on current main; it is a
+source port, not a requalification of that newer stack.
 
 These results qualify this finite panel and pinned standalone evaluation
 configuration. They do not isolate the cause of the earlier nine reply changes,
