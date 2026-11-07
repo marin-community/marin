@@ -3,6 +3,7 @@
 
 """Snowball model identity and representative inference goldens."""
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,10 @@ from marin.testing.inference.backend_parity import TokenScore
 
 BATCH_SIZE = 8
 TOP_K = 25
+TPU_TYPE = "v4-32"
+TPU_REGION = "us-central2"
+TPU_CHIPS_PER_HOST = 4
+TPU_TENSOR_PARALLEL_SIZE = 16
 PROMPT_BUCKET_MAX_TOKENS = (256, 1024, 4096, 16384, 32768)
 # Shared serving-path bound; repeated-run measurements are recorded in #7354.
 MAX_PROBABILITY_ERROR = 0.075
@@ -38,6 +43,8 @@ class ModelIdentity:
     checkpoint_step: int
     export_sha256: str
     export_uri: str
+    tpu_export_uri: str
+    tpu_manifest_sha256: str
 
     @property
     def executor_info_path(self) -> str:
@@ -60,7 +67,23 @@ SNOWBALL = ModelIdentity(
     checkpoint_step=42150,
     export_sha256="d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0",
     export_uri="s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/",
+    tpu_export_uri=(
+        "gs://marin-us-central2/models/snowball/june-67b-a2b-step-42150/"
+        "d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0/"
+    ),
+    tpu_manifest_sha256="ad9e19bbb57ea4fc9cae2287ea0174fe64d012d6f2fc1c30dbdc6787ed642e91",
 )
+
+
+def read_tpu_export_manifest() -> dict:
+    """Require the verified durable mirror of this exact Snowball export."""
+    raw = (StoragePath(SNOWBALL.tpu_export_uri) / "manifest.json").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == SNOWBALL.tpu_manifest_sha256
+    manifest = json.loads(raw)
+    assert manifest["verified"] and manifest["destination"] == SNOWBALL.tpu_export_uri
+    assert manifest["source"] == SNOWBALL.export_uri
+    assert manifest["export_sha256"] == SNOWBALL.export_sha256
+    return manifest
 
 
 @dataclass(frozen=True)
