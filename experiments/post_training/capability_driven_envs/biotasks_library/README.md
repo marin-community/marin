@@ -129,8 +129,11 @@ and systematic path/format problems; this provisional matrix is not IRT-ready.
 The versioned **v3 reference/path/contract** rerun and its precise reuse rules
 are described in [OPENROUTER_V3_DESIGN.md](OPENROUTER_V3_DESIGN.md). The
 completed 12-model, 230-task diagnostic and remaining blockers are in
-[OPENROUTER_V3_RESULTS.md](OPENROUTER_V3_RESULTS.md). V1 and v2 responses
-remain frozen.
+[OPENROUTER_V3_RESULTS.md](OPENROUTER_V3_RESULTS.md). An explicitly
+exploratory Bayesian 2PL fit, its prior/format sensitivity, and an estimate of
+needed additional respondents are in
+[IRT_V3_EXPLORATORY.md](IRT_V3_EXPLORATORY.md). V1 and v2 responses remain
+frozen.
 
 ## GLM OpenAI-compatible solver calibration
 
