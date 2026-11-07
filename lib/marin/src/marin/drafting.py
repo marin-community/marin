@@ -470,10 +470,10 @@ def train_draft(config: DraftTrainingConfig) -> ResolvedModelLocator:
 
 @contextlib.contextmanager
 def draft_serving(output: str) -> Iterator[tuple[ServedModelConfig, VllmEngineConfig]]:
-    """Stage a durable draft export and yield the recorded target/tokenizer pair.
+    """Stage a saved draft and yield its model and engine configurations.
 
-    Pass the pair to Marin's existing local_inference or IrisServiceConfig APIs
-    inside an eight-H100 task. The serving export never selects the training stub.
+    Pass the pair to local_inference or IrisServiceConfig inside an eight-H100
+    task. The model configuration uses the recorded target checkpoint.
     """
     record = _read_json(prefix_join(output, "training.json"))
     config = DraftTrainingConfig(**record["config"])
