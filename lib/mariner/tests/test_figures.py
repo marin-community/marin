@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from mariner.cli import INPUT_ERROR_STATUS, PREDICTION_TOLERANCE, main
 from mariner.data import (
+    BUCKET_ID,
     FIGURES_INDEX,
     MAIN_SWARM,
     MANIFEST,
@@ -29,6 +30,8 @@ from mariner.data import (
 from mariner.figures import FIGURES, write_figures
 from mariner.figures.analysis import (
     COMMON_CRAWL,
+    DOLMA3,
+    DOLMINO,
     EPOCH_CAPS,
     FINEMATH,
     FLAN,
@@ -41,7 +44,7 @@ from mariner.figures.analysis import (
 from mariner.figures.epochs import Track
 from mariner.figures.layout import OBJECTIVE_TITLES, Method
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
-from mariner.figures.schedules import ComputePath
+from mariner.figures.schedules import SWITCH_ARM, ComputePath, switch_values
 from mariner.figures.starcoder import EPOCH_MATCHING_BPB, EPOCH_MATCHING_TABLE, epoch_matching
 from mariner.figures.surrogate import TRAINER_SEEDS
 from mariner.figures.swarm import holm
@@ -226,11 +229,21 @@ RAISING_CELLS = 20
 # and :120: "only two of these 26 removals move any task detectably".
 PRINTED_HOLM_THRESHOLD = "4.4"
 DETECTABLE_TOPIC_REMOVALS = {"Art & design (H)", "Health (H)"}
+# Its rows: "each Common Crawl topic's row holds its high-quality (H, left) and low-quality (L, right) buckets" (the
+# caption, sections/appendix_analysis.tex:108), 13 rows for "the 26 Common Crawl topic buckets" (:120), then Dolma 3's
+# four other sources and Dolmino's nine buckets, one row each; each source's rows by decreasing pool, as in the paper's
+# figure.
+QUALITY_SIDES = (" (H)", " (L)")
+REMOVAL_ROWS = {COMMON_CRAWL: 13, DOLMA3: 4, DOLMINO: 9}
 # sections/appendix_analysis.tex:217 and Figure 24's caption (:222): the Uncheatable proposal exceeds the swarm's
 # sampled range for "Common Crawl literature (H) and olmOCR PDFs HQ", and the OlmoBaseEval Easy proposal "stays within
 # every bucket's sampled range"; the faint dots are "the 280 mixtures of the Qwen3 360M/1.6B swarm".
 OUTSIDE_SUPPORT = {"uncheatable": {"Literature (H)", "olmOCR PDFs HQ"}, "obe_easy": set()}
 SWARM_FIT_RUNS = 280
+SWARM_BUCKETS = 39  # sections/experimental_setup.tex:38: "The partition draws 39 buckets"
+# The swarm's runs at zero epochs, which sit "in the shaded column at the left" with the zero-weight proposals (Figure
+# 24's caption, sections/appendix_analysis.tex:222): each bucket's removal run, and one sampled run without Wikipedia.
+ZERO_EPOCH_CELLS = 40
 # Figure 22's legends print each token budget's minimizing StarCoder epochs, by the StarCoder subset's repetition
 # relative to the target run's, from the smallest budget (1.00B tokens) to the largest (7.41B).
 PRINTED_REPLAY_EPOCHS = {
@@ -261,10 +274,10 @@ FRESH_SEED_GAIN = 0.005
 # panel B's "five paired seeds".
 SWITCH_SHARES = (0.02, 0.82)
 SWITCH_LR_STATE = "decay onset"  # starcoder_transition's name for the start of the learning-rate decay
-# The same caption: the switch is "at the target run's repetition", the StarCoder subset that starcoder_transition names
-# m100a, against single-phase runs of the schedule's average share, 0.8 x 0.02 + 0.2 x 0.82 = 0.18 ("vs tied 0.18").
+# The traced arm's label in starcoder_transition names its StarCoder subset, m100a, which the caption calls "the target
+# run's repetition", and the single-phase runs it is paired with, "tied" at the schedule's average share: with the
+# decay at DECAY_START, 0.8 x 0.02 + 0.2 x 0.82 = 0.18 ("vs tied 0.18").
 SWITCH_POOL = "m100a"
-FIRST_PHASE = 0.8
 SWITCH_BASELINE_LEAD = 64
 SWITCH_PAIRS = 8
 RAMP_PAIRS = 5
@@ -414,6 +427,33 @@ def test_holm_scales_each_p_value_by_the_hypotheses_left():
     then made non-decreasing in that order. Bonferroni's correction would give 0.12, 0.04, 0.16 and 0.02."""
     p_values = np.array([0.03, 0.01, 0.04, 0.005])
     np.testing.assert_allclose(holm(p_values), [0.06, 0.03, 0.06, 0.02], rtol=0, atol=1e-15)
+
+
+@pytest.mark.parametrize("note_column", [True, False], ids=["empty note column", "no note column"])
+def test_switch_gaps_keep_every_row_when_no_offline_row_has_a_note(note_column):
+    """Figure 26 leaves out the offline rows that carry a note, the within-run changes of other arms. A table whose
+    rows carry none, with an empty note column or none, keeps every row of the traced arm."""
+    switch = {"arm": SWITCH_ARM, "label": "P3", "p0": 0.02, "p1": 0.82, "lr_state": "decay onset", "switch_step": 100.0}
+    rows = [{"table": "eval_double_differences", **switch, "n": 8.0}]
+    rows += [
+        {
+            "table": "switch_window_offline_double_differences",
+            "arm": SWITCH_ARM,
+            "metric": metric,
+            "step": 100.0 + lag,
+            "lag": float(lag),
+            "n": 8.0,
+            "double_diff": 0.1,
+            "ci": 0.01,
+            "baseline_step": 36.0,
+        }
+        for metric in ("PL", "C4")
+        for lag in (0, 64)
+    ]
+    transition = pd.DataFrame(rows)
+    if note_column:
+        transition["note"] = None
+    assert len(switch_values(transition)["gaps"]) == 4
 
 
 def check_pipeline(values: dict[str, pd.DataFrame]) -> None:
@@ -809,7 +849,7 @@ def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
     switch = values["switch"].iloc[0]
     assert (switch["p0"], switch["p1"]) == SWITCH_SHARES
     assert SWITCH_POOL in switch["label"].split()
-    assert switch["label"].endswith(f"vs tied {FIRST_PHASE * switch['p0'] + (1 - FIRST_PHASE) * switch['p1']:.2f}")
+    assert switch["label"].endswith(f"vs tied {DECAY_START * switch['p0'] + (1 - DECAY_START) * switch['p1']:.2f}")
     assert switch["lr_state"] == SWITCH_LR_STATE
     assert switch["switch_step"] - switch["baseline_step"] == SWITCH_BASELINE_LEAD
     assert switch["pairs"] == SWITCH_PAIRS
@@ -929,8 +969,19 @@ def check_comparator_paths(values: dict[str, pd.DataFrame]) -> None:
 def check_deletion_matrix(values: dict[str, pd.DataFrame]) -> None:
     """Figure 23 and sections/appendix_analysis.tex:103-120: the OlmoBaseEval Easy mean's two detectable removals and
     their printed T, its swarm-to-repeat ratio of 12.6, Holm's first-step threshold of 4.4, the two Common Crawl topic
-    removals that move any task, and the paper figure's 24 annotated cells, 20 of them red."""
+    removals that move any task, and the paper figure's 24 annotated cells, 20 of them red. Its rows
+    (``REMOVAL_ROWS``): each topic's (H) bucket on the left and its (L) bucket on the right, by decreasing pool within
+    each source."""
     cells = values["cells"]
+    rows = values["rows"]
+    names = cells.drop_duplicates(BUCKET_ID).set_index(BUCKET_ID)["bucket"]
+    assert rows["source"].tolist() == [source for source, count in REMOVAL_ROWS.items() for _ in range(count)]
+    topic_rows = rows[rows["source"] == COMMON_CRAWL]
+    assert names[topic_rows["left"]].str.endswith(QUALITY_SIDES[0]).all()
+    assert names[topic_rows["right"]].str.endswith(QUALITY_SIDES[1]).all()
+    other_rows = rows[rows["source"] != COMMON_CRAWL]
+    assert (other_rows["left"] == other_rows["right"]).all()
+    assert rows.groupby("source", sort=False)["pool_tokens"].apply(lambda pools: pools.is_monotonic_decreasing).all()
     assert (cells.groupby("task").size() == REMOVALS).all()
     significant = cells[cells["significant"]]
     mean = significant[significant["task"] == values["summary"]["mean_task"].iloc[0]]
@@ -945,9 +996,15 @@ def check_deletion_matrix(values: dict[str, pd.DataFrame]) -> None:
 
 def check_swarm_support(values: dict[str, pd.DataFrame]) -> None:
     """sections/appendix_analysis.tex:217 and Figure 24's caption (``OUTSIDE_SUPPORT``): the buckets in which each
-    MARINER proposal lies outside the swarm's sampled positive epochs, among the 280 swarm mixtures; the buckets run in
-    order of pool size."""
-    assert values["swarm"]["run"].nunique() == SWARM_FIT_RUNS
+    MARINER proposal lies outside the swarm's sampled positive epochs, among the 280 swarm mixtures' dots at all 39
+    buckets; the swarm's zero epochs (``ZERO_EPOCH_CELLS``), which cover every bucket; and the buckets in order of pool
+    size."""
+    swarm = values["swarm"]
+    assert swarm["run"].nunique() == SWARM_FIT_RUNS
+    assert len(swarm) == SWARM_FIT_RUNS * SWARM_BUCKETS
+    zero = swarm[swarm["epochs"] == 0.0]
+    assert len(zero) == ZERO_EPOCH_CELLS
+    assert set(zero[BUCKET_ID]) == set(swarm[BUCKET_ID])
     ranges = values["ranges"]
     assert ranges["pool_tokens"].is_monotonic_decreasing
     proposals = values["proposals"]

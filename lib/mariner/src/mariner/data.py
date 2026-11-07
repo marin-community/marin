@@ -89,6 +89,7 @@ RUN_TABLE = "run"
 PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
 HELDOUT_TABLE = "heldout"
+VALIDATION_TABLE = "validation_3e18"
 # Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
 IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
@@ -508,7 +509,7 @@ def release_anchors(root: Path, swarm: str, objective: str) -> dict[str, Anchor]
 
 def trained_counts(root: Path, mixture_id: str) -> np.ndarray:
     """The block counts of a trained mixture: its ``validation_3e18`` weights times 2,048, which must be integers."""
-    name = "validation_3e18"
+    name = VALIDATION_TABLE
     table = read_table(root, name)
     rows = table[table["mixture_id"] == mixture_id]
     if rows.empty:

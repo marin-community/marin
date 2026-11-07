@@ -12,14 +12,16 @@
   removals. The tasks, their groups and the mean's signal-to-noise ratio come from ``fits_reliability``, the
   components from ``tasks``, and the buckets' names, sources and pools from ``partition``.
 - ``fig:a-support`` (Figure 24): each bucket's materialized epochs in the swarm's 280 fit runs and in MARINER's
-  proposals for both objectives, beside proportional sampling's. A proposal outside the swarm's range of positive
-  epochs for a bucket is drawn hollow; as in the paper's figure, the swarm's runs at zero epochs are not drawn.
+  proposals for both objectives, beside proportional sampling's. The swarm's zero epochs (each bucket's removal run
+  among them) and the proposals' zero weights sit in a shaded column, as in the paper's figure; positive epochs are on
+  a log axis. A proposal outside the swarm's range of positive epochs for a bucket is drawn hollow.
 """
 
 from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -43,6 +45,7 @@ from mariner.data import (
     REPEAT,
     RUN_LABEL,
     RUN_TABLE,
+    VALIDATION_TABLE,
     measured_outcomes,
     mixture_weights,
     objective_from_tasks,
@@ -64,14 +67,14 @@ from mariner.figures.analysis import (
 )
 from mariner.figures.layout import METHOD_COLORS, NEUTRAL, OBJECTIVE_TITLES, FigureData, Method, figure_legend
 
-PARTITION_COLUMNS = [BUCKET_ID, "paper_name", "pool", "quality_tier", POOL_TOKENS]
+BUCKET_COLUMNS = [BUCKET_ID, "paper_name", "pool", "quality_tier", POOL_TOKENS]
 SEPARATOR = {"color": NEUTRAL, "linewidth": 1.0}
 
 
 def partition_table(root: Path) -> pd.DataFrame:
     """The ``partition`` table with the columns these figures read: names, sources and pools."""
     table = read_table(root, PARTITION_TABLE)
-    require_columns(table, PARTITION_COLUMNS, PARTITION_TABLE)
+    require_columns(table, BUCKET_COLUMNS, PARTITION_TABLE)
     return table
 
 
@@ -85,7 +88,8 @@ RELIABILITY_COLUMNS = ["task_id", "group", "task", "subtasks", "snr"]
 HOLM_LEVEL = 0.05
 T_LIMIT = 6.0  # the colors clip |T| here
 QUALITY_SUFFIXES = {"high": " (H)", "low": " (L)"}  # how a Common Crawl topic bucket's name ends, by its quality
-HALVES = ("high", "low")  # a topic row's half-columns, left to right
+HALVES = ("high", "low")  # the qualities of a topic row's left and right half-cells
+SIDES = ("left", "right")  # the heatmap rows' columns of the buckets in their left and right half-cells
 REMOVAL_COLORMAP = "RdBu_r"  # red: the removal raises the loss
 DARK_CELL = 0.3  # a cell whose color lies this far from the center of the scale takes white text
 CELL_WIDTH = 0.3  # inches per task column
@@ -109,12 +113,21 @@ def removal_statistic(removals: np.ndarray, proportional: np.ndarray) -> np.ndar
     return (removals - proportional.mean()) / scale
 
 
-def removal_tasks(root: Path, components: tuple[str, ...]) -> tuple[list[tuple[str, str | None, list[str]]], float]:
-    """The heatmap's columns, the OlmoBaseEval Easy mean and its tasks in ``fits_reliability``'s order, each with its
-    group and components, and the mean's signal-to-noise ratio.
+class RemovalTask(NamedTuple):
+    """A column of Figure 23: a task or the OlmoBaseEval Easy mean, its group (none for the mean), and its components,
+    whose losses it averages within each run."""
 
-    Raises ``ValueError`` unless ``fits_reliability``'s components are ``components`` and each task has as many as it
-    records.
+    name: str
+    group: str | None
+    components: list[str]
+
+
+def removal_tasks(root: Path, components: tuple[str, ...]) -> tuple[list[RemovalTask], float]:
+    """The heatmap's columns, the OlmoBaseEval Easy mean and its tasks in ``fits_reliability``'s order, and the mean's
+    signal-to-noise ratio.
+
+    Raises ``ValueError`` unless ``fits_reliability``'s components are ``components``, each task has as many as it
+    records, and the table has one row of the mean.
     """
     reliability = read_table(root, RELIABILITY_TABLE)
     rows = reliability_rows(reliability, RELIABILITY_SOURCES[REMOVAL_OBJECTIVE])
@@ -123,20 +136,23 @@ def removal_tasks(root: Path, components: tuple[str, ...]) -> tuple[list[tuple[s
     if set(named["task_id"]) != set(components):
         raise ValueError(f"{RELIABILITY_TABLE}'s components are not the {REMOVAL_OBJECTIVE} tasks of the tasks table")
     task_of = named.set_index("task_id")["task"]
-    columns: list[tuple[str, str | None, list[str]]] = [(MEAN_TASK, None, list(components))]
+    columns = [RemovalTask(MEAN_TASK, None, list(components))]
     tasks = reliability_rows(reliability, RELIABILITY_COLLAPSED_SOURCE)
     for task, group, count in tasks.loc[tasks["group"].notna(), ["task", "group", "subtasks"]].itertuples(index=False):
         members = [component for component in components if task_of[component] == task]
         if len(members) != count:
             raise ValueError(f"{RELIABILITY_TABLE} gives {task} {count} components, not {len(members)}")
-        columns.append((str(task), str(group), members))
-    (mean_snr,) = rows.loc[rows["task_id"].isna(), "snr"]
-    return columns, float(mean_snr)
+        columns.append(RemovalTask(str(task), str(group), members))
+    mean = rows.loc[rows["task_id"].isna(), "snr"]
+    if len(mean) != 1:
+        raise ValueError(f"{RELIABILITY_TABLE} has {len(mean)} rows of the {REMOVAL_OBJECTIVE} mean, not one")
+    return columns, float(mean.iloc[0])
 
 
 def removal_rows(table: pd.DataFrame) -> pd.DataFrame:
-    """The heatmap's rows by source: each Common Crawl topic with its high- and low-quality buckets, by their joint
-    pool, and every other bucket alone (in both half-columns), by its pool.
+    """The heatmap's rows by source, with the buckets of their left and right half-cells: each Common Crawl topic with
+    its high-quality bucket on the left and its low-quality one on the right, by their joint pool, and every other
+    bucket alone (in both halves), by its pool.
 
     Raises ``ValueError`` unless each topic has one bucket of each quality, named as such.
     """
@@ -146,7 +162,7 @@ def removal_rows(table: pd.DataFrame) -> pd.DataFrame:
     for source in SOURCES:
         buckets = [bucket for bucket in table[BUCKET_ID] if sources[bucket] == source]
         if source != COMMON_CRAWL:
-            rows += [{"source": source, "label": names[bucket], "high": bucket, "low": bucket} for bucket in buckets]
+            rows += [{"source": source, "label": names[bucket], "left": bucket, "right": bucket} for bucket in buckets]
             continue
         topics: dict[str, dict[str, str]] = {}
         for bucket in buckets:
@@ -154,14 +170,20 @@ def removal_rows(table: pd.DataFrame) -> pd.DataFrame:
             suffix = QUALITY_SUFFIXES[quality]
             if not names[bucket].endswith(suffix):
                 raise ValueError(f"the {quality}-quality bucket {bucket} is named {names[bucket]}")
-            topics.setdefault(names[bucket].removesuffix(suffix), {})[quality] = bucket
+            pair = topics.setdefault(names[bucket].removesuffix(suffix), {})
+            if quality in pair:
+                raise ValueError(f"two {quality}-quality buckets are named {names[bucket]}")
+            pair[quality] = bucket
         if any(set(pair) != set(HALVES) for pair in topics.values()):
             raise ValueError("every Common Crawl topic needs one high- and one low-quality bucket")
-        rows += [{"source": source, "label": topic, **pair} for topic, pair in topics.items()]
+        rows += [
+            {"source": source, "label": topic, **dict(zip(SIDES, (pair[quality] for quality in HALVES), strict=True))}
+            for topic, pair in topics.items()
+        ]
     frame = pd.DataFrame(rows)
     pools = indexed[POOL_TOKENS]
-    split = frame["high"] != frame["low"]
-    frame["pool_tokens"] = pools[frame["high"]].to_numpy() + np.where(split, pools[frame["low"]].to_numpy(), 0)
+    split = frame["left"] != frame["right"]
+    frame["pool_tokens"] = pools[frame["left"]].to_numpy() + np.where(split, pools[frame["right"]].to_numpy(), 0)
     rank = frame["source"].map({source: index for index, source in enumerate(SOURCES)})
     order = np.lexsort((-frame["pool_tokens"].to_numpy(), rank.to_numpy()))
     return frame.iloc[order].reset_index(drop=True)
@@ -192,16 +214,17 @@ def deletion_values(root: Path) -> dict[str, pd.DataFrame]:
     names, sources = bucket_names(table), bucket_sources(table)
     degrees = len(proportional) - 1
     cells = []
-    for task, group, members in columns:
+    for task in columns:
         t = removal_statistic(
-            removal_losses[members].mean(axis=1).to_numpy(), proportional_losses[members].mean(axis=1).to_numpy()
+            removal_losses[task.components].mean(axis=1).to_numpy(),
+            proportional_losses[task.components].mean(axis=1).to_numpy(),
         )
         p = 2.0 * stats.t.sf(np.abs(t), degrees)
         cells += [
             {
-                "task": task,
-                "group": group,
-                "components": len(members),
+                "task": task.name,
+                "group": task.group,
+                "components": len(task.components),
                 BUCKET_ID: bucket,
                 "bucket": names[bucket],
                 "source": sources[bucket],
@@ -230,7 +253,7 @@ def draw_deletion_matrix(root: Path) -> FigureData:
     columns = cells.drop_duplicates("task").set_index("task")
     statistic = cells.set_index(["task", BUCKET_ID])
     matrix = np.array(
-        [[statistic.loc[(task, row[half]), "t"] for task in tasks for half in HALVES] for _, row in rows.iterrows()]
+        [[statistic.loc[(task, row[side]), "t"] for task in tasks for side in SIDES] for _, row in rows.iterrows()]
     )
     size = (len(tasks) * CELL_WIDTH + HEATMAP_MARGINS[0], len(rows) * CELL_HEIGHT + HEATMAP_MARGINS[1])
     figure = Figure(figsize=size, layout="constrained")
@@ -238,10 +261,10 @@ def draw_deletion_matrix(root: Path) -> FigureData:
     norm = Normalize(-T_LIMIT, T_LIMIT)
     image = axis.imshow(np.clip(matrix, -T_LIMIT, T_LIMIT), cmap=REMOVAL_COLORMAP, norm=norm, aspect="auto")
     for index, row in rows.iterrows():
-        split = row["high"] != row["low"]
+        split = row["left"] != row["right"]
         for column, task in enumerate(tasks):
-            for offset, half in enumerate(HALVES if split else HALVES[:1]):
-                cell = statistic.loc[(task, row[half])]
+            for offset, side in enumerate(SIDES if split else SIDES[:1]):
+                cell = statistic.loc[(task, row[side])]
                 if not cell["significant"]:
                     continue
                 dark = abs(float(norm(np.clip(cell["t"], -T_LIMIT, T_LIMIT))) - 0.5) > DARK_CELL
@@ -256,7 +279,7 @@ def draw_deletion_matrix(root: Path) -> FigureData:
                 )
     labels = [task if count == 1 else f"{task} ({count})" for task, count in columns["components"].items()]
     axis.set_xticks(2 * np.arange(len(tasks)) + 0.5, labels, rotation=90)
-    split_rows = rows["high"] != rows["low"]
+    split_rows = rows["left"] != rows["right"]
     row_labels = [f"{label} (H | L)" if split else label for label, split in zip(rows["label"], split_rows, strict=True)]
     axis.set_yticks(range(len(rows)), row_labels)
     axis.tick_params(length=0, labelsize=6.5)
@@ -315,7 +338,6 @@ def draw_deletion_matrix(root: Path) -> FigureData:
 # Figure 24: the epochs the swarm sampled, against MARINER's proposals
 # ---------------------------------------------------------------------------------------------------------------
 
-VALIDATION_TABLE = "validation_3e18"
 PROPOSAL_COLUMNS = ["mixture_id", "method", "proposal_objective", "variant"]  # what mixture_epochs checks of a run
 SUPPORT_MARKERS = {"uncheatable": ("D", METHOD_COLORS[Method.MARINER]), "obe_easy": ("o", "#D95F02")}
 SWARM_DOTS = {"marker": ".", "markersize": 1.6, "color": "#7D93AB", "alpha": 0.35, "linestyle": "none"}
@@ -329,8 +351,9 @@ ZERO_COLUMN_RATIO = (1, 14)  # the zero column's width against the log axis'
 
 
 def support_values(root: Path) -> dict[str, pd.DataFrame]:
-    """The swarm's positive epochs per bucket, each bucket's sampled range, MARINER's proposals' epochs with whether each
-    lies outside that range, and proportional sampling's epochs, the buckets by decreasing pool."""
+    """The swarm's epochs of each bucket in each run (zero included), each bucket's sampled range of positive epochs,
+    MARINER's proposals' epochs with whether each lies outside that range, and proportional sampling's epochs, the
+    buckets by decreasing pool."""
     table = partition_table(root)
     partition = partition_from_table(table)
     swarm = swarm_from_runs(release_runs(root, MAIN_SWARM), partition, ())
@@ -367,7 +390,7 @@ def support_values(root: Path) -> dict[str, pd.DataFrame]:
             }
             for _, row in ranges.iterrows()
         ]
-    dots = positive[order].reset_index().melt(id_vars="run", var_name=BUCKET_ID, value_name="epochs").dropna()
+    dots = epochs[order].reset_index().melt(id_vars="run", var_name=BUCKET_ID, value_name="epochs")
     return {
         "swarm": dots,
         "ranges": ranges,
@@ -377,8 +400,9 @@ def support_values(root: Path) -> dict[str, pd.DataFrame]:
 
 
 def draw_swarm_support(root: Path) -> FigureData:
-    """Figure 24: each bucket's epochs in the swarm's runs (faint dots) and in MARINER's proposals, with zero epochs in
-    a shaded column and positive epochs on a log axis; the buckets run by decreasing pool."""
+    """Figure 24: each bucket's epochs in the swarm's runs (faint dots) and in MARINER's proposals. Zero epochs, the
+    swarm's and the proposals', sit in a shaded column; positive epochs are on a log axis. The buckets run by decreasing
+    pool."""
     values = support_values(root)
     swarm, ranges, proposals = values["swarm"], values["ranges"], values["proposals"]
     proportional = float(values["proportional"]["epochs"].iloc[0])
@@ -387,7 +411,10 @@ def draw_swarm_support(root: Path) -> FigureData:
     figure = Figure(figsize=(SUPPORT_WIDTH, height), layout="constrained")
     zero_axis, axis = figure.subplots(1, 2, sharey=True, gridspec_kw={"width_ratios": ZERO_COLUMN_RATIO})
     jitter = np.random.default_rng(JITTER_SEED).uniform(-JITTER, JITTER, len(swarm))
-    axis.plot(swarm["epochs"], swarm[BUCKET_ID].map(row_of).to_numpy() + jitter, zorder=2, **SWARM_DOTS)
+    jittered = swarm[BUCKET_ID].map(row_of).to_numpy() + jitter
+    sampled_zero = (swarm["epochs"] == 0.0).to_numpy()
+    axis.plot(swarm["epochs"].to_numpy()[~sampled_zero], jittered[~sampled_zero], zorder=2, **SWARM_DOTS)
+    zero_axis.plot(np.zeros(int(sampled_zero.sum())), jittered[sampled_zero], zorder=2, **SWARM_DOTS)
     axis.axvline(proportional, color=NEUTRAL, linestyle="--", linewidth=0.8, zorder=3)
     handles = [Line2D([], [], label=f"the swarm's {swarm['run'].nunique()} mixtures", **SWARM_DOTS | {"markersize": 5})]
     for objective, (marker, color) in SUPPORT_MARKERS.items():

@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
-from mariner.data import OBJECTIVES, OUTCOME_PREFIX, read_table, require_columns
+from mariner.data import OBJECTIVES, OUTCOME_PREFIX, VALIDATION_TABLE, read_table, require_columns
 from mariner.figures.layout import (
     BAND_ALPHA,
     LOSS_LABELS,
@@ -108,11 +108,11 @@ def draw_learning_baselines(root: Path) -> FigureData:
 # ---------------------------------------------------------------------------------------------------------------
 
 PATHS_TABLE = "fits_path_predictions"
-VALIDATION_TABLE = "validation_3e18"
 MIXTURE_COLUMNS = ["start_mixture_id", "end_mixture_id", "midpoint_mixture_id"]
 CURVE_COLUMNS = ["objective", "path", "predictor", "position", "predicted_bpb"]
 PATH_BASELINES = (Method.OLMIX, Method.QUADRATIC, Method.SPLINE, Method.REGMIX, Method.KERNEL_RIDGE)  # the columns
 MIDPOINT_LAUNCH = "path_midpoints"  # the validation launch that trained each path's blend at s = 0.5
+MIDPOINT_SEED = 0  # the trainer seed of that run
 MIDPOINT = 0.5
 ENDPOINT_STYLE = {"marker": "o", "markersize": 4.5, "markerfacecolor": "white", "markeredgewidth": 1.0}
 MIDPOINT_STYLE = {"marker": "D", "markersize": 5.5, "markeredgecolor": "white"}
@@ -122,11 +122,17 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each path's predictions and mixtures, the measured runs of its two proposals at s = 0 and 1, and the run of its
     trained midpoint at s = 0.5.
 
-    Raises ``ValueError`` unless every path names one start, end and midpoint mixture and holds the predictions of
-    MARINER and of its own baseline, and unless its midpoint has one run in the midpoint launch.
+    Raises ``ValueError`` unless each objective's paths lead to the five baselines of ``PATH_BASELINES``, every path
+    names one start, end and midpoint mixture and holds the predictions of MARINER and of its own baseline, and its
+    midpoint has one run in the midpoint launch, at trainer seed 0.
     """
     predictions = read_table(root, PATHS_TABLE)
     require_columns(predictions, [*CURVE_COLUMNS, *MIXTURE_COLUMNS], PATHS_TABLE)
+    baselines = sorted(baseline.value for baseline in PATH_BASELINES)
+    for objective in OBJECTIVES:
+        held = sorted(set(predictions.loc[predictions["objective"] == objective, "path"]))
+        if held != baselines:
+            raise ValueError(f"{PATHS_TABLE}'s {objective} paths lead to {held}, not to {baselines}")
     validation = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in OBJECTIVES]
     require_columns(validation, ["mixture_id", "launch", "trainer_seed", *outcomes], VALIDATION_TABLE)
@@ -156,8 +162,11 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
                 for seed, bpb in zip(runs["trainer_seed"], runs[measured], strict=True)
             ]
         run = validation[(validation["mixture_id"] == midpoint) & (validation["launch"] == MIDPOINT_LAUNCH)]
-        if len(run) != 1:
-            raise ValueError(f"{MIDPOINT_LAUNCH} holds {len(run)} runs of {midpoint}, not one")
+        if run["trainer_seed"].tolist() != [MIDPOINT_SEED]:
+            seeds = run["trainer_seed"].tolist()
+            raise ValueError(
+                f"{MIDPOINT_LAUNCH} holds runs of {midpoint} at trainer seeds {seeds}, not one at seed {MIDPOINT_SEED}"
+            )
         midpoints.append(
             {
                 "objective": objective,

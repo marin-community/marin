@@ -283,7 +283,8 @@ RAMP_TABLE = "starcoder_ramp_designs"
 SWITCH_ARM = "p3_vs_p4_m100a"
 SWITCH_LAGS = (-256, 1_500)  # the steps after the switch that panel A shows
 SWITCH_COLUMNS = ["arm", "label", "p0", "p1", "lr_state", "switch_step", "n"]
-GAP_COLUMNS = ["arm", "metric", "step", "lag", "n", "double_diff", "ci", "baseline_step", "note"]
+GAP_COLUMNS = ["arm", "metric", "step", "lag", "n", "double_diff", "ci", "baseline_step"]
+NOTE = "note"  # starcoder_transition's column that marks an offline row as a within-run change, not a paired gap
 GAIN_COLUMNS = ["arm", "n", "pl_gain_over_october_abrupt", "pl_gain_ci_low", "pl_gain_ci_high", "ramp_worse_in"]
 METRIC_LABELS = {"PL": "programming-languages", "C4": "C4"}
 METRIC_COLORS = {"PL": "#1F6FB2", "C4": "#D9622B"}
@@ -304,7 +305,8 @@ RAMP_WINDOW = (0.685, 0.915)  # the fractions of training that Figure 27 shows, 
 
 
 def transition_rows(transition: pd.DataFrame, name: str, columns: list[str]) -> pd.DataFrame:
-    """The ``columns`` of ``starcoder_transition``'s sub-table ``name``, whose other sub-tables' columns are empty.
+    """The ``columns`` of ``starcoder_transition``'s sub-table ``name``, whose other sub-tables' columns are empty,
+    with the table's index.
 
     Raises ``ValueError`` when no row belongs to ``name`` or the sub-table leaves a column of ``columns`` empty.
     """
@@ -313,7 +315,7 @@ def transition_rows(transition: pd.DataFrame, name: str, columns: list[str]) -> 
     if rows.empty:
         raise ValueError(f"{TRANSITION_TABLE} has no sub-table {name}")
     require_columns(rows, columns, f"{TRANSITION_TABLE} {name}")
-    return rows[columns].reset_index(drop=True)
+    return rows[columns]
 
 
 def unique_row(rows: pd.DataFrame, what: str) -> pd.Series:
@@ -333,8 +335,9 @@ def switch_values(transition: pd.DataFrame) -> dict[str, pd.DataFrame]:
     settings = transition_rows(transition, "eval_double_differences", SWITCH_COLUMNS)
     switch = unique_row(settings[settings["arm"] == SWITCH_ARM], f"the switch {SWITCH_ARM}")
     gaps = transition_rows(transition, "switch_window_offline_double_differences", GAP_COLUMNS)
-    # A noted row is a within-run change of another arm, not a paired gap.
-    gaps = gaps[(gaps["arm"] == SWITCH_ARM) & gaps["lag"].between(*SWITCH_LAGS) & gaps["note"].isna()]
+    # A noted row is a within-run change of another arm, not a paired gap; a table without notes leaves every row in.
+    noted = transition[NOTE].notna() if NOTE in transition.columns else pd.Series(False, index=transition.index)
+    gaps = gaps[(gaps["arm"] == SWITCH_ARM) & gaps["lag"].between(*SWITCH_LAGS) & ~noted.loc[gaps.index]]
     shared = unique_row(gaps[["n", "baseline_step"]], f"the offline gaps of {SWITCH_ARM}")
     if not ((gaps["step"] - gaps["lag"]) == switch["switch_step"]).all():
         raise ValueError(f"the offline gaps of {SWITCH_ARM} are not placed after its switch at {switch['switch_step']}")
