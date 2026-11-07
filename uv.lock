@@ -6946,7 +6946,6 @@ deploy = [
 
 [package.dev-dependencies]
 test = [
-    { name = "marin-core" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -6972,7 +6971,6 @@ provides-extras = ["deploy"]
 
 [package.metadata.requires-dev]
 test = [
-    { name = "marin-core", editable = "lib/marin" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -7263,6 +7261,7 @@ test = [
     { name = "pytest-asyncio" },
     { name = "pytest-forked" },
     { name = "pytest-profiling" },
+    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "soundfile" },
     { name = "tensorboardx" },
@@ -7371,6 +7370,7 @@ test = [
     { name = "pytest-asyncio" },
     { name = "pytest-forked" },
     { name = "pytest-profiling", specifier = ">=1.8.1" },
+    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "soundfile" },
     { name = "tensorboardx", specifier = ">=2.6" },
