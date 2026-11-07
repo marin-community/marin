@@ -71,6 +71,9 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 `max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
 `resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.
 
+For frozen Snowball baseline, EAGLE3 and synthetic-acceptance launch configurations,
+see [Snowball speculative serving](../../../../docs/references/snowball-speculative-serving.md).
+
 For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_source: upstream`,
 an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are
 part of the model catalog and the recorded effective serving configuration. The plugin is installed
