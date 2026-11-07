@@ -9,27 +9,13 @@ Metrics come from the pinned upstream processor's agg.json, never from UI arithm
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
+
+from .replay import RequestRecord, prepare_requests, profile_records
 
 BUNDLE_MANIFEST = "agentx-source.json"
-
-
-class RequestRecord(TypedDict):
-    id: str
-    conversation_id: str
-    corpus_id: str
-    source_outer_idx: int
-    source_kind: str
-    turn: int
-    phase: str
-    start_ns: int
-    end_ns: int
-    ttft_ms: float | None
-    input_tokens: int | None
-    output_tokens: int | None
-    error: str | None
 
 
 @dataclass(frozen=True)
@@ -39,6 +25,7 @@ class ImportRun:
     # Preserve opaque upstream settings and aggregate fields across collector versions.
     run: dict[str, Any]
     requests: list[RequestRecord]
+    series: dict[str, Any] = field(default_factory=dict)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -115,42 +102,23 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             files.append(gang_path)
         profile_path = raw_dir / "aiperf_artifacts/profile_export.jsonl"
         files.append(profile_path)
-        records = [json.loads(line) for line in profile_path.read_text().splitlines() if line.strip()]
-        origin = min(r["metadata"]["request_start_ns"] for r in records)
-        requests: list[RequestRecord] = []
-        for record in records:
-            meta, metrics = record["metadata"], record["metrics"]
-            start, end = meta["request_start_ns"] - origin, meta["request_end_ns"] - origin
-            requests.append(
-                {
-                    "id": meta["x_request_id"],
-                    "conversation_id": meta["conversation_id"],
-                    "corpus_id": meta["source_trace_id"],
-                    "source_outer_idx": meta["source_outer_idx"],
-                    "source_kind": meta["source_kind"],
-                    "turn": meta["turn_index"],
-                    "phase": meta["benchmark_phase"],
-                    "start_ns": start,
-                    "end_ns": end,
-                    "ttft_ms": metrics.get("time_to_first_token", {}).get("value"),
-                    "input_tokens": metrics.get("input_sequence_length", {}).get("value"),
-                    "output_tokens": metrics.get("output_sequence_length", {}).get("value"),
-                    "error": record.get("error", {}).get("type"),
-                }
-            )
+        origin, requests = prepare_requests(lambda path=profile_path: profile_records(path))
         profiling = sum(r["phase"] == "profiling" and not r["error"] for r in requests)
         validation = receipt["validation"]
         throughput = aggregate["request_metrics"]["throughput"]
         output = throughput["per_gpu"]["output_tput_tps"]
         if (
-            len(records) != aggregate["num_requests_total"]
+            len(requests) != aggregate["num_requests_total"]
             or profiling != aggregate["num_requests_successful"]
             or profiling != validation["profiling_requests"]
             or validation["coverage"]["expected_duration_seconds"] != 3600
             or not math.isclose(output, throughput["output"]["tokens_per_second"] / physical_gpus, abs_tol=0.00001)
         ):
             raise ValueError("Request counts, full-hour coverage or physical-GPU normalization differs")
-        file_hashes = {str(p.relative_to(bundle)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+        file_hashes = {}
+        for path in files:
+            with path.open("rb") as stream:
+                file_hashes[str(path.relative_to(bundle))] = hashlib.file_digest(stream, "sha256").hexdigest()
         key = f"{source['run_id']}-{source['run_attempt']}-{aggregate['hw']}-c{aggregate['conc']}"
         dataset = manifest["workload"]["lineage"]
         run = {
@@ -171,19 +139,24 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             "dataset": dataset["dataset"],
             "dataset_revision": dataset["dataset_revision"],
             "dataset_sessions": dataset["sessions"],
-            "request_count": len(records),
+            "request_count": len(requests),
             "profiling_requests": profiling,
             "origin_ns": str(origin),
             "metrics": aggregate["request_metrics"],
+            "diagnostic_aggregates": {
+                "isl": aggregate["request_metrics"].get("tokens", {}).get("input"),
+                "osl": aggregate["request_metrics"].get("tokens", {}).get("output_actual"),
+                "kvCacheUtil": None,
+                "prefixCacheHitRate": None,
+            },
             "framework": aggregate["framework"],
             "aggregate": aggregate,
             "configuration": config,
             "manifest": manifest,
             "validation": validation,
             "source_files": file_hashes,
-            "format_version": 1,
+            "format_version": 2,
         }
-        requests.sort(key=lambda r: r["start_ns"])
         digest = hashlib.sha256(json.dumps([run, requests], sort_keys=True, allow_nan=False).encode()).hexdigest()
         run["content_sha256"] = digest
         prepared.append(ImportRun(key, digest, run, requests))

@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS knotmeter_requests (
     payload JSONB NOT NULL,
     PRIMARY KEY (import_id, ordinal)
 );
+ALTER TABLE knotmeter_imports ADD COLUMN IF NOT EXISTS series_count INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS knotmeter_series (
+    import_id TEXT NOT NULL REFERENCES knotmeter_imports(id),
+    part INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (import_id, part)
+);
 CREATE TABLE IF NOT EXISTS knotmeter_current (
     run_key TEXT PRIMARY KEY,
     import_id TEXT NOT NULL REFERENCES knotmeter_imports(id)
@@ -28,5 +35,13 @@ CREATE TABLE IF NOT EXISTS knotmeter_corpus (
     conversation_id TEXT NOT NULL,
     structure JSONB NOT NULL,
     PRIMARY KEY (dataset, revision, conversation_id)
+);
+ALTER TABLE knotmeter_corpus ADD COLUMN IF NOT EXISTS summary JSONB;
+CREATE TABLE IF NOT EXISTS knotmeter_datasets (
+    dataset TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    summary JSONB NOT NULL,
+    distributions JSONB NOT NULL,
+    PRIMARY KEY (dataset, revision)
 );
 """

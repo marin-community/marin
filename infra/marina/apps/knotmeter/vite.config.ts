@@ -1,16 +1,8 @@
-import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  base: "./",
-  plugins: [vue()],
-  resolve: {
-    alias: {
-      vue: new URL(
-        "./node_modules/vue/dist/vue.runtime.esm-bundler.js",
-        import.meta.url,
-      ).pathname,
-      "@marina": new URL("../../web", import.meta.url).pathname,
-    },
-  },
+ base: "./",
+ plugins: [tailwindcss()],
+ resolve: { alias: { "@": new URL("./src/upstream", import.meta.url).pathname, "@marina": new URL("../../web", import.meta.url).pathname } },
 });

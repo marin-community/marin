@@ -1,13 +1,23 @@
 # Knotmeter
 
-A Marina application for saved AgentX results. See the [guide](../../../../docs/references/knotmeter.md)
-for local previews, imports, data contracts and the comparison with the standalone dashboard.
+A Marina application for saved AgentX inference measurements. The [reference](../../../../docs/references/knotmeter.md)
+covers previews, imports, metric definitions and deployment prerequisites.
 
-- `src/`: Vue views and SVG charts; uses Marina's shared browser kit.
+- `src/`: React views, hash navigation and Marina CSS tokens.
+- `src/upstream/`: adapted InferenceX charts, diagnostics, timelines and corpus flamegraphs.
 - `server/`: FastAPI reads and the app-owned Postgres schema.
-- `ingest/`: separate collector-bundle adapter and Marina SQL loader.
-- `tests/`: metric, timestamp, replay and concurrent-import contracts.
+- `ingest/`: explicit collector/corpus loading and an offline server-series reducer.
+- `tests/`: import contracts and separate synthetic UI fixtures.
 
-No AgentX or InferenceX Python package is installed in Marin. No upstream dashboard
-code is copied or patched. The collector's pinned upstream processor supplies the
-aggregate metrics; the adapter retains its identities and calculations.
+The frontend and reducer adapt InferenceX revision `315128ce`; see
+[THIRD_PARTY.md](THIRD_PARTY.md) and [LICENSE.inferencex](LICENSE.inferencex).
+Node runs the build and offline reducer. Marina serves the packaged browser app;
+there is no Node serving process. AgentX and InferenceX Python packages stay
+outside Marin; this app consumes the collector's saved processor outputs.
+
+```bash
+npm --prefix infra/marina/apps/knotmeter ci
+npm --prefix infra/marina/apps/knotmeter test
+npm --prefix infra/marina/apps/knotmeter run build
+uv run --package marin-marina pytest infra/marina/apps/knotmeter/tests
+```

@@ -1,27 +1,55 @@
 # Knotmeter on Marina
 
-Knotmeter browses saved AgentX inference measurements in Marina. It provides a
-run inventory, model/hardware/date filters, throughput and first-token latency
-plots, dated history, runtime/recipe provenance, request timelines and navigation
-to retained corpus conversations. Selectors list imported data. Every measured
-load is shown, with output tokens/s per physical GPU as the default metric.
+Knotmeter browses saved AgentX inference measurements through Marina. Its React
+frontend adapts InferenceX charts, diagnostics, request timelines and corpus
+flamegraphs. Marina owns authentication, package releases, API routing and the
+application's Postgres role and schema.
 
-This is a local comparison with the [standalone dashboard draft](https://github.com/marin-community/marin/pull/10646),
-at `a411962ba9e63ceb3c27c762da08991710dbaeb8`. It does not select a production approach.
-Pricing, power, accuracy evaluation, OperatorX and server-log ingestion are outside
-this application. A hardware comparison needs the same model measured on both chips.
+## Views and controls
 
-## Preview and load
+| View | Controls and data |
+| --- | --- |
+| Performance | Model, hardware and UTC date; input/output/total throughput per physical GPU; TTFT, interactivity, E2E and normalized axes; percentiles; Horace He accounting; measured Pareto curves and Perf Ruler; numeric table; labels, legend, zoom, linear/log scales; PNG, CSV and shared selections. |
+| Runs and submissions | Search, sort, pagination, expandable configuration, physical topology and source/runtime/recipe pins; selected-run overlays; weekly and cumulative imported submissions. |
+| History | Throughput at matched P90 interactivity, dated source observations and record-improvement waterfall. Model and corpus revisions remain separate. |
+| Run diagnostics | Token distributions and in-flight estimates; rolling/cumulative latency and interactivity; per-engine KV, queues, completed requests, prefix hits, input/decode throughput and prompt-token sources. |
+| Request timeline | Warmup/profiling, conversation/worker grouping, replay and subagent hierarchy, queue waits, idle/cursor counts, zoom/pan and virtual scrolling. A source link opens the exact nested corpus request; return restores the timeline view. |
+| Cache and aggregates | Measured HBM/host/not-reused shares, corpus theoretical ceiling, profiling totals and token/cache distributions across configurations. |
+| Corpus | Dataset/model/cache/subagent summaries and distributions; searchable, sortable, paginated conversations; original timing/token structure and expandable token flamegraphs. |
 
-From the repository root, start the actual package release and disposable Postgres
-stack. Docker, Node 24, npm and the Marina Python environment are required:
+Selectors list imported data. Performance defaults to Snowball when present,
+output tokens/s/GPU versus P90 TTFT, and the latest available UTC date. Choose
+**All dates** or select runs in the inventory for comparisons. Shared performance
+links freeze the selected run identities and effective date. Labels, high contrast
+and Perf Ruler are visible controls.
+
+A single configuration is shown as a point. Curves require measured loads from the
+same submission and configuration identity. History uses the latest submission per
+UTC date and the pinned upstream Pareto/Hermite interpolation. It does not extrapolate.
+A submission is an original GitHub run/attempt; it can contain several loads
+(concurrency settings). Curves group loads within that attempt by hardware, framework,
+precision, parallelism/offload settings and model/corpus revisions. Dates use the
+original GitHub attempt’s `created_at` in UTC, never collection/import time.
+
+Interactivity is the inverse of full-response inter-token latency, in tokens/s/user.
+E2E latency includes the whole request; E2E-normalized interactivity also includes
+first-token delay per generated token. Perf Ruler shows a throughput ratio at the
+same selected horizontal-axis value.
+
+One dated observation has no historical trend. Perf Ruler compares overlapping
+measured curve ranges and keeps model/corpus revisions and precision compatible.
+
+## Start and load a local preview
+
+From the repository root, start a package release and disposable Postgres stack.
+Docker, Node 24, npm, uv and the Marina Python environment are required:
 
 ```bash
 uv run --package marin-marina marina release infra/marina/apps/knotmeter --local --json
 ```
 
-Leave this terminal running. It prints a loopback origin and an immutable revision
-URL such as `http://127.0.0.1:PORT/a/fe24b7ec-33fa-4edb-8787-2df5b9091a75/v/1/`.
+Leave this terminal running. It prints a loopback origin and a revision URL such as
+`http://127.0.0.1:PORT/a/fe24b7ec-33fa-4edb-8787-2df5b9091a75/v/1/`.
 In another terminal, load saved inputs into that explicit origin:
 
 ```bash
@@ -32,39 +60,47 @@ uv run --package marin-marina python -m infra.marina.apps.knotmeter.ingest \
   --bundle /path/to/snowball-collector \
   --bundle /path/to/hero-collector \
   --corpus /path/to/corpus.jsonl \
-  --source-attempts /path/to/source-attempts.json
+  --source-attempts /path/to/source-attempts.json \
+  --series-cache /path/to/local-series-cache
 ```
 
-`--url` is mandatory. Omitting it cannot target production accidentally. Without
-`--source-attempts`, the loader reads the original attempt through `gh api`; saved
-responses are a JSON object keyed by run ID. No benchmark runs are submitted.
+`--url` and `--series-cache` are required. Store the cache outside the app package.
+The build creates `.build/reduce-series.mjs`; loading invokes it through an isolated
+`uv run --script` parser pinned to `ijson==3.6.0`. Large raw server exports are streamed.
+The cache key covers the export, profile and reducer/parser hashes. Node is needed
+for loading, not for serving. Without `--source-attempts`, the loader reads original
+attempts with `gh api`; a saved response file is a JSON object keyed by run ID.
 
-The retained collectors measure Snowball v0.1.1
-(`open-athena/Marin-Snowball-67B-A2B-v0.1.1`) and Hero step144000
-(`marin-community/Hero-535B-step144000`): [Snowball 40633833787](https://github.com/marin-community/marin/actions/runs/40633833787)
-and [Hero 40723697736](https://github.com/marin-community/marin/actions/runs/40723697736).
-Their source measurements are 40625266678/1 and 40705471793/1, both on October 28,
-2026. Collector IDs must never replace source IDs or dates. The retained local
-corpus snapshot contains 393 upstream conversation structures for
-`semianalysisai/cc-traces-weka-062126-256k` at revision
-`8fecd2fc56694469f758f0afbbb6335ad3043740`. Keep that JSONL and saved attempt responses
-beside the collector bundles, outside the application package. The corpus snapshot
-is a separate input; it is not included in the collector bundles.
-
-On a Mac, forward the printed server port, then open the same application path:
+The preview used artifacts `agentx-results-40625266678-1` and
+`agentx-results-40705471793-1`. Download and unpack them with:
 
 ```bash
-ssh -N -L 18097:127.0.0.1:PORT devbox
+gh run download 40633833787 --repo marin-community/marin \
+  --name agentx-results-40625266678-1 --dir /path/to/snowball-collector
+gh run download 40723697736 --repo marin-community/marin \
+  --name agentx-results-40705471793-1 --dir /path/to/hero-collector
+```
+
+The retained corpus JSONL was exported from the standalone dashboard’s loaded
+original conversation structures. It must be supplied separately in the contract
+below; there is no automatic corpus download in this loader.
+
+Keep the collector bundles, corpus and cache outside the application package. The
+corpus is a separate input, absent from the collector bundles. No benchmark jobs
+are submitted by these commands.
+
+On a Mac, forward the printed server port over the existing SSH route:
+
+```bash
+ssh -N -L 18097:127.0.0.1:PORT devbox-tailnet
 # http://localhost:18097/a/fe24b7ec-33fa-4edb-8787-2df5b9091a75/
 ```
 
-Stop only this preview with Ctrl-C in its first terminal. Marina removes its
-Postgres container. Repeating the release and import commands recreates the app
-from the saved inputs; a new preview may choose another port. The standalone
-preview on port 18096 has independent containers and is unaffected.
+Ctrl-C in the first terminal stops this preview and removes its Postgres container.
+Repeat the release and import commands to recreate it. A restart may choose a new
+port; update the forward. The standalone preview on 18096 has independent containers.
 
-For an edit while the preview remains running, inspect its current revision,
-then release with the inspected value:
+For an edit without restarting, inspect the current revision and use its value:
 
 ```bash
 uv run --package marin-marina marina apps versions fe24b7ec-33fa-4edb-8787-2df5b9091a75 --url "$preview_origin" --json
@@ -72,80 +108,90 @@ uv run --package marin-marina marina release infra/marina/apps/knotmeter \
   --url "$preview_origin" --base-version CURRENT_VERSION --allow-dirty --json
 ```
 
-`--allow-dirty` permits branch source for this local comparison and omits verified
-main-branch provenance. Open the newly printed revision URL or the stable UUID URL.
+`--allow-dirty` permits local branch source and omits verified main-branch provenance.
+Open the printed revision URL or the stable UUID URL without `/v/NUMBER/`.
 
-## Import contract
+## Data contracts and definitions
 
-The adapter accepts the runner's collector-bundle layout:
+The loader accepts `agentx-source.json`, `bmk_*/agg.json` from the pinned processor,
+and matching raw `attempt.json` and `aiperf_artifacts/profile_export.jsonl` files.
+Multihost runs also require `gang.json`. An adjacent `server_metrics_export.json`
+supplies collected server series when present. It validates original attempt,
+recipe, receipts, request counts, the full-hour window and physical-GPU normalization.
+Multihost normalization counts unique devices across successful hosts.
 
-- `agentx-source.json`: original source attempt, point manifests and valid receipts.
-- `bmk_*/agg.json`: pinned upstream processor outputs, including metrics and physical GPUs.
-- Matching raw directory: `attempt.json`, `aiperf_artifacts/profile_export.jsonl`,
-  and `gang.json` for a multihost run.
+The saved bundles were produced with AgentX `1.0.12` and the isolated processor
+revision `80dff120d27fd6092210f4546b8faa5e6c9723ac`. This producer pin is separate
+from the frontend/reducer source pin below.
 
-It validates source/attempt/recipe identity, receipt request counts, the full-hour
-window and physical-GPU normalization. For multiple hosts it counts unique devices
-across successful hosts. It stores the upstream aggregate and declared settings;
-original model, runtime, workload and recipe pins remain visible.
+Aggregate throughput and latency come from `agg.json`. Throughput is divided by
+all allocated physical GPUs, across all hosts. Aggregate latencies are in seconds;
+request TTFT/TPOT values are in milliseconds. Successful profiling requests supply
+the benchmark aggregates; the timeline also retains warmup and error records.
+Warmup is capped at one output token, so its decode/interactivity can be unavailable.
 
-Throughput and latency statistics come directly from `agg.json`. Output throughput
-is output tokens/s divided by all allocated physical GPUs, including all hosts.
-TTFT and inter-token latency aggregates are in seconds; the UI labels TTFT in
-seconds and converts inter-token latency to milliseconds. Statistics refer to
-successful profiling requests. The timeline retains warmup and error records too.
-Epoch nanoseconds travel as a decimal string plus exact integer offsets, avoiding
-JavaScript's loss of precision for absolute nanoseconds. Its waiting-for-first-token
-bar includes client/transport time and is not a server-prefill measurement.
+Horace He accounting subtracts corpus-cacheable input from input/total throughput;
+output throughput is unchanged. Measured HBM/host cache shares instead use the saved
+processor's profiling counter deltas. Per-interval charts retain the upstream
+server-series calculation. These definitions can differ: the retained Snowball
+profiling share is 70.342%, while the standalone UI's chart-window calculation is
+67.697%. Corpus cacheability is a theoretical ceiling, not measured server reuse.
+In-flight views estimate tokens from request lifetimes and shared conversation
+prefixes; they are distinct from measured KV gauges. Missing measurements remain
+unavailable, including percentile markers for absent series.
 
-A run key is the original run, attempt, hardware profile and concurrency. A content
-hash covers the adapted payload, requests and source-file hashes. Loading stages
-request batches, then atomically selects the complete import. An unchanged import
-is a no-op. Competing writers cannot overwrite a newer selection silently. Old
-selected data is removed after replacement; failed staging rows remain for inspection.
+Epoch nanoseconds travel as a decimal string plus exact integer offsets. Requests
+retain worker, replay, ancestry, credit/start/ack/end timing and original outer/inner
+corpus indices. The timeline's waiting-for-first-token bar includes transport/client
+time; it is not a server-prefill measurement. Source timing in the corpus is separate
+from measured replay timing.
 
-The corpus JSONL contract is one object per original conversation:
+A run key combines original run, attempt, hardware profile and concurrency. Content
+hashes cover metadata, requests and source files. Loading stages requests and server
+series, then atomically selects a complete import. Reads of a run's metadata,
+requests and series use one database snapshot. Unchanged imports are no-ops;
+competing loaders cannot silently overwrite a newer selection. Failed staging data
+remain available for inspection.
+
+The corpus JSONL contains one object per original conversation:
 
 ```json
-{"dataset":"owner/dataset","revision":"commit","conversation_id":"original-id","structure":{"nodes":[],"totals":{}}}
+{"dataset":"owner/dataset","revision":"commit","conversation_id":"original-id","structure":{"blockSize":64,"nodes":[],"totals":{"in":0,"out":0,"cached":0,"uncached":0,"numTurns":0,"numSubagentGroups":0}}}
 ```
 
-`structure` is the upstream conversation structure: main turns and subagent groups,
-with original model names, source indices, timing and token counts. A replay's
-`source_trace_id` selects the conversation; `source_outer_idx` highlights its source
-group. Corpus timing is distinct from measured replay timing. This retained corpus
-contains token/timing traces, not generated answer transcripts. Missing corpus data
-produces an explicit unavailable response. Dataset revisions are immutable identities;
-repeat corpus loads insert only missing records.
+`structure` retains upstream main turns and subagent groups, model names, source
+indices, timing and token counts. This is a token/timing corpus, not answer text.
+Repeated loads preserve immutable structures and refresh derived summaries.
+Load the full dataset revision for its summary and distributions. Missing conversations
+return an unavailable response.
 
-Raw profiles, server-metric dumps, corpus JSONL and GitHub responses stay outside the
-release archive. This comparison stores compact request records and 393 conversation
-structures in Postgres. A larger corpus or high-volume campaign should move bulk
-payloads to versioned object storage and retain a small serving catalog. That requires
-an explicit Marina data-prefix grant; no such infrastructure change is included here.
+## Retained preview inputs and ownership
 
-## Comparison and later hosting
+The authentic inputs are [Snowball collector 40633833787](https://github.com/marin-community/marin/actions/runs/40633833787)
+and [Hero collector 40723697736](https://github.com/marin-community/marin/actions/runs/40723697736).
+Their original measurements are 40625266678/1 and 40705471793/1 on October 28, 2026.
+Snowball v0.1.1 uses 8 H100s; Hero step144000 uses 16 GB200s across four hosts. These
+are different models. Hero is provisional: prefix caching disabled, max batched
+tokens 512 and max sequences 64. The preview labels those settings.
 
-The standalone implementation reuses the broad InferenceX UI, its Node server,
-schema and ETL. Its patch touches 40 upstream files, including tests, model catalogs,
-provenance and correctness fixes. It already supports richer trace/cache exploration.
-Updating it requires rebasing those changes and validating the upstream stack.
+The retained corpus has 393 conversations from
+`semianalysisai/cc-traces-weka-062126-256k` at
+`8fecd2fc56694469f758f0afbbb6335ad3043740`. Each model currently has one measured
+load/date. Separate synthetic browser fixtures exercise larger histories, sweeps,
+rulers and hierarchy; they are never imported as authentic preview results.
 
-The Marina implementation owns a smaller Vue/SVG interface, Python read API, schema
-and collector adapter. It reuses Marina's authentication, package lifecycle, SQL
-loading, role-scoped database and browser kit. There is no upstream UI patch, copied
-Next.js component tree, dedicated Node service or standalone image build. It also
-owns its charts and timeline interactions; upstream UI improvements will not arrive
-automatically. Current production Marina dependencies are reused without additions.
-The app has its own frontend development lockfile.
+Knotmeter adapts InferenceX revision `315128ce4e49c8a1ec1aa67eafa8f2de26e4c1f9`;
+source and GPL v3 attribution ship with the browser package. See the app's
+`THIRD_PARTY.md`. It owns the adapted components, API contracts and ingestion.
+Upstream UI improvements require deliberate integration. The app adds local React,
+D3, Radix controls, Tailwind and build/test dependencies, with its own lockfile.
+There is no Next.js runtime, Node service, shared Python dependency change or upstream
+patch overlay. The [standalone draft](https://github.com/marin-community/marin/pull/10646)
+retains the upstream application, database/ETL and its 40-file patch overlay.
 
-One measured concurrency setting and one date per model can verify navigation and metrics. They cannot show
-a throughput elbow or performance trend. Hero remains the provisional October 28 run
-with prefix caching disabled, max batched tokens 512 and max sequences 64.
-
-If Marina is selected, release the reviewed package, explicitly load the corpus and
-measurements, and verify production authentication and source/data parity. A named
-host needs operator registration and any approved DNS/runtime changes. The runner
-owner must connect authenticated loading before enabling weekly automation. Existing
-AgentX and processor execution can remain pinned `uvx` commands in the collector;
-this loader consumes their saved outputs. No scheduler or runner change is included.
+Production use still requires a reviewed Marina release, authenticated loading,
+production authentication checks and data parity verification. A named host needs
+operator registration and approved DNS/runtime work. The runner owner must connect
+loading before weekly automation is enabled. This app does not activate scheduled
+workflows or change cloud resources. Pricing, power, accuracy suites, OperatorX
+and new server-log ingestion remain outside scope.

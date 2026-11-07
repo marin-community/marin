@@ -12,7 +12,8 @@ from sqlalchemy import text
 from starlette.testclient import TestClient
 
 from infra.marina.apps.knotmeter.ingest.adapter import prepare_bundle
-from infra.marina.apps.knotmeter.ingest.load import load_run
+from infra.marina.apps.knotmeter.ingest.load import load_corpus, load_run
+from infra.marina.apps.knotmeter.ingest.replay import prepare_requests
 from infra.marina.apps.knotmeter.server.app import create_api, migrate
 
 
@@ -46,6 +47,7 @@ def test_multihost_import_rejects_per_host_gpu_normalization(bundle):
 def test_import_replay_and_concurrent_selection_preserve_complete_serving_run(bundle):
     path, actual = bundle()
     (original,) = prepare_bundle(path, actual)
+    original = replace(original, series={"kvCacheUsage": [{"t": i, "value": 0.25} for i in range(10000)]})
     with disposable_database() as url:
         services = SourceServices(name="knotmeter", data_url="", database=UrlDatabase(url))
         engine = services.engine()
@@ -63,9 +65,11 @@ def test_import_replay_and_concurrent_selection_preserve_complete_serving_run(bu
         assert load_run(original, query)["changed"]
         with TestClient(create_api(services).app) as client:
             before = client.get(f"/runs/{original.key}/requests").json()
+            assert client.get(f"/runs/{original.key}/series").json() == original.series
             assert [r["start_ns"] for r in before["requests"]] == [0, 51, 12800]
             assert not load_run(original, query)["changed"]
             assert client.get(f"/runs/{original.key}/requests").json() == before
+            assert client.get(f"/runs/{original.key}/series").json() == original.series
             assert query("SELECT count(*) AS count FROM knotmeter_requests", {})["rows"][0]["count"] == 3
             winner = replace(original, digest="winner", run=original.run | {"runtime": "winning-runtime"})
             loser = replace(original, digest="loser", run=original.run | {"runtime": "stale-runtime"})
@@ -79,5 +83,82 @@ def test_import_replay_and_concurrent_selection_preserve_complete_serving_run(bu
                 load_run(loser, racing_query)
             assert client.get(f"/runs/{original.key}").json()["runtime"] == "winning-runtime"
             assert client.get(f"/runs/{original.key}/requests").json() == before
+            snapshot = client.get(f"/runs/{original.key}/data").json()
+            assert snapshot["run"]["runtime"] == "winning-runtime"
+            assert snapshot["requests"] == before["requests"]
+            assert snapshot["series"] == original.series
             assert not load_run(winner, query)["changed"]
+        engine.dispose()
+
+
+def test_replay_ancestry_distinguishes_repeated_sources_and_preserves_queue_time(bundle):
+    path, _ = bundle()
+    records = [
+        json.loads(line) for line in (path / "point/aiperf_artifacts/profile_export.jsonl").read_text().splitlines()
+    ]
+    # Parent links must join a child to its replay even when the child appears first.
+    records[0]["metadata"].update(x_correlation_id="child", parent_correlation_id="parent", source_inner_idx=3)
+    records[1]["metadata"].update(x_correlation_id="parent", root_correlation_id="root-a")
+    records[2]["metadata"].update(x_correlation_id="repeated-source", root_correlation_id="root-b", worker_id="worker-2")
+    records[1]["metadata"]["credit_issued_ns"] = records[1]["metadata"]["request_start_ns"] - 19
+    records[0]["metadata"]["request_ack_ns"] = records[0]["metadata"]["request_start_ns"] + 7
+    records[0]["metadata"]["was_cancelled"] = True
+    _, requests = prepare_requests(lambda: records)
+    parent, repeated, child = requests
+    assert parent["replay_index"] == child["replay_index"]
+    assert repeated["replay_index"] != parent["replay_index"]
+    assert parent["credit_ns"] == 0
+    assert parent["start_ns"] == 19
+    assert child["ack_ns"] is not None
+    assert child["ack_ns"] - child["start_ns"] == 7
+    assert child["source_inner_idx"] == 3
+    assert child["cancelled"]
+
+
+def test_corpus_summary_counts_nested_requests_and_keeps_revision_immutable(tmp_path):
+    turn = {"kind": "turn", "turnIndex": 0, "in": 100, "out": 10, "cached": 50, "uncached": 50, "model": "a"}
+    child = turn | {"in": 40, "out": 4, "cached": 20, "uncached": 20, "model": "b"}
+    structure = {
+        "nodes": [turn, {"kind": "subagent", "children": [child, child]}],
+        "totals": {"in": 180, "out": 18, "cached": 90, "uncached": 90, "numTurns": 1, "numSubagentGroups": 1},
+    }
+    path = tmp_path / "corpus.jsonl"
+    rows = [
+        {"dataset": "example/corpus", "revision": "r1", "conversation_id": cid, "structure": structure}
+        for cid in ["one", "two"]
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows))
+    with disposable_database() as url:
+        services = SourceServices(name="knotmeter", data_url="", database=UrlDatabase(url))
+        engine = services.engine()
+        with engine.begin() as connection:
+            migrate(connection)
+
+        def query(sql, parameters):
+            with engine.begin() as connection:
+                result = connection.execute(text(sql), parameters)
+                return {
+                    "rows": [dict(r) for r in result.mappings()] if result.returns_rows else [],
+                    "row_count": result.rowcount,
+                }
+
+        load_corpus(path, query)
+        with TestClient(create_api(services).app) as client:
+            before = client.get("/datasets").json()
+            summary = before[0]["summary"]
+            assert summary["requests"] == 6
+            assert summary["models"] == {"a": 2, "b": 4}
+            assert summary["in"] == 360
+            inputs = before[0]["distributions"]["Input tokens per request"]
+            assert inputs["stats"]["mean"] == 60
+            assert inputs["stats"]["median"] == 40
+            assert sum(bucket["count"] for bucket in inputs["bins"]) == 6
+            load_corpus(path, query)
+            assert client.get("/datasets").json() == before
+            assert len(client.get("/corpus?dataset=example/corpus&revision=r1").json()) == 2
+            rows[0]["structure"] = structure | {"totals": structure["totals"] | {"in": 999}}
+            path.write_text("\n".join(json.dumps(row) for row in rows))
+            with pytest.raises(ValueError, match="immutable"):
+                load_corpus(path, query)
+            assert client.get("/datasets").json() == before
         engine.dispose()
