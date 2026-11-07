@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 from finestore.reader import ReadView
-from marin.evaluation.curated import CuratedExecutor
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import EvalRef, JudgeIdentity, RunStatus
@@ -57,7 +57,7 @@ def load_policy_finalization(path: Path) -> PolicyFinalization:
 class PolicyJudge:
     """Run curated evaluations with the policy answer-equivalence judge."""
 
-    source: CuratedExecutor
+    source: DatasetEvaluator
     model: ModelConfig
     accelerator: AcceleratorChoice
     priority: int
@@ -140,7 +140,7 @@ def policy_executor(
     """Bind each policy benchmark to its own grading configuration."""
     if reference.name in POLICY_JUDGED_BENCHMARKS:
         assert judge_accelerator is not None
-        if not isinstance(source, CuratedExecutor):
+        if not isinstance(source, DatasetEvaluator):
             raise TypeError("policy answer-equivalence grading requires curated tasks")
         assert config.judge.revision is not None
         source = replace(

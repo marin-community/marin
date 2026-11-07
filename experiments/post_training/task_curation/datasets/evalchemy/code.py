@@ -140,7 +140,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
     ]
 
 
-def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+def fewshot_sources() -> list[RlDataSource[EvalDataset]]:
     human = next(source for source in sources() if source.name == "evalchemy-humaneval")
     dataset = human.config
     assert dataset is not None and isinstance(dataset.recipe.source, HfSource)

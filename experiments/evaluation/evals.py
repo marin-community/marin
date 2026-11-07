@@ -21,7 +21,7 @@ from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
 
 from experiments.evaluation.curated import CuratedDefinition
-from experiments.post_training.task_curation.datasets.evalchemy.checkpoint import sources as checkpoint_sources
+from experiments.post_training.task_curation.sources import evaluation_sources
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,23 @@ _CURATED_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 EVALS: dict[str, EvaluationDefinition] = {
     path.stem: CuratedDefinition.from_file(path) for path in sorted(_CURATED_CONFIG_DIR.glob("*.yaml"))
 }
-_CHECKPOINT_BENCHMARKS = {
+# Alternate checkpoint menus reuse their base selection and generation budget.
+for base, shots in (
+    ("arc-challenge", 10),
+    ("arc-easy", 10),
+    ("boolq", 10),
+    ("piqa", 10),
+    ("winogrande", 0),
+    ("hellaswag", 0),
+    ("truthfulqa", 6),
+    ("mmlu", 0),
+):
+    name = f"{base}-{shots}shot"
+    definition = EVALS[base]
+    assert isinstance(definition, CuratedDefinition)
+    EVALS[name] = definition.model_copy(update={"name": name, "num_fewshot": shots})
+
+_ADDITIONAL_BENCHMARKS = {
     "commonsense_qa": "commonsense-qa-10shot",
     "copa": "copa",
     "wsc273": "wsc273",
@@ -198,13 +214,13 @@ _CHECKPOINT_BENCHMARKS = {
     "drop-0shot": "drop-0shot",
     "humaneval-10shot": "humaneval-10shot",
 }
-_CHECKPOINT_SOURCES = checkpoint_sources()
-for benchmark, name in _CHECKPOINT_BENCHMARKS.items():
+_EVALUATION_SOURCES = evaluation_sources()
+for benchmark, name in _ADDITIONAL_BENCHMARKS.items():
     EVALS[name] = CuratedDefinition(
         name=name,
         sources=tuple(
             source.name
-            for source in _CHECKPOINT_SOURCES
+            for source in _EVALUATION_SOURCES.values()
             if source.config is not None and source.config.protocol.benchmark == benchmark
         ),
     )

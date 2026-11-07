@@ -88,7 +88,7 @@ def runtime_config(
 
 
 @dataclass(frozen=True)
-class CuratedExecutor:
+class DatasetEvaluator:
     """Execute raw attempts; summary computation belongs to Evaldash."""
 
     datasets: tuple[str, ...]

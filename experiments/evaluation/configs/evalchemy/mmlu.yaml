@@ -1,4 +1,5 @@
 name: mmlu
+num_fewshot: 5
 sources:
 - evalchemy-mmlu-abstract_algebra
 - evalchemy-mmlu-anatomy

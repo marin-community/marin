@@ -1,4 +1,5 @@
 name: piqa
+num_fewshot: 0
 sources:
 - evalchemy-piqa
 max_tokens: 256

@@ -35,7 +35,7 @@ AMC23_SHA256 = "02ae54425741562778916b5fa8f6ff07749689cfcd7a53e65e1d88a89e5065f9
 MATH_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
 
 
-def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+def fewshot_sources() -> list[RlDataSource[EvalDataset]]:
     result = [
         fewshot_generation_source(
             "gsm8k_cot",

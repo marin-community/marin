@@ -10,8 +10,8 @@ from experiments.post_training.task_curation.datasets import (
     unconverted,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
-from experiments.post_training.task_curation.datasets.evalchemy import checkpoint as eval_checkpoint
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
+from experiments.post_training.task_curation.datasets.evalchemy import commonsense as eval_commonsense
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
 from experiments.post_training.task_curation.datasets.evalchemy import instructions as eval_instructions
@@ -49,15 +49,19 @@ def evaluation_sources() -> dict[str, RlDataSource[EvalDataset]]:
     """Canonical evaluation declarations, keyed by curation invocation name."""
     sources = [
         *eval_code.sources(),
-        *eval_checkpoint.sources(),
+        *eval_code.fewshot_sources(),
+        *eval_commonsense.sources(),
         *eval_harness.sources(),
+        *eval_harness.short_answer_sources(),
         *eval_instructions.sources(),
         *eval_harness.chat_sources(
             [source for source in eval_instructions.sources() if source.name == "evalchemy-ifeval"]
         ),
         *eval_jee.sources(),
         *eval_math.sources(),
+        *eval_math.fewshot_sources(),
         *eval_reasoning.sources(),
+        *eval_reasoning.likelihood_sources(),
         *eval_mmlu.sources(),
         *eval_financebench.sources(),
         *eval_simpleqa.sources(),

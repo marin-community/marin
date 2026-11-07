@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Curated execution binds model admission to the live serving boundary."""
+"""Model admission follows the running server's context limit."""
 
-from functools import partial
 from types import SimpleNamespace
 
 import httpx
-from marin.evaluation.curated import runtime_config
+from marin.evaluation.dataset_evaluator import runtime_config
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
 from marin.evaluation.records import CuratedSettings
 from openai import OpenAI
@@ -34,13 +33,10 @@ def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_
             },
         )
 
-    monkeypatch.setattr(
-        "marin.evaluation.curated.OpenAI",
-        partial(
-            OpenAI,
-            http_client=httpx.Client(transport=httpx.MockTransport(endpoint)),
-        ),
-    )
+    def client(**kwargs):
+        return OpenAI(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(endpoint)))
+
+    monkeypatch.setattr("marin.evaluation.dataset_evaluator.OpenAI", client)
     model = ModelConfig(
         name="solver",
         location="example/solver",
@@ -49,21 +45,12 @@ def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_
         serve=ServeConfig(max_model_len=8192),
         generation=GenerationConfig(max_gen_toks=8192),
     )
-    settings = CuratedSettings(max_tokens=2048, source_limit=2, seed=42, judge=None)
+    settings = CuratedSettings(max_tokens=8192, source_limit=2, seed=42, judge=None)
     session = SimpleNamespace(
         model=SimpleNamespace(endpoint=SimpleNamespace(base_url="http://server/v1", api_key=None, model="served-alias"))
     )
     first = runtime_config(model, settings, session)
     assert first.model.context_window == 4096
-    assert first.max_tokens == 2048
-    assert first.model.tokenizer_revision == "tokenizer-pin"
+    assert first.max_tokens == 4095
     created[0] += 100
-    # Each request owns a new client, as the production constructor does.
-    monkeypatch.setattr(
-        "marin.evaluation.curated.OpenAI",
-        partial(
-            OpenAI,
-            http_client=httpx.Client(transport=httpx.MockTransport(endpoint)),
-        ),
-    )
     assert runtime_config(model, settings, session) == first

@@ -86,6 +86,20 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
+Use the same source with `num_fewshot` to select an already-declared shot variant:
+
+```yaml
+name: arc-easy-10shot
+sources: [evalchemy-arc_easy]
+num_fewshot: 10
+max_tokens: 256
+```
+
+The launcher resolves the shot count to a distinct curated corpus with compiled
+demonstrations. Unsupported counts fail before launch. Likelihood evaluations
+score supplied continuations and do not use the generation `max_tokens` budget.
+Built-in shot variants inherit their base menu's remaining settings.
+
 Judge selections record a `JudgeIdentity` in `judge`, a credential-free
 `judge_endpoint`, and ordered `judge_api_key` secret references. The standard
 FinanceBench and OlympiadBench definitions use Together and record its model alias
