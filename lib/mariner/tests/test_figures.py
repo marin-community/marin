@@ -242,6 +242,9 @@ REPLAY_EPOCH_FALLS = [(0.25, 0)]
 CURRICULA_BLOCKS = 28
 BLOCK_PAIRS = 5
 CONFIRMATION_PAIRS = 8
+# The confirmed cell's mean gain and 95% paired-t interval over its eight pairs (1e-3 BPB), which Figure 25C's star
+# plots: a normal quantile or a population standard deviation would give a narrower interval.
+CONFIRMATION_INTERVAL = ("6.101", "5.269", "6.933")
 # sections/appendix_analysis.tex:302: "A cell went to a fresh-seed test only if its first 23 schedules gave a
 # single-seed gain of at least 0.005 BPB."
 FRESH_SEED_GAIN = 0.005
@@ -250,6 +253,10 @@ FRESH_SEED_GAIN = 0.005
 # panel B's "five paired seeds".
 SWITCH_SHARES = (0.02, 0.82)
 SWITCH_LR_STATE = "decay onset"  # starcoder_transition's name for the start of the learning-rate decay
+# The same caption: the switch is "at the target run's repetition", the StarCoder subset that starcoder_transition names
+# m100a, against single-phase runs of the schedule's average share, 0.8 x 0.02 + 0.2 x 0.82 = 0.18 ("vs tied 0.18").
+SWITCH_POOL = "m100a"
+FIRST_PHASE = 0.8
 SWITCH_BASELINE_LEAD = 64
 SWITCH_PAIRS = 8
 RAMP_PAIRS = 5
@@ -263,6 +270,8 @@ WIDE_RAMPS = 2
 BLOCK_SEQUENCES = 2048
 BLOCK_STEPS = 16
 DECAY_START = 0.8
+# sections/appendix_analysis.tex:362: the selected schedule "raises StarCoder from 0 to 0.28 when the decay begins".
+PRINTED_DECAY_SHARE = "0.28"
 
 
 def epoch_label(value: float) -> str:
@@ -721,7 +730,9 @@ def check_curricula_sweeps(values: dict[str, pd.DataFrame]) -> None:
     assert cells.set_index("cell_id")["train_tokens"].idxmax() == qualified
     confirmation = values["confirmation"].iloc[0]
     assert confirmation["cell_id"] == qualified
-    assert confirmation["pairs"] == confirmation["positive_pairs"] == CONFIRMATION_PAIRS
+    assert confirmation["pairs"] == confirmation["seeds"] == confirmation["positive_pairs"] == CONFIRMATION_PAIRS
+    interval = (confirmation[column] * 1e3 for column in ("gain_bpb", "low_bpb", "high_bpb"))
+    assert tuple(f"{value:.3f}" for value in interval) == CONFIRMATION_INTERVAL
 
 
 def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
@@ -732,6 +743,8 @@ def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
     seed"."""
     switch = values["switch"].iloc[0]
     assert (switch["p0"], switch["p1"]) == SWITCH_SHARES
+    assert SWITCH_POOL in switch["label"].split()
+    assert switch["label"].endswith(f"vs tied {FIRST_PHASE * switch['p0'] + (1 - FIRST_PHASE) * switch['p1']:.2f}")
     assert switch["lr_state"] == SWITCH_LR_STATE
     assert switch["switch_step"] - switch["baseline_step"] == SWITCH_BASELINE_LEAD
     assert switch["pairs"] == SWITCH_PAIRS
@@ -753,15 +766,27 @@ def check_ramp_schedules(values: dict[str, pd.DataFrame]) -> None:
     some of it from just after the start of the learning-rate decay to just before it"; each line gives "the StarCoder
     share of each mixture block of 2,048 sequences (16 training steps), as the data loader allocated it", a whole number
     of sequences per block, which the design's weights are not; "All ramps are centred on the start of the decay, 80%
-    of the way through training." At every data seed each ramp's StarCoder total equals the abrupt switch's, and a
-    wider ramp draws more of it before the decay. Each plotted ramp runs from half its width before the decay to half
-    its width after it."""
+    of the way through training." Every plotted schedule puts the same number of StarCoder sequences in its full
+    blocks and rises from 0 to the 0.28 of sections/appendix_analysis.tex:362. At every data seed each ramp's StarCoder
+    total equals the abrupt switch's, and a wider ramp draws more of it before the decay. Each plotted ramp runs from
+    half its width before the decay to half its width after it."""
     training = values["training"].iloc[0]
     decay = training["decay_step"]
     assert decay / training["total_steps"] == DECAY_START
     assert training["steps_per_block"] == BLOCK_STEPS
-    sequences = values["schedules"]["share"].to_numpy() * BLOCK_SEQUENCES
+    schedules = values["schedules"]
+    sequences = schedules["share"].to_numpy() * BLOCK_SEQUENCES
     assert np.array_equal(sequences, np.round(sequences))
+    # The plotted form of the totals claim: every schedule puts as many StarCoder sequences in its full blocks.
+    full_blocks = set()
+    for _, rows in schedules.groupby("arm"):
+        rows = rows.sort_values("stage")
+        shares = rows["share"].to_numpy()
+        assert shares[0] == 0.0
+        assert f"{shares[-1]:.2f}" == PRINTED_DECAY_SHARE
+        blocks = (rows["end_step"] - rows["start_step"]).to_numpy() // training["steps_per_block"]
+        full_blocks.add(float(np.sum(blocks * shares * BLOCK_SEQUENCES)))
+    assert len(full_blocks) == 1
     for _, rows in values["totals"].groupby("data_seed"):
         abrupt = rows["ramp_width"].isna()
         assert abrupt.sum() == 1

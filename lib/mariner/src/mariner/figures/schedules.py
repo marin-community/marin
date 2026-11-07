@@ -4,9 +4,10 @@
 """Redraws of the paper's figures on two-phase schedules (Appendix E): Figures 25 (``fig:a-curricula-sweeps``), 26
 (``fig:a-switch-smoothing``) and 27 (``fig:a-ramp-schedules``).
 
-A two-phase schedule trains a 210M-parameter model on one Nemotron-CC/StarCoder mixture for the first 80% of training
-and on another for the learning-rate decay. A gain is the programming-languages BPB of a selected single-phase mixture
-minus that of a selected two-phase schedule, so a positive gain favors the schedule.
+A two-phase schedule trains a model on one Nemotron-CC/StarCoder mixture for the first 80% of training and on another
+for the learning-rate decay. The model has 210M parameters, except along two of Figure 25C's paths, which add
+parameters up to 1.2B. A gain is the programming-languages BPB of a selected single-phase mixture minus that of a
+selected two-phase schedule, so a positive gain favors the schedule.
 
 - ``fig:a-curricula-sweeps`` (Figure 25): the gains measured on five fresh paired seeds in each of the 28 blocks of
   token budget and StarCoder pool (``starcoder_curricula``), with their 95% paired-t intervals and whether they stay
@@ -146,8 +147,9 @@ def path_cells(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def confirmation_gain(root: Path, cells: pd.DataFrame) -> pd.DataFrame:
-    """The confirmed cell's measured gain: the mean over its fresh pairs with a 95% paired-t interval, and how many
-    pairs favor the two-phase schedule. Raises ``ValueError`` unless the pairs come from one cell of ``cells``."""
+    """The confirmed cell's measured gain: the mean over its fresh pairs with a 95% paired-t interval, the number of
+    distinct pair seeds, and how many pairs favor the two-phase schedule. Raises ``ValueError`` unless the pairs come
+    from one cell of ``cells``."""
     pairs = read_table(root, CONFIRMATION_TABLE)
     require_columns(pairs, CONFIRMATION_COLUMNS, CONFIRMATION_TABLE)
     confirmed = pairs["cell_id"].unique()
@@ -160,6 +162,7 @@ def confirmation_gain(root: Path, cells: pd.DataFrame) -> pd.DataFrame:
         "cell_id": confirmed[0],
         "compute_flops": compute,
         "pairs": len(gains),
+        "seeds": int(pairs["pair_seed"].nunique()),
         "positive_pairs": int((gains > 0).sum()),
         "gain_bpb": mean,
         "low_bpb": mean - half,
@@ -279,8 +282,8 @@ RAMP_TABLE = "starcoder_ramp_designs"
 # single-phase runs of the average mixture (0.18 StarCoder).
 SWITCH_ARM = "p3_vs_p4_m100a"
 SWITCH_LAGS = (-256, 1_500)  # the steps after the switch that panel A shows
-SWITCH_COLUMNS = ["arm", "p0", "p1", "lr_state", "switch_step", "n"]
-GAP_COLUMNS = ["arm", "metric", "step", "lag", "n", "double_diff", "ci", "baseline_step"]
+SWITCH_COLUMNS = ["arm", "label", "p0", "p1", "lr_state", "switch_step", "n"]
+GAP_COLUMNS = ["arm", "metric", "step", "lag", "n", "double_diff", "ci", "baseline_step", "note"]
 GAIN_COLUMNS = ["arm", "n", "pl_gain_over_october_abrupt", "pl_gain_ci_low", "pl_gain_ci_high", "ramp_worse_in"]
 METRIC_LABELS = {"PL": "programming-languages", "C4": "C4"}
 METRIC_COLORS = {"PL": "#1F6FB2", "C4": "#D9622B"}
@@ -330,12 +333,14 @@ def switch_values(transition: pd.DataFrame) -> dict[str, pd.DataFrame]:
     settings = transition_rows(transition, "eval_double_differences", SWITCH_COLUMNS)
     switch = unique_row(settings[settings["arm"] == SWITCH_ARM], f"the switch {SWITCH_ARM}")
     gaps = transition_rows(transition, "switch_window_offline_double_differences", GAP_COLUMNS)
-    gaps = gaps[(gaps["arm"] == SWITCH_ARM) & gaps["lag"].between(*SWITCH_LAGS)]
+    # A noted row is a within-run change of another arm, not a paired gap.
+    gaps = gaps[(gaps["arm"] == SWITCH_ARM) & gaps["lag"].between(*SWITCH_LAGS) & gaps["note"].isna()]
     shared = unique_row(gaps[["n", "baseline_step"]], f"the offline gaps of {SWITCH_ARM}")
     if not ((gaps["step"] - gaps["lag"]) == switch["switch_step"]).all():
         raise ValueError(f"the offline gaps of {SWITCH_ARM} are not placed after its switch at {switch['switch_step']}")
     row = {
         "arm": SWITCH_ARM,
+        "label": switch["label"],
         "p0": switch["p0"],
         "p1": switch["p1"],
         "lr_state": switch["lr_state"],
