@@ -56,13 +56,19 @@ from experiments.post_training.task_curation.config import (
     PipelineOptions,
     RecipeSettings,
 )
-from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, MANIFEST_FILENAME
 from experiments.post_training.task_curation.embedding import (
     INPUTS_VERSION,
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
-from experiments.post_training.task_curation.inventory import SelectionRecipe, task_selection_step
+from experiments.post_training.task_curation.inventory import (
+    SELECTION_INPUT_PREFIX,
+    SelectionRecipe,
+    TestPanelRecipe,
+    task_selection_step,
+    test_panel_step,
+)
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
@@ -211,7 +217,7 @@ def _quick_conversion(
 def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], report_path: str, population: str) -> None:
     sources = []
     for identifier, root in roots.items():
-        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
+        manifest = json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
         row = {
             "source_id": identifier,
             "root": root,
@@ -245,7 +251,7 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
     roots = {}
     for row in document["sources"]:
-        manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
+        manifest = json.loads((StoragePath(row["root"]) / MANIFEST_FILENAME).read_text())
         if canonical_sha256(manifest) != row["source_key"]:
             raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
         if row["source_id"] in roots:
@@ -254,17 +260,19 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     return _CorpusSources(roots, inventory, document["population"])
 
 
-def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_dir: Path | None, do_run: bool) -> None:
-    if corpus.population != "admitted":
-        raise click.UsageError("Task selection requires an admitted corpus from FULL curation")
-    curated = {
-        source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
-        for index, (source_id, root) in enumerate(sorted(corpus.roots.items()))
+def _corpus_inputs(corpus: _CorpusSources, population: str, name: str, version: str) -> dict[str, ArtifactStep]:
+    if corpus.population != population:
+        raise click.UsageError("Test panels require a converted corpus; training selection requires an admitted corpus")
+    return {
+        source_id: ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
+        for source_id, root in sorted(corpus.roots.items())
     }
+
+
+def _selection_pass(step: ArtifactStep, *, cache_dir: Path | None, do_run: bool) -> None:
     with ExitStack() as scope:
         if cache_dir is not None:
             scope.enter_context(artifact_prefix(str(cache_dir)))
-        step = task_selection_step(curated, recipe)
         if do_run:
             result = run(step, max_concurrent=1)[0]
             click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
@@ -300,7 +308,7 @@ def _embedding_pass(
 ) -> None:
     curated = {}
     for source_id, root in roots.items():
-        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
+        manifest = json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
         digest = canonical_sha256(manifest)
         curated[source_id] = ArtifactStep.adopt(f"rl-semantics/source-{digest[:16]}", INPUTS_VERSION, source=root)
     curriculum = TASK_CURRICULUM
@@ -384,6 +392,7 @@ def _embedding_pass(
 @click.option("--corpus", help="Run embedding or selection from a completed corpus.json without rerunning curation.")
 @click.option("--embed", type=click.Choice(EMBEDDING_STAGES), help="Run this embedding stage after curation.")
 @click.option("--selection", help="Selection recipe JSON: append task-selection after FULL or an admitted --corpus.")
+@click.option("--test-panel", help="Test-panel recipe JSON: select from a completed converted --corpus.")
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
@@ -491,6 +500,7 @@ def main(
     corpus: str | None,
     embed: str | None,
     selection: str | None,
+    test_panel: str | None,
     representation: str,
     embedding_sample_size: int | None,
     catalog_root: str | None,
@@ -531,8 +541,10 @@ def main(
         )
     if mode is None and corpus is None:
         raise click.UsageError("Supply --mode or --corpus")
-    if corpus is not None and embed is None and selection is None:
-        raise click.UsageError("--corpus requires --embed or --selection")
+    if corpus is not None and embed is None and selection is None and test_panel is None:
+        raise click.UsageError("--corpus requires --embed, --selection or --test-panel")
+    if test_panel is not None and (corpus is None or selection is not None or embed is not None):
+        raise click.UsageError("--test-panel requires --corpus and cannot combine with --selection or --embed")
     if corpus is not None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("--corpus uses completed conversions; omit local input overrides")
     configure_coreweave_s3()
@@ -563,8 +575,15 @@ def main(
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
     if corpus is not None and embed is None:
-        assert selection_recipe is not None
-        _selection_pass(_corpus_sources(corpus), selection_recipe, cache_dir=cache_dir, do_run=do_run)
+        if test_panel is not None:
+            panel = TestPanelRecipe.model_validate_json(StoragePath(test_panel).read_text())
+            inputs = _corpus_inputs(_corpus_sources(corpus), "converted", panel.name, panel.version)
+            step = test_panel_step(inputs, panel)
+        else:
+            assert selection_recipe is not None
+            inputs = _corpus_inputs(_corpus_sources(corpus), "admitted", selection_recipe.name, selection_recipe.version)
+            step = task_selection_step(inputs, selection_recipe)
+        _selection_pass(step, cache_dir=cache_dir, do_run=do_run)
         return
     if embed is not None:
         review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
@@ -636,7 +655,8 @@ def main(
         assert embedding is not None
         embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
         if selection_recipe is not None:
-            _selection_pass(restored, selection_recipe, cache_dir=cache_dir, do_run=do_run)
+            inputs = _corpus_inputs(restored, "admitted", selection_recipe.name, selection_recipe.version)
+            _selection_pass(task_selection_step(inputs, selection_recipe), cache_dir=cache_dir, do_run=do_run)
         return
     if input_root is not None and local_files:
         raise click.UsageError("Choose either --input-root or --input-file")

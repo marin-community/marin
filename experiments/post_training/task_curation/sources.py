@@ -5,6 +5,7 @@
 
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
+    nemo_tool_calls,
     structure_closure,
     thoughtcrime,
     unconverted,
@@ -78,6 +79,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *nemotron_ultra.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
+        *nemo_tool_calls.sources(),
         *campaign_releases.sources(),
         *unconverted.sources(),
     ]
