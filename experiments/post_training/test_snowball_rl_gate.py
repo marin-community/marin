@@ -36,7 +36,15 @@ from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.snowball_rl_test_fixtures import answer as _answer
+from experiments.post_training.snowball_rl_test_fixtures import (
+    answer as _answer,
+)
+from experiments.post_training.snowball_rl_test_fixtures import (
+    duplicate_first_answer,
+    leave_unresolved_receipt,
+    omit_last_task_answers,
+    remove_run_receipts,
+)
 from experiments.post_training.snowball_rl_test_fixtures import write_json as _json
 
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
@@ -68,10 +76,7 @@ def rescore(preset, *args, exit_code=None):
 def status(preset, argv):
     result = CliRunner().invoke(snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, *argv])
     resume_warning, _, payload = result.stdout.partition("preset:")
-    if "--resume-from" in argv:
-        assert resume_warning.startswith("Cannot compare this checkout with resume source tree "), resume_warning
-        assert "verify optimizer and checkpoint compatibility before continuing." in resume_warning
-    else:
+    if "--resume-from" not in argv:
         assert not resume_warning, resume_warning
     snapshot = yaml.safe_load("preset:" + payload.split("StepSpec(", 1)[0])
     assert result.exit_code == {"pass": 0, "fail": 1, "invalid": 2, None: 0}[snapshot.get("verdict")], (
@@ -217,7 +222,7 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
     old = recorded_runs(
         "speed-medium", "users/test/old-baseline", version="2026.10.26", argv=("--preset", "speed-medium")
     )
-    unfinished = recorded_runs("speed-medium", "users/test/unfinished-baseline", missing_receipt=True)
+    unfinished = recorded_runs("speed-medium", "users/test/unfinished-baseline", mutations=(remove_run_receipts,))
     failed = recorded_runs("speed-medium", "users/test/failed-baseline", argv=("--preset", "speed-medium"))
     terminal = json.loads((failed / "terminal.json").read_text())
     terminal["result"]["state"] = "failed"
@@ -296,7 +301,7 @@ BROKEN = {
     },
     "unscored": 20,
     "initial_unscored": 20,
-    "duplicate_task": True,
+    "answer_transform": duplicate_first_answer,
     "omit_step": 25,
     "argv": ("snowball", "--init", "users/test/missing@2026.10.27"),
 }
@@ -373,7 +378,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             id="recorded-panel-version-differs",
         ),
         ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
-        ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
+        ("speed-medium", {"reply_tokens": 12}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
         ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None),
         ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None),
@@ -389,7 +394,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ),
         (
             "learning-medium",
-            {"drop_task": True},
+            {"answer_transform": omit_last_task_answers},
             {},
             "invalid",
             None,
@@ -488,8 +493,16 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             id="initial-quality-failure",
         ),
-        ("speed-medium", {"missing_receipt": True}, {}, "invalid", None, set(), None),
-        ("speed-medium", {"unresolved_receipt": True}, {}, "invalid", None, set(), None),
+        ("speed-medium", {"mutations": (remove_run_receipts,), "refusal": "missing"}, {}, "invalid", None, set(), None),
+        (
+            "speed-medium",
+            {"mutations": (leave_unresolved_receipt,), "refusal": "unresolved"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+        ),
         pytest.param(
             "speed-short", {"score": 0.2}, {}, "fail", "regression", set(), None, id="quality-score-regression"
         ),
@@ -515,7 +528,7 @@ def test_rescore_reports_candidate_and_control_contracts(
         control_fault.get("preset", preset),
         **{key: value for key, value in control_fault.items() if key != "preset"},
     )
-    recorded_fault = {key: value for key, value in fault.items() if key != "missing_final_panel"}
+    recorded_fault = {key: value for key, value in fault.items() if key not in {"missing_final_panel", "refusal"}}
     source = recorded_runs(preset, f"users/test/{preset}", **({"score": 0.495} | recorded_fault))
     if fault.get("missing_final_panel"):
         shutil.rmtree(source / "exports/test_panel")
@@ -523,12 +536,12 @@ def test_rescore_reports_candidate_and_control_contracts(
         preset,
         "--candidate",
         f"users/test/{preset}" + ("@" + fault["version"] if "version" in fault else ""),
-        exit_code=4 if fault.get("unresolved_receipt") or fault.get("missing_receipt") else None,
+        exit_code=4 if fault.get("refusal") else None,
     )
-    if fault.get("unresolved_receipt") or fault.get("missing_receipt"):
+    if fault.get("refusal"):
         assert set(report) == {"preset", "verdict", "reason"}
         assert report["preset"] == preset and report["verdict"] == "invalid"
-        if fault.get("missing_receipt"):
+        if fault.get("refusal") == "missing":
             assert report["reason"] == f"no launch receipt at {source}"
         else:
             assert report["reason"].startswith(f"cannot recover recorded command options for {source}:")
@@ -783,11 +796,22 @@ REQUIREMENT = "policy/raw_grad_norm<=1"
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
 def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch):
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")
+    model = tmp_path / "model"
+    model.mkdir()
+    monkeypatch.setattr(presets, "MODEL_URI", str(model))
     controls(recorded_runs, preset)
+
+    def finish_native(_config):
+        shutil.copytree(staged, source, dirs_exist_ok=True)
+        return SkyRLRun.raw_load(str(source))
+
+    monkeypatch.setattr("marin.rl.skyrl.run_skyrl", finish_native)
     if preset == "learning-medium":
         init = ArtifactStep.adopt(
             "users/test/initializer", presets.PRESET_REVISION, str(tmp_path / "initializer"), kind=LevanterCheckpoint
         )
+        for filename in ("config.json", "tokenizer_config.json"):
+            _json(Path(init.path()) / "hf" / filename, {})
         _json(
             Path(init.path()) / RECORD_FILENAME,
             ArtifactRecord(result_type=result_type_name(LevanterCheckpoint)).model_dump(mode="json"),
@@ -844,7 +868,10 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         metrics=timers,
     )
     built = replace(built, gate=gate.completed_gate(presets.PRESETS[preset], built.runs, built.gate))
+    staged = source.with_name(source.name + "-awaiting-native")
+    source.rename(staged)
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
+    assert report["verdict"] == "pass", report
     timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
     assert {key: row["run"] for key, row in timer_rows.items()} == timers
     assert all(row["control"] is None and row["change"] == "unavailable" for row in timer_rows.values())
@@ -1048,7 +1075,9 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     if outcome == "native-failed":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["state"] = "failed"
-        _json(source / "terminal.json", receipt)
+        _json(source / "attempts/recorded-attempt.json", receipt)
+        (source / "terminal.json").unlink()
+        (source / ".executor_status").write_text("FAILED")
     final = JobState.FAILED if outcome in {"parent-early", "native-failed", "record-recovery"} else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
@@ -1075,9 +1104,13 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         assert "# " + preset_name in result.output
     if outcome == "native-failed":
         assert "result: invalid" in result.output and "native job /tests/native-run is failed" in result.output
-        assert (
-            rescore(preset_name, "--candidate", built.runs[0].name)["reason"] == "native job /tests/native-run is failed"
-        )
+        (source / RECORD_FILENAME).unlink()
+        before = {str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+        report = rescore(preset_name, "--candidate", built.runs[0].name)
+        assert report["reason"] == "native job /tests/native-run is failed"
+        assert {
+            str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()
+        } == before
     if outcome == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0

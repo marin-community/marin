@@ -525,7 +525,15 @@ def build_run(
         runs.append(run)
     gate = (
         snowball_rl_gate.gate_step(
-            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
+            preset,
+            tuple(runs),
+            inputs=snowball_rl_gate.gate_inputs(
+                settings,
+                f"{tasks.name}@{tasks.version}" if tasks is not None else None,
+                f"{init.name}@{init.version}" if init is not None else None,
+                requirements,
+                baselines,
+            ),
         )
         if presets.gated(preset) and not control
         else None
