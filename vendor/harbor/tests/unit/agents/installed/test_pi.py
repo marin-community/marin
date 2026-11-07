@@ -1341,8 +1341,7 @@ class TestPiTrajectoryConversion:
 
     def test_converts_session_to_valid_atif_trajectory(self, temp_dir):
         agent = self._agent(temp_dir, version="1.2.3")
-        events = self._events()
-        self._write_jsonl(temp_dir / "pi.txt", events)
+        self._write_jsonl(temp_dir / "pi.txt", self._events())
         context = AgentContext()
 
         agent.populate_context_post_run(context)
@@ -1391,26 +1390,13 @@ class TestPiTrajectoryConversion:
         assert final.tool_calls is None
         assert final.metrics.prompt_tokens == 180
 
-        source_messages = [
-            event["message"]
-            for event in events
-            if event.get("type") == "message_end" and isinstance(event.get("message"), dict)
-        ]
-        assistant_messages = [message for message in source_messages if message["role"] == "assistant"]
-        source_prompt_tokens = sum(
-            message["usage"].get("input", 0) + message["usage"].get("cacheRead", 0)
-            for message in assistant_messages
-        )
-        source_completion_tokens = sum(message["usage"].get("output", 0) for message in assistant_messages)
-        source_cached_tokens = sum(message["usage"].get("cacheRead", 0) for message in assistant_messages)
-        source_cost_usd = sum(message["usage"].get("cost", {}).get("total", 0) for message in assistant_messages)
-        source_steps = sum(message["role"] in {"system", "user", "assistant"} for message in source_messages)
-
-        assert trajectory.final_metrics.total_prompt_tokens == source_prompt_tokens == context.n_input_tokens
-        assert trajectory.final_metrics.total_completion_tokens == source_completion_tokens == context.n_output_tokens
-        assert trajectory.final_metrics.total_cached_tokens == source_cached_tokens == context.n_cache_tokens
-        assert trajectory.final_metrics.total_cost_usd == source_cost_usd == context.cost_usd
-        assert trajectory.final_metrics.total_steps == source_steps == len(trajectory.steps)
+        # Source session: 105 + 140 + 180 prompt, 20 + 35 + 40 completion,
+        # five system/user/assistant messages, and two tool results.
+        assert trajectory.final_metrics.total_prompt_tokens == context.n_input_tokens == 425
+        assert trajectory.final_metrics.total_completion_tokens == context.n_output_tokens == 95
+        assert trajectory.final_metrics.total_cached_tokens == context.n_cache_tokens == 5
+        assert trajectory.final_metrics.total_cost_usd == context.cost_usd == 0.1
+        assert trajectory.final_metrics.total_steps == len(trajectory.steps) == 5
 
         # Usage still counts every assistant turn, including the turns the
         # trajectory records as steps.
