@@ -177,7 +177,6 @@ identity fixed. The gate re-score command accepts additional baselines and recov
 those recorded at launch. A baseline that becomes unavailable leaves the control verdict intact;
 `vs_baseline` is empty and `vs_baseline_reason` explains why. JSON comparison rows use
 `control`, `n_control`, `control_min` and `control_max` for the baseline statistics.
-Timer comparisons are unavailable until the test-panel control refresh records timers.
 
 The Breakdown tables show overall results, agentic results when the panel has both
 agentic and other tasks, family, AAII category,
@@ -288,4 +287,3 @@ The default selection and panels use local graders and need no remote judge cred
 | layout-p40-only | calibrated training gates cover the 40-GPU layout; other training layouts need qualification |
 | AAII coverage; no-agentic-tasks | the panel covers scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tool use and long-context coverage need separate qualification |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
-| no-async-speed-gate | Speed-long has no pinned controls; collect controls before using its throughput verdict. |

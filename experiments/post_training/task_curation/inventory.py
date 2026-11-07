@@ -53,6 +53,8 @@ SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
 HELDOUT_BLEND = "rlvr1"
 STRUCTURAL_FAMILY = "structural"
 PARQUET_BATCH_ROWS = 256
+# Answers per task in the initializer run that measures panel pass rates.
+PASS_RATE_ATTEMPTS = 8
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 SUMMARY_FILENAME = "summary.json"
@@ -151,7 +153,7 @@ class SelectionConfig:
     recipe: SelectionRecipe
     heldout: tuple[HeldoutSource, ...]
     output_path: str
-    exclusions: tuple[HeldoutSource, ...] = ()
+    exclusions: tuple[HeldoutSource, ...]
 
 
 @dataclass(frozen=True)
@@ -421,12 +423,18 @@ def _grader_counts(path: Path) -> dict[str, int]:
 
 
 def write_training(
-    config: SelectionConfig, excluded: tuple[TaskSpec, ...], destination: Path
+    config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
 ) -> dict[str, SourceCounts]:
-    """Filter excluded and duplicate admitted tasks before seeded sampling without replacement."""
+    """Filter excluded and duplicate admitted tasks before seeded sampling without replacement.
+
+    Heldout and exclusion tasks match by ID, public semantics or exact context. Exclusion tasks also match by
+    the test panel's overlap keys, which add the whitespace-normalized final user statement.
+    """
+    excluded = (*heldout, *exclusions)
     excluded_ids = {task.id for task in excluded}
     excluded_public = {semantic_digest(task, False) for task in excluded}
     excluded_contexts = {task.context.model_dump_json() for task in excluded}
+    excluded_panel_keys = {key for task in exclusions for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
     counts = {source.source_id: SourceCounts() for source in config.sources}
@@ -443,6 +451,7 @@ def write_training(
                     task.id in excluded_ids
                     or semantic_digest(task, False) in excluded_public
                     or task.context.model_dump_json() in excluded_contexts
+                    or not excluded_panel_keys.isdisjoint(_panel_keys(task).exclusion)
                 ):
                     source_counts.heldout_overlap += 1
                     continue
@@ -493,7 +502,7 @@ def prepare(config: SelectionConfig) -> None:
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
         excluded = tuple(task for source in config.exclusions for task in _panel_source_tasks(source, environments))
-        counts = write_training(config, (*selection.full, *excluded), directory / TRAIN_FILENAME)
+        counts = write_training(config, selection.full, excluded, directory / TRAIN_FILENAME)
         write_parquet_file(
             task_records(iter(selection.sample)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
         )
@@ -599,7 +608,11 @@ def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, Panel
         raise ValueError("Panel pass-rate rows must have unique task IDs and the declared population")
     for row in rows:
         # The range comparison also refuses NaN and infinite scores.
-        valid = 0 < row.samples and 0 <= row.passed <= row.samples <= row.attempted == 8 and 0 <= row.mean_score <= 1
+        valid = (
+            0 < row.samples
+            and 0 <= row.passed <= row.samples <= row.attempted == PASS_RATE_ATTEMPTS
+            and 0 <= row.mean_score <= 1
+        )
         if not valid or row.model_revision != measurement.model_revision:
             raise ValueError(f"Panel pass-rate evidence is incomplete: {row.task_id}")
     return by_id
@@ -721,12 +734,10 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
             "full_validation_rows": len(selection.tasks),
             "validation_rows": len(selection.fast),
             "family_counts": dict(Counter(part.family for _, part in selection.tasks)),
-            "fast_family_counts": recipe.fast_counts,
             "category_counts": dict(Counter(part.aaii_category for _, part in selection.tasks)),
             "source_counts": {
                 part.name: {"source_id": part.source_id, **selection.counts[part.name]} for part in recipe.sources
             },
-            "pass_rate_measured": recipe.pass_rates is not None,
         }
         _publish_selection(directory, config.output_path, (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME), summary)
 

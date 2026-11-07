@@ -1075,6 +1075,8 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
 
 @pytest.mark.parametrize("preset", ["speed-long", "speed-medium", "data-long"])
 def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, preset):
+    if preset == "speed-long":
+        monkeypatch.delitem(gate.CONTROLS, preset)
     if preset == "data-long":
         monkeypatch.delitem(gate.CONTROLS, "learning-long")
     if preset == "speed-medium":
