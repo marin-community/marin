@@ -17,6 +17,8 @@ from marin.training.training import LevanterCheckpoint
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.evaluation.pipeline import eval_step as launch_step
 
+DEFAULT_ACCELERATOR = AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
+
 
 @dataclass(frozen=True)
 class EvalGroup:
@@ -24,9 +26,7 @@ class EvalGroup:
     evals: tuple[str, ...]
     serve: ServeConfig = field(default_factory=ServeConfig)
     resource_hint: ResourceHint = field(default_factory=ResourceHint)
-    accelerator: AcceleratorChoice = field(
-        default_factory=lambda: AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
-    )
+    accelerator: AcceleratorChoice = DEFAULT_ACCELERATOR
     tokenizer: str | None = None
     tokenizer_revision: str | None = None
     discover_latest_checkpoint: bool = True

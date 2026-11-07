@@ -3,10 +3,10 @@
 
 """Checkpoint evaluation menus using exact curated protocol variants."""
 
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ServeConfig
 
-from experiments.evals.evaluation import EvalGroup
+from experiments.evals.evaluation import DEFAULT_ACCELERATOR, EvalGroup
 
 CORE = (
     "agieval-lsat-ar-3shot",
@@ -31,7 +31,7 @@ def core_evals(serve: ServeConfig | None = None, accelerator: AcceleratorChoice 
             name="core",
             evals=CORE,
             serve=serve or ServeConfig(),
-            accelerator=accelerator or AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8"),
+            accelerator=accelerator or DEFAULT_ACCELERATOR,
         )
     ]
 
@@ -40,7 +40,7 @@ def key_evals(
     serve: ServeConfig | None = None, accelerator: AcceleratorChoice | None = None, max_eval_instances: int | None = None
 ) -> list[EvalGroup]:
     serving = serve or ServeConfig()
-    hardware = accelerator or AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
+    hardware = accelerator or DEFAULT_ACCELERATOR
     return [
         EvalGroup(
             name="key_generation",
@@ -67,7 +67,7 @@ def base_model_evals(
     discover_latest_checkpoint: bool = True,
 ) -> list[EvalGroup]:
     serving = serve or ServeConfig()
-    hardware = accelerator or AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
+    hardware = accelerator or DEFAULT_ACCELERATOR
     selections = [
         ("core_leaderboard", ("bbh-3shot", "gpqa-0shot", *CORE)),
         ("mmlu_0shot", ("mmlu-0shot",)),

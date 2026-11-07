@@ -7,6 +7,7 @@ import asyncio
 import json
 import math
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -28,6 +29,7 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from fray.local_backend import LocalClient
 from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
@@ -46,12 +48,29 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
+from marin.execution.artifact import write_artifact
 from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt
 from marin.rollouts.evaluation_results import logical_samples
+from taskcompendium.evaluation.corpus import EvaluationManifest, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
 from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from zephyr.context import ZephyrContext
 
 from experiments.evaluation.policy_finalization import PolicyJudge
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.evalchemy.math import math_dataset
+from experiments.post_training.task_curation.evaluation import curate
+from experiments.post_training.task_curation.images.build import (
+    EnvironmentArtifact,
+    environment_artifact,
+    identity_digest,
+)
+from experiments.post_training.task_curation.local import artifact_prefix
+from experiments.post_training.task_curation.pipeline import HfSource
 
 
 @pytest.fixture
@@ -81,9 +100,17 @@ def raw_run(tmp_path):
 
 
 def write_observations(
-    record, *, summary="mean", metrics=("accuracy",), metric_kind="continuous", num_fewshot=None, observations
+    record,
+    *,
+    summary="mean",
+    metrics=("accuracy",),
+    metric_kind="continuous",
+    num_fewshot=None,
+    protocol: EvaluationProtocol | None = None,
+    manifest: EvaluationManifest | None = None,
+    observations,
 ):
-    protocol = EvaluationProtocol(
+    protocol = protocol or EvaluationProtocol(
         benchmark="colors",
         version="1",
         operation="continuation_likelihood" if summary == "perplexity" else "chat_generation",
@@ -104,6 +131,12 @@ def write_observations(
         summary=summary,
         expected_population=2,
     )
+    snapshot = (
+        manifest.model_dump(mode="json", exclude_none=True)
+        if manifest is not None
+        else {"rows": 2, "source_dataset": "colors", "source_revision": "pin"}
+    )
+    dataset_id = canonical_sha256(snapshot) if manifest is not None else "dataset"
     with DataStore.open(record.results_path) as store:
         EvaluationStore(store)
         store.table(
@@ -122,9 +155,9 @@ def write_observations(
                     {
                         "datasets": [
                             {
-                                "dataset": "dataset",
+                                "dataset": dataset_id,
                                 "protocol": protocol.model_dump(mode="json"),
-                                "manifest": {"rows": 2, "source_dataset": "colors", "source_revision": "pin"},
+                                "manifest": snapshot,
                             }
                         ]
                     }
@@ -133,7 +166,7 @@ def write_observations(
             for index in range(2):
                 transaction.table(SELECTIONS_TABLE).add(
                     Selection(
-                        dataset="dataset",
+                        dataset=dataset_id,
                         source_row=f"rows:{index}",
                         source_ordinal=index,
                         status="selected",
@@ -147,7 +180,7 @@ def write_observations(
                 )
             for index, retry, phase, outcome, values, weights in observations:
                 attempt = Attempt(
-                    dataset="dataset",
+                    dataset=dataset_id,
                     task_id=str(index),
                     source_row=f"rows:{index}",
                     trial=0,
@@ -176,7 +209,68 @@ def write_observations(
                         ),
                         doc=json.dumps({"groups": {"color": "red"}}),
                     )
-                    transaction.table("samples").add(sample_to_archive_row(sample, trial_id=f"dataset/0/{retry}"))
+                    transaction.table("samples").add(sample_to_archive_row(sample, trial_id=f"{dataset_id}/0/{retry}"))
+
+
+def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw_run, tmp_path):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "test.jsonl").write_text(
+        "\n".join(json.dumps({"problem": f"{index} + 1?", "answer": str(index + 1)}) for index in range(2)) + "\n"
+    )
+    source = math_dataset(
+        "colors", "colors", HfSource("fixture/colors", "a" * 40, ("test.jsonl",), SourceFormat.JSONL), "answer", 2, 1, 0
+    )
+    dataset = source.config
+    assert dataset is not None and dataset.recipe.grader is not None
+    revised = replace(dataset.recipe.grader, requirements=(*dataset.recipe.grader.requirements, "numpy==2.3.5"))
+    records = []
+    runtime = CampaignRuntime()
+    options = PipelineOptions(SourceProcessingMode.QUICK, runtime, inputs=InputOverrides(root=str(inputs)))
+    client = LocalClient()
+    try:
+        with (
+            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+            runtime.activate(context),
+        ):
+            for region, grader in (
+                ("east", dataset.recipe.grader),
+                ("west", dataset.recipe.grader),
+                ("revised", revised),
+            ):
+                declaration = replace(source, config=replace(dataset, recipe=replace(dataset.recipe, grader=grader)))
+                output = str(tmp_path / region / "corpus")
+                with artifact_prefix(str(tmp_path / region / "artifacts")):
+                    built = EnvironmentArtifact(
+                        path=environment_artifact(grader).path(), identity=identity_digest(grader)
+                    )
+                    write_artifact(built.result_payload(), built.path)
+                    publish = curate(declaration, options).lower().fn
+                    assert publish is not None
+                    publish(output)
+                protocol, manifest = evaluation_protocol(output)
+                record = raw_run.model_copy(
+                    update={
+                        "run_id": region,
+                        "model": raw_run.model.model_copy(update={"name": region}),
+                        "results_path": str(tmp_path / region / "results"),
+                    }
+                )
+                write_observations(
+                    record,
+                    protocol=protocol,
+                    manifest=manifest,
+                    observations=[
+                        (0, 0, "finished", "graded", {"accuracy": 1.0}, {}),
+                        (1, 0, "finished", "graded", {"accuracy": 0.0}, {}),
+                    ],
+                )
+                records.append(import_curated_record(record))
+    finally:
+        client.shutdown()
+    comparison = build_comparison(records[:2], panel_request(), ("east", "west"))
+    assert comparison["shared"] == ["colors"]
+    assert build_comparison([records[0], records[2]], panel_request(), ("east", "revised"))["shared"] == []
 
 
 def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retries(raw_run, tmp_path):
