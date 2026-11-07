@@ -64,6 +64,7 @@ LOCAL_TOKENIZER_FILE = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenize
 LOCAL_TOKENIZER_CONFIG = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json"
 # Vocab size of the reduced fixture above (matches lib/levanter/tests/conftest.py).
 LOCAL_TOKENIZER_VOCAB_SIZE = 5027
+LOCAL_TOKENIZER_EOS_TOKEN_ID = 5026
 
 _S3_ENV_KEYS = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "FSSPEC_S3"]
 
@@ -192,6 +193,8 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
                 },
                 train_config=TrainLmConfig(
                     data=train_data_config,
+                    # The local fixture is offline and has no reference generation_config.json.
+                    hf_generation_eos_token_ids=[LOCAL_TOKENIZER_EOS_TOKEN_ID] if Path(tokenizer).is_dir() else None,
                     # hf_save_steps=2 (not 1): at num_train_steps=2, final info.step=1 doesn't match
                     # every=2, so Trainer.train's end-of-train run_hooks(force=True) flushes the HF
                     # save exactly once. hf_save_steps=1 would double-fire on info.step=1.
