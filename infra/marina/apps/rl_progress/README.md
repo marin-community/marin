@@ -3,12 +3,17 @@
 Maintained source for the private [RL progress dashboard](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/).
 The stable UUID is declared in `applet.toml`. Preserve it when releasing updates.
 
-This source was recovered from the deployed report contract and retained frontend
-assets after its original temporary checkout was lost. It preserves the existing
-nine-record report, runtime-campaign filtering, comparison eligibility, and
-shareable run details. The frontend leads with reward versus elapsed time;
-unknown evaluation protocols remain unranked and incomplete coverage stays visible.
-W&B links identify the project unless a record supplies an exact run URL.
+Each run has one row with its attempts in a dropdown, latest first. Failed attempts
+are marked. The selected attempt supplies the run's graph points and details.
+Campaign and series come from record fields; names do not define a comparison group.
+A run-only link (`#run=<run_id>`) selects its latest attempt. Add
+`&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
+run URL; an `issue` field links to the experiment's GitHub issue.
+
+The frontend leads with reward versus elapsed time. The backend applies each record's
+coverage threshold and evaluation identity to comparison eligibility. Incomplete
+coverage remains visible, including attempts that meet their recorded threshold.
+Malformed records are skipped individually and named in a visible note.
 
 ## Data contract
 
@@ -33,7 +38,9 @@ Each record retains its run/attempt identity, label, status, UTC submission/star
 completion timestamps, timing scope, elapsed seconds, optimizer count, source/data/
 initializer identities, evaluation identity, baseline/final reward and attempted/
 scored counts, artifact URI, and evidence. `GET api/runs` adds coverage and
-comparison fields. A runtime evaluation protocol hash is distinct from a declared
+comparison fields and a `skipped_records` list for malformed rows. Structural validation
+is shared with the publisher through `marin.rl.rl_progress`. The publisher command is
+`python -m experiments.post_training.publish_rl_progress <summary_path>`. A runtime evaluation protocol hash is distinct from a declared
 source protocol; absent runtime identity remains null. Names do not define a
 comparison group. Use `wandb_url` for an exact W&B run link when recorded.
 
@@ -43,7 +50,7 @@ From the repository root:
 
 ```bash
 node --check infra/marina/apps/rl_progress/dist/app.js
-uv run pytest infra/marina/apps/rl_progress/tests
+uv run pytest infra/marina/tests/test_rl_progress.py
 uv run marina validate infra/marina/apps/rl_progress
 uv run marina release infra/marina/apps/rl_progress --local --json
 ```

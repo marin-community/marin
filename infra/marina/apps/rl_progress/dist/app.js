@@ -1,7 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const ns = 'http://www.w3.org/2000/svg';
-const colors = { A: '#286451', B: '#a06534', C: '#526bb2', D: '#9a5079' };
+const colors = ['#286451', '#a06534', '#526bb2', '#9a5079'];
 let runs = [];
+const selectedAttempts = new Map();
 
 function element(tag, text, attrs = {}) {
   const node = document.createElement(tag);
@@ -16,20 +17,31 @@ function svg(tag, attrs = {}, text) {
   return node;
 }
 const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
-const fixed = (run) => run.run_id.includes('snowball-inventory-batch-fixed');
-const arm = (run) => run.label.match(/\b([A-D]\d+)\b/)?.[1] ?? run.label;
-const color = (run) => colors[arm(run)[0]] ?? '#6d6a60';
+const series = (run) => run.series ?? run.label;
+const campaign = (run) => run.campaign ?? 'Unspecified';
+const color = (run) => colors[Array.from(series(run)).reduce((sum, letter) => sum + letter.codePointAt(0), 0) % colors.length];
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds / 3600;
-const gain = (run) => run.final && run.baseline ? (run.final.reward - run.baseline.reward) / hours(run) : null;
+const gain = (run) => run.gain_per_hour;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
-function visibleRuns() {
-  return runs.filter((run) => $('campaign').value === 'all' || fixed(run) === ($('campaign').value === 'fixed'));
+function groupedRuns() {
+  const groups = new Map();
+  for (const run of runs) {
+    if (!groups.has(run.run_id)) groups.set(run.run_id, []);
+    groups.get(run.run_id).push(run);
+  }
+  for (const attempts of groups.values()) attempts.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) || b.attempt_id.localeCompare(a.attempt_id));
+  return groups;
 }
-function route(run) { return '#run=' + encodeURIComponent(identity(run)); }
+function visibleRuns(groups) {
+  return [...groups.values()].map((attempts) => attempts.find((run) => run.attempt_id === selectedAttempts.get(run.run_id)) ?? attempts[0])
+    .filter((run) => $('campaign').value === 'all' || campaign(run) === $('campaign').value);
+}
+function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id }); }
 function selectedFromHash() {
-  if (!location.hash.startsWith('#run=')) return null;
-  return runs.find((run) => route(run) === location.hash) ?? null;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const attempts = groupedRuns().get(params.get('run')) ?? [];
+  return params.has('attempt') ? attempts.find((run) => run.attempt_id === params.get('attempt')) ?? null : attempts[0] ?? null;
 }
 
 function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, labelDots = false, baseline = false } = {}) {
@@ -66,10 +78,10 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
   for (const point of points) {
     const { run, phase } = point;
     const link = svg('a', { href: route(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}: ${yLabel.toLowerCase()} ${number(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${number(hours(run), 2)} elapsed hours` });
-    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${run.partial_coverage ? 'Incomplete evaluation; excluded' : run.provisional ? 'Provisional; unranked' : 'Complete evaluation'}\nClick for run details`));
+    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${run.pareto_eligible ? 'Eligible for comparison' : run.status === 'failed' ? 'Failed attempt; descriptive' : 'Provisional; unranked'}\nClick for run details`));
     link.append(svg('circle', { cx: px(point.x), cy: py(point.y), r: phase === 'baseline' ? 5 : 6, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': id === 'pareto' && frontier.has(identity(run)) ? 4 : 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
     root.append(link);
-    if (labelDots && phase === 'final') root.append(svg('text', { x: px(point.x) + 10, y: py(point.y) - 10, class: 'dot-label' }, arm(run)));
+    if (labelDots && phase === 'final') root.append(svg('text', { x: px(point.x) + 10, y: py(point.y) - 10, class: 'dot-label' }, series(run)));
   }
   host.append(root);
 }
@@ -80,20 +92,18 @@ function addField(list, title, value) {
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
-  const warning = run.partial_coverage ? 'Incomplete evaluation: this attempt is excluded from comparison. Training completion and evaluation validity are separate.' : run.provisional ? 'Descriptive result. Runtime evaluation protocol is unknown, so this run is unranked.' : 'Complete comparison metadata.';
+  const warning = run.status === 'failed' ? 'The native attempt failed. Its retained evidence is descriptive.' : run.provisional ? 'Unranked: coverage or evaluation identity is insufficient for comparison.' : run.partial_coverage ? 'This attempt meets its recorded coverage threshold with some unscored answers.' : 'Complete comparison metadata.';
   body.append(element('p', warning, { class: run.partial_coverage ? 'warning' : 'note' }));
   const links = element('div', null, { class: 'links' });
   const explicitWandb = run.wandb_url ?? run.links?.wandb;
   if (explicitWandb && /^https:\/\/wandb\.ai\//.test(explicitWandb)) links.append(element('a', 'W&B run ↗', { href: explicitWandb, target: '_blank', rel: 'noopener noreferrer' }));
-  else if (fixed(run)) {
-    links.append(element('a', 'W&B project ↗', { href: 'https://wandb.ai/marin-community/marin-snowball-curriculum', target: '_blank', rel: 'noopener noreferrer' }));
-    links.append(element('span', 'Exact W&B run URL was not recorded.', { class: 'note' }));
-  }
+  if (run.issue) links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Campaign', fixed(run) ? 'Fixed runtime' : 'Earlier runtime'], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
+    ['Campaign', campaign(run)], ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
+    ['Verdict', run.verdict], ['Gate', run.gate],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
     ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
@@ -112,25 +122,33 @@ function showDetails(run) {
 }
 function followHash() {
   const run = selectedFromHash();
-  if (run) showDetails(run);
+  if (run) { selectedAttempts.set(run.run_id, run.attempt_id); render(); showDetails(run); }
   else if ($('run-detail').open) $('run-detail').close();
 }
 
 function render() {
-  const selected = visibleRuns();
-  $('count').textContent = `${selected.length} attempts · ${selected.filter((run) => run.pareto_eligible).length} eligible for frontier ranking`;
+  const groups = groupedRuns(), selected = visibleRuns(groups);
+  $('count').textContent = `${selected.length} runs · ${runs.length} recorded attempts · ${selected.filter((run) => run.pareto_eligible).length} eligible for frontier ranking`;
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
-  chart('gain', selected.filter((run) => !run.partial_coverage), (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
+  chart('gain', selected, (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
   $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
-  $('legend').replaceChildren(...[...new Set(selected.map(arm))].map((name) => {
-    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${colors[name[0]]}` }), document.createTextNode(name)); return item;
+  $('legend').replaceChildren(...[...new Set(selected.map(series))].map((name) => {
+    const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${color(selected.find((run) => series(run) === name))}` }), document.createTextNode(name)); return item;
   }));
   $('attempts').replaceChildren(...[...selected].sort((a, b) => Date.parse(b.run_date) - Date.parse(a.run_date)).map((run) => {
     const tr = element('tr');
-    const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); followHash(); }; name.append(button);
-    tr.append(name, element('td', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`), element('td', `${number(hours(run), 2)} h`), element('td', run.optimizer_steps), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.partial_coverage ? 'Incomplete · excluded' : run.provisional ? 'Provisional · unranked' : 'Complete'));
+    const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); }; name.append(button);
+    const attempts = element('select', null, { 'aria-label': `Attempt for ${run.label}` });
+    for (const attempt of groups.get(run.run_id)) {
+      const option = element('option', `${attempt.started_at} · ${attempt.attempt_id} · ${attempt.status}`, { value: attempt.attempt_id });
+      option.selected = attempt.attempt_id === run.attempt_id;
+      attempts.append(option);
+    }
+    attempts.onchange = () => { location.hash = route(groups.get(run.run_id).find((attempt) => attempt.attempt_id === attempts.value)); };
+    name.append(attempts, element('span', run.status, { class: run.status === 'failed' ? 'warning' : 'note' }));
+    tr.append(name, element('td', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`), element('td', `${number(hours(run), 2)} h`), element('td', run.optimizer_steps), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.status === 'failed' ? 'Failed' : run.provisional ? 'Unranked' : run.partial_coverage ? 'Meets coverage threshold' : 'Complete'));
     return tr;
   }));
 }
@@ -140,7 +158,11 @@ async function refresh() {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
     const data = await response.json(); runs = data.runs;
-    if (!runs.some(fixed)) $('campaign').value = 'all';
+    const previous = $('campaign').value;
+    $('campaign').replaceChildren(element('option', 'All campaigns', { value: 'all' }), ...[...new Set(runs.map(campaign))].sort().map((value) => element('option', value, { value })));
+    $('campaign').value = [...$('campaign').options].some((option) => option.value === previous) ? previous : 'all';
+    $('warnings').hidden = !(data.skipped_records?.length);
+    $('warnings').textContent = (data.skipped_records ?? []).map((record) => `Skipped malformed record ${record.run_id}/${record.attempt_id}: ${record.error}`).join('\n');
     render(); followHash();
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
   finally { $('refresh').disabled = false; }

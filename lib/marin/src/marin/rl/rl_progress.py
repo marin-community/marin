@@ -1,0 +1,121 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Validate retained RL progress records and evaluation identities."""
+
+import hashlib
+import json
+from datetime import datetime, timedelta
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
+
+
+def validate_evaluation_identity(
+    *,
+    task_ids: list[str] | None,
+    task_count: int | None,
+    membership_sha256: str | None,
+    protocol: dict[str, Any] | None,
+    protocol_sha256: str | None,
+) -> None:
+    """Reject supplied identity mismatches while preserving unknown historical fields."""
+    if task_ids is not None:
+        membership = hashlib.sha256(json.dumps(sorted(task_ids), separators=(",", ":")).encode()).hexdigest()
+        if len(set(task_ids)) != len(task_ids) or membership != membership_sha256:
+            raise ValueError("Evaluation membership does not match its recorded identity")
+        if task_count is not None and task_count != len(task_ids):
+            raise ValueError("Evaluation task count disagrees with membership")
+    if protocol is not None:
+        encoded = json.dumps(protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if hashlib.sha256(encoded.encode()).hexdigest() != protocol_sha256:
+            raise ValueError("Evaluation protocol does not match its recorded identity")
+
+
+Count = Annotated[StrictInt, Field(ge=0)]
+Identity = Annotated[str, Field(min_length=1)]
+
+
+class EvaluationResult(BaseModel):
+    model_config = ConfigDict(strict=True)
+    reward: FiniteFloat
+    attempted: Count
+    scored: Count
+
+    @model_validator(mode="after")
+    def valid_coverage(self):
+        if self.scored > self.attempted:
+            raise ValueError("Scored count exceeds attempted count")
+        return self
+
+
+class EvaluationIdentity(BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow")
+    name: Identity
+    version: Identity
+    task_count: Annotated[StrictInt, Field(gt=0)]
+    task_set_sha256: Identity | None
+    protocol_sha256: str | None
+    task_ids: list[str] | None = None
+    membership_sha256: str | None = None
+    protocol: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def matching_evaluation_identity(self):
+        validate_evaluation_identity(
+            task_ids=self.task_ids,
+            task_count=self.task_count,
+            membership_sha256=self.membership_sha256,
+            protocol=self.protocol,
+            protocol_sha256=self.protocol_sha256,
+        )
+        return self
+
+
+class RunSummary(BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow")
+    run_id: Identity
+    attempt_id: Identity
+    label: Identity
+    campaign: str | None = None
+    series: str | None = None
+    issue: Annotated[StrictInt, Field(gt=0)] | None = None
+    verdict: Literal["pass", "fail", "invalid"] | None = None
+    gate: str | None = None
+    min_scored_fraction: Annotated[FiniteFloat, Field(gt=0, le=1)] = 1.0
+    run_date: str
+    date_basis: Literal["submission_acknowledged", "launch_started"]
+    started_at: str
+    completed_at: str | None
+    elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)]
+    timing_scope: Identity
+    status: Literal["succeeded", "failed", "running"]
+    optimizer_steps: Count
+    source_revision: Identity
+    data_identity: Identity
+    initializer_identity: Identity
+    evaluation: EvaluationIdentity
+    baseline: EvaluationResult | None
+    final: EvaluationResult | None
+    artifact_uri: str | None
+    evidence: list[str]
+
+    @field_validator("run_date", "started_at", "completed_at")
+    @classmethod
+    def utc_timestamp(cls, value):
+        if value is not None:
+            parsed = datetime.fromisoformat(value)
+            if parsed.utcoffset() != timedelta(0):
+                raise ValueError("Run timestamps must explicitly use UTC")
+        return value
+
+    @model_validator(mode="after")
+    def valid_outcome(self):
+        if self.status != "running" and self.completed_at is None:
+            raise ValueError("Terminal attempts require a completion timestamp")
+        if self.final is not None and (self.baseline is None or self.elapsed_seconds <= 0):
+            raise ValueError("A final measurement requires a baseline and positive elapsed time")
+        for phase in (self.baseline, self.final):
+            if phase is not None and phase.attempted > self.evaluation.task_count:
+                raise ValueError("Attempted count exceeds the fixed evaluation cohort")
+        return self
