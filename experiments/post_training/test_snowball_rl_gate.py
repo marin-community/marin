@@ -4,6 +4,7 @@
 import hashlib
 import json
 import math
+import re
 import runpy
 import shutil
 import sys
@@ -1419,10 +1420,21 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         return
     if unavailable["value"]:
         unserved = paths[1:] if case == "partial-retry" else paths
-        errors = ["1 step(s) failed: Publication authentication failed: Credential unavailable"] * len(unserved)
+        indices = range(1, len(sources)) if case == "partial-retry" else range(len(sources))
+        patterns = [
+            (
+                rf"1 step\(s\) failed: Step failed: {re.escape(built.runs[index].name)}/publication/"
+                rf"native-{index}_[0-9a-f]{{8}}: Publication authentication failed: Credential unavailable"
+            )
+            for index in indices
+        ]
         if case == "control-missing-receipt":
             unserved = [str(sources[0]), paths[1]]
-            errors[0] = f"No stored native receipt at {sources[0]}"
+            patterns[0] = re.escape(f"No stored native receipt at {sources[0]}")
+        errors = snapshot["publication"]["errors"]
+        assert len(errors) == len(patterns)
+        for error, pattern in zip(errors, patterns, strict=True):
+            assert re.fullmatch(pattern, error), error
         assert snapshot["publication"] == {
             "served_records": paths[:1] if case == "partial-retry" else [],
             "unserved_records": unserved,
