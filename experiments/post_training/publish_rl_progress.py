@@ -5,9 +5,9 @@
 
 import json
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from marin.rl.rl_progress import RunSummary
 
@@ -20,7 +20,16 @@ ON CONFLICT (run_id, attempt_id) DO NOTHING"""
 READ = "SELECT record FROM rl_runs WHERE run_id = :run_id AND attempt_id = :attempt_id"
 
 
-def publish_result(record: dict[str, Any], service_url: str | None = None) -> dict[str, Any]:
+@dataclass(frozen=True)
+class PublicationReceipt:
+    run_id: str
+    attempt_id: str
+    inserted: bool
+    verified: bool
+    url: str
+
+
+def publish_result(record: dict[str, Any], service_url: str | None = None) -> PublicationReceipt:
     """Insert one immutable attempt and verify its exact readback and served identity."""
     from marina import client  # noqa: PLC0415
 
@@ -29,8 +38,7 @@ def publish_result(record: dict[str, Any], service_url: str | None = None) -> di
     encoded = json.dumps(record, allow_nan=False)
     details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
     query = client.applet_query(service_url, APPLET_ID, authenticated_url=details["authenticated_url"])
-    location = urlparse(details["authenticated_url"])
-    origin = f"{location.scheme}://{location.netloc}" if location.netloc else service_url.rstrip("/")
+    origin = client.applet_origin(service_url, details["authenticated_url"])
     identity = {"run_id": summary.run_id, "attempt_id": summary.attempt_id}
     inserted = query(INSERT, identity | {"record": encoded})
     if inserted["row_count"] not in (0, 1):
@@ -42,10 +50,10 @@ def publish_result(record: dict[str, Any], service_url: str | None = None) -> di
     matching = [run for run in api["runs"] if (run["run_id"], run["attempt_id"]) == (summary.run_id, summary.attempt_id)]
     if len(matching) != 1:
         raise RuntimeError("Published attempt is missing or duplicated in the dashboard API")
-    return {
-        "run_id": summary.run_id,
-        "attempt_id": summary.attempt_id,
-        "inserted": inserted["row_count"] == 1,
-        "verified": True,
-        "url": details["authenticated_url"],
-    }
+    return PublicationReceipt(
+        run_id=summary.run_id,
+        attempt_id=summary.attempt_id,
+        inserted=inserted["row_count"] == 1,
+        verified=True,
+        url=details["authenticated_url"],
+    )

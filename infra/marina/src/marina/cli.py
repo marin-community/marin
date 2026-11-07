@@ -29,7 +29,7 @@ from marina.applets import (
     read_applet_package,
     validate_backend_import,
 )
-from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, marina_request, publish_applet
+from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, applet_origin, marina_request, publish_applet
 from marina.database_setup import ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
@@ -416,8 +416,7 @@ def _applet_details(service_url: str, applet_id: str) -> dict[str, object]:
 
 def _applet_origin(service_url: str, details: dict[str, object]) -> str:
     assert isinstance(details["authenticated_url"], str)
-    parsed = urlparse(details["authenticated_url"])
-    return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+    return applet_origin(service_url, details["authenticated_url"])
 
 
 @apps.group("hosts")

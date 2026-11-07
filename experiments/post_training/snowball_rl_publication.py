@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import NamedTuple
 
 import click
@@ -17,7 +17,7 @@ import pyarrow.compute as pc
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl import skyrl
-from marin.rl.rl_progress import RunSummary, membership_sha256, protocol_sha256
+from marin.rl.rl_progress import EvaluationResult, RunSummary, membership_sha256, protocol_sha256
 from marin.rl.skyrl import read_stored_skyrl_attempts
 from rigging.filesystem.storage_path import StoragePath
 
@@ -28,6 +28,35 @@ from experiments.post_training import snowball_rl_scoring as scoring
 
 RESULT_FILENAME = "progress-record.json"
 PUBLICATION_FILENAME = "publication.json"
+
+
+class RunOutput(NamedTuple):
+    path: str
+    name: str
+    version: str
+
+
+@dataclass
+class PublicationOutcome:
+    served_records: list[str] = field(default_factory=list)
+    unserved_records: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    login: str | None = None
+    retry: str | None = None
+
+    def add(self, other: PublicationOutcome) -> None:
+        """Combine attempts, keeping the last supplied login and retry instructions."""
+        self.served_records.extend(other.served_records)
+        self.unserved_records.extend(other.unserved_records)
+        self.errors.extend(other.errors)
+        if other.login is not None:
+            self.login = other.login
+        if other.retry is not None:
+            self.retry = other.retry
+
+    def to_dict(self) -> dict:
+        """Encode publication status with absent optional instructions omitted."""
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
 
 def publishes(preset: presets.Preset) -> bool:
@@ -46,7 +75,7 @@ def _phase_result(
     prefix: str,
     task_ids: set[str],
     evidence: list[str],
-) -> dict | None:
+) -> EvaluationResult | None:
     table = scores.filter(pc.equal(scores["step"], step))
     rows = table.to_pylist()
     if not rows:
@@ -72,7 +101,8 @@ def _phase_result(
         evidence.append(f"Evaluation step {step} has no scored reward.")
         return None
     scored_tasks = {row["item"] for row in rows if row["scored"]}
-    return {"reward": reward, "attempted": len(counts), "scored": len(scored_tasks)}
+    # RunSummary validates the assembled record.
+    return EvaluationResult.model_construct(reward=reward, attempted=len(counts), scored=len(scored_tasks))
 
 
 def record_path(run_output: str, attempt_id: str) -> StoragePath:
@@ -165,7 +195,7 @@ def build_record(
     task_ids = list(panel.task_ids)
     protocol = scoring.evaluation_protocol(launch, evaluation.name)
     evaluation = replace(evaluation, answers=protocol["n_samples_per_prompt"])
-    phases = [None, None]
+    phases: list[EvaluationResult | None] = [None, None]
     try:
         scores = scoring.panel_scores(evaluation, run_output) if options.resume_from is None else None
         phases = (
@@ -227,8 +257,8 @@ def build_record(
             "protocol": protocol,
             "protocol_sha256": protocol_sha256(protocol),
         },
-        "baseline": phases[0],
-        "final": phases[1],
+        "baseline": phases[0].model_dump(mode="python") if phases[0] is not None else None,
+        "final": phases[1].model_dump(mode="python") if phases[1] is not None else None,
         "artifact_uri": str(destination),
         "evidence": evidence,
     }
@@ -258,14 +288,12 @@ def _publish_attempt(record: dict, service_url: str | None, output: str) -> Arti
         root.mkdirs()
         frozen.write_text(json.dumps(record, allow_nan=False, indent=2))
     receipt = publish_rl_progress.publish_result(json.loads(presets.read_text(frozen)), service_url)
-    (root / PUBLICATION_FILENAME).write_text(json.dumps(receipt, indent=2))
+    (root / PUBLICATION_FILENAME).write_text(json.dumps(asdict(receipt), indent=2))
     return Artifact(path=output)
 
 
 def publication_step(
-    run_output: str,
-    name: str,
-    version: str,
+    output: RunOutput,
     record: dict,
     *,
     gate_path: str | None = None,
@@ -283,14 +311,14 @@ def publication_step(
         record.update(gate=gate_record.name, verdict=gate_record.result["verdict"])
     attempt_id = record["attempt_id"]
     step = apply(
-        f"{name}/publication/{attempt_id}",
+        f"{output.name}/publication/{attempt_id}",
         _publish_attempt,
-        version=version,
+        version=output.version,
         record=record,
         service_url=service_url,
         output=OUT,
     )
-    return replace(step, override_path=str(publication_path(run_output, attempt_id)))
+    return replace(step, override_path=str(publication_path(output.path, attempt_id)))
 
 
 def gate_complete(gate_path: str | None) -> bool:
@@ -301,30 +329,28 @@ def gate_complete(gate_path: str | None) -> bool:
 
 
 def publish_run(
-    run_output: str,
-    name: str,
-    version: str,
+    output: RunOutput,
     preset: presets.Preset,
     *,
     gate_path: str | None = None,
     gate_required: bool = False,
     issue: int | None = None,
     service_url: str | None = None,
-) -> dict:
+) -> PublicationOutcome:
     """Build and publish terminal attempts on the caller, isolating each publication failure."""
     from marin.execution.lazy import run  # noqa: PLC0415
     from rigging.auth import IapCredentialsUnavailable, IapLoginRequired  # noqa: PLC0415
 
-    result = {"served_records": [], "unserved_records": [], "errors": []}
-    path = run_output
+    result = PublicationOutcome()
+    path = output.path
     try:
         current_id, attempts = read_stored_skyrl_attempts(path)
         if not attempts:
             raise FileNotFoundError(f"No stored native receipt at {path}")
     except Exception as error:
         attempts = {}
-        result["unserved_records"].append(path)
-        result["errors"].append(str(error))
+        result.unserved_records.append(path)
+        result.errors.append(str(error))
     for attempt_id in attempts:
         destination = record_path(path, attempt_id)
         try:
@@ -341,51 +367,38 @@ def publish_run(
                 else retain_record(path, preset, attempt_id=attempt_id, attempts=(current_id, attempts))
             )
             step = publication_step(
-                run_output,
-                name,
-                version,
+                output,
                 record,
                 gate_path=gate_path if attempt_id == current_id else None,
                 issue=issue if attempt_id == current_id else None,
                 service_url=service_url,
             )
             run(step, max_concurrent=1)
-            result["served_records"].append(str(destination))
+            result.served_records.append(str(destination))
         except Exception as error:
             causes = []
             cause = error
             while cause is not None:
                 causes.append(str(cause))
                 if isinstance(cause, (IapCredentialsUnavailable, IapLoginRequired)):
-                    result["login"] = "iris login"
+                    result.login = "iris login"
                 cause = cause.__cause__
-            result["unserved_records"].append(str(destination))
-            result["errors"].append(": ".join(dict.fromkeys(causes)))
-    if result["unserved_records"]:
-        result["retry"] = "Repeat the original command with --wait."
+            result.unserved_records.append(str(destination))
+            result.errors.append(": ".join(dict.fromkeys(causes)))
+    if result.unserved_records:
+        result.retry = "Repeat the original command with --wait."
     return result
 
 
-class RunOutput(NamedTuple):
-    path: str
-    name: str
-    version: str
-
-
-def publish_runs(runs: Sequence[RunOutput], preset: presets.Preset, **kwargs) -> dict:
+def publish_runs(runs: Sequence[RunOutput], preset: presets.Preset, **kwargs) -> PublicationOutcome:
     """Publish stored runs and combine each attempt's publication outcome."""
-    result = {"served_records": [], "unserved_records": [], "errors": []}
+    result = PublicationOutcome()
     for output in runs:
-        published = publish_run(output.path, output.name, output.version, preset, **kwargs)
-        for key, value in published.items():
-            if isinstance(value, list):
-                result[key].extend(value)
-            else:
-                result[key] = value
+        result.add(publish_run(output, preset, **kwargs))
     return result
 
 
-def publish_controls(preset_name: str, *, service_url: str | None = None) -> dict:
+def publish_controls(preset_name: str, *, service_url: str | None = None) -> PublicationOutcome:
     """Publish the exact pinned control paths using the same frozen payloads as the launcher."""
     preset = presets.PRESETS[preset_name]
     if not publishes(preset):
@@ -400,8 +413,8 @@ def publish_controls(preset_name: str, *, service_url: str | None = None) -> dic
         for index in range(pin.runs)
     ]
     result = publish_runs(outputs, preset, service_url=service_url)
-    if result["unserved_records"]:
-        result["retry"] = f"Repeat python -m experiments.post_training.snowball_rl_publication --preset {preset_name}."
+    if result.unserved_records:
+        result.retry = f"Repeat python -m experiments.post_training.snowball_rl_publication --preset {preset_name}."
     return result
 
 
@@ -419,8 +432,8 @@ def main(preset_name: str, url: str | None) -> None:
 
     configure_coreweave_s3()
     result = publish_controls(preset_name, service_url=url)
-    click.echo(json.dumps(result))
-    if result["unserved_records"]:
+    click.echo(json.dumps(result.to_dict()))
+    if result.unserved_records:
         raise click.exceptions.Exit(1)
 
 
