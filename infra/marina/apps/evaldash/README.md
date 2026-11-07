@@ -388,7 +388,10 @@ Ingest snapshots its protocols, manifests, selections and attempts, then selects
 latest finished retry per dataset, source row and trial. The sample browser uses the
 same selection. Zero grades remain scored; failed and unfinished work stays missing
 coverage. Means, instruction weights, classification, perplexity and groups follow
-protocol metadata. Dataset identities and the summary revision distinguish comparison
-protocols. PostgreSQL reconciliation checks the raw store HEAD as well as record.json,
+protocol metadata. Semantic curation identities and the summary revision distinguish
+comparison protocols across regional materializations. Physical manifest hashes retain
+their archive-integrity and resume role. Unidentified older archives use the historical
+metric/kind/shot compatibility rules; they cannot erase known corpus differences.
+PostgreSQL reconciliation checks the raw store HEAD as well as record.json,
 so resumed work can refresh an unchanged producer record. Derived summaries remain in
 Evaldash's catalog.

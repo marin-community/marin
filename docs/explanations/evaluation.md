@@ -61,9 +61,11 @@ scores. The judge is served and recorded under its own model identity.
 
 Protocols declare mean, weighted mean, classification or perplexity reductions.
 Grouped observations use the same reduction. MMLU subjects share a benchmark name
-and combine by item count, while subject summaries remain available. Dataset
+and combine by item count, while subject summaries remain available. Semantic curation
 identities and summary revisions distinguish dashboard protocols, including changes
-to prompts or graders. PostgreSQL ingest also checks the raw store version, so a
+to prompts or graders. Regional output paths, grader lock URLs and conversion timing
+do not change these identities. Physical manifest hashes still bind archive integrity
+and resume. PostgreSQL ingest also checks the raw store version, so a
 resume can refresh scores without changing the producer record.
 
 Producer `record.json` files retain execution identity and status. Derived summaries
@@ -72,7 +74,7 @@ archives. Historical Evalchemy scores remain eligible alongside curated scores w
 rerunning models. Comparison uses canonical metric names and statistical kinds;
 recorded shot counts must agree when both are known. Missing historical corpus
 identities do not exclude scores. Two runs with recorded, differing corpus identities
-remain separate. Stored scores, uncertainty, coverage and cohort provenance are
+remain separate, even when an unidentified record is newer. Stored scores, uncertainty, coverage and cohort provenance are
 preserved. Reproduction uses the recorded historical checkout and cohort.
 
 ## Other evaluation paths

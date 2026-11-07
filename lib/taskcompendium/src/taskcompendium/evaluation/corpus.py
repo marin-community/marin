@@ -58,6 +58,7 @@ class EvaluationManifest(EvaluationModel):
     intended_use: Literal["eval"] = "eval"
     protocol_hash: str
     conversion_manifest_sha256: str
+    curation_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     rows: int = Field(gt=0)
     shards: tuple[EvaluationShard, ...]
 

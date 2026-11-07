@@ -411,7 +411,7 @@ def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
     selection = select([legacy, declared], SelectionRequest())
 
     assert selection.cells["m"]["drop"].run_id == "declared"
-    assert selection.rejections[0].reason == "metric accuracy differs from declared f1"
+    assert {rejection.run_id for rejection in selection.rejections} == {"legacy"}
 
 
 @pytest.mark.parametrize(
@@ -448,6 +448,23 @@ def test_historical_comparisons_preserve_known_protocol_differences(identity, sh
     assert ("historical" in selection.cells) is admitted
     assert selection.cells["native"]["gsm8k"].run_id == "native"
     assert bool(selection.rejections) is not admitted
+
+
+def test_newer_unknown_corpus_does_not_merge_distinct_known_protocols():
+    measurements = [
+        replace(
+            _measurement(model=name, run_id=name, declared=True, protocol_metric="accuracy", created_at=date),
+            protocol_identity=identity,
+        )
+        for name, identity, date in (
+            ("old", "corpus-a", "2026-11-01T00:00:00Z"),
+            ("current", "corpus-b", "2026-11-02T00:00:00Z"),
+            ("unknown", None, "2026-11-03T00:00:00Z"),
+        )
+    ]
+    selection = select(measurements, SelectionRequest())
+    assert set(selection.cells) == {"current", "unknown"}
+    assert {rejection.run_id for rejection in selection.rejections} == {"old"}
 
 
 def test_selection_rejects_failed_runs_but_keeps_them_explainable():

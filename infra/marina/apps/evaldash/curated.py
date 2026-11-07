@@ -20,7 +20,7 @@ from marin.rollouts.evaluation_results import SCORED_OUTCOMES, evaluation_covera
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
-SUMMARY_REVISION = "2026.11.05.3"
+SUMMARY_REVISION = "2026.11.07.1"
 
 
 def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind) -> tuple[float, float | None]:
@@ -122,6 +122,9 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
                 summary[f"{group}/{metric}"] = _reduce(observations, reductions[metric])[0]
         metrics[name] = summary
         primary = next(metric for metric in protocol.metrics if metric.name == protocol.primary_metric)
+        # Physical manifests include regional paths and conversion timing. The curation
+        # identity binds source, compiler, grader and protocol independently of placement.
+        identities = [manifests[dataset].get("curation_identity") for dataset in datasets]
         tasks.append(
             EvalTaskRef(
                 name=name,
@@ -143,7 +146,11 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
                     n_benchmark=coverage[name].n_benchmark,
                     n_attempted=coverage[name].n_attempted,
                     requires_judge=protocol.requires_judge,
-                    identity=canonical_sha256({"datasets": sorted(datasets), "summary_revision": SUMMARY_REVISION}),
+                    identity=(
+                        canonical_sha256({"corpora": sorted(identities), "summary_revision": SUMMARY_REVISION})
+                        if all(identities)
+                        else None
+                    ),
                     source={
                         "dataset": ",".join(manifests[dataset]["source_dataset"] for dataset in datasets),
                         "revision": ",".join(manifests[dataset]["source_revision"] for dataset in datasets),
