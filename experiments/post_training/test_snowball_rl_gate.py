@@ -28,6 +28,7 @@ from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_typ
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.rl.skyrl import SkyRLRun, read_skyrl_launch_config
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
 from rigging.timing import Timestamp
 from scipy.stats import t
 
@@ -1229,7 +1230,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "fail-no-login",
         "invalid-no-login",
         "builder-error",
-        "retry-invalid-receipt",
+        "retry-storage-error",
         "speed-medium",
         "data-short",
     ],
@@ -1264,7 +1265,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         receipt = json.loads((sources[0] / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(sources[0] / "terminal.json", receipt)
-    if case == "historical":
+    if case in {"historical", "retry-storage-error"}:
         receipt = json.loads((sources[0] / "terminal.json").read_text())
         receipt["config"]["run"]["attempt_id"] = "historical-native"
         receipt["result"].update(
@@ -1394,14 +1395,26 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         str(root / f"exports/attempts/native-{index}/{publication.RESULT_FILENAME}")
         for index, root in enumerate(sources)
     ]
-    if case == "retry-invalid-receipt":
-        (sources[0] / "terminal.json").write_text("{")
+    if case == "retry-storage-error":
+        location = publication.publication_path(str(sources[0]), "historical-native") / publication.PUBLICATION_FILENAME
+        filesystem, key = filesystem_for(str(location))
+        original_exists = type(filesystem).exists
+        metadata_unavailable = True
+
+        def exists(filesystem, path, **kwargs):
+            nonlocal metadata_unavailable
+            if path == key and metadata_unavailable:
+                metadata_unavailable = False
+                raise OSError("Publication metadata temporarily unavailable")
+            return original_exists(filesystem, path, **kwargs)
+
+        monkeypatch.setattr(type(filesystem), "exists", exists)
         repeated = CliRunner().invoke(snowball.main, arguments)
         assert repeated.exit_code == 3, (repeated.output, repeated.exception)
         error = repeated.exception
-        while error is not None and not isinstance(error, ValueError):
+        while error is not None and not isinstance(error, OSError):
             error = error.__cause__ or error.__context__
-        assert isinstance(error, ValueError)
+        assert isinstance(error, OSError)
         assert yaml.safe_load(repeated.output)["reason"] == str(error)
         return
     if unavailable["value"]:
