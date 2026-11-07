@@ -3,14 +3,12 @@
 import asyncio
 import inspect
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import ray
 import torch
-from hydra import compose, initialize_config_dir
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
@@ -114,10 +112,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
 ):
     # The real buffer runs in process; its actor lifetime has no Ray service.
     monkeypatch.setattr(ray, "kill", lambda _actor: None)
-    with initialize_config_dir(
-        config_dir=str(Path(__file__).resolve().parents[2] / "skyrl_train/config"), version_base=None
-    ):
-        config = compose(config_name="ppo_base_config")
+    config = get_default_config()
     config.trainer.strategy = "megatron"
     config.trainer.use_sample_packing = True
     config.trainer.policy.sequence_parallel_size = 1
