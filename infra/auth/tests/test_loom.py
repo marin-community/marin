@@ -465,3 +465,14 @@ def test_retry_binding_between_retirement_phases_does_not_revoke_live_run(
         assert run.session_id
         assert grant_service.active(pending.id, pending.actor)
         assert observer.reconcile()
+
+
+def test_stale_callback_cannot_replace_a_known_running_launch(launcher, grant_service, loom_api):
+    run = launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+    # The observer reply is stale; the local ledger already recorded successful provisioning.
+    loom_api.runs[run.run_id]["status"] = "creating"
+    with pytest.raises(GrantDenied):
+        launcher.observe(grant_service.grant, "review", run.run_id, run.session_id)
+    loom_api.runs[run.run_id]["status"] = "running"
+    assert launcher.reconcile()[0].status == "running"
+    assert grant_service.active(run.grant_id, run.actor)

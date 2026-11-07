@@ -190,7 +190,7 @@ class LoomLauncher:
                 (row["actor"], row["principal"], row["template"]) != (grant.actor, grant.created_by, template)
                 or (row["run_id"] and row["run_id"] != run_id)
                 or (row["session_id"] and row["session_id"] != session_id)
-                or row["status"] == "cleaned"
+                or row["status"] not in {"pending", "creating"}
             ):
                 raise GrantDenied("The grant is already bound to a different Loom launch")
             db.execute(
