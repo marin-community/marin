@@ -764,7 +764,8 @@ def read_skyrl_launch_config(run_output: str) -> dict:
 def read_skyrl_attempt_tracking(run_output: str, attempt_id: str) -> dict:
     """Read one native attempt's startup metadata and W&B link, or return an empty mapping."""
     fs, key = filesystem_for(prefix_join(run_output, f"exports/attempts/{attempt_id}/{_TRACKING_FILENAME}"))
-    return json.loads(fs.cat(key)) if fs.exists(key) else {}
+    record = json.loads(fs.cat(key)) if fs.exists(key) else {}
+    return record if record.get("attempt_id") == attempt_id else {}
 
 
 def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
