@@ -9,6 +9,7 @@ import math
 from collections import Counter, defaultdict
 from copy import deepcopy
 from pathlib import PurePosixPath
+from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -84,8 +85,13 @@ def recorded_identity(source: dict) -> tuple[str, str]:
     return name, version
 
 
-def task_set_sha256(launch: dict, name: str) -> str:
-    """Hash the recorded TaskSpecs, independent of Parquet row order and artifact names."""
+class RecordedPanel(NamedTuple):
+    task_ids: tuple[str, ...]
+    task_set_sha256: str
+
+
+def read_recorded_panel(launch: dict, name: str) -> RecordedPanel:
+    """Read panel task IDs and a hash of the sorted raw TaskSpec strings."""
     pairs = []
     for source in recorded_sources(launch, name):
         path = StoragePath(source["uri"]) / source["relative_path"]
@@ -94,7 +100,7 @@ def task_set_sha256(launch: dict, name: str) -> str:
             for raw in pq.read_table(stream, columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
                 pairs.append((json.loads(raw)["id"], raw))
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
-    return hashlib.sha256(payload).hexdigest()
+    return RecordedPanel(tuple(task_id for task_id, _ in pairs), hashlib.sha256(payload).hexdigest())
 
 
 def evaluation_protocol(launch: dict, name: str) -> dict:
