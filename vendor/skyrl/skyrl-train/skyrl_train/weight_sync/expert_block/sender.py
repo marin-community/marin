@@ -84,6 +84,8 @@ class ExpertBlockSender:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             device,
+            # Trainer groups take the process's NCCL limits, which match vLLM's.
+            max_ctas=None,
             sources=self.sources,
             expert_sources=self.expert_sources,
         )

@@ -48,7 +48,7 @@ from vllm.entrypoints.serve.tokenize.serving import ServingTokenization
 from vllm.v1.metrics.loggers import LoggingStatLogger
 from vllm.lora.request import LoRARequest
 from torch.distributed import DistNetworkError, destroy_process_group
-from skyrl_train.distributed.utils import init_custom_process_group
+from skyrl_train.distributed.utils import init_custom_process_group, nccl_group_options
 from uuid import uuid4
 import warnings
 from contextvars import ContextVar
@@ -71,6 +71,10 @@ from skyrl_train.inference_engines.placement import inference_worker_placement
 from skyrl_train.inference_engines.vllm.numa import set_async_worker_numa_affinity
 from skyrl_train.inference_engines.policy_steps import PolicyStepStamps
 from skyrl_train.weight_sync.expert_block.receiver import ExpertBlockReceiver
+from skyrl_train.inference_engines.vllm.nccl_channels import (
+    install_engine_nccl_channel_limit,
+    weight_sync_max_ctas,
+)
 from skyrl_train.weight_sync.weight_loader import WeightLoader
 from skyrl_train.weight_sync.vllm_weight_conversion import load_weights_into_vllm
 from skyrl_train.weight_sync.weight_extractor import is_weight_sync_dtype_compatible
@@ -93,6 +97,9 @@ from skyrl_train.inference_engines.vllm.stats import (
 from skyrl_train.utils import get_tcp_url, str_to_torch_dtype, torch_dtype_to_str
 import time
 
+# vLLM workers import this module, as the worker extension class's home, before they create
+# NCCL groups, so the engine channel limit is in place when those groups start.
+install_engine_nccl_channel_limit()
 
 _exact_chat_prompt_token_ids: ContextVar[list[int] | None] = ContextVar("exact_chat_prompt_token_ids", default=None)
 
@@ -451,6 +458,7 @@ class WorkerWrap:
             world_size=world_size,
             rank=rank,
             group_name=group_name,
+            pg_options=nccl_group_options(weight_sync_max_ctas()),
         )
         logger.info(
             f"init_weight_update_communicator: master_address={master_address}, master_port={master_port}, ",
@@ -1089,6 +1097,7 @@ class WorkerWrap:
                 pp_rank=placement.pp_rank,
                 pp_size=placement.pp_world_size,
                 gpu_uuid=placement.gpu_uuid,
+                weight_sync_max_ctas=weight_sync_max_ctas(),
             )
         return getattr(receiver, method)(*args)
 

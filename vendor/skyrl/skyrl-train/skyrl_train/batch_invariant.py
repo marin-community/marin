@@ -9,6 +9,8 @@ from skyrl_train.env_vars import VLLM_BATCH_INVARIANT_ENV
 
 logger = logging.getLogger(__name__)
 
+NCCL_MAX_CHANNELS_ENV = "NCCL_MAX_NCHANNELS"
+
 # Mirror pinned vLLM as a set; replace this list via https://github.com/marin-community/vllm/issues/80.
 BATCH_INVARIANT_NCCL_ENV = {
     "NCCL_LAUNCH_MODE": "GROUP",  # Match vLLM's kernel launch mode.
@@ -16,7 +18,7 @@ BATCH_INVARIANT_NCCL_ENV = {
     "NCCL_NVLS_ENABLE": "0",  # Avoid NVLink SHARP reduction offload.
     "NCCL_P2P_NET_DISABLE": "1",  # Match vLLM; NCCL does not document this switch.
     "NCCL_MIN_NCHANNELS": "1",  # Match vLLM's channel lower bound.
-    "NCCL_MAX_NCHANNELS": "1",  # Prevent a multiple-channel split.
+    NCCL_MAX_CHANNELS_ENV: "1",  # Prevent a multiple-channel split.
     "NCCL_PROTO": "Simple",  # Keep LL and LL128 out of collectives.
     "NCCL_ALGO": "allreduce:tree",  # Keep all-reduce on the Tree algorithm.
     "NCCL_NTHREADS": "1",  # Match vLLM; NCCL does not document 1 as valid.

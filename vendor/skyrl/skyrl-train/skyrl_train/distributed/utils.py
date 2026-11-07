@@ -93,6 +93,18 @@ def get_free_port():
         return sock.getsockname()[1]
 
 
+def nccl_group_options(max_ctas: int | None) -> torch.distributed.ProcessGroupNCCL.Options | None:
+    """Fresh NCCL options that cap one group's channels, or ``None`` for the process defaults.
+
+    Torch writes each group's name and ranks into its options, so every group needs its own object.
+    """
+    if max_ctas is None:
+        return None
+    options = torch.distributed.ProcessGroupNCCL.Options()
+    options.config.max_ctas = max_ctas
+    return options
+
+
 # Copy from pytorch to allow creating multiple main groups.
 # https://github.com/pytorch/pytorch/blob/main/torch/distributed/distributed_c10d.py
 # https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/utils/distributed_util.py
