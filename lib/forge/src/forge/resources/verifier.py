@@ -26,35 +26,43 @@ class RoundVerifier:
                 await machine.close()
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
-        async with self.lock:
-            selection = spec.verifier_machine
-            if selection is None:
-                return await self.engine.run_task(spec, model, run_id=run_id)
+        selection = spec.verifier_machine
+        if selection is None:
+            return await self.engine.run_task(spec, model, run_id=run_id)
+        leased = False
+        lease = 0
 
-            async def acquire(prepared: MachineSpec) -> Machine:
-                key = (selection.backend, prepared)
-                if self.machine is not None:
-                    if self.key != key or not isinstance(self.machine, ResettableMachine):
-                        await self.close()
-                    else:
-                        try:
-                            await self.machine.reset()
-                        except MachineTerminated:
-                            await self.close()
-                if self.machine is None:
-                    self.machine = await self.engine.machine_factories[selection.backend].create(prepared)
-                    self.key = key
-                    if isinstance(self.machine, ResettableMachine):
+        async def acquire(prepared: MachineSpec) -> Machine:
+            nonlocal leased, lease
+            await self.lock.acquire()
+            leased = True
+            key = (selection.backend, prepared)
+            if self.machine is not None:
+                if self.key != key or not isinstance(self.machine, ResettableMachine):
+                    await self.close()
+                else:
+                    try:
                         await self.machine.reset()
-                self.index += 1
-                return self.machine
+                    except MachineTerminated:
+                        await self.close()
+            if self.machine is None:
+                self.machine = await self.engine.machine_factories[selection.backend].create(prepared)
+                self.key = key
+                if isinstance(self.machine, ResettableMachine):
+                    await self.machine.reset()
+            self.index += 1
+            lease = self.index
+            return self.machine
 
-            try:
-                result = await self.engine.run_task(spec, model, run_id=run_id, verifier=acquire)
-            except BaseException:
+        try:
+            result = await self.engine.run_task(spec, model, run_id=run_id, verifier=acquire)
+        except BaseException:
+            if leased:
                 await self.close()
-                raise
-            return replace(
-                result,
-                grade=replace(result.grade, diagnostics={**result.grade.diagnostics, "verifier_lease": self.index}),
-            )
+            raise
+        finally:
+            if leased:
+                self.lock.release()
+        return replace(
+            result, grade=replace(result.grade, diagnostics={**result.grade.diagnostics, "verifier_lease": lease})
+        )

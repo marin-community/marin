@@ -329,3 +329,32 @@ async def test_dead_machine_during_reset_is_recreated(monkeypatch: pytest.Monkey
         assert len(factory.machines) == 2 and factory.machines[0].closed
     finally:
         await holder.close()
+
+
+async def test_solver_machines_run_concurrently_before_shared_grading() -> None:
+    factory = CountedFactory()
+    pool, _ = setup(factory)
+    candidate = event()
+    task = candidate.spec.task.model_copy(update={"environment_requirements": requirements(image=None)})
+    spec = candidate.spec.model_copy(update={"task": task, "task_machine": machine_runtime(backend="shellsim")})
+    started = 0
+    ready = asyncio.Event()
+
+    async def model(request: ModelRequest) -> ModelTurn:
+        nonlocal started
+        started += 1
+        if started == 3:
+            ready.set()
+        await asyncio.wait_for(ready.wait(), 5)
+        return await twelve(request)
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            trials = [group.create_task(pool.run_task(spec, model)) for _ in range(3)]
+        assert all(trial.result().grade.reward == 1 for trial in trials)
+        assert sorted(trial.result().grade.diagnostics["verifier_lease"] for trial in trials) == [1, 2, 3]
+        assert len(factory.machines) == 4
+        assert sum(not machine.closed for machine in factory.machines) == 1
+    finally:
+        await pool.close()
+    assert all(machine.closed for machine in factory.machines)

@@ -124,8 +124,9 @@ async def run_adversary(
                 )
                 return AdversaryResult(name, False, (), (reason,))
             report = outcome.payload
-            findings = await asyncio.gather(*(claim_result(ctx, spec, claim) for claim in report.findings))
-            return AdversaryResult(name, True, tuple(findings))
+            async with asyncio.TaskGroup() as group:
+                findings = [group.create_task(claim_result(ctx, spec, claim)) for claim in report.findings]
+            return AdversaryResult(name, True, tuple(finding.result() for finding in findings))
     finally:
         await env.close()
 
@@ -145,16 +146,21 @@ async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, reso
         raise ValueError("Validation needs at least one solver trial")
     async with ctx.scope("validate"):
         ctx.observe(Resolved, grader_infra_unavailable)
-        controls, solver, adversary = await asyncio.gather(
-            asyncio.gather(
-                *(control_result(ctx, spec, index, control) for index, control in enumerate(submission.controls))
-            ),
-            asyncio.gather(*(solver_result(ctx, spec, trial, len(workpiece.evidence)) for trial in range(k))),
-            asyncio.gather(
-                *(
-                    adversary_result(ctx, workpiece, config, resources, spec, name)
-                    for name in config.policy.setting("adversary.roster", tuple)
-                )
-            ),
+        async with asyncio.TaskGroup() as group:
+            controls = [
+                group.create_task(control_result(ctx, spec, index, control))
+                for index, control in enumerate(submission.controls)
+            ]
+            solver = [group.create_task(solver_result(ctx, spec, trial, len(workpiece.evidence))) for trial in range(k)]
+            adversary = [
+                group.create_task(adversary_result(ctx, workpiece, config, resources, spec, name))
+                for name in config.policy.setting("adversary.roster", tuple)
+            ]
+        return Validated(
+            ValidationResult(
+                submission.digest,
+                tuple(trial.result() for trial in solver),
+                tuple(control.result() for control in controls),
+                tuple(result.result() for result in adversary),
+            )
         )
-        return Validated(ValidationResult(submission.digest, tuple(solver), tuple(controls), tuple(adversary)))

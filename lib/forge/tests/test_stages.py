@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 from dataclasses import replace
 from functools import partial
@@ -9,6 +10,7 @@ from pathlib import PurePosixPath
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.forge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
+from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
@@ -203,12 +205,37 @@ async def test_author_reference_describes_valid_wire_values_and_supported_enviro
     assert tuple(machine_backend(value).value for value in task_resolved) == ("gvisor", "shellsim")
 
 
-async def test_validate_propagates_solver_restart_for_stage_replay(workpiece: Workpiece) -> None:
+async def test_validate_restart_joins_adversary_before_replay(
+    workpiece: Workpiece, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ctx = Context(log=EventLog())
     bundle = resources(ctx, restart=1)
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
-    with pytest.raises(Restart):
-        await validate(ctx, workpiece, config(harness), bundle)
+    started = asyncio.Event()
+
+    async def blocked(*args: object, **kwargs: object) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    original = bundle.rollouts.engine.run_task
+
+    async def solver(spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        await started.wait()
+        return await original(spec, model, run_id=run_id)
+
+    monkeypatch.setattr(harness, "run", blocked)
+    monkeypatch.setattr(bundle.rollouts.engine, "run_task", solver)
+    setup = config(harness)
+    setup = replace(
+        setup,
+        policy=setup.policy.overlaid({"adversary.roster": ["finder"]}),
+        adversaries={"finder": harness},
+        tools={"finder": {}},
+    )
+    with pytest.raises(ExceptionGroup) as error:
+        await validate(ctx, workpiece, setup, bundle)
+    assert error.value.subgroup(Restart) is not None
+    assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     await ctx.drain()
     assert isinstance(bundle.rollouts.engine, SolverEngine) and len(bundle.rollouts.engine.started) == 3
 
