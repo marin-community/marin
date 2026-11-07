@@ -49,7 +49,12 @@ One smoke trial per route was recorded separately before the main wave. Those
 12 attempts are reused by the main run, not repeated. The new OpenRouter
 campaign has a **$50 pre-batch spend ceiling** with a frozen initial key-usage
 baseline; do not construe this as a real-time per-token cutoff inside a batch.
-The BaseTen Nemotron route returned a 429 even in its single-request smoke;
+The first full driver completed eleven models, then stopped *before*
+Sonnet: its conservative single-batch cost reserve of $34.76 plus $17.97
+spent would have exceeded the $50 gate. Sonnet was partitioned into three
+disjoint 57/57/55-pair files, with the **same $50 gate** rechecked before each;
+completed model files are reused on resume. The BaseTen Nemotron route
+returned a 429 even in its single-request smoke;
 its route remains pinned and incomplete responses count as missing, not
 incorrect. The adduct-correction smoke also exposed a residual wording issue:
 Qwen used lowercase `dbe` where the frozen grader expects `DBE`; its v3 score
