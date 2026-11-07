@@ -1234,6 +1234,7 @@ class TestPiTrajectoryConversion:
                 "message": {
                     "role": "assistant",
                     "content": [
+                        {"type": "thinking", "thinking": "List files before writing."},
                         {"type": "text", "text": "Listing the directory before writing."},
                         {
                             "type": "toolCall",
@@ -1250,7 +1251,7 @@ class TestPiTrajectoryConversion:
                         "output": 20,
                         "cacheRead": 5,
                         "cacheWrite": 2,
-                        "cost": {"input": 0, "output": 0, "total": 0},
+                        "cost": {"input": 0.1, "output": 0, "total": 0.1},
                     },
                     "stopReason": "toolCall",
                 },
@@ -1298,7 +1299,7 @@ class TestPiTrajectoryConversion:
                     "toolCallId": "chatcmpl-tool-bbb",
                     "toolName": "write",
                     "content": [{"type": "text", "text": "wrote /app/greeting.txt"}],
-                    "isError": False,
+                    "isError": True,
                     "timestamp": 1762309200006,
                 },
             },
@@ -1340,7 +1341,8 @@ class TestPiTrajectoryConversion:
 
     def test_converts_session_to_valid_atif_trajectory(self, temp_dir):
         agent = self._agent(temp_dir, version="1.2.3")
-        self._write_jsonl(temp_dir / "pi.txt", self._events())
+        events = self._events()
+        self._write_jsonl(temp_dir / "pi.txt", events)
         context = AgentContext()
 
         agent.populate_context_post_run(context)
@@ -1364,6 +1366,7 @@ class TestPiTrajectoryConversion:
 
         tool_step = trajectory.steps[2]
         assert tool_step.message == "Listing the directory before writing."
+        assert tool_step.reasoning_content == "List files before writing."
         assert tool_step.model_name == "hosted_vllm/test-model"
         assert [call.function_name for call in tool_step.tool_calls] == ["bash"]
         assert tool_step.tool_calls[0].tool_call_id == "chatcmpl-tool-aaa"
@@ -1374,10 +1377,12 @@ class TestPiTrajectoryConversion:
         result = tool_step.observation.results[0]
         assert result.source_call_id == "chatcmpl-tool-aaa"
         assert result.content == "total 4\nhello.txt"
+        assert result.extra == {"is_error": False}
 
         second_tool_step = trajectory.steps[3]
         assert [call.function_name for call in second_tool_step.tool_calls] == ["write"]
         assert second_tool_step.observation.results[0].content == "wrote /app/greeting.txt"
+        assert second_tool_step.observation.results[0].extra == {"is_error": True}
 
         final = trajectory.steps[4]
         assert final.message == (
@@ -1386,9 +1391,26 @@ class TestPiTrajectoryConversion:
         assert final.tool_calls is None
         assert final.metrics.prompt_tokens == 180
 
-        assert trajectory.final_metrics.total_prompt_tokens == 425  # 105 + 140 + 180
-        assert trajectory.final_metrics.total_completion_tokens == 95
-        assert trajectory.final_metrics.total_steps == 5
+        source_messages = [
+            event["message"]
+            for event in events
+            if event.get("type") == "message_end" and isinstance(event.get("message"), dict)
+        ]
+        assistant_messages = [message for message in source_messages if message["role"] == "assistant"]
+        source_prompt_tokens = sum(
+            message["usage"].get("input", 0) + message["usage"].get("cacheRead", 0)
+            for message in assistant_messages
+        )
+        source_completion_tokens = sum(message["usage"].get("output", 0) for message in assistant_messages)
+        source_cached_tokens = sum(message["usage"].get("cacheRead", 0) for message in assistant_messages)
+        source_cost_usd = sum(message["usage"].get("cost", {}).get("total", 0) for message in assistant_messages)
+        source_steps = sum(message["role"] in {"system", "user", "assistant"} for message in source_messages)
+
+        assert trajectory.final_metrics.total_prompt_tokens == source_prompt_tokens == context.n_input_tokens
+        assert trajectory.final_metrics.total_completion_tokens == source_completion_tokens == context.n_output_tokens
+        assert trajectory.final_metrics.total_cached_tokens == source_cached_tokens == context.n_cache_tokens
+        assert trajectory.final_metrics.total_cost_usd == source_cost_usd == context.cost_usd
+        assert trajectory.final_metrics.total_steps == source_steps == len(trajectory.steps)
 
         # Usage still counts every assistant turn, including the turns the
         # trajectory records as steps.
