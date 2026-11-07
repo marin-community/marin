@@ -151,7 +151,7 @@ class SelectionConfig:
     recipe: SelectionRecipe
     heldout: tuple[HeldoutSource, ...]
     output_path: str
-    exclusions: tuple[HeldoutSource, ...] = ()
+    exclusions: tuple[HeldoutSource, ...]
 
 
 @dataclass(frozen=True)
