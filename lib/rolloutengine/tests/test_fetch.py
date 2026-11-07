@@ -20,6 +20,8 @@ from rolloutengine.test_support import (
 PAGE_URL = "https://fetch-fixture.invalid/answer"
 FETCH_HARNESS = {SHELL: ShellHarness(command_timeout=None, tools={FETCH_ACTION_INTERFACE: FetchProvider()})}
 
+pytestmark = pytest.mark.asyncio
+
 
 @pytest.mark.parametrize(
     "page,observation",
