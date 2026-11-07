@@ -194,6 +194,8 @@ class RemoteInferenceEngine(InferenceEngineInterface):
                 payload = sampling_params.copy()
                 payload["model"] = self.model_name
                 payload["prompt"] = prompt_token_ids
+                payload["return_token_ids"] = True
+                payload.setdefault("logprobs", 0)
                 request_url = f"{self.url}/v1/completions"
             elif self.engine_backend == "sglang":
                 # SGLang supports /generate, works exactly like its Python `async_generate()` method
@@ -206,24 +208,33 @@ class RemoteInferenceEngine(InferenceEngineInterface):
             else:
                 raise ValueError(f"Invalid engine backend: {self.engine_backend}")
             async with session.post(request_url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
                 response = await resp.json()
 
         # 3. Parse outputs
         outputs = []
         output_ids = []
         finish_reasons = []
+        response_logprobs = None
 
         if self.engine_backend == "vllm":
+            if len(response["choices"]) != len(prompt_token_ids):
+                raise ValueError("Remote completion count does not match the prompt batch")
+            if payload["logprobs"] is not None:
+                response_logprobs = []
             for i, choice in enumerate(response.get("choices", [])):
                 # Since n=1, index i represents the output for `prompt[i]`
                 assert choice["index"] == i, "Expect the choices to be ordered by index."
                 text = choice["text"]
                 outputs.append(text)
                 finish_reasons.append(choice["finish_reason"])
-                # TODO(Charlie): this is not token-in-token-out because vLLM does not support
-                # returning token IDs via HTTP requests. Fix after this vLLM PR is merged:
-                # https://github.com/vllm-project/vllm/pull/22587
-                output_ids.append(self.tokenizer.encode(text, add_special_tokens=False))
+                token_ids = choice["token_ids"]
+                output_ids.append(token_ids)
+                if response_logprobs is not None:
+                    logprobs = choice["logprobs"]["token_logprobs"]
+                    if len(logprobs) != len(token_ids) or any(value is None for value in logprobs):
+                        raise ValueError("Remote sampled-token logprobs must align with the returned token IDs")
+                    response_logprobs.append(logprobs)
         elif self.engine_backend == "sglang":
             # since prompt_token_ids is a list of lists, response is a list of dicts
             for output in response:
@@ -237,7 +248,7 @@ class RemoteInferenceEngine(InferenceEngineInterface):
             raise ValueError(f"Invalid engine backend: {self.engine_backend}")
 
         return InferenceEngineOutput(
-            responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=None
+            responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=response_logprobs
         )
 
     async def chat_completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
