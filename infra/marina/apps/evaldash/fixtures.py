@@ -992,7 +992,7 @@ def build_fixtures(dest: str) -> list[str]:
     return written
 
 
-def build_curated_fixtures(dest: str) -> list[str]:
+def build_native_fixtures(dest: str) -> list[str]:
     """Write native raw runs for browser checks of historical comparisons and retry-safe samples."""
     written = []
     for name, shots, metric in (("mmlu", 5, "acc,none"), ("humaneval", 0, "accuracy")):
@@ -1122,7 +1122,7 @@ def build_curated_fixtures(dest: str) -> list[str]:
             status=RunStatus.SUCCEEDED,
             results_path=root,
             metrics={},
-            description="Synthetic native fixture for migration browser checks",
+            description="Native raw observations with failed and unfinished retries",
         )
         record = record.model_copy(
             update={"provenance": record.provenance.model_copy(update={"eval_runtime": "fixture-native"})}
@@ -1133,7 +1133,7 @@ def build_curated_fixtures(dest: str) -> list[str]:
 
 def main() -> None:
     dest = sys.argv[1] if len(sys.argv) > 1 else "/tmp/evaldash-fixtures"
-    written = build_fixtures(dest)
+    written = [*build_fixtures(dest), *build_native_fixtures(dest)]
     print(f"wrote {len(written)} records under {dest}")
 
 

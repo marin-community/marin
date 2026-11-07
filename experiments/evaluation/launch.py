@@ -27,7 +27,7 @@ from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
-from marin.evaluation.curated import CuratedExecutor
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
@@ -430,7 +430,7 @@ def build_evaluation_batch(
         )
         if violations:
             raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
-    if judge is not None and any(isinstance(definition.executor, CuratedExecutor) for _, definition in definitions):
+    if judge is not None and any(isinstance(definition.executor, DatasetEvaluator) for _, definition in definitions):
         raise ValueError(
             "--judge-model serves Harbor verifiers only; configure curated judges in their source selection"
         )
@@ -604,14 +604,14 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     return replace(batch, evaluations=tuple(evaluations))
 
 
-def _curated_executor(executor: EvalExecutor) -> CuratedExecutor | None:
+def _dataset_evaluator(executor: EvalExecutor) -> DatasetEvaluator | None:
     if isinstance(executor, PolicyJudge):
         return executor.source
-    return executor if isinstance(executor, CuratedExecutor) else None
+    return executor if isinstance(executor, DatasetEvaluator) else None
 
 
 def _bind_corpora(executor: EvalExecutor, roots: dict[str, str]) -> EvalExecutor:
-    source = _curated_executor(executor)
+    source = _dataset_evaluator(executor)
     if source is None:
         return executor
     bound = replace(source, datasets=tuple(roots[name] for name in source.datasets))
@@ -624,7 +624,7 @@ def evaluation_group_step(batch: EvaluationBatch, runtime: CampaignRuntime) -> S
         dict.fromkeys(
             name
             for evaluation in batch.evaluations
-            if (source := _curated_executor(evaluation.executor)) is not None
+            if (source := _dataset_evaluator(evaluation.executor)) is not None
             for name in source.datasets
         )
     )
@@ -692,7 +692,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         # Child grader workers can inherit this profile, but cannot elevate a default parent.
         container_profile=(
             job_pb2.CONTAINER_PROFILE_PRIVILEGED
-            if any(_curated_executor(evaluation.executor) is not None for evaluation in batch.evaluations)
+            if any(_dataset_evaluator(evaluation.executor) is not None for evaluation in batch.evaluations)
             else job_pb2.CONTAINER_PROFILE_UNSPECIFIED
         ),
         constraints=constraints,

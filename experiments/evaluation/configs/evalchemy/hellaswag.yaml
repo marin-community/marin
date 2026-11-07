@@ -1,4 +1,5 @@
 name: hellaswag
+num_fewshot: 10
 sources:
 - evalchemy-hellaswag
 max_tokens: 256

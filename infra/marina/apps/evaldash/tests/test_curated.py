@@ -28,7 +28,7 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
-from marin.evaluation.curated import CuratedExecutor
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -410,7 +410,7 @@ def test_policy_finalization_uses_the_same_scored_trial_coverage_as_evaldash(raw
         ],
     )
     model = ModelConfig(name="judge", location="test/judge", revision="pin", tokenizer_revision="pin")
-    source = CuratedExecutor(("dataset",), model, CuratedSettings())
+    source = DatasetEvaluator(("dataset",), model, CuratedSettings())
     executor = PolicyJudge(source, model, AcceleratorChoice(platform=Platform.GPU, gpu_type="H100"), 0)
     session = SimpleNamespace(jobs=(), wait_until_ready=lambda **_kwargs: None)
     monkeypatch.setattr("experiments.evaluation.policy_finalization.inference_config_for_model", lambda *_a, **_k: None)
@@ -418,7 +418,7 @@ def test_policy_finalization_uses_the_same_scored_trial_coverage_as_evaldash(raw
     monkeypatch.setattr(
         "experiments.evaluation.policy_finalization.remote_inference", lambda _config: nullcontext(session)
     )
-    monkeypatch.setattr(CuratedExecutor, "__call__", lambda *_a, **_k: EvaluationOutcome(metrics={}))
+    monkeypatch.setattr(DatasetEvaluator, "__call__", lambda *_a, **_k: EvaluationOutcome(metrics={}))
     expected = import_curated_record(raw_run).coverage
     if second_outcome == "infra_error":
         with pytest.raises(EvaluationError) as caught:

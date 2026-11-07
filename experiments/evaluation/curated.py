@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import yaml
 from huggingface_hub import HfApi
-from marin.evaluation.curated import CuratedExecutor
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import DEFAULT_EVALUATION_CONCURRENCY, CuratedRef, CuratedSettings, EvalRef, JudgeIdentity
 from marin.execution.lazy import ArtifactStep
@@ -28,6 +28,26 @@ from experiments.post_training.task_curation.sources import evaluation_sources
 @cache
 def _evaluation_sources():
     return evaluation_sources()
+
+
+def _source_for_shots(name: str, num_fewshot: int) -> str:
+    catalog = _evaluation_sources()
+    dataset = catalog[name].config
+    assert dataset is not None
+    if dataset.protocol.num_fewshot == num_fewshot:
+        return name
+    if dataset.fewshot_group is None:
+        raise ValueError(f"Source {name} has no curated {num_fewshot}-shot variant")
+    variants = [
+        source.name
+        for source in catalog.values()
+        if source.config is not None
+        and source.config.fewshot_group == dataset.fewshot_group
+        and source.config.protocol.num_fewshot == num_fewshot
+    ]
+    if len(variants) != 1:
+        raise ValueError(f"Source {name} requires exactly one curated {num_fewshot}-shot variant, found {variants}")
+    return variants[0]
 
 
 def pinned_model(model: ModelConfig) -> ModelConfig:
@@ -48,12 +68,13 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
 
 
 class CuratedDefinition(BaseModel):
-    """A menu selection names complete curated sources, never evaluator plugins."""
+    """A menu selection binds curated corpora to run settings."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     sources: tuple[str, ...] = Field(min_length=1)
+    num_fewshot: int | None = Field(default=None, ge=0)
     limit: int | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, gt=0)
     family: str | None = None
@@ -93,7 +114,7 @@ class CuratedDefinition(BaseModel):
     def from_file(cls, path: Path) -> "CuratedDefinition":
         return cls.model_validate(yaml.safe_load(path.read_text()))
 
-    def executor_for(self, model: ModelConfig, limit: int | None, seed: int | None) -> CuratedExecutor:
+    def executor_for(self, model: ModelConfig, limit: int | None, seed: int | None) -> DatasetEvaluator:
         if model.effective_tokenizer_revision is None:
             raise ValueError("Curated evaluation requires an explicit tokenizer revision")
         settings = CuratedSettings(
@@ -105,9 +126,11 @@ class CuratedDefinition(BaseModel):
         )
         # Corpus paths are bound in the cluster before inference starts.
         sources = self.chat_sources if model.apply_chat_template and self.chat_sources else self.sources
-        return CuratedExecutor(sources, model, settings, self.judge_endpoint)
+        if self.num_fewshot is not None:
+            sources = tuple(_source_for_shots(name, self.num_fewshot) for name in sources)
+        return DatasetEvaluator(sources, model, settings, self.judge_endpoint)
 
-    def record_ref_for(self, executor: CuratedExecutor) -> EvalRef:
+    def record_ref_for(self, executor: DatasetEvaluator) -> EvalRef:
         return EvalRef(
             name=self.name,
             mechanism="curated",

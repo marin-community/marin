@@ -31,7 +31,7 @@ def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
     """Fixture records on disk, reconciled into the app's schema; yields the records prefix."""
     prefix = RECORDS_PREFIX
     fixtures.build_fixtures(prefix)
-    fixtures.build_curated_fixtures(prefix)
+    fixtures.build_native_fixtures(prefix)
     engine = engine_for(marina_database, APP)
     try:
         with engine.begin() as migration_connection:

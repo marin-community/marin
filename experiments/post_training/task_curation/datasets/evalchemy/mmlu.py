@@ -88,6 +88,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 population,
                 HarnessTemplate("mmlu", shots, subject, subject + "/dev-00000-of-00001.parquet"),
                 raw,
+                fewshot_group="mmlu-" + subject,
             )
             dataset = source.config
             assert dataset is not None
