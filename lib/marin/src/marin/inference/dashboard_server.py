@@ -116,6 +116,7 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
+    worker_metrics_url: str | None = None,
     shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
 ) -> Starlette:
     """Build the dashboard and reverse proxy for a local serving backend.
@@ -125,6 +126,7 @@ def build_dashboard_app(
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
+        worker_metrics_url: Direct vLLM metrics URL when the API uses a router.
         shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
     """
     state: dict[str, httpx.AsyncClient] = {}
@@ -165,7 +167,7 @@ def build_dashboard_app(
         fwd_headers = forwardable_request_headers(request.headers)
         upstream_request = client.build_request(
             request.method,
-            request.url.path,
+            worker_metrics_url if request.url.path == "/metrics" and worker_metrics_url else request.url.path,
             params=dict(request.query_params),
             content=body,
             headers=fwd_headers,

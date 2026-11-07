@@ -6,7 +6,7 @@
 ``VllmEnvironment`` appends ``serve <model> ... --port <p>``, so ``--port`` is read from argv.
 
 Modes:
-  serve                          Answer /v1/models with 200.
+  serve                          Answer /v1/models and report native chat DP ranks.
   hang <counter>                 Record the start, then sleep without becoming ready.
   stuck-fault <counter> [error]  Log a streamer fault while the parent stays alive.
   exit                           Exit successfully without becoming ready.
@@ -14,6 +14,7 @@ Modes:
   record-engine-timeout <path>   Record the engine timeout env, then answer /v1/models.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -48,14 +49,36 @@ def _record_start(counter: str) -> int:
     return n
 
 
-def _serve() -> None:
+def _serve(scrape_log: Path | None = None) -> None:
     port = int(sys.argv[sys.argv.index("--port") + 1])
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--data-parallel-size", "--data_parallel_size", "-dp", type=int, default=1)
+    native, _ = parser.parse_known_args()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self.send_response(200)
             self.end_headers()
+            if self.path == "/metrics" and scrape_log is not None:
+                with scrape_log.open("a") as stream:
+                    stream.write("scrape\n")
+                self.wfile.write(b"# TYPE vllm:num_requests_running gauge\nvllm:num_requests_running 7\n")
+                return
             self.wfile.write(b'{"data": [{"id": "fake-model"}]}')
+
+        def do_POST(self) -> None:
+            if self.path != "/v1/chat/completions":
+                self.send_error(404)
+                return
+            self.rfile.read(int(self.headers["Content-Length"]))
+            rank = int(self.headers.get("X-data-parallel-rank", "0"))
+            if not 0 <= rank < native.data_parallel_size:
+                self.send_error(400, "Native DP rank is out of range")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"rank": rank}).encode())
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
@@ -67,6 +90,8 @@ def main() -> None:
     mode = sys.argv[1]
     if mode == "serve":
         _serve()
+    elif mode == "serve-metrics":
+        _serve(Path(sys.argv[2]))
     elif mode == "record-args":
         Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
         _serve()
