@@ -98,21 +98,69 @@ when the candidate's runs at the rungs below share its label. One rung is not en
 synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable +2.7%), while
 FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024.
 
-## Validation runs (2026-11-06)
+## Validation runs (2026-11-06 to 2026-11-07)
+
+| Candidate | Rungs | Answer |
+|---|---|---|
+| FineMath-4plus, 5% | helps, trade-off, trade-off | yes |
+| FineMath-4plus, 20% | trade-off, trade-off, trade-off | yes |
+| FineMath-4plus, 50% | trade-off, hurts, hurts | no |
+| OpenCoder synthetic code, 20% | trade-off, hurts, hurts | no |
+| OpenCoder web code, 20% | trade-off, no gain, no gain | no |
+| FineWeb-2 Chinese, 20% | no gain, hurts | no |
+| FineWeb, 50% | hurts, hurts | no |
+| FineWeb-Edu, 50% | hurts, hurts | no |
+| FineWeb-Edu against FineWeb, 50% | hurts, hurts | no |
+| Cosmopedia web samples, 20% | no gain, no gain | no |
+| Null: control seeds 6–8 | no gain, no gain | no |
 
 | Candidate, share | Rung, seeds | Paloma | Uncheatable | knowledge | commonsense | math | code | Verdict |
 |---|---|---:|---:|---:|---:|---:|---:|---|
+| FineMath-4plus, 5% | d512, 3 | −0.43% | −0.41% | −0.60% | −0.38% | −6.15% | −1.04% | helps |
+| FineMath-4plus, 5% | d768, 3 | +0.14% | +0.13% | −1.04% | +0.51% | −7.89% | −0.27% | trade-off |
+| FineMath-4plus, 5% | d1024, 3 | −0.08% | +0.01% | +0.12% | −0.16% | −8.30% | −1.61% | trade-off |
 | FineMath-4plus, 20% | d512, 6 | +0.08% | +0.72% | +0.02% | +0.53% | −12.17% | −0.44% | trade-off |
 | FineMath-4plus, 20% | d768, 3 | +0.13% | +0.46% | −0.70% | +0.58% | −14.79% | −1.86% | trade-off |
 | FineMath-4plus, 20% | d1024, 3 | +0.33% | +0.73% | −1.15% | +0.29% | −16.70% | −4.01% | trade-off |
+| FineMath-4plus, 50% | d512, 3 | +1.94% | +3.57% | +2.06% | +3.03% | −15.87% | +1.11% | trade-off |
+| FineMath-4plus, 50% | d768, 3 | +1.43% | +2.71% | +0.32% | +1.87% | −21.18% | −1.44% | hurts |
+| FineMath-4plus, 50% | d1024, 3 | +2.18% | +3.40% | +1.46% | +1.71% | −23.48% | −2.60% | hurts |
 | OpenCoder synthetic code, 20% | d512, 3 | +1.49% | +1.33% | +0.78% | +1.85% | +1.72% | −9.05% | trade-off |
 | OpenCoder synthetic code, 20% | d768, 3 | +2.36% | +2.68% | +2.12% | +2.57% | +3.41% | −6.52% | hurts |
+| OpenCoder synthetic code, 20% | d1024, 3 | +2.15% | +2.44% | +2.99% | +1.72% | +2.03% | −5.31% | hurts |
+| OpenCoder web code, 20% | d512, 3 | −1.12% | −0.58% | −0.42% | −0.04% | +0.40% | +1.62% | trade-off |
+| OpenCoder web code, 20% | d768, 3 | −0.82% | −0.66% | −0.12% | −0.65% | −1.01% | +1.74% | no gain |
+| OpenCoder web code, 20% | d1024, 3 | −0.63% | −0.61% | +0.25% | −0.32% | −0.80% | −0.49% | no gain |
 | FineWeb-2 Chinese, 20% | d512, 3 | +0.79% | +1.07% | +0.84% | +1.34% | +1.69% | +1.96% | no gain |
+| FineWeb-2 Chinese, 20% | d768, 3 | +2.19% | +2.83% | +2.82% | +2.49% | +3.78% | +4.11% | hurts |
 | FineWeb, 50% | d512, 6 | −2.43% | −0.01% | −2.68% | −5.13% | +3.69% | +7.78% | hurts |
+| FineWeb, 50% | d768, 3 | −2.99% | −0.65% | −3.76% | −5.51% | +2.90% | +8.29% | hurts |
+| FineWeb-Edu, 50% | d512, 6 | −0.14% | +0.91% | −2.68% | −2.18% | +2.99% | +8.79% | hurts |
+| FineWeb-Edu, 50% | d768, 3 | −1.06% | −0.46% | −4.72% | −3.66% | +0.77% | +7.98% | hurts |
 | FineWeb-Edu against FineWeb, 50% | d512, 6 | +2.34% | +0.92% | +0.00% | +3.11% | −0.67% | +0.94% | hurts |
+| FineWeb-Edu against FineWeb, 50% | d768, 3 | +2.00% | +0.19% | −1.00% | +1.96% | −2.06% | −0.29% | hurts |
+| Cosmopedia web samples, 20% | d512, 3 | +1.20% | +1.21% | +0.11% | +0.27% | +3.61% | +4.23% | no gain |
+| Cosmopedia web samples, 20% | d768, 3 | +0.71% | +0.84% | +1.04% | −0.09% | +2.34% | +4.00% | no gain |
+| Null: control seeds 6–8 | d512, 3 | +0.17% | +0.19% | +0.44% | +0.61% | +0.38% | −0.15% | no gain |
+| Null: control seeds 6–8 | d768, 3 | −0.13% | −0.06% | −0.08% | +0.43% | −0.88% | −0.08% | no gain |
 
 Each `Δ` is BPB against the control at the same rung (6 control seeds at d512, 3 at d768 and d1024), negative is better. The
-runs are `dbelay-<rung>-<candidate>-s<seed>` in W&B `marin-community/marin_moe`.
+runs are `dbelay-<rung>-<candidate>-s<seed>` in W&B `marin-community/marin_moe`; the null arm is control seeds 6–8,
+judged against the control seeds above.
+
+Four arms tested the method, with expectations written down before their runs: the null arm, FineMath at 5% and 50%,
+and Cosmopedia.
+
+- **Null** (met): no group is `better` or `worse` at either rung. At d512 one of six group intervals (commonsense,
+  +0.6%) lies above 0, about the rate a 95% interval allows, so one group's gain of about 0.5% at a single rung is noise.
+- **FineMath dose response** (met): the math gain grows with the share at every rung (d1024: −8.3%, −16.7%, −23.5%),
+  and so does the cost on Paloma and Uncheatable. 5% gets about half of 20%'s math gain at no cost elsewhere; 50% is
+  `hurts`.
+- **Cosmopedia** (missed): synthetic textbooks were expected to improve knowledge or commonsense, and no task in either
+  group moved. With FineWeb-Edu, this is the second dataset with a published benefit on accuracy benchmarks at larger
+  scale that shows none here. The Data Belay detects data that matches an eval's domain (math, code), but has not
+  detected general "educational" data, either because answer BPB at these scales misses the effect or because the
+  effect is absent against this base mix.
 
 ## Limits
 
