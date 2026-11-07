@@ -8,6 +8,7 @@ import haliax as hax
 from haliax.nn.scan import ScanCheckpointPolicy
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 import pytest
 import optax
@@ -214,6 +215,126 @@ def _assert_named_native_loss_and_gradients(kv_heads, *, gradient_checkpointing)
             np.testing.assert_allclose(
                 value, gradients[0][name].reshape(value.shape), atol=1e-5, rtol=1e-5, err_msg=name
             )
+
+
+def test_native_checkpoint_resume_matches_next_donated_step_dp2_tp2(tmp_path):
+    if len(jax.devices()) < 4:
+        pytest.skip("Requires four devices for DP2/TP2 placement")
+    config = NativeLlamaLmConfig(
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        max_seq_len=12,
+        gradient_checkpointing=False,
+        attn_backend=AttentionBackend.VANILLA,
+    )
+    mesh = Mesh(
+        np.asarray(jax.devices()[:4]).reshape(2, 2),
+        ("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+    mapping = {"batch": "data", "mlp": "model", "heads": "model", "kv_head": "model", "vocab": "model"}
+    trainer_config = TrainerConfig(
+        id="native-checkpoint-next-step",
+        train_batch_size=4,
+        num_train_steps=2,
+        per_device_parallelism=-1,
+        require_accelerator=False,
+        load_checkpoint=False,
+        mp=jmp.get_policy("f32"),
+        mesh=MeshConfig(
+            axes={"data": 2, "model": 2},
+            param_mapping={k: v for k, v in mapping.items() if k != "batch"},
+            compute_mapping=mapping,
+        ),
+        checkpointer=CheckpointerConfig(
+            base_path=str(tmp_path / "checkpoints"), append_run_id_to_base_path=False, save_interval=None, keep=None
+        ),
+        log_dir=tmp_path / "logs",
+        log_jaxprs=False,
+        log_xla_hlo=False,
+    )
+    sharding = NativeLlamaSharding(batch_axes=("data",), model_axis="model")
+    layout = ExplicitTrainingLayout(mesh, P("data", None))
+    examples = []
+    with jax.set_mesh(mesh), hax.axis_mapping({}):
+        for row in range(4):
+            tokens = hax.named((jnp.arange(12) * 5 + row * 7 + 3) % 32, config.max_Pos)
+            weight = hax.named(jnp.ones(12).at[-1].set(0), config.max_Pos)
+            segments = hax.named(jnp.repeat(jnp.arange(3), 4), config.max_Pos)
+            examples.append(LmExample(tokens, weight, AttentionMask.causal().with_segment_ids(segments)))
+    dataset = ListAsyncDataset(examples)
+
+    def loss(model, batch, *, key=None):
+        return model.compute_next_token_loss(batch, key=key)
+
+    with (
+        current_tracker(NoopTracker()),
+        Trainer(
+            trainer_config,
+            optax.adam(1e-3),
+            loss,
+            explicit_layout=layout,
+            checkpoint_metadata=lambda model: model.checkpoint_metadata(),
+        ) as prefix_trainer,
+    ):
+        initial = prefix_trainer.initial_state(
+            jax.random.PRNGKey(104),
+            model_init=lambda: config.build(hax.Axis("vocab", 32), key=jax.random.PRNGKey(103), sharding=sharding),
+        )
+        batch = next(iter(prefix_trainer.data_loader(dataset)))
+        prefix = prefix_trainer.train_step(initial, batch)
+        uninterrupted = prefix.state
+        prefix_trainer.run_hooks(prefix, force=True)
+
+    checkpoint = discover_latest_checkpoint(str(tmp_path / "checkpoints"))
+    assert checkpoint is not None
+    restored_config = dataclasses.replace(trainer_config, load_checkpoint=True, load_checkpoint_path=checkpoint)
+    with (
+        current_tracker(NoopTracker()),
+        Trainer(
+            restored_config, optax.adam(1e-3), loss, explicit_layout=layout, add_default_hooks=False
+        ) as continuation_trainer,
+    ):
+        restored = continuation_trainer.initial_state(
+            jax.random.PRNGKey(106),
+            model_init=lambda: config.build(hax.Axis("vocab", 32), key=jax.random.PRNGKey(105), sharding=sharding),
+        )
+        for actual, expected in zip(
+            jax.tree.leaves(eqx.filter(restored, eqx.is_array)),
+            jax.tree.leaves(eqx.filter(uninterrupted, eqx.is_array)),
+            strict=True,
+        ):
+            np.testing.assert_array_equal(actual, expected)
+            assert actual.sharding == expected.sharding
+            if jnp.issubdtype(actual.dtype, jnp.inexact):
+                assert actual.dtype == jnp.float32
+        assert int(restored.step) == int(uninterrupted.step) == 1
+        assert int(restored.opt_state[0].count) == int(uninterrupted.opt_state[0].count) == 1
+        prefix_key = np.array(restored.training_key)
+        expected = continuation_trainer.train_step(uninterrupted, batch)
+        actual = continuation_trainer.train_step(restored, batch)
+        assert np.isfinite(expected.loss) and np.isfinite(actual.loss)
+        np.testing.assert_allclose(actual.loss, expected.loss, atol=1e-5, rtol=1e-4)
+        assert int(actual.state.step) == int(expected.state.step) == 2
+        assert int(actual.state.opt_state[0].count) == int(expected.state.opt_state[0].count) == 2
+        np.testing.assert_array_equal(actual.state.training_key, expected.state.training_key)
+        assert not np.array_equal(actual.state.training_key, prefix_key)
+        for actual_family, expected_family in (
+            (actual.state.model, expected.state.model),
+            (actual.state.opt_state[0].mu, expected.state.opt_state[0].mu),
+            (actual.state.opt_state[0].nu, expected.state.opt_state[0].nu),
+        ):
+            for actual_leaf, expected_leaf in zip(
+                jax.tree.leaves(eqx.filter(actual_family, eqx.is_array)),
+                jax.tree.leaves(eqx.filter(expected_family, eqx.is_array)),
+                strict=True,
+            ):
+                assert actual_leaf.dtype == expected_leaf.dtype == jnp.float32
+                assert actual_leaf.sharding == expected_leaf.sharding
+                np.testing.assert_allclose(actual_leaf, expected_leaf, atol=1e-5, rtol=1e-4)
 
 
 def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_state(tmp_path):
