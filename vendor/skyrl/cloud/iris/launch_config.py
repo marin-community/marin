@@ -60,7 +60,6 @@ class RunConfig:
     id: str = MISSING
     attempt_id: str = MISSING
     coordinator_iris_job_id: str | None = None
-    issue: int | None = None
     seed: int = 42
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value

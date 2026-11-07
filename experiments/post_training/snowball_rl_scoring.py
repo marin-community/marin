@@ -15,10 +15,9 @@ import pyarrow.parquet as pq
 from marin.rl.skyrl import named_evaluation_profiles, read_skyrl_launch_config
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.models import TaskSpec
 
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME, TRAIN_FILENAME
+from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN, TRAIN_FILENAME
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [
@@ -92,51 +91,34 @@ def task_set_sha256(launch: dict, name: str) -> str:
         path = StoragePath(source["uri"]) / source["relative_path"]
         fs, key = filesystem_for(str(path))
         with fs.open(key, "rb") as stream:
-            for raw in pq.read_table(stream, columns=["task_spec"])["task_spec"].to_pylist():
-                task = TaskSpec.model_validate_json(raw)
-                canonical = json.dumps(
-                    task.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-                )
-                pairs.append((task.id, canonical))
+            for raw in pq.read_table(stream, columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
+                pairs.append((json.loads(raw)["id"], raw))
     payload = json.dumps(sorted(pairs), separators=(",", ":"), ensure_ascii=False).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
-def evaluation_protocol(launch: dict, name: str, *, vllm_version: str | None = None) -> dict:
-    """The effective evaluation settings that can change generated answers."""
+def evaluation_protocol(launch: dict, name: str) -> dict:
+    """The evaluation request recorded by native configuration composition."""
     config = launch["skyrl"]
     generator = config["generator"]
     sampling = deepcopy(generator["eval_sampling_params"])
     samples = generator["eval_n_samples_per_prompt"]
     if name in launch["inputs"].get("evaluation_data", {}):
-        profiles = named_evaluation_profiles(config, name)
-        if len(profiles) != 1:
+        profile = named_evaluation_profiles(config).get(name)
+        if profile is None:
             raise InvalidComparison(f"expected one recorded evaluation profile for {name}")
-        profile = profiles[0]
         sampling.update(profile.get("sampling_params") or {})
         samples = profile.get("n_samples_per_prompt", samples)
-    engine_keys = (
-        "backend",
-        "model_dtype",
-        "vllm_attention_backend",
-        "enable_prefix_caching",
-        "max_num_seqs",
-        "max_num_batched_tokens",
-        "enable_chunked_prefill",
-        "enforce_eager",
-        "engine_init_kwargs",
-        "chat_template",
-    )
     return {
         "sampling_params": sampling,
         "n_samples_per_prompt": samples,
-        "context_budget": {key: config["context_budget"][key] for key in ("max_new_tokens_per_turn", "max_turns")},
+        "context_budget": {
+            "max_new_tokens_per_turn": sampling["max_generate_length"],
+            "max_turns": generator["max_turns"],
+        },
         "max_prompt_length": config["trainer"]["max_prompt_length"],
-        "engine": {key: deepcopy(generator.get(key)) for key in engine_keys},
-        "batch_invariant": config["trainer"]["algorithm"]["batch_invariant"],
-        "vllm_env": {key: value for key, value in config.get("extra_env", {}).items() if key.startswith("VLLM_")},
-        "task_env": deepcopy(config.get("runtime", {}).get("task_env", {})),
-        "vllm_version": vllm_version,
+        "chat_template": generator.get("chat_template"),
+        "task_env": {key: value for key, value in launch["runtime"]["task_env"].items() if not key.startswith("VLLM_")},
     }
 
 

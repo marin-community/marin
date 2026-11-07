@@ -16,7 +16,9 @@ from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.reasoning_markup import ReasoningViolation
 
-TASK_TIMING_KEYS = ("timing/grading", "timing/setup")
+GRADING_SECONDS_METRIC = "timing/grading"
+SETUP_SECONDS_METRIC = "timing/setup"
+TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"

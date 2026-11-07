@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import pytest
 import yaml
 
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.launch import ExportedPolicy, LaunchOutcome, LaunchState, execute_launch
+from cloud.iris.iris_backend import supervise_iris_job
+from iris.resources.state import JobState
+from rigging.timing import Timestamp
 from cloud.iris.tests.test_launch_config import _raw_config
 from marinskyrl.checkpoint_paths import policy_export_path
 
@@ -64,7 +69,19 @@ def test_prepare_validates_without_submitting(tmp_path: Path, monkeypatch) -> No
 
 
 def test_wait_launches_exports_and_records_the_terminal_model(tmp_path: Path, monkeypatch) -> None:
-    backend = RecordingBackend()
+    status = SimpleNamespace(
+        state=JobState.SUCCEEDED,
+        started_at=Timestamp.from_seconds(datetime(2026, 11, 7, 1, tzinfo=timezone.utc).timestamp()),
+        finished_at=Timestamp.from_seconds(datetime(2026, 11, 7, 2, tzinfo=timezone.utc).timestamp()),
+    )
+
+    class NativeStatusBackend(RecordingBackend):
+        def launch(self, config_path):
+            super().launch(config_path)
+            job = SimpleNamespace(job_id="/user/job", wait=lambda **kwargs: status)
+            return supervise_iris_job(job)
+
+    backend = NativeStatusBackend()
     writes: list[tuple[str, dict]] = []
     model = ExportedPolicy(
         policy_export_uri="s3://runs/smoke/exports/global_step_8/policy",
@@ -85,6 +102,11 @@ def test_wait_launches_exports_and_records_the_terminal_model(tmp_path: Path, mo
 
     assert result.state is LaunchState.SUCCEEDED
     assert result.model == model
+    assert all(
+        payload["result"]["started_at"] == "2026-11-07T01:00:00+00:00"
+        and payload["result"]["finished_at"] == "2026-11-07T02:00:00+00:00"
+        for _, payload in writes
+    )
     assert backend.launched and backend.exported
     assert backend.launched_config is not None
     assert backend.launched_config["inputs"]["train_data"][0]["kind"] == "directory"

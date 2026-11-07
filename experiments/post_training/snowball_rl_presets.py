@@ -8,11 +8,12 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Literal
 from urllib.parse import urlencode
 
 import click
@@ -41,7 +42,6 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from rolloutengine.models import TASK_TIMING_KEYS
-from taskcompendium.models import TaskSpec, grades_with_judge
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.inventory import (
@@ -49,7 +49,6 @@ from experiments.post_training.task_curation.inventory import (
     SELECTION_PREFIX,
     SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
-    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
@@ -108,21 +107,15 @@ class Gap(StrEnum):
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
 
 
-class EvalHarness(StrEnum):
-    PANEL = "panel"
-
-
 @dataclass(frozen=True)
 class Evaluation:
     name: str
     file: str
-    harness: EvalHarness = EvalHarness.PANEL
     source: str = "default"
     sample: int | None = None
     answers: int = 1
     every: int | None = None
     at_start: bool = False
-    local_only: bool = False
 
     def tasks(self, selection: ArtifactStep, default: ArtifactStep) -> ArtifactStep:
         if self.source == "default":
@@ -139,7 +132,6 @@ class Layout:
     megatron: MegatronGeometry
     cluster: str
     host_memory: str
-    sockets: bool
 
 
 @dataclass(frozen=True)
@@ -151,8 +143,6 @@ class Recipe:
     staleness: int
     estimator: Mapping[str, object]
     optimizer: Mapping[str, object]
-    max_turns: int = 1
-    engine_init_kwargs: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -172,6 +162,7 @@ class Preset:
     evaluations: tuple[Evaluation, ...] = ()
     checkpoint_every: int | None = None
     guards: tuple[Metric, ...] = ()
+    objectives: tuple[Metric, ...] = ()
     reported: tuple[Metric, ...] = ()
     gaps: tuple[Gap, ...] = ()
     budget: str = "hours to days"
@@ -214,8 +205,6 @@ def exists(path: str | StoragePath) -> bool:
 
 
 class PanelEvaluator:
-    required_env: tuple[str, ...] = ()
-
     def callbacks(self, evaluation: Evaluation, *, updates: int) -> list[dict]:
         return [
             {
@@ -228,9 +217,7 @@ class PanelEvaluator:
 
     def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
         if evaluation.sample is not None:
-            tasks = sampled_tasks_step(
-                tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], local_only=evaluation.local_only
-            )
+            tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"])
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
         sampling = (
             {
@@ -252,14 +239,6 @@ class PanelEvaluator:
         return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
-class Evaluator(Protocol):
-    required_env: tuple[str, ...]
-
-    def callbacks(self, evaluation: Evaluation, *, updates: int) -> list[dict]: ...
-    def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]: ...
-
-
-EVALUATORS: Mapping[EvalHarness, Evaluator] = MappingProxyType({EvalHarness.PANEL: PanelEvaluator()})
 _TEST_PANEL = f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}"
 
 EVALUATIONS = MappingProxyType(
@@ -268,7 +247,7 @@ EVALUATIONS = MappingProxyType(
         for evaluation in (
             Evaluation(name="test_panel", file=Path(FULL_VALIDATION_FILENAME).stem, source=_TEST_PANEL),
             Evaluation(name="test_panel_100", file=Path(VALIDATION_FILENAME).stem, source=_TEST_PANEL),
-            Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4, local_only=True),
+            Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4),
             Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
     }
@@ -299,7 +278,6 @@ P40 = Layout(
     ),
     cluster="cw-us-east-02a",
     host_memory="1800GB",
-    sockets=True,
 )
 E8 = replace(P40, name="e8", role_plan=replace(_P40_PLAN, generate_only=True))
 _ESTIMATOR = MappingProxyType(
@@ -338,7 +316,6 @@ _LEARNING = Recipe(
     staleness=0,
     estimator=_ESTIMATOR,
     optimizer=_OPTIMIZER,
-    engine_init_kwargs={"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
 )
 _ASYNC_P40 = replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"})
 _GAPS = (
@@ -427,6 +404,7 @@ _LEARNING_MEDIUM = Preset(
     measured=range(21, 26),
     evaluations=(replace(EVALUATIONS["test_panel"], at_start=True),),
     guards=(Metric("test_panel/family_mean", True),),
+    objectives=(Metric("test_panel/family_mean", True), Metric("test_panel/family_mean/gain_per_h100_hour", True)),
     reported=(*_TRAINING_REPORTS, Metric("test_panel/mean", True)),
     gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
@@ -434,6 +412,7 @@ _LEARNING_MEDIUM = Preset(
 _LEARNING_LONG = replace(
     _LEARNING_MEDIUM,
     duration=Duration.LONG,
+    objectives=(Metric("test_panel/family_mean", True), Metric("test_panel_100/family_mean/gain_per_h100_hour", True)),
     recipe=_ASYNC_P40,
     updates=100,
     measured=range(91, 101),
@@ -448,6 +427,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.SHORT,
+                objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
                 recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
                 updates=0,
                 measured=range(1),
@@ -466,6 +446,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.DATA,
                 duration=Duration.SHORT,
+                objectives=(Metric("screen-256x4/mixed_fraction", True),),
                 recipe=replace(_LEARNING, layout=E8),
                 updates=0,
                 measured=range(1),
@@ -485,6 +466,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.MEDIUM,
+                objectives=(Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),),
                 recipe=replace(
                     _LEARNING,
                     fixed_reply_tokens=4096,
@@ -503,6 +485,11 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
+                objectives=(
+                    Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
+                    Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
+                    Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
+                ),
                 recipe=_ASYNC_P40,
                 updates=20,
                 measured=range(3, 21),
@@ -562,7 +549,7 @@ def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
     return (evaluation.sample or selection_summary(tasks)[key]) * evaluation.answers
 
 
-def _write_sample(selection: str, filename: str, count: int, seed: int, local_only: bool, output: str) -> None:
+def _write_sample(selection: str, filename: str, count: int, seed: int, output: str) -> None:
     generator = random.Random(seed)
     rows = []
     seen = 0
@@ -572,8 +559,6 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, local_on
         schema = source.schema_arrow
         for batch in source.iter_batches(batch_size=256):
             for row in batch.to_pylist():
-                if local_only and grades_with_judge(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]).grader):
-                    continue
                 seen += 1
                 if len(rows) < count:
                     rows.append(row)
@@ -595,10 +580,8 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, local_on
                 target.write(source.read())
 
 
-def sampled_tasks_step(
-    selection: ArtifactStep, filename: str, count: int, seed: int, *, local_only: bool
-) -> ArtifactStep:
-    identity = fingerprint_hash(json.dumps((selection.name, selection.version, filename, count, seed, local_only)))
+def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed: int) -> ArtifactStep:
+    identity = fingerprint_hash(json.dumps((selection.name, selection.version, filename, count, seed)))
     return apply(
         f"datasets/snowball-rl/sample-{identity}",
         _write_sample,
@@ -607,7 +590,6 @@ def sampled_tasks_step(
         filename=filename,
         count=count,
         seed=seed,
-        local_only=local_only,
         output=OUT,
     )
 
@@ -732,7 +714,7 @@ def grafana_links(
         if preset.focus == Focus.SPEED
         else GRAFANA_LEARNING_PANELS if preset.focus in (Focus.LEARNING, Focus.DATA) else ()
     )
-    if preset.name == "speed-medium":
+    if any(metric.key.startswith("policy/mismatch/") for metric in preset.guards):
         panels = (*panels, GRAFANA_MISMATCH_PANEL)
     return {"run": url, **{name: f"{url}&viewPanel={panel}" for name, panel in panels}}
 
@@ -791,6 +773,31 @@ def panel_evaluation(preset: Preset) -> Evaluation | None:
         ),
         None,
     )
+
+
+def utc_millis(value: str) -> int:
+    """Parse a native receipt's UTC timestamp for duration and dashboard windows."""
+    return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+EXIT_CODES = {"pass": 0, "fail": 1, "invalid": 2, None: 3}
+REFUSAL_EXIT_CODE = 4
+
+
+class SnowballCommand(click.Command):
+    def make_context(self, *args, **kwargs):
+        try:
+            return super().make_context(*args, **kwargs)
+        except click.UsageError as error:
+            error.exit_code = REFUSAL_EXIT_CODE
+            raise
+
+    def invoke(self, context):
+        try:
+            return super().invoke(context)
+        except click.UsageError as error:
+            error.exit_code = REFUSAL_EXIT_CODE
+            raise
 
 
 def run_command(*, help_text: str | None = None):
@@ -888,6 +895,6 @@ def run_command(*, help_text: str | None = None):
         command = rl_build_options(function)
         for option in reversed(options):
             command = option(command)
-        return click.command(help=help_text)(command)
+        return click.command(cls=SnowballCommand, help=help_text)(command)
 
     return decorate

@@ -207,6 +207,8 @@ def supervise_iris_job(job: Job) -> LaunchOutcome:
         job_id=job_id,
         job_state=status.state.value,
         exit_code=0 if status.state is JobState.SUCCEEDED else 1,
+        started_at=status.started_at.as_formatted_date() if status.started_at else None,
+        finished_at=status.finished_at.as_formatted_date() if status.finished_at else None,
     )
 
 

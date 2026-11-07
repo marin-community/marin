@@ -3,7 +3,7 @@
 
 import json
 import subprocess
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,15 +11,12 @@ from types import SimpleNamespace
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 from iris.cluster.client.job_info import set_job_info
-from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from rigging.provenance import Provenance
-from rigging.timing import Timestamp
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import Source
@@ -32,7 +29,6 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 
 
-@pytest.fixture
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
@@ -71,14 +67,12 @@ def selection(tmp_path, monkeypatch):
     return ArtifactStep.adopt("tests/candidate", "2026.10.26", str(root))
 
 
-@pytest.fixture
 def source_provenance(monkeypatch):
     monkeypatch.setattr(
         snowball, "_provenance", lambda **kwargs: Provenance("tree-one", "commit-one", False, "branch", "test")
     )
 
 
-@pytest.fixture
 def synthetic_current_controls(monkeypatch):
     long_pin = gate.ControlPin("learning-long", "09026fd100", presets.PRESET_REVISION, 4)
     monkeypatch.setattr(
@@ -92,7 +86,6 @@ def synthetic_current_controls(monkeypatch):
     )
 
 
-@pytest.fixture
 def native_json():
     def execute(script, paths):
         source = str(presets.REPO_ROOT / "vendor/skyrl")
@@ -112,7 +105,6 @@ def native_json():
     return execute
 
 
-@pytest.fixture
 def recorded_runs(selection, tmp_path, monkeypatch, request):
 
     monkeypatch.setattr(
@@ -120,29 +112,18 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     )
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
-    native_job = SimpleNamespace(
-        state=JobState.SUCCEEDED,
-        started_at=Timestamp.from_ms(1794000000000),
-        finished_at=Timestamp.from_ms(1794003600000),
-    )
-    monkeypatch.setattr(
-        "marin.rl.cli.iris_client", lambda **kwargs: nullcontext(SimpleNamespace(job_status=lambda job_id: native_job))
-    )
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    panel = Path(presets.default_selection().path())
-    tasks = [
+    test_panel = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
+    full_tasks = [
         {
             "task_id": f"task-{i}",
-            "family": ("large", "small")[i == 0],
-            "aaii_category": ("coding", "format")[i == 0],
+            "family": "small" if i == 0 else "large",
+            "aaii_category": "format" if i == 0 else "coding",
             "agentic": False,
         }
-        for i in range(910)
+        for i in range(1500)
     ]
-    pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
-    test_panel = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
-    full_tasks = [{**tasks[0 if i == 0 else 1], "task_id": f"task-{i}"} for i in range(1500)]
     pq.write_table(pa.Table.from_pylist(full_tasks), test_panel / presets.TASK_MANIFEST_FILENAME)
     revision = presets.MODEL_REVISION
     rows = [
@@ -153,13 +134,11 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             "samples": 8,
             "mean_score": (0.05, 0.5, 0.95)[i % 3],
         }
-        for i in range(910)
+        for i in range(1500)
     ]
     panel_rates = tmp_path / "test-panel-rates" / scoring.PASS_RATES_FILENAME
     panel_rates.parent.mkdir()
-    pq.write_table(
-        pa.Table.from_pylist([{**rows[i % len(rows)], "task_id": f"task-{i}"} for i in range(1500)]), panel_rates
-    )
+    pq.write_table(pa.Table.from_pylist(rows), panel_rates)
 
     def write(
         preset,
@@ -188,10 +167,9 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         quality_metrics=None,
         initial_unscored=0,
         first_answer_task="task-0",
-        attempt_id="recorded-attempt",
         panel_identity="",
-        run_id=None,
     ):
+        attempt_id = "recorded-attempt"
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
         result_run = SkyRLRun(
@@ -217,7 +195,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             0
         ].main_commit
         source = {"tree_hash": "native-tree", "base_commit": commit, "dirty": False, "command_line": list(argv)}
-        result = {"state": "succeeded", "iris_job_id": "/tests/native-run", "provenance": source | (provenance or {})}
+        result = {
+            "state": "succeeded",
+            "iris_job_id": "/tests/native-run",
+            "provenance": source | (provenance or {}),
+            "started_at": "2026-11-06T18:40:00+00:00",
+            "finished_at": "2026-11-06T19:40:00+00:00",
+        }
         (root / ".executor_status").write_text("SUCCESS")
         for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
             row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
@@ -251,9 +235,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             if step != omit_step:
                 write_json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
         launch = {
-            "run": {"id": run_id or f"{name}-{version}", "attempt_id": attempt_id},
+            "run": {"id": f"{name}-{version}", "attempt_id": attempt_id},
+            "runtime": {"task_env": {"NCCL_NET": "Socket", "VLLM_LOGGING_LEVEL": "ERROR"}},
+            "iris": {"allocation": {"num_nodes": preset.recipe.layout.role_plan.num_nodes, "gpus_per_node": 8}},
             "skyrl": {
-                "context_budget": {"max_new_tokens_per_turn": 8192, "max_turns": 1},
                 "trainer": {
                     "seed": presets.SEED,
                     "max_steps": preset.updates,
@@ -267,6 +252,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     "eval_sampling_params": {"temperature": 0.0, "max_generate_length": 8192},
                     "backend": "vllm",
                     "model_dtype": "bfloat16",
+                    "max_turns": 1,
                     "vllm_attention_backend": "FLASH_ATTN",
                     "enable_prefix_caching": True,
                     "max_num_seqs": 1024,
@@ -340,9 +326,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 )
             binding = selected
             if evaluation.sample is not None:
-                binding = presets.sampled_tasks_step(
-                    selected, evaluation.file, evaluation.sample, presets.SEED, local_only=evaluation.local_only
-                )
+                binding = presets.sampled_tasks_step(selected, evaluation.file, evaluation.sample, presets.SEED)
             descriptor = {
                 "uri": str(run_panel),
                 "relative_path": f"{evaluation.file}.parquet",
@@ -420,13 +404,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         write_json(
             root / f"exports/attempts/{attempt_id}/tracking.json",
             {
-                "run_id": run_id or f"{name}-{version}",
+                "run_id": f"{name}-{version}",
                 "attempt_id": attempt_id,
                 "iris_job_id": "/tests/native-run",
                 "coordinator_iris_job_id": "/tests/coordinator",
                 "wandb_url": None,
                 "started_at": "2026-11-06T17:20:00+00:00",
-                "vllm_version": "fixture-vllm",
+                "engine": {"vllm_version": "fixture-vllm"},
             },
         )
         if not (missing_receipt or unresolved_receipt):
