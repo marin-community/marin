@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timezone
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -361,10 +362,12 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
     assert seen[0].model_source_uri is None
 
 
-def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("entrypoint", ["standard", "generate"])
+def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path, monkeypatch, entrypoint) -> None:
     destination = tmp_path / "launch.yaml"
     document = _raw_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
+    document["skyrl"]["entrypoint"] = entrypoint
     document["artifacts"]["export_root"] = str(tmp_path / "exports")
     contents = yaml.safe_dump(document).encode()
 
@@ -376,18 +379,41 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     assert path == str(destination)
     assert destination.read_bytes() == contents
 
+    record_path = tmp_path / "exports/attempts/attempt-1/tracking.json"
+    first_start = datetime.now(timezone.utc)
+    fail = True
+
     def workload(config):
+        assert record_path.exists()
+        assert config.runtime.iris_job_id == "/tests/bootstrap-trainer"
+        if fail:
+            raise RuntimeError("workload initialization failed")
         with Tracking("project", "display-name", "files", config):
             pass
 
-    monkeypatch.setitem(sys.modules, "skyrl_train.entrypoints.main_base", SimpleNamespace(run=workload))
-    skyrl_entrypoint.run_config(destination)
-    record = json.loads((tmp_path / "exports/attempts/attempt-1/tracking.json").read_text())
-    assert (record["run_id"], record["attempt_id"], record["coordinator_iris_job_id"]) == (
-        "smoke",
-        "attempt-1",
-        "/tests/coordinator",
+    monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
+    if entrypoint == "generate":
+        monkeypatch.setattr(skyrl_entrypoint, "version", lambda name: "fixture-vllm")
+    module = (
+        "skyrl_train.entrypoints.main_generate" if entrypoint == "generate" else "skyrl_train.entrypoints.main_base"
     )
+    monkeypatch.setitem(sys.modules, module, SimpleNamespace(run=workload))
+    with pytest.raises(RuntimeError, match="workload initialization failed"):
+        skyrl_entrypoint.run_config(destination)
+    record = json.loads(record_path.read_text())
+    assert {key: record[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
+        "run_id": "smoke",
+        "attempt_id": "attempt-1",
+        "iris_job_id": "/tests/bootstrap-trainer",
+        "coordinator_iris_job_id": "/tests/coordinator",
+    }
+    assert first_start <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
+    assert record["engine"]["vllm_version"] == ("fixture-vllm" if entrypoint == "generate" else None)
+    record["wandb_url"] = "https://wandb.example/retained-attempt"
+    record_path.write_text(json.dumps(record))
+    fail = False
+    skyrl_entrypoint.run_config(destination)
+    assert json.loads(record_path.read_text()) == record
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:
