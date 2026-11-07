@@ -52,6 +52,7 @@ from experiments.post_training.task_curation.inventory import (
     FULL_VALIDATION_FILENAME,
     HELDOUT_BLEND,
     HELDOUT_FAMILIES,
+    PASS_RATE_ATTEMPTS,
     STRUCTURAL_FAMILY,
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
@@ -615,10 +616,10 @@ def measured_recipe(settings: PanelRecipe, tmp_path: Path, tasks: list[TaskSpec]
             "task_id": task.id,
             "task_digest": canonical_sha256(task.model_dump(mode="json")),
             "model_revision": "fixture-model",
-            "attempted": 8,
-            "samples": 8,
+            "attempted": PASS_RATE_ATTEMPTS,
+            "samples": PASS_RATE_ATTEMPTS,
             "passed": index + 1,
-            "mean_score": (index + 1) / 8,
+            "mean_score": (index + 1) / PASS_RATE_ATTEMPTS,
         }
         for index, task in enumerate(tasks)
     ]
@@ -701,7 +702,7 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
     assert read_tasks(final / VALIDATION_FILENAME) == fast
     difficulty = [row["difficulty"] for row in pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()]
-    assert difficulty == [1 - (index + 1) / 8 for index in range(len(full))]
+    assert difficulty == [1 - (index + 1) / PASS_RATE_ATTEMPTS for index in range(len(full))]
     subset = measured.model_copy(
         update={"version": "2026.11.04.2", "sources": (questions,), "fast_counts": {questions.family: 4}}
     )
@@ -774,7 +775,7 @@ def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evid
         last = {
             "missing-rate": {"task_id": "unknown"},
             "duplicate-rate": {"task_id": tasks[0].id},
-            "attempted-rate": {"attempted": 7, "samples": 7, "passed": 7},
+            "attempted-rate": dict.fromkeys(("attempted", "samples", "passed"), PASS_RATE_ATTEMPTS - 1),
             "model-rate": {"model_revision": "another-model"},
         }[failure]
         settings = measured_recipe(settings, tmp_path, tasks, **last)

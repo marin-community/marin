@@ -53,6 +53,8 @@ SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
 HELDOUT_BLEND = "rlvr1"
 STRUCTURAL_FAMILY = "structural"
 PARQUET_BATCH_ROWS = 256
+# Answers per task in the initializer run that measures panel pass rates.
+PASS_RATE_ATTEMPTS = 8
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 SUMMARY_FILENAME = "summary.json"
@@ -606,7 +608,11 @@ def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, Panel
         raise ValueError("Panel pass-rate rows must have unique task IDs and the declared population")
     for row in rows:
         # The range comparison also refuses NaN and infinite scores.
-        valid = 0 < row.samples and 0 <= row.passed <= row.samples <= row.attempted == 8 and 0 <= row.mean_score <= 1
+        valid = (
+            0 < row.samples
+            and 0 <= row.passed <= row.samples <= row.attempted == PASS_RATE_ATTEMPTS
+            and 0 <= row.mean_score <= 1
+        )
         if not valid or row.model_revision != measurement.model_revision:
             raise ValueError(f"Panel pass-rate evidence is incomplete: {row.task_id}")
     return by_id
