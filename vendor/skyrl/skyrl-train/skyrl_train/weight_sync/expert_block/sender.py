@@ -18,7 +18,7 @@ from skyrl_train.weight_sync.expert_block.schedule import Schedule, TrainerRank,
 from skyrl_train.weight_sync.expert_block.megatron_source import local_source_slices
 from skyrl_train.weight_sync.expert_block.source_views import local_expert_sources
 from skyrl_train.weight_sync.expert_block.stream import Stream, bind, storage_identity
-from skyrl_train.weight_sync.expert_block.verify_weights import compare_replicas, replay
+from skyrl_train.weight_sync.expert_block.verify_weights import compare_replicas
 
 
 class ExpertBlockSender:
@@ -79,15 +79,17 @@ class ExpertBlockSender:
             raise RuntimeError("Expert-block sender is already initialised")
         plan = from_wire(Schedule, init_info["schedule"])
         device = next(iter(self.sources.values())).device
-        self.groups, self.stream, warm = bind(
+        bound = bind(
             self.trainer.rank,
             plan,
             Rendezvous(**init_info["rendezvous"]),
             device,
-            sources=self.sources,
-            expert_sources=self.expert_sources,
+            make_stream=lambda groups: Stream(
+                self.trainer.rank, plan, groups, device=device, sources=self.sources, expert_sources=self.expert_sources
+            ),
         )
-        return {"participant": self.trainer.rank, "warmup_seconds": warm}
+        self.groups, self.stream = bound.groups, bound.stream
+        return {"participant": self.trainer.rank, "warmup_seconds": bound.warmup_seconds}
 
     def send_weights(self, update_info: dict) -> dict:
         """Send this rank's weights for one update. Refuses if the rank has not finished that update."""
@@ -121,7 +123,7 @@ class ExpertBlockSender:
             for name in self.sources
         }
         return {
-            "replay": asdict(replay(self.stream, version)),
+            "replay": asdict(self.stream.verify(version)),
             "replicas": asdict(compare_replicas(self.sources, groups, self.trainer.rank, version)),
         }
 
