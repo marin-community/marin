@@ -360,6 +360,10 @@ async def test_submit_grades_the_right_answer_and_its_shifted_numbers():
     assert "fails right_answer" in problem
 
 
+def test_a_full_precision_number_of_an_answer_is_not_moved():
+    assert shifted_answers("0.2880658436213992 and 2.50") == ["0.2880658436213992 and 2.51"]
+
+
 def test_each_number_of_an_answer_moves_alone_by_a_unit_of_its_last_digit():
     assert shifted_answers('{"a": 2.50, "b": 7, "c": "x1"}') == [
         '{"a": 2.51, "b": 7, "c": "x1"}',

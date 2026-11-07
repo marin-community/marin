@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "10"
+DRAFT_REVISION = "11"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -134,6 +134,8 @@ EXAMPLE_CUE_CHARS = 60
 """How far after a cue a number still counts as its example."""
 """The significant digits at which an exact form of the prompt is compared with the reference."""
 MAX_SHIFTED_NUMBERS = 12
+MAX_SHIFTED_DIGITS = 6
+"""The most significant digits of a number that ``submit`` moves: beyond them a number is a full-precision value."""
 """The most numbers of a right answer that ``submit`` moves, one at a time: each is one grader run."""
 ANSWER_NUMBER = re.compile(r"(?<![\w.])[+-]?\d+(?:\.\d+)?(?!\w|\.\d)")
 """A plain decimal of an answer, whose last digit gives its precision; not part of a name or of 1e-3."""
@@ -383,9 +385,14 @@ class DraftTools:
 
 
 def shifted_answers(answer: str) -> list[str]:
-    """``answer`` with each of its first plain decimals, one at a time, one unit larger in its last digit."""
+    """``answer`` with each of its first plain decimals, one at a time, one unit larger in its last digit. A number
+    with more significant digits than a solver is asked for is a full-precision value, whose last digit any sound
+    tolerance ignores, so it is not moved."""
     shifted = []
-    for match in list(ANSWER_NUMBER.finditer(answer))[:MAX_SHIFTED_NUMBERS]:
+    numbers = [
+        match for match in ANSWER_NUMBER.finditer(answer) if _significant_digits(match.group()) <= MAX_SHIFTED_DIGITS
+    ]
+    for match in numbers[:MAX_SHIFTED_NUMBERS]:
         token = match.group()
         unit = Decimal(1).scaleb(-len(token.partition(".")[2]))
         shifted.append(answer[: match.start()] + str(Decimal(token) + unit) + answer[match.end() :])
