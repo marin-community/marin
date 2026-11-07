@@ -379,6 +379,16 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ),
         pytest.param(
             "speed-medium",
+            {"mismatch_window": "partial-nan"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="nonfinite-selected-token-kl",
+        ),
+        pytest.param(
+            "speed-medium",
             {"mismatch_window": "spike"},
             {},
             "fail",
@@ -569,13 +579,24 @@ def test_rescore_reports_candidate_and_control_contracts(
             path = source / f"exports/metrics/step-{step:06d}.json"
             row = json.loads(path.read_text())
             prefix = "policy/mismatch/staleness0/"
+            if mismatch_window == "empty-update":
+                for metric in presets.PRESETS[preset].reported:
+                    if metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN:
+                        row[metric.key] = 0.2 if step == measured.start + 1 else 0.1
+                if step == measured.start + 1:
+                    row[prefix + "selected_tokens"] = 1500
             if mismatch_window == "all-stale" or (mismatch_window == "empty-update" and step == measured.start):
                 row[prefix + "selected_tokens"] = 0
                 row.pop(prefix + "kl_k3")
                 row.pop(prefix + "finite_fraction")
+                for metric in presets.PRESETS[preset].reported:
+                    if metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN:
+                        row.pop(metric.key, None)
                 row["policy/mismatch/staleness2/selected_tokens"] = 1758754
                 row["policy/mismatch/pooled/selected_tokens"] = 1758754
                 row["policy/mismatch/pooled/finite_fraction"] = 1
+            if mismatch_window == "partial-nan" and step == measured.start:
+                row[prefix + "finite_fraction"] = 0.999
             if mismatch_window == "spike" and step == measured.start:
                 row[prefix + "selected_tokens"] = 9000
                 row[prefix + "kl_k3"] = 0.5
@@ -614,6 +635,22 @@ def test_rescore_reports_candidate_and_control_contracts(
     if mismatch_window and verdict != "invalid":
         mismatch = next(row for row in report["guards"] if row["metric"] == "policy/mismatch/staleness0/kl_k3")
         assert mismatch["run"] == pytest.approx(53 / 170 if mismatch_window == "spike" else 0.1)
+    if mismatch_window == "empty-update":
+        diagnostic_keys = {
+            "log_ratio_abs_mean",
+            "log_ratio_abs_p99",
+            "log_ratio_abs_p999",
+            "frac_outside_0_5_2",
+            "pos_first256/log_ratio_abs_mean",
+            "pos_last256/log_ratio_abs_mean",
+            "pos_middle/log_ratio_abs_mean",
+        }
+        diagnostics = {
+            row["metric"].removeprefix("policy/mismatch/staleness0/"): row["run"]
+            for row in report["reported"]
+            if row["metric"].removeprefix("policy/mismatch/staleness0/") in diagnostic_keys
+        }
+        assert diagnostics == pytest.approx(dict.fromkeys(diagnostic_keys, 19 / 175))
     if preset == "speed-long" and verdict != "invalid":
         assert {row["metric"] for row in report["guards"]} == {
             "speed/update_seconds",
@@ -1020,6 +1057,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
     Path(printed["report"]).unlink()
     terminal = json.loads((source / "terminal.json").read_text())
+    terminal["config"]["run"]["attempt_id"] = "failed"
     _json(source / "attempts/failed.json", terminal | {"result": terminal["result"] | {"state": "failed"}})
     (source / "terminal.json").unlink()
     launch = json.loads((source / "resolved-launch.yaml").read_text())["config"]
@@ -1087,6 +1125,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("parent-early", 3),
         ("native-failed", 2),
         ("no-wait", 0),
+        ("pending-resubmit", 0),
         ("child", 0),
         ("control", 0),
         ("generate", 0),
@@ -1105,13 +1144,14 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         speed=150 if case in {"fail", "no-wait"} else 101,
         fingerprint=built.runs[0].fingerprint(),
         attempt_id="recorded-attempt",
+        mutations=(leave_unresolved_receipt,) if case == "pending-resubmit" else (),
     )
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
     built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
-    if case not in {"missing", "control", "native-failed"}:
+    if case not in {"missing", "control", "native-failed", "pending-resubmit"}:
         run(built.gate)
     if case == "parent-early":
         shutil.rmtree(source)
@@ -1134,7 +1174,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
-    if case != "no-wait":
+    if case not in {"no-wait", "pending-resubmit"}:
         arguments.append("--wait")
     if case == "control":
         arguments.append("--control")
@@ -1143,8 +1183,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if case in {"no-wait", "child"} else [(job,)]
+    waited = [] if case in {"no-wait", "pending-resubmit", "child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
+    if case == "pending-resubmit":
+        assert client.submit.call_args is not None
     if case != "child":
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:

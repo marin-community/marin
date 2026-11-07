@@ -18,7 +18,7 @@ from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl import skyrl
 from marin.rl.rl_progress import RunSummary, membership_sha256, protocol_sha256
-from marin.rl.skyrl import read_skyrl_launch_config, read_stored_skyrl_receipt
+from marin.rl.skyrl import read_stored_skyrl_attempts
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import publish_rl_progress
@@ -83,22 +83,6 @@ def publication_path(run_output: str, attempt_id: str) -> StoragePath:
     return StoragePath(run_output) / "publication" / attempt_id
 
 
-def stored_attempts(run_output: str) -> dict[str, skyrl.SkyRLLaunchReceipt]:
-    """Discover native attempts from their stored receipts, including attempts with no progress record."""
-    current = read_stored_skyrl_receipt(run_output)
-    try:
-        launch = current.config if current is not None else read_skyrl_launch_config(run_output)
-    except FileNotFoundError:
-        return {}
-    attempts = {current.config["run"]["attempt_id"]: current} if current is not None else {}
-    for path in scoring.paths(StoragePath(launch["artifacts"]["attempts_root"]) / "*.json"):
-        attempt_id = path.name.removesuffix(".json")
-        receipt = read_stored_skyrl_receipt(run_output, attempt_id)
-        if receipt is not None:
-            attempts[attempt_id] = receipt
-    return attempts
-
-
 def label(preset: presets.Preset, inputs: gate.GateInputs) -> str:
     parts = [preset.name]
     for text in inputs.settings:
@@ -113,11 +97,14 @@ def build_record(
     preset: presets.Preset,
     *,
     attempt_id: str | None = None,
+    attempts: tuple[str | None, dict[str, skyrl.SkyRLLaunchReceipt]] | None = None,
 ) -> dict:
     """Build a terminal progress record from stored native outputs without launching or live lookups."""
     if not publishes(preset):
         raise ValueError("Progress publication requires a trained-panel preset")
-    receipt = read_stored_skyrl_receipt(run_output, attempt_id)
+    current_id, receipts = attempts if attempts is not None else read_stored_skyrl_attempts(run_output)
+    selected_id = attempt_id or current_id
+    receipt = receipts.get(selected_id) if selected_id is not None else None
     if receipt is None:
         raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
     launch, result = receipt.config, receipt.result
@@ -131,12 +118,9 @@ def build_record(
     provenance = result.provenance or {}
     options = gate.recorded_run_options(provenance.get("command_line", []))
     tracking = skyrl.read_skyrl_attempt_tracking(run_output, attempt_id)
-    attempts = stored_attempts(run_output)
-    current = read_stored_skyrl_receipt(run_output)
-    latest = current is not None and current.config["run"]["attempt_id"] == attempt_id
     started, finished = result.started_at, result.finished_at
     metrics = gate.read_metrics(StoragePath(run_output))
-    if not latest:
+    if attempt_id != current_id:
         selected_steps = [step for step, row in metrics.items() if row.get("attempt_id") == attempt_id]
         last_step = max(selected_steps, default=-1)
         metrics = {step: row for step, row in metrics.items() if step <= last_step}
@@ -160,7 +144,7 @@ def build_record(
     )
     lineage_ids = {attempt_id} | {row["attempt_id"] for row in metrics.values() if row.get("attempt_id")}
     windows = [
-        (attempts[key].result.started_at, attempts[key].result.finished_at) if key in attempts else (None, None)
+        (receipts[key].result.started_at, receipts[key].result.finished_at) if key in receipts else (None, None)
         for key in lineage_ids
     ]
     elapsed = None
@@ -252,9 +236,15 @@ def build_record(
     return record
 
 
-def retain_record(run_output: str, preset: presets.Preset, *, attempt_id: str | None = None) -> dict:
+def retain_record(
+    run_output: str,
+    preset: presets.Preset,
+    *,
+    attempt_id: str | None = None,
+    attempts: tuple[str | None, dict[str, skyrl.SkyRLLaunchReceipt]] | None = None,
+) -> dict:
     """Build and retain one terminal record from its stored native outputs."""
-    record = build_record(run_output, preset, attempt_id=attempt_id)
+    record = build_record(run_output, preset, attempt_id=attempt_id, attempts=attempts)
     destination = StoragePath(record["artifact_uri"])
     destination.parent.mkdirs()
     destination.write_text(json.dumps(record, allow_nan=False, indent=2))
@@ -321,15 +311,13 @@ def publish_run(
     result = {"served_records": [], "unserved_records": [], "errors": []}
     path = run_output
     try:
-        attempts = stored_attempts(path)
+        current_id, attempts = read_stored_skyrl_attempts(path)
         if not attempts:
             raise FileNotFoundError(f"No stored native receipt at {path}")
     except Exception as error:
         attempts = {}
         result["unserved_records"].append(path)
         result["errors"].append(str(error))
-    current = read_stored_skyrl_receipt(path) if attempts else None
-    current_id = current.config["run"]["attempt_id"] if current is not None else None
     for attempt_id in attempts:
         destination = record_path(path, attempt_id)
         try:
@@ -347,7 +335,7 @@ def publish_run(
             record = (
                 json.loads(presets.read_text(destination))
                 if presets.exists(destination)
-                else retain_record(path, preset, attempt_id=attempt_id)
+                else retain_record(path, preset, attempt_id=attempt_id, attempts=(current_id, attempts))
             )
             step = publication_step(
                 run_output,

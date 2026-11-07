@@ -32,6 +32,7 @@ from experiments.post_training import snowball_rl_scoring as scoring
 
 
 def selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
@@ -268,8 +269,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             if step != omit_step:
                 write_json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
         launch = {
-            "run": {"id": f"{name}-{version}", "attempt_id": attempt_id},
             "artifacts": {"attempts_root": str(root / "attempts")},
+            "run": {"id": f"{name}-{version}", "attempt_id": attempt_id},
             "runtime": {"task_env": {"NCCL_NET": "Socket", "VLLM_LOGGING_LEVEL": "ERROR"}},
             "iris": {"allocation": {"num_nodes": preset.recipe.layout.role_plan.num_nodes, "gpus_per_node": 8}},
             "skyrl": {

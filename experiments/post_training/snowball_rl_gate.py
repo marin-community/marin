@@ -53,7 +53,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.11.06"
+GATE_REVISION = "2026.11.07"
 GATE_REPORT_FILENAME = "gate_report.json"
 GRADER_ERROR_LIMIT = 0.01
 OUTCOME_PREFIX = "generate/outcome/"
@@ -359,8 +359,8 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
             if first is not None:
                 values[metric.key] = float(first)
             continue
-        if metric in preset.guards and metric.key == "policy/mismatch/staleness0/kl_k3":
-            prefix = metric.key.rsplit("/", 1)[0]
+        if metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN:
+            prefix = "/".join(metric.key.split("/")[:3])
             counts = _mismatch_counts(rows, prefix)
             if counts is None:
                 continue
@@ -1036,7 +1036,12 @@ def control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
     )
 
 
-def _pass_rates_path(preset: presets.Preset) -> str | None:
+class PassRatesInput(NamedTuple):
+    identity: str
+    path: str
+
+
+def _pass_rates_input(preset: presets.Preset) -> PassRatesInput | None:
     for evaluation in preset.evaluations:
         if (
             not any(presets.guards_evaluation(evaluation, metric) for metric in preset.guards)
@@ -1044,9 +1049,15 @@ def _pass_rates_path(preset: presets.Preset) -> str | None:
         ):
             continue
         default = presets.default_selection()
-        reference = presets.selection_summary(evaluation.tasks(default, default))["recipe"]["pass_rates"]
-        return str(StoragePath(reference["uri"]).parent)
+        selection = evaluation.tasks(default, default)
+        reference = presets.selection_summary(selection)["recipe"]["pass_rates"]
+        return PassRatesInput(f"{selection.name}@{selection.version}", str(StoragePath(reference["uri"]).parent))
     return None
+
+
+def _pass_rates_path(preset: presets.Preset) -> str | None:
+    source = _pass_rates_input(preset)
+    return source.path if source is not None else None
 
 
 class ReceiptEvidence(NamedTuple):
@@ -1076,28 +1087,58 @@ def _gate_artifact(
     candidates: tuple[str, ...],
     inputs: GateInputs,
     leave_out: int | None = None,
+    *,
+    run_paths: tuple[str, ...],
 ) -> ArtifactStep[GateReport]:
     pins = control_pins(preset.name)
     controls = tuple(
-        tuple(control_path(preset, pin, index) for index in range(pin.runs) if pin != pins[0] or index != leave_out)
+        tuple(
+            (
+                f"{presets.control_name(pin.preset, pin.main_commit, index)}@{pin.revision}",
+                control_path(preset, pin, index),
+            )
+            for index in range(pin.runs)
+            if pin != pins[0] or index != leave_out
+        )
         for pin in pins
     )
+    rates = _pass_rates_input(preset)
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     name += "-base-" + fingerprint_hash(canonical_json(inputs.baselines)) if inputs.baselines else ""
-    attempts = [receipt_evidence(path) for path in candidates]
+    attempts = [
+        receipt_evidence(path)._replace(path=identity) for identity, path in zip(candidates, run_paths, strict=True)
+    ]
     name += "-evidence-" + fingerprint_hash(canonical_json(attempts))
-    return apply(
+    step = apply(
         name,
         _write_gate,
         version=GATE_REVISION,
         artifact_type=GateReport,
         preset_name=preset.name,
         run_paths=candidates,
-        control_paths=controls,
+        control_paths=tuple(tuple(identity for identity, _ in group) for group in controls),
         pins=pins,
         inputs=inputs,
-        pass_rates_path=_pass_rates_path(preset),
+        pass_rates_path=rates.identity if rates is not None else None,
         output=OUT,
+    )
+
+    def build_config(ctx: StepContext) -> dict:
+        config = step.build_config(ctx)
+        if not ctx.is_fingerprint:
+            config.update(ctx.runtime_arg("paths"))
+        return config
+
+    return replace(
+        step,
+        build_config=build_config,
+        runtime_args={
+            "paths": {
+                "run_paths": run_paths,
+                "control_paths": tuple(tuple(path for _, path in group) for group in controls),
+                "pass_rates_path": rates.path if rates is not None else None,
+            }
+        },
     )
 
 
@@ -1119,7 +1160,8 @@ def gate_step(
             raise click.BadParameter(str(error), param_hint="--baseline") from error
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
     paths = tuple(candidate.path(presets.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
-    return replace(_gate_artifact(name, preset, paths, inputs), deps=runs)
+    identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
+    return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths), deps=runs)
 
 
 def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
@@ -1129,18 +1171,7 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
         raise InvalidComparison(f"cannot recover recorded command options for {path}: {error}") from error
     if receipt is None:
         raise InvalidComparison(f"no launch receipt at {path}")
-    options = recorded_run_options((receipt.result.provenance or {}).get("command_line", []))
-    return options.preset_name, options.inputs
-
-
-class RecordedRunOptions(BaseModel):
-    preset_name: str | None
-    inputs: GateInputs
-    resume_from: str | None
-
-
-def recorded_run_options(argv: Sequence[str]) -> RecordedRunOptions:
-    """Parse stored launcher arguments into the gate inputs and preset name."""
+    argv = (receipt.result.provenance or {}).get("command_line", [])
     context = presets.run_command()(lambda **kwargs: ()).make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
@@ -1148,16 +1179,12 @@ def recorded_run_options(argv: Sequence[str]) -> RecordedRunOptions:
     settings = tuple(
         leaf for text in params.get("settings", ()) for leaf in presets.setting_leaves(presets.parse_setting(text))
     )
-    return RecordedRunOptions(
-        preset_name=params.get("preset_name"),
-        inputs=gate_inputs(
-            settings,
-            params.get("tasks_name"),
-            params.get("init_name"),
-            params.get("requirements", ()),
-            params.get("baselines", ()),
-        ),
-        resume_from=params.get("resume_name"),
+    return params.get("preset_name"), gate_inputs(
+        settings,
+        params.get("tasks_name"),
+        params.get("init_name"),
+        params.get("requirements", ()),
+        params.get("baselines", ()),
     )
 
 
@@ -1258,7 +1285,14 @@ def main(
         )
         for text in inputs.requirements:
             parse_requirement(text)
-        step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
+        step = _gate_artifact(
+            f"{namespace}/gate-n1-{pins[0].main_commit}",
+            preset,
+            (f"{name}@{version if separator else presets.PRESET_REVISION}",),
+            inputs,
+            index,
+            run_paths=(source,),
+        )
     except InvalidComparison as error:
         click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
         raise click.exceptions.Exit(presets.REFUSAL_EXIT_CODE) from error
