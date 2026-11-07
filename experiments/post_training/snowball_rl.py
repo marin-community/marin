@@ -609,6 +609,17 @@ def _completed_update(path: str, *, generating: bool) -> int | None:
     return None
 
 
+def _comparison_line(row: dict, *, constraint: bool = False) -> str:
+    if row.get("run") is None or row.get("control") is None:
+        return f"{row['metric']}: unavailable"
+    values = f"{row['metric']}: {row['control']:.6g} -> {row['run']:.6g}"
+    if constraint:
+        return values + ("; within bound" if row["passes"] else "; outside bound")
+    delta = f"{row['delta_percent']:+.1f}%" if row["delta_percent"] is not None else "unavailable"
+    noise = f"{row['noise_percent']:.1f}%" if row["noise_percent"] is not None else "unavailable"
+    return f"{values}; {delta}; noise +/-{noise}; {row['change']}"
+
+
 def _status(run: SnowballRun, preset: presets.Preset) -> dict:
     run = replace(run, gate=snowball_rl_gate.completed_gate(preset, run.runs, run.gate))
     rows = []
@@ -690,7 +701,9 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
             report = snowball_rl_gate.GateReport.model_validate_json(presets.read_text(path))
             verdict = {
                 "report": str(path),
-                **report.model_dump(mode="json", include={"verdict", "label", "reason", "objectives", "constraints"}),
+                **report.model_dump(
+                    mode="json", include={"verdict", "label", "reason", "objectives", "constraints", "invariants"}
+                ),
             }
             changes, reason = _changed_paths(
                 report.control.main_commit,
@@ -703,19 +716,21 @@ def _status(run: SnowballRun, preset: presets.Preset) -> dict:
             crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
             if crashed is not None:
                 verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
+    objectives = verdict.pop("objectives", None) or [
+        {"metric": metric.key} for metric in snowball_rl_gate.objective_metrics(preset)
+    ]
+    constraints = verdict.pop("constraints", None) or [
+        {"metric": metric.key} for metric in preset.guards if metric not in snowball_rl_gate.objective_metrics(preset)
+    ]
+    invariant_lines = [
+        f"r{row['replicate']} {row['name']}: {row['value']} (required {row['limit']}); "
+        + ("within bound" if row["holds"] else "outside bound")
+        for row in verdict.pop("invariants", [])
+    ]
     return {
         "preset": preset.name,
-        "objectives": verdict.pop(
-            "objectives", [{"metric": metric.key} for metric in snowball_rl_gate.objective_metrics(preset)]
-        ),
-        "constraints": verdict.pop(
-            "constraints",
-            [
-                {"metric": metric.key}
-                for metric in preset.guards
-                if metric not in snowball_rl_gate.objective_metrics(preset)
-            ],
-        ),
+        "objectives": [_comparison_line(row) for row in objectives],
+        "constraints": [*(_comparison_line(row, constraint=True) for row in constraints), *invariant_lines],
         "result": verdict.get("label") or verdict.get("verdict") or "pending",
         "code": asdict(Provenance.capture(presets.REPO_ROOT)),
         "inputs": {
@@ -755,7 +770,7 @@ def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Pre
     if run.gate is not None and "report" not in snapshot:
         snapshot.pop("verdict", None)
         snapshot["reason"] = "coordinator finished without a gate report"
-    click.echo(yaml.safe_dump(snapshot, sort_keys=False))
+    click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if "report" in snapshot:
         click.echo(presets.read_text(snapshot["report"].removesuffix(".json") + ".md"))
     if run.gate is not None and "report" not in snapshot:
@@ -863,7 +878,7 @@ def main(
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
-    click.echo(yaml.safe_dump(_status(run, preset), sort_keys=False))
+    click.echo(yaml.safe_dump(_status(run, preset), sort_keys=False, width=1000))
     return (*run.runs, *((run.gate,) if run.gate else ()))
 
 
