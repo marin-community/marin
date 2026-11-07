@@ -1,0 +1,47 @@
+[
+ {
+  "row": {
+   "index": 115,
+   "name": "Munkres_exercise_21_6a",
+   "textbook": "Munkres",
+   "header": "import Mathlib\n\nopen Filter Set TopologicalSpace\nopen scoped Topology",
+   "helper": "abbrev I : Set ℝ := Icc 0 1",
+   "informal_stmt": "Define $f_{n}:[0,1] \\rightarrow \\mathbb{R}$ by the equation $f_{n}(x)=x^{n}$. Show that the sequence $\\left(f_{n}(x)\\right)$ converges for each $x \\in[0,1]$.",
+   "formal_stmt": "theorem Munkres_exercise_21_6a\n  (f : ℕ → I → ℝ)\n  (h : ∀ x n, f n x = ↑x ^ n) :\n  ∀ x, ∃ y, Tendsto (λ n => f n x) atTop (𝓝 y) := by\n  sorry",
+   "informal_proof": "If $0 \\leq x<1$ is fixed, then $f_n(x) \\rightarrow 0$ as $n \\rightarrow \\infty$. As $f_n(1)=1$ for all $n, f_n(1) \\rightarrow 1$. Thus $\\left(f_n\\right)_n$ converges to $f:[0,1] \\rightarrow \\mathbb{R}$ given by $f(x)=0$ if $x=0$ and $f(1)=1$. The sequence",
+   "formal_proof": "to avoid data contamination, the formal proof is in proofnet_verified_gt.zip"
+  },
+  "proof": "by\n  intro x\n  rcases eq_or_lt_of_le x.2.2 with h1 | h1\n  · refine ⟨1, ?_⟩\n    simp only [h, h1, one_pow]\n    exact tendsto_const_nhds\n  · refine ⟨0, ?_⟩\n    simp only [h]\n    exact tendsto_pow_atTop_nhds_zero_of_lt_one x.2.1 h1",
+  "found_by": "hand-written; the row has a helper abbreviation"
+ },
+ {
+  "row": {
+   "index": 320,
+   "name": "Pugh_exercise_2_32a",
+   "textbook": "Pugh",
+   "header": "import Mathlib\n\nopen Filter Real Function\nopen scoped Topology",
+   "helper": "",
+   "informal_stmt": "Show that every subset of $\\mathbb{N}$ is clopen.",
+   "formal_stmt": "theorem Pugh_exercise_2_32a (A : Set ℕ) : IsClopen A := by\n  sorry",
+   "informal_proof": "32. The one-point set $\\{n\\} \\subset \\mathbb{N}$ is open, since it contains all $m \\in \\mathbb{N}$ that satisfy $d(m, n)<\\frac{1}{2}$. Every subset of $\\mathbb{N}$ is a union of one-point sets, hence is open. Then every set it closed, since its complement is necessarily open.",
+   "formal_proof": "to avoid data contamination, the formal proof is in proofnet_verified_gt.zip"
+  },
+  "proof": "by\n  simp",
+  "found_by": "simp"
+ },
+ {
+  "row": {
+   "index": 337,
+   "name": "Rudin_exercise_1_18b",
+   "textbook": "Rudin",
+   "header": "import Mathlib\n\nopen Topology Filter Real Complex TopologicalSpace Finset\nopen scoped BigOperators",
+   "helper": "",
+   "informal_stmt": "If $k = 1$ and $\\mathbf{x} \\in R^{k}$, $\\mathbf{x} \\neq 0$, prove that there does not exist $\\mathbf{y} \\in R^{k}$ such that $\\mathbf{y} \\neq 0$ but $\\mathbf{x} \\cdot \\mathbf{y}=0$",
+   "formal_stmt": "theorem Rudin_exercise_1_18b\n  : ∀ (x : ℝ), x ≠ 0 → ¬ ∃ (y : ℝ), y ≠ 0 ∧ x * y = 0 := by\n  sorry",
+   "informal_proof": "Not true when $k=1$, since the product of two nonzero real numbers is nonzero.",
+   "formal_proof": "to avoid data contamination, the formal proof is in proofnet_verified_gt.zip"
+  },
+  "proof": "by\n  aesop",
+  "found_by": "aesop"
+ }
+]

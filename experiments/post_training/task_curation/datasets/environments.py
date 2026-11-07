@@ -123,5 +123,9 @@ COMPILER_GRADER_PACKAGES = replace(GRADER_PACKAGES, apt=("build-essential",))
 LEAN_GRADER_PACKAGES = replace(GRADER_PACKAGES, dockerfile=HERE / "nemotron_ultra/lean.Dockerfile")
 """The grader packages with Lean 4 and Mathlib, for the Nemotron Ultra Lean proof grader."""
 
-BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES, LEAN_GRADER_PACKAGES)
+LEAN_KERNEL_GRADER_PACKAGES = replace(GRADER_PACKAGES, dockerfile=HERE / "lean/lean.Dockerfile")
+"""The grader packages with Lean, Mathlib and Prime Intellect's proof checker, for the Lean proof grader in
+``lean/lean_grade.py``, which replays each accepted proof in the kernel."""
+
+BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES, LEAN_GRADER_PACKAGES, LEAN_KERNEL_GRADER_PACKAGES)
 """Explicit environment registrations for the images build CLI."""
