@@ -208,6 +208,13 @@ for options, put the correct one at a position drawn from the id. Never put the 
 that gives it, in the prompt or in the solver's files.
 - Write every number and fact of the prompt from the same variables that the program computes the reference \
 from, and never type a value twice: a prompt whose data differs from the key's fails every careful solver.
+- State each rule, constant, sign convention and fallback of the task once, in the prompt, from the variables \
+that the program computes the key from, and add no rule that the program does not apply. A task with several \
+dependent steps fails as a whole if one step's data or convention differs from the key's. Before you submit, \
+read the written prompt alone and check that it gives every value and convention the key uses, and only one \
+reading of each.
+- A script grader compares numbers, enums or exact strings that the prompt defines, not free prose matched by a \
+narrow regex: a regex rejects right phrasings. Where the answer is prose, use a judge.
 - Make the task hard for a strong model that answers with no reasoning: a later step keeps a task only if such a \
 solver fails it at least once in 8 tries. A short answer that one formula evaluation or one lookup gives is too \
 easy. Within the proposal's design, make the answer need several dependent steps, or data that the solver must \
