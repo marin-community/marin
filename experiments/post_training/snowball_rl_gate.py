@@ -25,7 +25,7 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TypeGuard
 
@@ -36,11 +36,10 @@ from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
-from marin.rl import cli as rl_cli
 from marin.rl.skyrl import (
-    TRACKING_FILENAME,
     SkyRLReceiptLookupError,
     SkyRLRun,
+    read_skyrl_attempt_tracking,
     read_skyrl_launch_config,
     read_skyrl_launch_receipt,
 )
@@ -112,8 +111,7 @@ class Change(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-@dataclass(frozen=True)
-class GateInputs:
+class GateInputs(BaseModel, frozen=True):
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: str | None = None
@@ -142,15 +140,15 @@ def parse_requirement(text: str) -> Requirement:
 def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
     gated = presets.gated(preset)
+    if requirements and (control or not gated):
+        raise click.BadParameter("--require needs a gated candidate preset, without --control")
+    keys = [parse_requirement(text).key for text in requirements]
     pins = control_pins(preset.name) if not control and gated else ()
     if not requirements:
         return
-    if control or not gated:
-        raise click.BadParameter("--require needs a gated candidate preset, without --control")
-    keys = [parse_requirement(text).key for text in requirements]
     rates_path = _pass_rates_path(preset)
     rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
-    reference = _load_run(control_path(preset, pins[0], 0), preset, rates)
+    reference = _with_objectives(_load_run(control_path(preset, pins[0], 0), preset, rates), preset)
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
@@ -163,14 +161,14 @@ def gate_inputs(
     requirements: Sequence[str] = (),
     baselines: Sequence[str] = (),
 ) -> GateInputs:
-    values = {leaf.key: leaf.value for setting in settings for leaf in presets.setting_leaves(setting)}
+    values = {setting.key: setting.value for setting in settings}
     tasks, init = (f"{item.name}@{item.version}" if isinstance(item, ArtifactStep) else item for item in (tasks, init))
     return GateInputs(
-        tuple(f"{key}={json.dumps(value, default=str)}" for key, value in sorted(values.items())),
-        tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
-        init,
-        tuple(requirements),
-        tuple(sorted(set(baselines))),
+        settings=tuple(f"{key}={json.dumps(value, default=str)}" for key, value in sorted(values.items())),
+        tasks=tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
+        init=init,
+        requirements=tuple(requirements),
+        baselines=tuple(sorted(set(baselines))),
     )
 
 
@@ -219,17 +217,13 @@ class ObjectiveComparison(Comparison):
     noise_percent: float | None = None
 
 
-class RunMetadata(BaseModel):
+class RunMetadata(GateInputs):
     tree: str | None = None
     base_commit: str | None = None
     dirty: bool | None = None
-    settings: tuple[str, ...]
-    tasks: str | None
-    init: str | None
     replicates: int
-    requirements: tuple[str, ...]
-    baselines: tuple[str, ...] = ()
     panel: str | None = None
+    engines: tuple[dict, ...] = ()
 
 
 class ControlMetadata(BaseModel):
@@ -237,6 +231,7 @@ class ControlMetadata(BaseModel):
     revision: str
     runs: int
     gate_revision: str = GATE_REVISION
+    engines: tuple[dict, ...] = ()
     panel: str | None = None
 
 
@@ -420,6 +415,8 @@ class RunData:
     missing_tokens: bool
     slices: dict[str, tuple[int, float | None]]
     evaluation_identity: dict[str, tuple[str | None, dict]]
+    h100_hours: float | None
+    engine: dict
 
 
 def _recorded_panel(launch: dict, evaluation: presets.Evaluation) -> str:
@@ -450,7 +447,6 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
             evaluation.file,
             evaluation.sample,
             launch["skyrl"]["trainer"]["seed"],
-            local_only=evaluation.local_only,
         )
     expected = f"{binding.name}@{binding.version}"
     sources = scoring.recorded_sources(launch, evaluation.name)
@@ -497,27 +493,24 @@ def _load_run(
     if terminal is None:
         raise FileNotFoundError(f"no launch receipt at {path}")
     if terminal.result.state != "succeeded":
-        raise InvalidComparison(f"run crashed: {terminal.result.iris_job_id}")
+        raise InvalidComparison(native_failure_reason(terminal.result.state, terminal.result.iris_job_id))
     if terminal.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     metrics = _metrics(StoragePath(path))
     generating = preset.recipe.layout.role_plan.generate_only
-    planned = {0} if generating else set(range(1, preset.updates + 1))
-    training = [metrics[step] for step in sorted(planned.intersection(metrics))]
-    training_checks = training_invariants(preset, metrics)
-    invariants = [training_checks[0]]
+    training = [
+        row for step, row in sorted(metrics.items()) if (step == 0 if generating else 1 <= step <= preset.updates)
+    ]
+    invariants = list(training_invariants(preset, metrics))
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
     launch = read_skyrl_launch_config(path)
     attempt = launch["run"]["attempt_id"]
-    tracking_path = StoragePath(path) / "exports" / "attempts" / attempt / TRACKING_FILENAME
-    tracking = json.loads(presets.read_text(tracking_path)) if presets.exists(tracking_path) else {}
-    if tracking and tracking.get("attempt_id") != attempt:
-        raise InvalidComparison(f"tracking attempt differs from launch: {path}")
+    tracking = read_skyrl_attempt_tracking(path, attempt)
     try:
         identities = {
             evaluation.name: (
                 scoring.task_set_sha256(launch, evaluation.name) if evaluation.file != scoring.TRAIN_STEM else None,
-                scoring.evaluation_protocol(launch, evaluation.name, vllm_version=tracking.get("vllm_version")),
+                scoring.evaluation_protocol(launch, evaluation.name),
             )
             for evaluation in preset.evaluations
         }
@@ -557,8 +550,6 @@ def _load_run(
                         answers=session.num_rows,
                     )
                 )
-    invariants.extend(training_checks[1:])
-
     invariants.append(_grader_errors(training, OUTCOME_PREFIX, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens
     if fixed is not None:
@@ -586,40 +577,51 @@ def _load_run(
         values[key + "/initial"] = value
         if key in values:
             values[key + "/gain"] = values[key] - value
-    primary = presets.panel_evaluation(preset)
-    if primary is not None and preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA):
-        gain = values.get(primary.name + "/family_mean/gain")
-        if gain is not None:
-            try:
-                with rl_cli.iris_client() as client:
-                    job = client.job_status(terminal.result.iris_job_id)
-                seconds = (job.finished_at.epoch_ms() - job.started_at.epoch_ms()) / 1000
-                hours = seconds * preset.recipe.layout.role_plan.num_nodes * 8 / 3600
-                if hours > 0:
-                    values[primary.name + "/family_mean/gain_per_h100_hour"] = gain / hours
-            except Exception as error:
-                logger.warning("Could not read native job duration for reward gain per H100-hour: %s", error)
+    result = terminal.result
+    h100_hours = None
+    if result.started_at and result.finished_at:
+        seconds = (presets.utc_millis(result.finished_at) - presets.utc_millis(result.started_at)) / 1000
+        if seconds > 0:
+            allocation = launch["iris"]["allocation"]
+            h100_hours = seconds * allocation["num_nodes"] * allocation["gpus_per_node"] / 3600
     initializer = {row["task_id"]: row["mean_score"] for row in rates.to_pylist()} if rates is not None else {}
     slices = {}
     for key, rows in scoring.score_slices(final, rates).items():
         ids = {row["item"] for row in rows}
         initial = statistics.mean(initializer[item] for item in ids) if ids <= initializer.keys() else None
         slices[key] = len(ids), initial
-    return _with_requirements(
-        RunData(
-            path=path,
-            version=presets.artifact_record(path).version,
-            panel=panel,
-            provenance=terminal.result.provenance,
-            values=values,
-            panel_ids=panel_ids,
-            invariants=tuple(invariants),
-            missing_tokens=missing,
-            slices=slices,
-            evaluation_identity=identities,
-        ),
-        inputs.requirements,
+    return RunData(
+        path=path,
+        version=presets.artifact_record(path).version,
+        panel=panel,
+        provenance=terminal.result.provenance,
+        values=values,
+        panel_ids=panel_ids,
+        invariants=tuple(invariants),
+        missing_tokens=missing,
+        slices=slices,
+        evaluation_identity=identities,
+        h100_hours=h100_hours,
+        engine=tracking.get("engine", {}),
     )
+
+
+def native_failure_reason(state: str, job_id: str | None) -> str:
+    return f"native job {job_id} is {state}"
+
+
+def result_text(verdict: str | None, label: str | None) -> str:
+    return f"{verdict} ({label})" if label else verdict or "pending"
+
+
+def _with_objectives(candidate: RunData, preset: presets.Preset) -> RunData:
+    values = dict(candidate.values)
+    for metric in preset.objectives:
+        if metric.key.endswith("/gain_per_h100_hour"):
+            gain = values.get(metric.key.removesuffix("_per_h100_hour"))
+            if gain is not None and candidate.h100_hours:
+                values[metric.key] = gain / candidate.h100_hours
+    return replace(candidate, values=values)
 
 
 def _with_requirements(candidate: RunData, requirements: Sequence[str]) -> RunData:
@@ -760,14 +762,7 @@ def _compare(
 
 
 def objective_metrics(preset: presets.Preset) -> tuple[presets.Metric, ...]:
-    if preset.focus == presets.Focus.SPEED:
-        return tuple(
-            metric
-            for metric in preset.guards
-            if not metric.key.startswith("policy/mismatch/")
-            and not any(presets.guards_evaluation(evaluation, metric) for evaluation in preset.evaluations)
-        )
-    return preset.guards
+    return preset.objectives
 
 
 def _objectives(
@@ -776,21 +771,18 @@ def _objectives(
     grouped: Mapping[ControlPin, Sequence[RunData]],
     guards: Sequence[GuardComparison],
 ) -> list[ObjectiveComparison]:
-    keys = {metric.key for metric in objective_metrics(preset)}
-    rows = [row for row in guards if row.metric in keys]
-    primary = presets.panel_evaluation(preset)
-    if primary is not None and preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA):
-        key = primary.name + "/family_mean/gain_per_h100_hour"
-        noise = calibrate({pin: [run.values for run in group] for pin, group in grouped.items()})
-        rows.append(
-            _comparison(
-                presets.Metric(key, True),
-                [run.values for run in runs],
-                noise.get(key),
-                sum(map(len, grouped.values())),
-                1,
+    noise = calibrate({pin: [run.values for run in group] for pin, group in grouped.items()})
+    guarded = {row.metric: row for row in guards}
+    rows = [
+        (
+            guarded[metric.key]
+            if metric.key in guarded
+            else _comparison(
+                metric, [run.values for run in runs], noise.get(metric.key), sum(map(len, grouped.values())), 1
             )
         )
+        for metric in preset.objectives
+    ]
     return [
         ObjectiveComparison(
             **row.model_dump(include=set(Comparison.model_fields)),
@@ -830,9 +822,7 @@ def _render_markdown(report: GateReport) -> str:
     lines += [
         tabulate(constraints, "keys", "github", floatfmt=".8g", missingval="unavailable"),
         "",
-        f"Result: {report.label or report.verdict}",
-        f"Verdict: {report.verdict}",
-        f"Label: {report.label or 'unavailable'}",
+        f"Result: {result_text(report.verdict, report.label)}",
     ]
     if report.reason:
         lines += ["", report.reason]
@@ -883,7 +873,7 @@ def _write_gate(
     output: str,
 ) -> GateReport:
     preset = presets.PRESETS[preset_name]
-    metadata = RunMetadata(**asdict(inputs), replicates=len(run_paths))
+    metadata = RunMetadata(**inputs.model_dump(), replicates=len(run_paths))
     control = ControlMetadata(
         main_commit=pins[0].main_commit, revision=pins[0].revision, runs=sum(map(len, control_paths))
     )
@@ -899,11 +889,18 @@ def _write_gate(
             manifest = scoring.task_manifest(StoragePath(evaluation.tasks(default, default).path()))
             if set(rates["task_id"].to_pylist()) != set(manifest):
                 raise InvalidComparison("pass-rate panel task IDs differ from the panel manifest")
-        runs = [_load_run(path, preset, rates, inputs) for path in run_paths]
+        runs = [
+            _with_requirements(_with_objectives(_load_run(path, preset, rates, inputs), preset), inputs.requirements)
+            for path in run_paths
+        ]
         if runs:
             fields = {"tree": "tree_hash", "base_commit": "base_commit", "dirty": "dirty"}
             metadata = metadata.model_copy(
-                update={"panel": runs[0].panel, **{field: runs[0].provenance[key] for field, key in fields.items()}}
+                update={
+                    "panel": runs[0].panel,
+                    "engines": tuple(run.engine for run in runs),
+                    **{field: runs[0].provenance[key] for field, key in fields.items()},
+                }
             )
         invariants = [
             row.model_copy(update={"replicate": index})
@@ -911,13 +908,15 @@ def _write_gate(
             for row in candidate.invariants
         ]
         grouped = {
-            pin: [_load_run(path, preset, rates) for path in paths]
+            pin: [_with_objectives(_load_run(path, preset, rates), preset) for path in paths]
             for pin, paths in zip(pins, control_paths, strict=True)
         }
         controls = [candidate for group in grouped.values() for candidate in group]
         if not runs or not controls:
             raise InvalidComparison("comparison needs recorded runs and control replicates")
-        control = control.model_copy(update={"panel": controls[0].panel})
+        control = control.model_copy(
+            update={"panel": controls[0].panel, "engines": tuple(run.engine for run in controls)}
+        )
         for pin, group in grouped.items():
             for candidate in group:
                 _check_control(candidate, pin)
@@ -1105,7 +1104,9 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
     params = context.params
-    settings = tuple(map(presets.parse_setting, params.get("settings", ())))
+    settings = tuple(
+        leaf for text in params.get("settings", ()) for leaf in presets.setting_leaves(presets.parse_setting(text))
+    )
     return params.get("preset_name"), gate_inputs(
         settings,
         params.get("tasks_name"),
@@ -1130,8 +1131,8 @@ def _baseline_runs(
         preset_name, recorded = _recorded_run(path)
         if preset_name != preset.name:
             raise InvalidComparison(f"baseline is not a recorded {preset.name} run: {reference}")
-        inputs = replace(recorded, requirements=(), baselines=())
-        baseline = _load_run(path, preset, rates, inputs)
+        inputs = recorded.model_copy(update={"requirements": (), "baselines": ()})
+        baseline = _with_objectives(_load_run(path, preset, rates, inputs), preset)
         if baseline.version != presets.PRESET_REVISION:
             raise InvalidComparison(f"baseline preset revision differs: {reference}")
         if baseline.panel_ids != control.panel_ids:
@@ -1144,7 +1145,7 @@ def _baseline_runs(
     return list(runs.values())
 
 
-@click.command(help=__doc__)
+@click.command(cls=presets.SnowballCommand, help=__doc__)
 @click.option(
     "--preset",
     "preset_name",
@@ -1195,7 +1196,7 @@ def main(
         index = None
         if leave_out is not None:
             if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:
-                raise click.BadParameter(f"choose r0 through r{pins[0].runs-1}", param_hint="--leave-out")
+                raise click.BadParameter(f"choose r0 through r{pins[0].runs - 1}", param_hint="--leave-out")
             index = int(leave_out[1:])
             candidate_name = presets.control_name(pins[0].preset, pins[0].main_commit, index)
         name, separator, version = candidate_name.partition("@")
@@ -1204,28 +1205,25 @@ def main(
             f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
         )
         _, recorded = _recorded_run(source)
-        inputs = replace(
-            recorded,
-            requirements=(*recorded.requirements, *requirements),
-            baselines=tuple(sorted({*recorded.baselines, *baselines})),
+        inputs = recorded.model_copy(
+            update={
+                "requirements": (*recorded.requirements, *requirements),
+                "baselines": tuple(sorted({*recorded.baselines, *baselines})),
+            }
         )
         for text in inputs.requirements:
             parse_requirement(text)
         step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
     except InvalidComparison as error:
         click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
-        raise click.exceptions.Exit(2) from error
+        raise click.exceptions.Exit(presets.REFUSAL_EXIT_CODE) from error
     report = run(step)[0]
     payload = {
         "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
         **report.model_dump(mode="json", exclude={"path"}),
     }
     click.echo(json.dumps(payload))
-
-
-if __name__ == "__main__":
-    # The importable module owns the persisted GateReport type.
-    importlib.import_module("experiments.post_training.snowball_rl_gate").main()
+    raise click.exceptions.Exit(presets.EXIT_CODES[report.verdict])
 
 
 def completed_gate(
@@ -1236,3 +1234,8 @@ def completed_gate(
         return None
     config = gate.build_config(StepContext.for_fingerprint(gate.runtime_args, gate.deps))
     return gate_step(preset, runs, inputs=config["inputs"])
+
+
+if __name__ == "__main__":
+    # The importable module owns the persisted GateReport type.
+    importlib.import_module("experiments.post_training.snowball_rl_gate").main()

@@ -20,8 +20,6 @@ import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
@@ -59,22 +57,28 @@ def controls(write, preset, *, constant=False, fault=None, common_fault=None):
     ]
 
 
-def rescore(preset, *args, exit_code=0):
+def rescore(preset, *args, exit_code=None):
     result = CliRunner().invoke(gate.main, ["--preset", preset, *args])
-    assert result.exit_code == exit_code, (result.output, result.exception)
-    return json.loads(result.output.splitlines()[-1])
+    payload = json.loads(result.output.splitlines()[-1])
+    expected = {"pass": 0, "fail": 1, "invalid": 2}[payload["verdict"]] if exit_code is None else exit_code
+    assert result.exit_code == expected, (result.output, result.exception)
+    return payload
 
 
 def status(preset, argv):
     result = CliRunner().invoke(snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, *argv])
-    assert result.exit_code == 0, (result.output, result.exception)
     resume_warning, _, payload = result.stdout.partition("preset:")
     if "--resume-from" in argv:
         assert resume_warning.startswith("Cannot compare this checkout with resume source tree "), resume_warning
         assert "verify optimizer and checkpoint compatibility before continuing." in resume_warning
     else:
         assert not resume_warning, resume_warning
-    return yaml.safe_load("preset:" + payload.split("StepSpec(", 1)[0])
+    snapshot = yaml.safe_load("preset:" + payload.split("StepSpec(", 1)[0])
+    assert result.exit_code == {"pass": 0, "fail": 1, "invalid": 2, None: 0}[snapshot.get("verdict")], (
+        result.output,
+        result.exception,
+    )
+    return snapshot
 
 
 def test_calibrate_pools_deviations_within_pins():
@@ -262,7 +266,7 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
         refused = CliRunner().invoke(
             snowball.main, ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--baseline", ref]
         )
-        assert refused.exit_code == 2 and reason in refused.output
+        assert refused.exit_code == 4 and reason in refused.output
 
 
 VLLM = "vllm/median_generation_throughput"
@@ -517,7 +521,7 @@ def test_rescore_reports_candidate_and_control_contracts(
         preset,
         "--candidate",
         f"users/test/{preset}" + ("@" + fault["version"] if "version" in fault else ""),
-        exit_code=2 if fault.get("unresolved_receipt") or fault.get("missing_receipt") else 0,
+        exit_code=4 if fault.get("unresolved_receipt") or fault.get("missing_receipt") else None,
     )
     if fault.get("unresolved_receipt") or fault.get("missing_receipt"):
         assert set(report) == {"preset", "verdict", "reason"}
@@ -899,27 +903,24 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     }
     _json(source / "terminal.json", linked_receipt)
     started, finished = 1793840000000, 1793840060000
-    native_job = SimpleNamespace(
-        state=JobState.SUCCEEDED, started_at=Timestamp.from_ms(started), finished_at=Timestamp.from_ms(finished)
+    linked_receipt["result"] = {
+        **linked_receipt["result"],
+        "started_at": Timestamp.from_ms(started).as_formatted_date(),
+        "finished_at": Timestamp.from_ms(finished).as_formatted_date(),
+    }
+    _json(source / "terminal.json", linked_receipt)
+    monkeypatch.setattr(
+        "marin.rl.cli.iris_client",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("status must use saved timing")),
     )
-    client = MagicMock(spec=IrisClient)
-    client.job_status.return_value = native_job
-    monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
     linked = status(preset, argv)["runs"][0]
     assert linked["wandb_entity"] == "receipt-team"
     links = linked["grafana_links"]
     query = parse_qs(urlsplit(links["run"]).query)
     assert query["var-run"] == ["run / id?x=1&y=2"]
     assert query["from"] == [str(started)] and query["to"] == [str(finished)]
-    client.job_status.side_effect = ConnectError(Code.NOT_FOUND, "archived native job")
-    assert "grafana_links" not in status(preset, argv)["runs"][0]
-    client.job_status.side_effect = ConnectionError("controller unavailable")
-    assert status(preset, argv)["verdict"] == report["verdict"]
-    client.job_status.side_effect = None
-    monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: (_ for _ in ()).throw(ConnectionError("offline")))
-    assert "grafana_links" not in status(preset, argv)["runs"][0]
-    monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
-    native_job.started_at = None
+    linked_receipt["result"]["started_at"] = None
+    _json(source / "terminal.json", linked_receipt)
     assert "grafana_links" not in status(preset, argv)["runs"][0]
     _json(source / "terminal.json", receipt)
     for step in (26, 28):
@@ -956,8 +957,8 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     )
     printed = status(preset, argv)
     assert (printed["verdict"], printed["reason"], printed["iris_job_id"]) == (
-        "fail",
-        "run crashed",
+        "invalid",
+        "native job /tests/native-run is failed",
         "/tests/native-run",
     )
 
@@ -980,7 +981,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         (gate.main, ["--preset", preset, "--candidate", "tests/unpinned"]),
     ):
         refused = CliRunner().invoke(command, arguments)
-        assert refused.exit_code == 2, (refused.output, refused.exception)
+        assert refused.exit_code == 4, (refused.output, refused.exception)
         payload = json.loads(refused.output)
         assert payload["preset"] == preset and payload["verdict"] == "invalid"
         control_preset = gate.SHARED_CONTROLS.get(preset, preset)
@@ -1001,6 +1002,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("invalid", 2),
         ("missing", 3),
         ("parent-early", 3),
+        ("native-failed", 2),
         ("no-wait", 0),
         ("child", 0),
         ("control", 0),
@@ -1025,7 +1027,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
     built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
-    if case not in {"missing", "control"}:
+    if case not in {"missing", "control", "native-failed"}:
         run(built.gate)
     if case == "parent-early":
         shutil.rmtree(source)
@@ -1033,7 +1035,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
-    final = JobState.FAILED if case == "parent-early" else JobState.SUCCEEDED
+    if case == "native-failed":
+        receipt = json.loads((source / "terminal.json").read_text())
+        receipt["result"]["state"] = "failed"
+        _json(source / "terminal.json", receipt)
+    final = JobState.FAILED if case in {"parent-early", "native-failed"} else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
@@ -1058,6 +1064,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
         assert "# speed-medium" in result.output
+    if case == "native-failed":
+        assert "result: invalid" in result.output and "native job /tests/native-run is failed" in result.output
+        assert (
+            rescore(preset_name, "--candidate", built.runs[0].name)["reason"] == "native job /tests/native-run is failed"
+        )
     if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0
@@ -1207,6 +1218,9 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name
     changed_document["config"]["inputs"]["validation_data"][0]["uri"] = str(copied)
     _json(changed_source / "terminal.json", changed_document)
     _json(changed_source / "resolved-launch.yaml", {"config": changed_document["config"]})
+    rows[0]["task_spec"] = json.dumps(json.loads(rows[0]["task_spec"]), indent=2)
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    assert scoring.task_set_sha256(document["config"], "test_panel") != original
     task = json.loads(rows[0]["task_spec"])
     task["context"]["events"][0]["content"] = "Return dog."
     rows[0]["task_spec"] = json.dumps(task)
@@ -1216,18 +1230,66 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
 
-def test_issue_metadata_preserves_native_run_identity_and_reaches_receipt_status(recorded_runs):
+def test_issue_metadata_stays_in_launcher_status(recorded_runs):
     preset = presets.PRESETS["learning-medium"]
     controls(recorded_runs, preset.name)
-    first = snowball.build_run(preset, issue=73).runs[0]
-    second = snowball.build_run(preset, issue=74).runs[0]
-    assert (first.name, first.fingerprint(), first.version) == (second.name, second.fingerprint(), second.version)
-    source = recorded_runs(preset, first.name, fingerprint=first.fingerprint())
+    first = snowball.build_run(preset).runs[0]
+    recorded_runs(preset, first.name, fingerprint=first.fingerprint())
+    before = status(preset.name, ["--issue", "73"])["runs"][0]
+    after = status(preset.name, ["--issue", "74"])["runs"][0]
+    assert (before["name"], before["version"]) == (after["name"], after["version"]) == (first.name, first.version)
+    assert (before["issue"], after["issue"]) == (73, 74)
+    assert snowball.build_run(preset).runs[0].fingerprint() == first.fingerprint()
+
+
+@pytest.mark.parametrize("change,verdict", [("engine", "pass"), ("reply-limit", "invalid"), ("task-env", "invalid")])
+def test_speed_short_compares_engine_changes_and_binds_the_evaluation_request(recorded_runs, change, verdict):
+    preset = "speed-short"
+    controls(recorded_runs, preset)
+    source = recorded_runs(preset, "users/test/request-" + change)
     document = json.loads((source / "terminal.json").read_text())
-    document["config"]["run"]["issue"] = 73
+    config = document["config"]
+    if change == "engine":
+        config["skyrl"]["generator"]["max_num_batched_tokens"] = 16384
+        config["runtime"]["task_env"]["VLLM_LOGGING_LEVEL"] = "INFO"
+        _json(
+            source / "exports/attempts/recorded-attempt/tracking.json",
+            {"attempt_id": "recorded-attempt", "engine": {"vllm_version": "another-wheel"}},
+        )
+    elif change == "reply-limit":
+        config["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["test_panel"]["sampling_params"][
+            "max_generate_length"
+        ] = 4096
+    else:
+        config["runtime"]["task_env"]["NCCL_NET"] = "another-net"
     _json(source / "terminal.json", document)
-    _json(source / "resolved-launch.yaml", {"config": document["config"]})
-    assert status(preset.name, ["--issue", "74"])["runs"][0]["issue"] == 73
-    before = status(preset.name, ["--issue", "73"])
-    assert before["runs"][0]["name"] == first.name
-    # The shared SkyRL owner renders execution-time run/config issue values; this owner covers the command and reader.
+    _json(source / "resolved-launch.yaml", {"config": config})
+    report = rescore(preset, "--candidate", "users/test/request-" + change)
+    assert report["verdict"] == verdict, report
+    if verdict == "invalid":
+        assert "evaluation protocol" in report["reason"]
+    else:
+        assert report["run"]["engines"] == [{"vllm_version": "another-wheel"}]
+
+
+@pytest.mark.parametrize(
+    "arguments", [["--unknown"], ["--preset", "speed-medium", "--set", "trainer.seed=3"], ["--issue", "0"]]
+)
+def test_refusals_exit_four_before_submission(recorded_runs, arguments):
+    result = CliRunner().invoke(
+        snowball.main, ["--preset", "speed-medium", "--version", presets.PRESET_REVISION, *arguments]
+    )
+    assert result.exit_code == 4, (result.output, result.exception)
+
+
+def test_result_prints_the_verdict_before_a_tradeoff_label(recorded_runs):
+    controls(recorded_runs, "speed-short")
+    built = snowball.build_run(presets.PRESETS["speed-short"])
+    recorded_runs("speed-short", built.runs[0].name, speed=120, score=0.1, fingerprint=built.runs[0].fingerprint())
+    built = replace(built, gate=gate.completed_gate(presets.PRESETS["speed-short"], built.runs, built.gate))
+    report = run(built.gate)[0]
+    assert (report.verdict, report.label) == ("fail", "trade-off")
+    assert status("speed-short", [])["result"] == "fail (trade-off)"
+    markdown = (Path(report.path) / "gate_report.md").read_text()
+    assert "Result: fail (trade-off)" in markdown
+    assert "Verdict:" not in markdown and "Label:" not in markdown

@@ -18,7 +18,7 @@ Evaluation sampling belongs to the preset revision; controls must match that rev
 
 Add `--run --wait` to poll every 60 seconds and print the final status and report
 table. Its exit code is 0 for PASS or completed train-long/control collection,
-1 for FAIL, 2 for INVALID and 3 when submission, the coordinator or missing evidence prevents a verdict. Successful ungated runs also exit 0. Submission without `--wait` returns 0 when accepted.
+1 for FAIL, 2 for INVALID, 3 when a required verdict is unavailable, and 4 for a refusal before execution (including bad flags, refused `--set` and missing controls). The re-score and status commands use the same verdict codes. Successful ungated runs also exit 0. Submission without `--wait` returns 0 when accepted.
 The status lists the latest completed update and the W&B URL when the tracker has
 saved one. Set `WANDB_ENTITY` before submission to choose the W&B team; an unset
 value uses `marin-community`. Runs use the `marin-snowball-rl` project.
@@ -46,7 +46,7 @@ Speed-long uses the asynchronous 40-H100 recipe without evaluation, checkpoints 
 export. It guards throughput and staleness-0 k3 mismatch, and reports phase timings, grading/setup
 timers, staleness summaries and selected-token counts by staleness bucket.
 
-Learning-long and data-long publish their own `test_panel_100` update-0 and update-100 measurements.
+Learning-long and data-long report their own `test_panel_100` update-0 and update-100 measurements.
 The 1,500-task `test_panel` runs in the update-100 evaluation and supplies the quality verdict; it does not run
 before training or after an early stop. A completed run with no full-panel result is INVALID. Long
 candidates require qualified controls before submission.
@@ -93,15 +93,26 @@ commit in their shared artifact names. Each data preset uses the controls of the
 
 Calibrated presets write `gate_report.json` and `gate_report.md`. Status shows
 `pass`, `fail` or `invalid`, a change label and the report path. Train-long has no
-verdict; a crashed run reports `fail` with its Iris job ID.
+verdict. A crashed native run reports `invalid`, with its Iris job ID and state.
+
+The status block and `gate_report.md` open with objective values (control to candidate), the
+percentage change and the calibrated noise as a percentage of the control. Constraints follow,
+then a result such as `fail (trade-off)`. Learning presets show panel score gain per H100-hour
+from the run's update-0 and final panel scores and the receipt's native elapsed time and GPU count.
+Long presets use `test_panel_100` for this gain; their quality guard uses the final full panel.
+The rate is unavailable when the receipt has no elapsed time. `--issue N` supplies launcher-side
+experiment metadata without changing run identity. Evaluation comparisons bind the stored TaskSpec
+strings and the request: merged sampling, sample count, reply/context budget, prompt length,
+chat template and non-`VLLM_*` task environment. Engine settings, batch invariance, `VLLM_*`
+environment and vLLM version are separate `engine` facts in attempt tracking and reports.
+Training optimizer and engine settings can vary between candidates and controls.
 
 The gate reads exact runs pinned in `snowball_rl_gate.CONTROLS`. Refresh a pin after
 its replicates finish. Pins with the same preset revision pool deviations from each
 pin's own mean.
 Pins must match the current `PRESET_REVISION`. A candidate with no matching pin returns
-JSON INVALID with exit code 2 before GPU submission and prints the control collection
+a refusal with exit code 4 before GPU submission and prints the control collection
 command. The test-panel revision requires a control refresh for every gated preset.
-Speed-long's 20-update sizing run took 48.2 minutes with natural replies up to 8,192 tokens.
 
 Guards compare candidate and control replicate means, signed so positive means better.
 Tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with `k` guards
@@ -199,7 +210,7 @@ supplies native evaluation callbacks, sampling settings and versioned validation
 
 Named panels use one greedy answer per task, with natural replies up to `EVAL_REPLY_TOKENS`
 (8,192). Training keeps its own sampling. Every preset uses FLASH_ATTN, prefix caching enabled
-and batch invariance disabled. Controls and candidates use these same settings.
+and batch invariance disabled. These are the preset defaults; candidates can vary engine settings.
 
 Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. An answer counts as scored only with successful verification and no exception or error treatment. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage uses the declared task count of the identity-bound panel version.
 
@@ -222,9 +233,7 @@ Metrics are in `exports/metrics/step-*.json`; per-answer JSONL is under
 `exports/test_panel/dumped_evals/eval_only/`. The canonical `terminal.json` records the result and Iris
 job ID. Inspect both the artifacts and job before treating a run as successful.
 
-The `Evaluator` interface supplies configuration, callbacks and required environment names for presets.
-The current implementation evaluates native panels. The default selection and panels need no remote
-judge credential. Each run forwards its required keys through Iris.
+The default selection and panels use local graders and need no remote judge credential.
 
 ## Which experiment to run
 
@@ -250,11 +259,3 @@ judge credential. Each run forwards its required keys through Iris.
 | AAII coverage; no-agentic-tasks | the panel covers scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tool use and long-context coverage need separate qualification |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
 | no-async-speed-gate | Speed-long has no pinned controls; collect controls before using its throughput verdict. |
-
-The status block and `gate_report.md` open with objective values (control to candidate), the
-percentage change and the calibrated noise as a percentage of the control. Constraints follow,
-then the verdict and label. Learning presets also show reward gain per H100-hour from the run's
-update-0 score and the native trainer's elapsed time and GPU count. This rate is unavailable
-when native job timing cannot be read. `--issue N` records the experiment issue without changing
-run identity. Evaluation comparisons bind the recorded TaskSpec content and effective evaluation
-settings; training optimizer settings can vary between candidates and controls.

@@ -3,7 +3,7 @@
 
 import json
 import subprocess
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,13 +13,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from iris.cluster.client.job_info import set_job_info
-from iris.resources.state import JobState
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from rigging.provenance import Provenance
-from rigging.timing import Timestamp
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import Source
@@ -120,14 +118,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     )
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
-    native_job = SimpleNamespace(
-        state=JobState.SUCCEEDED,
-        started_at=Timestamp.from_ms(1794000000000),
-        finished_at=Timestamp.from_ms(1794003600000),
-    )
-    monkeypatch.setattr(
-        "marin.rl.cli.iris_client", lambda **kwargs: nullcontext(SimpleNamespace(job_status=lambda job_id: native_job))
-    )
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     panel = Path(presets.default_selection().path())
@@ -217,7 +207,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             0
         ].main_commit
         source = {"tree_hash": "native-tree", "base_commit": commit, "dirty": False, "command_line": list(argv)}
-        result = {"state": "succeeded", "iris_job_id": "/tests/native-run", "provenance": source | (provenance or {})}
+        result = {
+            "state": "succeeded",
+            "iris_job_id": "/tests/native-run",
+            "provenance": source | (provenance or {}),
+            "started_at": "2026-11-06T18:40:00+00:00",
+            "finished_at": "2026-11-06T19:40:00+00:00",
+        }
         (root / ".executor_status").write_text("SUCCESS")
         for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
             row = {f"generate/outcome/{outcome}": 0.0 for outcome in (*Outcome, "rollout_failure")}
@@ -252,6 +248,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 write_json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
         launch = {
             "run": {"id": run_id or f"{name}-{version}", "attempt_id": attempt_id},
+            "runtime": {"task_env": {"NCCL_NET": "Socket", "VLLM_LOGGING_LEVEL": "ERROR"}},
+            "iris": {"allocation": {"num_nodes": preset.recipe.layout.role_plan.num_nodes, "gpus_per_node": 8}},
             "skyrl": {
                 "context_budget": {"max_new_tokens_per_turn": 8192, "max_turns": 1},
                 "trainer": {
@@ -340,9 +338,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 )
             binding = selected
             if evaluation.sample is not None:
-                binding = presets.sampled_tasks_step(
-                    selected, evaluation.file, evaluation.sample, presets.SEED, local_only=evaluation.local_only
-                )
+                binding = presets.sampled_tasks_step(selected, evaluation.file, evaluation.sample, presets.SEED)
             descriptor = {
                 "uri": str(run_panel),
                 "relative_path": f"{evaluation.file}.parquet",
@@ -426,7 +422,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 "coordinator_iris_job_id": "/tests/coordinator",
                 "wandb_url": None,
                 "started_at": "2026-11-06T17:20:00+00:00",
-                "vllm_version": "fixture-vllm",
+                "engine": {"vllm_version": "fixture-vllm"},
             },
         )
         if not (missing_receipt or unresolved_receipt):

@@ -168,7 +168,7 @@ print(json.dumps([{
     "quality_wire": quality_request(config),
     "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
                  if entry.type == "evaluation"],
-    "engine_profile": [config.skyrl.trainer.algorithm.batch_invariant,
+    "engine_settings": [config.skyrl.trainer.algorithm.batch_invariant,
                        config.skyrl.generator.vllm_attention_backend,
                        config.skyrl.generator.enable_prefix_caching],
     "fixed": config.skyrl.generator.eval_sampling_params.ignore_eos or config.skyrl.generator.sampling_params.ignore_eos,
@@ -211,7 +211,7 @@ print(json.dumps([{
         assert row["gpus"] <= 40, row
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
         name = row["name"]
-        assert row["engine_profile"] == [False, "FLASH_ATTN", True]
+        assert row["engine_settings"] == [False, "FLASH_ATTN", True]
         if "learning-medium-" in name or "data-medium-" in name:
             assert row["at_start"] == [True]
         if "speed-short-" in name or "data-short-" in name:

@@ -41,24 +41,17 @@ belong to `launch-rl`; job inspection and logs belong to `use-iris`; object-stor
   name, and the command then shows `state: not built` for a new run.
 - `--run --wait` polls until the coordinator finishes: about 15 minutes for speed-short and data-short,
   35–120 minutes for medium presets, about 4 h for learning-long and data-long, and hours to days for train-long, so run it in the
-  background. It exits 0 for `pass` or a finished train-long, 1 for `fail`, 2 for `invalid`, and 3
-  when a submission error, a failed coordinator, or missing evidence prevents a verdict.
+  background. It exits 0 for `pass` or a finished ungated run, 1 for `fail`, 2 for `invalid`, 3
+  without a required verdict, and 4 for a refusal before execution (bad flags, refused `--set`
+  or missing controls). Status and re-score use the same verdict codes. Stdout includes YAML and
+  Markdown; read the printed `report` path for the machine-readable `gate_report.json`.
 
 ## Choose the preset
 
-When a row names two presets, run the second only after the first passes.
+Use the recipe's [preset-choice table](../../../docs/recipes/snowball-rl.md#which-experiment-to-run).
+When it names two presets, run the second after the first passes.
 
 ### Inference and speed
-
-| change | presets |
-|---|---|
-| vLLM wheel, kernel, or engine option | speed-short, then speed-medium |
-| trainer kernel, parallelism, recompute, or exact numerics | speed-medium, then learning-medium |
-| fp8 experts or KV-cache precision | speed-medium, then learning-medium; ask the person to weigh the speed gain against the learning-medium result |
-| weight synchronization | speed-medium |
-| startup latency | speed-medium; read the `startup/*` rows of the Reported table, which never change the verdict |
-| asynchronous loop, grading, or admission throughput | speed-long |
-| sustained learning or curriculum changes | learning-long, or data-long with `--tasks` |
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --run
@@ -72,7 +65,7 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
   `generator.sampling_params`.
 - The `--require ...<=0` bound above holds every replicate to zero mismatch, for a change that claims
   exact numerics.
-- A preset without a matching control pin prints `invalid` and exits 2 before any GPU work. The
+- A preset without a matching control pin prints its refusal and exits 4 before any GPU work. The
   message includes the command that collects its control replicates. Report this to the person;
   collect controls only when they ask (see "Never").
 - speed-short measures throughput, then evaluates the full test panel in the same engine job.
@@ -209,8 +202,9 @@ same change, such as speed-medium after speed-short, goes in the same issue.
 ## Read the result
 
 Read the objectives first: each row gives the control and candidate values, percentage change,
-noise percentage and direction. Learning presets also report reward gain per H100-hour using the
-update-0 score and native trainer elapsed time. A missing native duration makes that rate unavailable.
+noise percentage and direction. Learning presets also report panel score gain per H100-hour using the
+update-0 and final scores and native elapsed time saved in the receipt. Long presets use
+`test_panel_100` for this gain. A missing native duration makes that rate unavailable.
 Read the constraints next, then the verdict and label. The status block and `gate_report.md` use
 this order. The report also has the full Guards, Reported, Invariants and Breakdown tables, plus
 Vs baseline when requested. The status includes native attempt IDs, job and W&B links, completed
@@ -220,13 +214,18 @@ update, output path and the optional experiment issue. See
 - `fail`: a guard fell below its tolerance, or a candidate invariant failed (planned updates, finite
   losses, panel coverage of at least 99%, grader errors of at most 1%, fixed reply length, or a numeric
   `--require`). The Guards and Invariants tables show which.
-- `invalid`: the gate could not compare the run, and `reason` names the cause, such as no control pin,
+- `invalid`: the gate could not compare the run, and `reason` names the cause, such as
   a different preset revision or panel, a missing guard or `--require` metric, or a grader-error count
   that straddles 1%. Fix the cause and rerun; do not reinterpret the numbers.
-- When a run's state is failed and no report exists, the status block shows `verdict: fail`,
-  `reason: run crashed`, and the run's `iris_job_id`; inspect that job with `use-iris`.
+- When a run's state is failed and no report exists, the status block shows `verdict: invalid`,
+  a reason naming the native failure, and the run's `iris_job_id`; inspect that job with `use-iris`.
 - Before reporting success, confirm that `terminal.json` under the run's `output` records the run as
   succeeded and that the Iris job finished.
+
+Evaluation identity compares the stored TaskSpec strings and the evaluation request: merged sampling,
+sample count, context/reply budget, prompt length, chat template and non-`VLLM_*` task environment.
+Engine settings, batch invariance, `VLLM_*` environment and vLLM version are recorded as separate
+attempt `engine` facts. They can vary between candidates and controls.
 
 ## Never
 
