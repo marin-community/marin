@@ -2,7 +2,10 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
 
+<!--marin-intro-start-->
+
 This repository contains the code for **[MARINER](https://arxiv.org/abs/XXXX.XXXXX)**, a parametric surrogate for data mixing that models each data bucket's saturating benefit and growing repetition harm as functions of its epochs. MARINER is fitted to the losses of a swarm of small proxy runs and proposes a mixture for a larger target run. The repository is a fork of [Marin](https://github.com/marin-community/marin) whose only addition is the `lib/mariner` package, which needs numpy, scipy, pandas, scikit-learn and pyarrow, and no accelerator libraries. Redrawing the paper's figures also needs matplotlib and LightGBM.
+<!--marin-intro-end-->
 
 ![Figure 1 of the paper: proxy experiments reproduce the target's repetition, MARINER models each data bucket's saturating benefit and growing repetition harm, and its mixtures lower loss across compute scales and raise downstream accuracy.](lib/mariner/paper_figures/figure1.png)
 
@@ -12,6 +15,7 @@ The runs and fits behind the paper are in the [mariner-data](https://huggingface
 
 For more details, see our paper: [*MARINER: Measuring and Modeling Repetition Harm for Multi-Epoch Data Mixing*](https://arxiv.org/abs/XXXX.XXXXX)
 
+<!--marin-first-steps-start-->
 ## Installation
 
 ```bash
@@ -22,6 +26,8 @@ pip install -c https://raw.githubusercontent.com/Calvin-Xu/mariner/v0.1.0/lib/ma
 ```
 
 The constraints file pins the library versions with which we checked the reproductions below. These versions need Python 3.12: the pinned pandas 2.2.2 has no wheels for later Python versions, and the package needs Python 3.12 or later. The `download` extra fetches the dataset from the Hugging Face Hub, the `olmix` extra installs cvxpy and its solvers for the Olmix baseline, and the `figures` extra installs matplotlib and LightGBM 4.7.0 for the figure redraws. Inside a clone of this repository (`git clone https://github.com/Calvin-Xu/mariner`), `uv run --package marin-mariner --extra download --extra olmix --extra figures mariner ...` runs the command in the workspace environment.
+
+<!--marin-first-steps-end-->
 
 ## Reproducing the paper's mixtures
 
