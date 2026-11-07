@@ -11,9 +11,7 @@
 - ``fig:r6`` (Figure 6): each surrogate's selection regret relative to a random pick against swarm size, from the
   out-of-fold learning-curve study in ``fits_learning_curves``.
 - ``fig:proposal-predictions`` (Figure 7): each model's trained proposal, its measured loss over three trainer seeds,
-  and all four models' predictions for it. It is not registered: ``fits_proposal_predictions`` holds 20 of its 32
-  predictions, and the spline's and tuned RegMix's predictions of Olmix's proposals need models this package does
-  not have.
+  and all four models' predictions for it, from ``fits_proposal_predictions``.
 """
 
 from __future__ import annotations
@@ -25,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from scipy import stats
 
 from mariner.data import OBJECTIVES, OBSERVATION_ID, TRAINED_MARINER, TRAINED_OLMIX, read_table
@@ -316,6 +315,7 @@ def draw_learning_curves(root: Path) -> FigureData:
         for model in LEARNING_CURVE_MODELS
     ]
     handles += [
+        Patch(color=NEUTRAL, alpha=0.16, linewidth=0, label=f"{CONFIDENCE:.0%} t-interval over the draws"),
         Line2D([], [], color=RANDOM_COLOR, linestyle="--", label="random pick"),
         Line2D(
             [],
@@ -332,7 +332,7 @@ def draw_learning_curves(root: Path) -> FigureData:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Figure 7: each model's proposal, its measured loss and every model's prediction (not registered)
+# Figure 7: each model's proposal, its measured loss and every model's prediction
 # ---------------------------------------------------------------------------------------------------------------
 
 PROPOSAL_MODELS = (Method.MARINER, Method.OLMIX, Method.SPLINE, Method.REGMIX)

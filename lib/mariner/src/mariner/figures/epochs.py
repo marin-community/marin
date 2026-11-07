@@ -1,41 +1,193 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Redraws of the paper's figures on proxy epochs: Figure 3 (``fig:b5``).
+"""Redraws of the paper's figures on proxy design: Figures 2 (``fig:epoch-matching``) and 3 (``fig:b5``).
 
-Figure 3 sweeps the StarCoder share of Nemotron-CC/StarCoder mixtures under simulated epoching along three paths of
-matched compute: a larger model at fixed tokens, more tokens at a fixed model, and both at five tokens per parameter.
-MARINER is fitted to each sweep (``mariner.figures.starcoder``), and the optimum's share and loss along each path follow
-power laws in the scaled quantity. The dataset records training FLOPs for the fixed-TPP sweeps only
-(``starcoder_diagonal``), so only their legend entries print compute.
+Figure 2 trains proxies of a 301M-parameter target run at ten tokens per parameter on Nemotron-CC/StarCoder mixtures,
+with and without simulated epoching, and the target at the share each proxy selects. Figure 3 sweeps the StarCoder
+share under simulated epoching along three paths of matched compute: a larger model at fixed tokens, more tokens at a
+fixed model, and both at five tokens per parameter. MARINER is fitted to each sweep (``mariner.figures.starcoder``),
+and the optimum's share and loss along each path follow power laws in the scaled quantity.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import math
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
+import matplotlib as mpl
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
 from mariner.figures.layout import NEUTRAL, FigureData, data_limits, figure_legend, panel_legend, panels, scale_colors
 from mariner.figures.starcoder import (
+    ARM_COLORS,
+    AVOIDED_COLOR,
     CURVE_POINTS,
+    DIAMOND,
     EPOCH_SCALE_TOLERANCE,
     FIXED_PARAMETERS_CURVES,
     FIXED_TOKENS_CURVES,
     SHARE_AXIS_LIMITS,
+    Arm,
+    EpochMatching,
     StarcoderSweep,
     atlas_sweeps,
     diagonal_sweeps,
+    draw_proxies,
+    draw_target,
+    epoch_matching,
     fitted_sweep,
     parameters_label,
+    selection_values,
     tokens_label,
 )
+
+# ---------------------------------------------------------------------------------------------------------------
+# Figure 2: proxies with and without simulated epoching, and the target at their selections
+# ---------------------------------------------------------------------------------------------------------------
+
+# The first shares in view: below them the proxies (share 0) and the target (shares 0 and 0.1) lie far off the loss
+# scale of the rest.
+PROXY_FIRST_SHARE = 0.1
+TARGET_FIRST_SHARE = 0.3
+EPOCH_TICK_SHARES = (0.6, 0.8, 1.0)  # the shares at which Figure 2's top axes print materialized epochs
+EPOCH_ROW_PITCH = 10.0  # points between stacked rows of epochs above a panel
+
+
+def rounded_label(value: float) -> str:
+    """Two decimals below one and one from one up, as the paper prints epochs and tokens per parameter."""
+    return f"{value:.2f}" if value < 1 else f"{value:.1f}"
+
+
+def flops_label(flops: float) -> str:
+    return f"{flops:.3g}".replace("e+", "e")
+
+
+def epoch_rows(axis: Axes, matching: EpochMatching, arms: Sequence[Arm]) -> None:
+    """Rows of each arm's materialized StarCoder epochs at ``EPOCH_TICK_SHARES`` above the panel, the first lowest.
+
+    Each row is a top axis of its own; the rows above the first stack their labels higher and draw no ticks or spine.
+    """
+    for row, arm in enumerate(arms):
+        top = axis.secondary_xaxis("top")
+        top.set_xticks(EPOCH_TICK_SHARES, [rounded_label(matching.epochs_at(arm, share)) for share in EPOCH_TICK_SHARES])
+        top.tick_params(axis="x", colors=ARM_COLORS[arm])
+        if row:
+            top.tick_params(axis="x", length=0, pad=float(mpl.rcParams["xtick.major.pad"]) + row * EPOCH_ROW_PITCH)
+            for spine in top.spines.values():
+                spine.set_visible(False)
+    top.set_xlabel("Materialized StarCoder epochs")
+
+
+def draw_epoch_matching(root: Path) -> FigureData:
+    """Figure 2: proxy and target loss over the StarCoder share at ten tokens per parameter, the share that each proxy
+    selects, and the target's loss at each selection."""
+    matching = epoch_matching(root)
+    selections = selection_values(matching).set_index("arm")
+    optimum = matching.target_optimum()
+    figure, axes = panels(2, legend_height=1.0)
+    proxy, target = axes
+    draw_proxies(proxy, matching, matching.matched, PROXY_FIRST_SHARE)
+    draw_target(target, matching, TARGET_FIRST_SHARE)
+    epoch_rows(proxy, matching, (Arm.UNMATCHED, Arm.MATCHED))
+    epoch_rows(target, matching, (Arm.TARGET,))
+    matched, unmatched = selections.loc[Arm.MATCHED], selections.loc[Arm.UNMATCHED]
+    with_color, without_color = ARM_COLORS[Arm.MATCHED], ARM_COLORS[Arm.UNMATCHED]
+    panel_legend(
+        proxy,
+        [
+            Line2D(
+                [], [], color=with_color, marker="o", markersize=3, label="with simulated epoching (3 subsets, range)"
+            ),
+            Line2D([], [], color=without_color, marker="o", markerfacecolor="white", label="without simulated epoching"),
+            Line2D(
+                [],
+                [],
+                color=with_color,
+                **DIAMOND,
+                label=f"selected with: p = {matched['share']:.3f}, {rounded_label(matched['epochs'])} epochs",
+            ),
+            Line2D(
+                [],
+                [],
+                color=without_color,
+                **DIAMOND,
+                label=f"selected without: p = {unmatched['share']:.2f}, {rounded_label(unmatched['epochs'])} epochs",
+            ),
+        ],
+    )
+    panel_legend(
+        target,
+        [
+            Line2D([], [], color=ARM_COLORS[Arm.TARGET], marker="o", markerfacecolor="white", label="target run"),
+            Line2D(
+                [],
+                [],
+                color=ARM_COLORS[Arm.TARGET],
+                marker="*",
+                linestyle="none",
+                markersize=11,
+                label=f"optimum: p = {optimum.share:.2f}, {optimum.bpb:.3f}",
+            ),
+            Line2D([], [], color=with_color, **DIAMOND, label=f"at the selection with: {matched['target_bpb']:.3f}"),
+            Line2D(
+                [], [], color=without_color, **DIAMOND, label=f"at the selection without: {unmatched['target_bpb']:.3f}"
+            ),
+            Line2D(
+                [],
+                [],
+                color=AVOIDED_COLOR,
+                label=f"{100 * matching.excess_loss_avoided:.1f}% less excess loss with simulated epoching",
+            ),
+        ],
+    )
+    proxy.set_title(f"Proxy runs, {flops_label(matching.compute_flops[Arm.MATCHED])} FLOPs")
+    target.set_title(f"Target run, {flops_label(matching.compute_flops[Arm.TARGET])} FLOPs")
+    proxy.set_ylabel("Proxy loss (BPB)")
+    target.set_ylabel("Target loss (BPB)")
+    for axis in axes:
+        axis.set_xlabel("StarCoder share of the mixture, p")
+    shown = matching.shares >= PROXY_FIRST_SHARE
+    proxy_curves = [
+        {"arm": Arm.MATCHED.value, "subset_seed": seed, "share": share, "bpb": bpb}
+        for seed, curve in matching.matched.iterrows()
+        for share, bpb in zip(matching.shares[shown], curve.to_numpy(float)[shown], strict=True)
+    ]
+    proxy_curves += [
+        {"arm": Arm.UNMATCHED.value, "subset_seed": np.nan, "share": share, "bpb": bpb}
+        for share, bpb in zip(matching.shares[shown], matching.unmatched.to_numpy(float)[shown], strict=True)
+    ]
+    target_curve = matching.target[matching.target.index >= TARGET_FIRST_SHARE]
+    epochs = [
+        {"arm": arm.value, "share": share, "epochs": matching.epochs_at(arm, share)}
+        for arm in Arm
+        for share in EPOCH_TICK_SHARES
+    ]
+    values = {
+        "proxy_curves": pd.DataFrame(proxy_curves),
+        "target_curve": target_curve.rename_axis("share").rename("bpb").reset_index(),
+        "selections": selections.reset_index(),
+        "target_optimum": pd.DataFrame([optimum._asdict()]),
+        "epochs": pd.DataFrame(epochs),
+        "summary": pd.DataFrame(
+            {
+                "excess_loss_avoided": [matching.excess_loss_avoided],
+                "proxy_flops": [matching.compute_flops[Arm.MATCHED]],
+                "target_flops": [matching.compute_flops[Arm.TARGET]],
+            }
+        ),
+    }
+    return FigureData(figure, values)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Figure 3: the optimum's epochs along three paths of matched compute
+# ---------------------------------------------------------------------------------------------------------------
 
 
 class Track(StrEnum):
@@ -96,19 +248,13 @@ def path_law(scales: np.ndarray, shares: np.ndarray, losses: np.ndarray) -> Path
     )
 
 
-def tpp_label(tokens_per_parameter: float) -> str:
-    return f"{tokens_per_parameter:.2f}" if tokens_per_parameter < 1 else f"{tokens_per_parameter:.1f}"
-
-
 def sweep_label(sweep: StarcoderSweep, epochs: float) -> str:
-    """A sweep's model size, tokens, tokens per parameter, compute where recorded, and fitted optimum's epochs."""
+    """A sweep's model size, tokens, tokens per parameter, training FLOPs and fitted optimum's epochs."""
     label = (
         f"N {parameters_label(sweep.total_parameters)}, D {tokens_label(sweep.train_tokens)},"
-        f" D/N {tpp_label(sweep.train_tokens / sweep.total_parameters)}"
+        f" D/N {rounded_label(sweep.train_tokens / sweep.total_parameters)}"
     )
-    if math.isfinite(sweep.compute_flops):
-        label += f", {sweep.compute_flops:.2g} FLOPs"
-    return f"{label}: E* {epochs:.1f}"
+    return f"{label}, {sweep.compute_flops:.2g} FLOPs: E* {epochs:.1f}"
 
 
 def law_label(law: PathLaw, symbol: str) -> str:

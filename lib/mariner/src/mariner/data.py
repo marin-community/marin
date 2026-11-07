@@ -122,6 +122,7 @@ DOWNLOAD_PATTERNS = (
     "data/starcoder/starcoder_curve_membership.*",
     "data/starcoder/starcoder_curves.*",
     "data/starcoder/starcoder_diagonal.*",
+    "data/starcoder/starcoder_epoch_matching.*",
 )
 
 
@@ -557,10 +558,10 @@ def download(local_dir: Path, repo_id: str = DATASET_REPO, revision: str | None 
     """Download MANIFEST.json, the card, figures_tables.csv and the tables this package reads into ``local_dir``.
 
     The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits, which the
-    commands read; ladder_accuracy, the domain sweeps and the StarCoder observations, curves, curve membership and
-    diagonal, which the main-text figures also read; and ladder_compute_equivalence, the baselines' released ladder
-    laws, which the tests compare Figure 1's fits with. The other StarCoder tables, ladder_unimax_cap_sweep and
-    run_sets stay on the Hub. Returns the directory's path.
+    commands read; ladder_accuracy, the domain sweeps and the StarCoder observations, curves, curve membership,
+    diagonal and epoch-matching sweep, which the main-text figures also read; and ladder_compute_equivalence, the
+    baselines' released ladder laws, which the tests compare Figure 1's fits with. The other StarCoder tables,
+    ladder_unimax_cap_sweep and run_sets stay on the Hub. Returns the directory's path.
     """
     try:
         from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)

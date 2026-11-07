@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mariner.figures import epochs, surrogate
+from mariner.figures import epochs, pipeline, surrogate
 from mariner.figures.layout import FigureData, save, style
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,18 @@ class FigureSpec:
 FIGURES: dict[str, FigureSpec] = {
     spec.label: spec
     for spec in (
+        FigureSpec("fig:pipeline", "f1_pipeline", ("starcoder", "ladder", "ladder_accuracy"), pipeline.draw_pipeline),
+        FigureSpec("fig:epoch-matching", "epoch_matching_tpp10", ("starcoder",), epochs.draw_epoch_matching),
         FigureSpec("fig:b5", "b5_matched_compute_scaling", ("starcoder",), epochs.draw_matched_compute_scaling),
         FigureSpec("fig:b6", "b6_olmix_capacity_failure", ("starcoder",), surrogate.draw_olmix_capacity_failure),
         FigureSpec("fig:mariner-terms", "m_mariner_terms", (), surrogate.draw_mariner_terms),
         FigureSpec("fig:r6", "r6_learning_curve_per_fold_ratio", ("fits",), surrogate.draw_learning_curves),
+        FigureSpec(
+            "fig:proposal-predictions",
+            "r_proposal_predictions",
+            ("validation_3e18", "fits"),
+            surrogate.draw_proposal_predictions,
+        ),
     )
 }
 

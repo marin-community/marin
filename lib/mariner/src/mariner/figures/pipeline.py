@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The lower panels of the paper's Figure 1 (``fig:pipeline``).
+"""Redraw of the paper's Figure 1 (``fig:pipeline``): its proxy and target repetition, loss and accuracy panels.
 
-Each mixture's Uncheatable loss across the compute ladder with its fitted power law and MARINER's compute multiples
-(``scaling_values``), and downstream accuracy at 1e21 FLOPs (``accuracy_values``). Figure 1 is not registered: its
-proxy and target repetition panel needs the StarCoder epoch-matching sweep.
+The repetition panels draw the epoch-matching sweep of Figure 2 (``mariner.figures.starcoder``): the proxies' loss
+with and without simulated epoching, the target's loss, and the excess loss that matching repetition avoids. The lower
+panels draw each mixture's Uncheatable loss across the compute ladder with its fitted power law and MARINER's compute
+multiples (``scaling_values``), and downstream accuracy at 1e21 FLOPs (``accuracy_values``). The paper's top-right
+panel, which illustrates the surrogates' shapes on six of the matched proxy's points, is not redrawn.
 """
 
 from __future__ import annotations
@@ -22,7 +24,25 @@ from matplotlib.ticker import FormatStrFormatter
 from scipy.optimize import curve_fit
 
 from mariner.data import read_table
-from mariner.figures.layout import METHOD_COLORS, METHOD_LABELS, FigureData, Method, figure_legend, panels
+from mariner.figures.layout import (
+    METHOD_COLORS,
+    METHOD_LABELS,
+    FigureData,
+    Method,
+    figure_legend,
+    panel_legend,
+    panels,
+)
+from mariner.figures.starcoder import (
+    ARM_COLORS,
+    AVOIDED_COLOR,
+    DIAMOND,
+    Arm,
+    draw_proxies,
+    draw_target,
+    epoch_matching,
+    selection_values,
+)
 
 SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
 LADDER_METHODS = (Method.PROPORTIONAL, Method.UNIMAX, Method.OLMIX, Method.MARINER)
@@ -45,6 +65,7 @@ ACCURACY_GROUPS = (
     ("QA", ("Question answering (lm-eval overlap)", "QA answer selection")),
 )
 ALL_TASKS = "All"
+FIRST_SHARE = 0.1  # the repetition panels start at 10% StarCoder: the runs without it lie far off the scale
 
 
 @dataclasses.dataclass(frozen=True)
@@ -216,14 +237,94 @@ def draw_accuracy(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
     axis.set_title("OlmoBaseEval Easy accuracy, 1e21 FLOPs")
 
 
-def draw_pipeline_lower_panels(root: Path) -> FigureData:
-    """Figure 1's lower panels on their own; the figure needs its repetition panel before it is registered."""
-    figure, axes = panels(2, legend_height=0.3)
+def draw_pipeline(root: Path) -> FigureData:
+    """Figure 1: proxy and target loss over the StarCoder share with and without simulated epoching, loss across
+    compute scales, and downstream accuracy at 1e21 FLOPs."""
+    matching = epoch_matching(root)
+    selections = selection_values(matching).set_index("arm")
+    optimum = matching.target_optimum()
+    figure, axes = panels(2, rows=2, legend_height=1.3)
+    proxy, target, scaling_axis, accuracy_axis = axes
+    # The figure draws the matched subsets' mean, where Figure 2 draws each subset.
+    mean_track = matching.matched.mean().to_frame().T
+    draw_proxies(proxy, matching, mean_track, FIRST_SHARE)
+    draw_target(target, matching, FIRST_SHARE)
+    with_color, without_color = ARM_COLORS[Arm.MATCHED], ARM_COLORS[Arm.UNMATCHED]
+    panel_legend(
+        proxy,
+        [
+            Line2D([], [], color=with_color, marker="o", markersize=3, label="proxy with simulated epoching (range)"),
+            Line2D(
+                [],
+                [],
+                color=without_color,
+                marker="o",
+                markerfacecolor="white",
+                label="proxy without simulated epoching",
+            ),
+            Line2D(
+                [],
+                [],
+                color=with_color,
+                **DIAMOND,
+                label=f"selected with: {100 * matching.selections[Arm.MATCHED]:.0f}%",
+            ),
+            Line2D(
+                [],
+                [],
+                color=without_color,
+                **DIAMOND,
+                label=f"selected without: {100 * matching.selections[Arm.UNMATCHED]:.0f}%",
+            ),
+        ],
+    )
+    panel_legend(
+        target,
+        [
+            Line2D([], [], color=ARM_COLORS[Arm.TARGET], marker="o", markerfacecolor="white", label="target scale"),
+            Line2D(
+                [],
+                [],
+                color=ARM_COLORS[Arm.TARGET],
+                marker="*",
+                linestyle="none",
+                markersize=11,
+                label=f"target optimum: {100 * optimum.share:.0f}%",
+            ),
+            Line2D([], [], color=with_color, **DIAMOND, label="at the selection with simulated epoching"),
+            Line2D([], [], color=without_color, **DIAMOND, label="at the selection without"),
+            Line2D([], [], color=AVOIDED_COLOR, label=f"excess loss avoided: {100 * matching.excess_loss_avoided:.0f}%"),
+        ],
+    )
+    for axis, title, label in (
+        (proxy, "Proxy scale", "Proxy loss (BPB)"),
+        (target, "Target scale", "Target loss (BPB)"),
+    ):
+        axis.set_title(f"{title}: StarCoder repetition")
+        axis.set_xlabel("StarCoder share of the mixture, p")
+        axis.set_ylabel(label)
     scaling, accuracy = scaling_values(root), accuracy_values(root)
-    draw_scaling(axes[0], scaling)
-    draw_accuracy(axes[1], accuracy)
+    draw_scaling(scaling_axis, scaling)
+    draw_accuracy(accuracy_axis, accuracy)
     handles = [
         Line2D([], [], color=METHOD_COLORS[method], marker="o", label=METHOD_LABELS[method]) for method in LADDER_METHODS
     ]
     figure_legend(figure, handles, columns=len(LADDER_METHODS))
-    return FigureData(figure, {**scaling, **accuracy})
+    shown = matching.shares >= FIRST_SHARE
+    proxy_curves = pd.DataFrame(
+        {
+            "share": matching.shares[shown],
+            Arm.MATCHED.value: mean_track.iloc[0].to_numpy(float)[shown],
+            Arm.UNMATCHED.value: matching.unmatched.to_numpy(float)[shown],
+        }
+    )
+    repetition = {
+        "proxy_curves": proxy_curves,
+        "target_curve": (
+            matching.target[matching.target.index >= FIRST_SHARE].rename_axis("share").rename("bpb").reset_index()
+        ),
+        "selections": selections.reset_index(),
+        "target_optimum": pd.DataFrame([optimum._asdict()]),
+        "summary": pd.DataFrame({"excess_loss_avoided": [matching.excess_loss_avoided]}),
+    }
+    return FigureData(figure, {**repetition, **scaling, **accuracy})

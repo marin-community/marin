@@ -3,24 +3,27 @@
 
 """The two-bucket Nemotron-CC/StarCoder sweeps that Figures 1 to 4 plot, and MARINER's fits to them.
 
-A sweep varies the StarCoder share p of a mixture with Nemotron-CC web text at one model size and token budget, under
-simulated epoching. Figures 3 and 4 fit MARINER to each sweep as a two-bucket swarm (``fit_sweep``), the way the paper
-fitted them.
+A sweep varies the StarCoder share p of a mixture with Nemotron-CC web text at one model size and token budget. Figures 3
+and 4 fit MARINER to each sweep as a two-bucket swarm (``fit_sweep``), the way the paper fitted them. Figures 1 and 2
+draw the epoch-matching sweep (``epoch_matching``): proxies with and without simulated epoching select a share, and a
+target run measures each selection.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import math
 from collections.abc import Sequence
+from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 from scipy.optimize import minimize_scalar
 
 from mariner.data import OBSERVATION_ID, read_table
+from mariner.figures.layout import NEUTRAL
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
 
@@ -90,7 +93,7 @@ def atlas_sweeps(root: Path, refs: Sequence[str]) -> dict[str, StarcoderSweep]:
             curve["total_parameters"],
             curve["train_tokens"],
             curve["starcoder_epochs_at_p1"],
-            math.nan,
+            curve["compute_flops"],
             runs["starcoder_weight"],
             runs["observed_bpb"],
         )
@@ -201,3 +204,167 @@ def parameters_label(count: float) -> str:
 
 def tokens_label(count: float) -> str:
     return f"{count / 1e9:.2f}B"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The epoch-matching sweep (Figures 1 and 2)
+# ---------------------------------------------------------------------------------------------------------------
+
+EPOCH_MATCHING_TABLE = "starcoder_epoch_matching"
+EPOCH_MATCHING_BPB = "programming_languages_bpb"
+SELECTION_TOLERANCE = 1e-12  # the target's follow-up run trains the matched selection, a mean of grid shares
+
+
+class Arm(StrEnum):
+    """The epoch-matching sweep's runs: the target, and the proxy without and with simulated epoching."""
+
+    TARGET = "target"
+    UNMATCHED = "unmatched"
+    MATCHED = "matched"
+
+
+PROXY_ARMS = (Arm.MATCHED, Arm.UNMATCHED)
+ARM_COLORS = {Arm.TARGET: "#2F4B7C", Arm.UNMATCHED: "#CC3311", Arm.MATCHED: "#469C76"}
+AVOIDED_COLOR = "#0072B2"
+DIAMOND = {"marker": "D", "markersize": 6, "markeredgecolor": "white", "linestyle": "none", "zorder": 6}
+
+
+@dataclasses.dataclass(frozen=True)
+class EpochMatching:
+    """The epoch-matching sweep (Figure 2) on its grid of StarCoder shares.
+
+    ``matched`` has one row per subset of the proxy with simulated epoching, the mean over its two trainer seeds, and
+    ``unmatched`` is the mean over the other proxy's two; the runs without StarCoder serve both. ``target`` holds the
+    target's grid runs and its follow-up at the matched selection. A proxy selects the mean of its curves' grid minima,
+    a curve being one trainer seed's runs (of one subset, with simulated epoching).
+    """
+
+    matched: pd.DataFrame  # subset seeds x grid shares
+    unmatched: pd.Series  # by grid share
+    target: pd.Series  # by share
+    selections: dict[Arm, float]  # each proxy's selected share
+    epochs: pd.DataFrame  # arms x shares: StarCoder's materialized epochs
+    compute_flops: dict[Arm, float]
+
+    @property
+    def shares(self) -> np.ndarray:
+        return self.unmatched.index.to_numpy(float)
+
+    def target_optimum(self) -> Optimum:
+        """The grid share with the least target loss, and that loss."""
+        grid = self.target.loc[self.shares]
+        return Optimum(float(grid.idxmin()), float(grid.min()))
+
+    def proxy_bpb(self, arm: Arm) -> float:
+        """A proxy's loss at its selection, on its curve: for simulated epoching, the subsets' mean."""
+        curve = self.matched.mean() if arm == Arm.MATCHED else self.unmatched
+        return float(np.interp(self.selections[arm], self.shares, curve.to_numpy(float)))
+
+    def target_bpb(self, arm: Arm) -> float:
+        """The target's loss at a proxy's selection, from the target run that trained it."""
+        trained = self.target[np.isclose(self.target.index, self.selections[arm], rtol=0, atol=SELECTION_TOLERANCE)]
+        if len(trained) != 1:
+            raise ValueError(f"{len(trained)} target runs trained the {arm} selection {self.selections[arm]:.6f}")
+        return float(trained.iloc[0])
+
+    def regret(self, arm: Arm) -> float:
+        return self.target_bpb(arm) - self.target_optimum().bpb
+
+    @property
+    def excess_loss_avoided(self) -> float:
+        """The fraction of the unmatched proxy's target regret that the matched proxy's selection avoids."""
+        return 1.0 - self.regret(Arm.MATCHED) / self.regret(Arm.UNMATCHED)
+
+    def epochs_at(self, arm: Arm, share: float) -> float:
+        row = self.epochs.loc[arm]
+        return float(row[np.isclose(row.index, share, rtol=0, atol=SELECTION_TOLERANCE)].iloc[0])
+
+    def selection_epochs(self, arm: Arm) -> float:
+        """StarCoder's materialized epochs at a proxy's selection. Simulated epoching reproduces the target's epochs,
+        and the matched selection is the share that the target's follow-up run trained."""
+        return self.epochs_at(Arm.TARGET if arm == Arm.MATCHED else arm, self.selections[arm])
+
+
+def epoch_matching(root: Path) -> EpochMatching:
+    """The epoch-matching sweep (``starcoder_epoch_matching``) reduced to the curves and selections Figures 1 and 2 plot.
+
+    A run without StarCoder is the same for every subset, so the unmatched proxy's runs at share 0 are also each
+    matched subset's point at 0.
+    """
+    runs = read_table(root, EPOCH_MATCHING_TABLE)
+    unmatched = runs[runs["arm"] == Arm.UNMATCHED]
+    matched = runs[runs["arm"] == Arm.MATCHED]
+    without = unmatched[unmatched["starcoder_weight"] == 0.0]
+    matched = pd.concat([matched, *(without.assign(subset_seed=seed) for seed in matched["subset_seed"].unique())])
+    matched_curves = matched.pivot_table(
+        index=["subset_seed", "trainer_seed"], columns="starcoder_weight", values=EPOCH_MATCHING_BPB
+    )
+    unmatched_curves = unmatched.pivot_table(index="trainer_seed", columns="starcoder_weight", values=EPOCH_MATCHING_BPB)
+    if not matched_curves.columns.equals(unmatched_curves.columns):
+        raise ValueError("the proxies' curves cover different StarCoder shares")
+    target = runs[runs["arm"] == Arm.TARGET].set_index("starcoder_weight")[EPOCH_MATCHING_BPB].sort_index()
+    epochs = runs.groupby(["arm", "starcoder_weight"])["starcoder_epochs"].mean().unstack()
+    compute = runs.groupby("arm")["compute_flops"].first()
+    return EpochMatching(
+        matched=matched_curves.groupby(level="subset_seed").mean(),
+        unmatched=unmatched_curves.mean(),
+        target=target,
+        selections={
+            Arm.MATCHED: float(matched_curves.idxmin(axis=1).mean()),
+            Arm.UNMATCHED: float(unmatched_curves.idxmin(axis=1).mean()),
+        },
+        epochs=epochs,
+        compute_flops={Arm(arm): float(flops) for arm, flops in compute.items()},
+    )
+
+
+def selection_values(matching: EpochMatching) -> pd.DataFrame:
+    """Each proxy's selected share, its loss there, the target's loss there and the target's regret."""
+    return pd.DataFrame(
+        [
+            {
+                "arm": arm.value,
+                "share": matching.selections[arm],
+                "proxy_bpb": matching.proxy_bpb(arm),
+                "target_bpb": matching.target_bpb(arm),
+                "regret": matching.regret(arm),
+                "epochs": matching.selection_epochs(arm),
+            }
+            for arm in PROXY_ARMS
+        ]
+    )
+
+
+def draw_proxies(axis: Axes, matching: EpochMatching, matched_curves: pd.DataFrame, first_share: float) -> None:
+    """The proxies' loss from ``first_share``: the rows of ``matched_curves`` over the band of the subsets' range, the
+    unmatched proxy's curve, and each proxy's selection on its curve."""
+    shown = matching.shares >= first_share
+    shares = matching.shares[shown]
+    color = ARM_COLORS[Arm.MATCHED]
+    low, high = matching.matched.min().to_numpy(float), matching.matched.max().to_numpy(float)
+    axis.fill_between(shares, low[shown], high[shown], color=color, alpha=0.16, linewidth=0)
+    for _, curve in matched_curves.iterrows():
+        axis.plot(shares, curve.to_numpy(float)[shown], color=color, marker="o", markersize=3)
+    unmatched = matching.unmatched.to_numpy(float)[shown]
+    axis.plot(shares, unmatched, color=ARM_COLORS[Arm.UNMATCHED], marker="o", markerfacecolor="white")
+    for arm in PROXY_ARMS:
+        axis.plot([matching.selections[arm]], [matching.proxy_bpb(arm)], color=ARM_COLORS[arm], **DIAMOND)
+
+
+def draw_target(axis: Axes, matching: EpochMatching, first_share: float) -> None:
+    """The target's loss from ``first_share``, its optimum, each proxy selection's target loss above the optimum (its
+    regret), and the excess loss that the matched selection avoids."""
+    target = matching.target[matching.target.index >= first_share]
+    optimum = matching.target_optimum()
+    color = ARM_COLORS[Arm.TARGET]
+    axis.plot(target.index, target.to_numpy(float), color=color, marker="o", markerfacecolor="white")
+    axis.axhline(optimum.bpb, color=NEUTRAL, linestyle="--", linewidth=0.7)
+    axis.plot([optimum.share], [optimum.bpb], "*", color=color, markersize=11, markeredgecolor="white", zorder=6)
+    for arm in PROXY_ARMS:
+        share, bpb = matching.selections[arm], matching.target_bpb(arm)
+        axis.plot([share, share], [optimum.bpb, bpb], color=ARM_COLORS[arm], linewidth=3, solid_capstyle="butt")
+        axis.plot([share], [bpb], color=ARM_COLORS[arm], **DIAMOND)
+    matched, unmatched = matching.target_bpb(Arm.MATCHED), matching.target_bpb(Arm.UNMATCHED)
+    share = matching.selections[Arm.MATCHED]
+    axis.plot([share, matching.selections[Arm.UNMATCHED]], [unmatched, unmatched], color=AVOIDED_COLOR, linestyle=":")
+    axis.plot([share, share], [matched, unmatched], color=AVOIDED_COLOR, linewidth=1.2, marker="_", markersize=8)
