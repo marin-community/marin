@@ -192,14 +192,18 @@ def exact_proposal(
     except ImportError as error:
         raise ImportError(CVXPY_MISSING) from error
 
+    # The sums are products with constant vectors, which give the solvers the same problem: cp.sum takes its result's
+    # shape from np.sum over an uninitialized array, which warns whenever that memory holds NaN, so a proposal's
+    # warnings would depend on what ran before it in the process.
+    ones = np.ones(len(natural))
     weights = cp.Variable(len(natural))
     prediction = sum(
-        float(task_weights[i]) * (float(np.exp(law.log_c)) + cp.exp(cp.sum(cp.multiply(law.coefficients, weights))))
+        float(task_weights[i]) * (float(np.exp(law.log_c)) + cp.exp(law.coefficients @ weights))
         for i, law in enumerate(laws)
     )
     problem = cp.Problem(
-        cp.Minimize(prediction + kl_reg * cp.sum(cp.rel_entr(weights, natural))),
-        [weights >= 0, cp.sum(weights) == 1, weights <= caps],
+        cp.Minimize(prediction + kl_reg * (ones @ cp.rel_entr(weights, natural))),
+        [weights >= 0, ones @ weights == 1, weights <= caps],
     )
     attempts = []
     for solver in SOLVERS:
