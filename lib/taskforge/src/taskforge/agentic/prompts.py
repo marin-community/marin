@@ -216,6 +216,13 @@ copies an example's values.
 score scale, weights, caps or reply format: verifyit sets those. Set incomplete_retry_tokens to 32768, as the \
 judge example does.
 - Pin every PyPI package of a machine to one version, as name==version.
+- A grader fails an answer that the prompt's rules make wrong: an answer that gives several conflicting answers, \
+pads a list of candidates, or uses another case or spelling than the prompt requires. A judge question says that \
+such an answer scores 0. A checklist has at most 8 criteria, each a check of a stated number, decision or \
+required element, not of a phrase. A script grader normalizes only what the prompt allows, and checks a formula \
+symbolically or at points beyond the ones the prompt shows.
+- For a number to d decimals, set tolerance_abs to 0.5 * 10**-d around the unrounded value, as the numeric \
+example does, so that only the correctly rounded answer passes.
 - Run the program for one task id, then call submit with the TaskSpec's path and the program's path.
 
 # Tools

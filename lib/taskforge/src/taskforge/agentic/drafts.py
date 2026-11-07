@@ -10,10 +10,12 @@ workspace that the program reads, so ``task_instances`` can make more tasks of i
 """
 
 import json
+import math
 import re
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +41,17 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from verifyit.grade import numeric_tolerance
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import RUBRIC_LABELS, JudgeSpec, StructuredExactSpec, spec_from_table
+from verifyit.numeric import numeric_literal
+from verifyit.spec import (
+    RUBRIC_CHECKLIST,
+    RUBRIC_LABELS,
+    JudgeSpec,
+    NumericSpec,
+    StructuredExactSpec,
+    spec_from_table,
+)
 
 from taskforge.agentic import grader_examples
 from taskforge.agentic.agent import SHELL_OUTPUT_BYTES, example_program, verifyit_reference
@@ -65,7 +76,7 @@ from taskforge.agentic.tools import (
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "3"
+DRAFT_REVISION = "4"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -91,6 +102,14 @@ OWN_SCALE = re.compile(
 )
 """Words of a judge question that set its own scale or reply format: a ``reference`` or ``checklist`` judge must end
 with verifyit's ``SCORE`` line, so such a question leaves every answer ungraded."""
+MAX_CHECKLIST_CRITERIA = 8
+"""The criteria of a checklist judge: each is one judge call, in sequence, so a long checklist grades one answer in
+minutes."""
+NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8}
+DECIMALS = re.compile(
+    r"\b(\d|one|two|three|four|five|six|seven|eight)\s+(?:decimal\s+(?:places?|digits?)|decimals)\b", re.IGNORECASE
+)
+"""How a prompt asks for an answer to a number of decimals, for example "to four decimal places"."""
 
 
 class Environment(StrEnum):
@@ -275,6 +294,7 @@ def draft_task_problems(task: TaskSpec, solver_machine: SolverMachine) -> list[s
         *machine_problems(task, solver_machine),
         *script_path_problems(task),
         *judge_problems(task),
+        *precision_problems(task),
         *unpinned_package_problems(task),
         *leaked_reference_problems(task),
         *example_answer_problems(task),
@@ -331,7 +351,42 @@ def judge_problems(task: TaskSpec) -> list[str]:
             "question must give no format, scale, weights or caps. For weighted items or caps, use the labels "
             "rubric with its own prompt_template and label_scores, or a checklist with one yes/no criterion each"
         )
+    if spec.rubric == RUBRIC_CHECKLIST and len(spec.criteria) > MAX_CHECKLIST_CRITERIA:
+        problems.append(
+            f"The checklist has {len(spec.criteria)} criteria, and each is one judge call in sequence. Keep at most "
+            f"{MAX_CHECKLIST_CRITERIA}, each a decisive check of a number, a decision or a required element, or "
+            "grade a long rubric with one labels call and a banded prompt_template"
+        )
     return problems
+
+
+def precision_problems(task: TaskSpec) -> list[str]:
+    """A numeric tolerance that does not match the decimals that the prompt asks for: the correctly rounded
+    reference must pass, and its neighbors one unit away in the last decimal must fail."""
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader):
+        return []
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    if not isinstance(spec, NumericSpec):
+        return []
+    prompt = " ".join(str(event.content) for event in task.context.events if isinstance(event, TextMessage))
+    asked = {NUMBER_WORDS.get(match.group(1).lower()) or int(match.group(1)) for match in DECIMALS.finditer(prompt)}
+    if len(asked) != 1:
+        return []
+    [decimals] = asked
+    expected = numeric_literal(spec.expected)
+    tolerance = numeric_tolerance(spec)
+    unit = Fraction(1, 10**decimals)
+    rounded = math.floor(expected / unit + Fraction(1, 2)) * unit
+    # A reference halfway between two roundings lets both pass at half a unit, which is right.
+    neighbors = [abs(rounded + step - expected) for step in (unit, -unit)]
+    if abs(rounded - expected) <= tolerance and all(gap > tolerance or gap == unit / 2 for gap in neighbors):
+        return []
+    return [
+        f"The prompt asks for {decimals} decimals, so only {float(rounded)} may pass: set tolerance_abs to "
+        f"0.5 * 10**-{decimals} around the unrounded value and tolerance_rel to 0 (now {spec.tolerance_abs} and "
+        f"{spec.tolerance_rel})"
+    ]
 
 
 def unpinned_package_problems(task: TaskSpec) -> list[str]:

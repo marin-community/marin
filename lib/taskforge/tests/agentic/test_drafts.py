@@ -21,7 +21,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.models import ResourceGroups, ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import JudgeSpec, spec_from_table
+from verifyit.spec import JudgeSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic import example_build
 from taskforge.agentic.drafts import DRAFT_MAX_ANSWER_SHARE, DraftConfig, DraftProposal, DraftTools, draft_task
@@ -247,7 +247,24 @@ def example_with_the_answer() -> TaskSpec:
     return _with_prompt(task, f"{_prompt(task)} For example: {example}")
 
 
+def long_checklist() -> TaskSpec:
+    task = judge_task("example")
+    criteria = tuple(f"The answer states the price after discount {k}" for k in range(9))
+    return _judge(task, rubric="checklist", references=(), criteria=criteria)
+
+
+def tolerance_of_a_whole_unit() -> TaskSpec:
+    task = EXAMPLES["numeric"]("example")
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    assert isinstance(spec, NumericSpec)
+    return task.model_copy(update={"grader": verifyit_package(dataclasses.replace(spec, tolerance_abs=0.01)).grader})
+
+
 DEFECTS = {
+    "checklist with more criteria than judge calls allow": (long_checklist, "criteria"),
+    "tolerance that passes the neighbors of the rounded answer": (tolerance_of_a_whole_unit, "decimals"),
     "script file staged under tests/tests": (nested_script_files, "stages no file there"),
     "judge question with its own scale": (judge_with_own_scale, "own scale or reply format"),
     "judge without a retry budget": (judge_without_retry, "incomplete_retry_tokens"),

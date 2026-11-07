@@ -7,7 +7,8 @@ A draft agent gets this file as ``/workspace/reference/grader_examples.py``. Cop
 proposal's grader design names into the build program, and replace its data. Each function takes the task id and
 draws its data from it, so other task ids give other data and other reference answers.
 
-- ``numeric_task``: one number, graded with a tolerance. No solver machine: the solver reads only the prompt.
+- ``numeric_task``: one number to the decimals that the prompt asks for, with a tolerance of half a unit of the last
+  decimal. No solver machine: the solver reads only the prompt.
 - ``exact_task``: one short text, compared after normalizing case and whitespace.
 - ``json_task``: a JSON object with fixed fields, compared field by field.
 - ``choice_task``: one option letter. The correct option's position comes from the task id, so answers vary.
@@ -66,16 +67,16 @@ def _task(task_id: str, prompt: str, grader, **fields) -> TaskSpec:
 
 def numeric_task(task_id: str) -> TaskSpec:
     rng = random.Random(task_id)
-    rate, hours = rng.randint(20, 90), rng.randint(3, 12)
+    rate, minutes = rng.randint(20, 90), rng.randint(30, 400)
+    decimals = 2
     prompt = (
-        f"A pump moves {rate} litres per minute. How many litres does it move in {hours} hours? "
-        "Reply with the number alone."
+        f"A pump moves {rate} litres per minute. How many cubic metres does it move in {minutes} minutes? Give the "
+        f"number alone, to {decimals} decimal places."
     )
-    return _task(
-        task_id,
-        prompt,
-        verifyit_package(NumericSpec(expected=str(rate * 60 * hours), tolerance_abs=0.0, tolerance_rel=0.0)),
-    )
+    # The tolerance is half a unit of the asked precision around the unrounded value, so that only the correctly
+    # rounded answer passes and its neighbors fail.
+    spec = NumericSpec(expected=str(rate * minutes / 1000), tolerance_abs=0.5 * 10**-decimals, tolerance_rel=0.0)
+    return _task(task_id, prompt, verifyit_package(spec))
 
 
 def exact_task(task_id: str) -> TaskSpec:
