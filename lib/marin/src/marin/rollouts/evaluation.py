@@ -574,7 +574,9 @@ async def run_evaluation(
         assert judge_connection is not None
         judge_connection = dataclasses.replace(judge_connection, default_model=config.judge.default_model or "")
     corpora = [(root, *evaluation_protocol(root)) for root in datasets]
-    if len({canonical_sha256(manifest.model_dump(mode="json")) for _, _, manifest in corpora}) != len(corpora):
+    if len({canonical_sha256(manifest.model_dump(mode="json", exclude_none=True)) for _, _, manifest in corpora}) != len(
+        corpora
+    ):
         raise ValueError("A run cannot include the same dataset snapshot twice")
     for _, protocol, _ in corpora:
         if protocol.requires_judge and config.judge is None:
@@ -590,9 +592,9 @@ async def run_evaluation(
         "datasets": [
             {
                 "root": root,
-                "dataset": canonical_sha256(manifest.model_dump(mode="json")),
+                "dataset": canonical_sha256(manifest.model_dump(mode="json", exclude_none=True)),
                 "protocol": protocol.model_dump(mode="json"),
-                "manifest": manifest.model_dump(mode="json"),
+                "manifest": manifest.model_dump(mode="json", exclude_none=True),
             }
             for root, protocol, manifest in corpora
         ],
@@ -631,7 +633,7 @@ async def run_evaluation(
 
         async def produce() -> None:
             for root, protocol, manifest in corpora:
-                dataset_id = canonical_sha256(manifest.model_dump(mode="json"))
+                dataset_id = canonical_sha256(manifest.model_dump(mode="json", exclude_none=True))
                 published_protocol = protocol
                 protocol = effective_protocol(protocol, config)
                 records = []

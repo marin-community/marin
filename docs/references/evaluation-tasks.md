@@ -253,12 +253,18 @@ raw and chat variants separately; no runtime task registry is loaded.
 Evaldash imports raw FineStore stores, selects one latest finished retry per logical
 trial, and applies these reductions. Its sample browser uses the same trial selection.
 The PostgreSQL reconciler checks both the producer record and the raw store version.
-Dataset identities and the summary revision participate in dashboard protocol
-comparison when both records carry identities. Historical results without corpus
+Curation identities and the summary revision participate in dashboard protocol
+comparison when both records carry identities. The canonical curation graph records
+the source, compiler, grader build, protocol and input overrides as `curation_identity`
+in the manifest. It excludes regional output paths, lock URLs and conversion timing.
+Physical manifest hashes still identify raw attempts and protect resume. Callers of
+`publish_evaluation_corpus` can supply the same semantic identity explicitly.
+Historical results without corpus
 identities can share a column with curated scores when canonical metric names,
 statistical kinds and known shot counts agree. Saved historical scores and their
 coverage remain unchanged; this compatibility rule requires no model rerun or
-archive rewrite. Producer records keep their metric maps empty.
+archive rewrite. The newest identified declaration governs known corpus differences;
+a newer unidentified record cannot erase them. Producer records keep their metric maps empty.
 
 Dashboard measurements use shared normalization rules for historical and native records:
 

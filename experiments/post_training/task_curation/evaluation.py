@@ -42,7 +42,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.11.05.1"
+EVALUATION_PIPELINE_VERSION = "2026.11.07.1"
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,7 @@ def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run
         run.source_input,
         run.output_path,
         source_overrides=input_file_overrides(options.inputs.files),
+        curation_identity=canonical_sha256(identity),
     )
     validated = False
     try:

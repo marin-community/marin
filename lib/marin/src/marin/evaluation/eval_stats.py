@@ -559,11 +559,15 @@ def effective_protocol(measurement: Measurement) -> MetricProtocol:
 
 
 def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, MetricProtocol]:
-    """Return each benchmark's protocol from its newest declared measurement."""
+    """Prefer the newest identified corpus; unknown identities cannot erase its constraints."""
     newest: dict[str, Measurement] = {}
     for measurement in measurements:
         current = newest.get(measurement.benchmark)
-        if measurement.declared and (current is None or measurement.created_at > current.created_at):
+        if measurement.declared and (
+            current is None
+            or (measurement.protocol_identity is not None, measurement.created_at)
+            > (current.protocol_identity is not None, current.created_at)
+        ):
             newest[measurement.benchmark] = measurement
     return {
         benchmark: effective_protocol(measurement)

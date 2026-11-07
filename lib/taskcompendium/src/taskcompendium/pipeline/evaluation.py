@@ -87,11 +87,14 @@ def publish_evaluation_corpus(
     output_path: str,
     *,
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
+    curation_identity: str | None = None,
 ) -> EvaluationManifest:
     """Convert all selected rows and publish a manifest only after population and sidecar checks pass.
 
     Conversion keeps duplicates at different source positions. Grader controls and old/new semantic
     comparison are independent checks; this manifest certifies conversion integrity, not grader parity.
+    ``curation_identity`` binds the semantic recipe independently of storage placement; the
+    canonical curation graph supplies it for dashboard comparisons across regional builds.
     """
     if recipe.intended_use is not IntendedUse.EVAL:
         raise ValueError("An evaluation corpus requires an evaluation source recipe")
@@ -170,6 +173,7 @@ def publish_evaluation_corpus(
         importer_revision=recipe.version,
         protocol_hash=protocol.fingerprint,
         conversion_manifest_sha256=file_sha256(conversion_path),
+        curation_identity=curation_identity,
         rows=result.input_rows,
         shards=tuple(shards),
     )
