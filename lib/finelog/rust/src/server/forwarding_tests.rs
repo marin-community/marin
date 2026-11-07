@@ -1467,6 +1467,71 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
+    // The Iris controller's iris.job / iris.task_attempt rows declare `cluster`, so
+    // registration keeps it as the origin column. A row written with it set is taken as
+    // already relayed: the forwarder passes it by for good. A row that leaves it empty
+    // reaches the hub stamped with the forwarding cluster.
+    let fx = Fixture::new("declared_cluster").await;
+    let namespace = "iris.job";
+    let schema = Schema::new(
+        vec![
+            Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("root_job_id", ColumnType::COLUMN_TYPE_STRING, false),
+        ],
+        "root_job_id",
+    );
+    fx.source
+        .register_table(namespace, schema, StoragePolicy::default())
+        .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("cluster", DataType::Utf8, false),
+            Field::new("root_job_id", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["", SOURCE_CLUSTER, ""])),
+            Arc::new(StringArray::from(vec![
+                "/u/empty-1",
+                "/u/set",
+                "/u/empty-2",
+            ])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "root_job_id").await,
+        vec![
+            Some("/u/empty-1".to_string()),
+            Some("/u/empty-2".to_string())
+        ],
+        "the row written with cluster set never reaches the hub"
+    );
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "cluster").await,
+        vec![
+            Some(SOURCE_CLUSTER.to_string()),
+            Some(SOURCE_CLUSTER.to_string())
+        ],
+    );
+    assert_eq!(
+        fx.cursor(namespace),
+        Some(fx.tip(namespace)),
+        "the cursor moves past the skipped row"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn schema_evolution_is_registered_before_forwarding_new_rows() {
     let fx = Fixture::new("schema-evolution").await;
     write_id_rows(&fx.source, "events", 1).await;

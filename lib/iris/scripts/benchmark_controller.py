@@ -66,8 +66,9 @@ from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
 )
+from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.log_stack import LogStack, build_log_stack
 from iris.cluster.controller.ops.task import Assignment, apply_reconcile_updates
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -105,6 +106,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.workers import worker_roster
 from iris.cluster.types import USER_JOB_STATES, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
@@ -112,6 +114,7 @@ from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.testing.controller import FakeProvider, worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import CursorTransitionReader
+from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
@@ -2252,6 +2255,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         local_state_dir=state_dir / "local",
         dry_run=True,
         checkpoint_interval=None,
+        cluster_id="benchmark",
     )
     threads = ThreadContainer("bench-serve")
     log_stack = build_log_stack(
@@ -2351,6 +2355,7 @@ def _reconcile_launch_request(
         environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
         task_image="bench:latest",
+        termination_grace=duration_to_proto(DEFAULT_TERMINATION_GRACE),
     )
 
 
@@ -2363,6 +2368,8 @@ class SyntheticReconcileState:
     worker_ids: list[WorkerId]
     task_ids: list[JobName]
     address: str  # all workers share this loopback address
+    # Embedded finelog the controller-row tables write to, as on a real controller.
+    log_stack: LogStack
 
 
 def _build_synthetic_reconcile_state(
@@ -2382,6 +2389,17 @@ def _build_synthetic_reconcile_state(
     """
     db = ControllerDB(db_dir=db_dir)
     db.apply_migrations()
+    log_stack = build_log_stack(
+        log_service_address="", local_log_dir=db_dir / "log-server", host="127.0.0.1", worker_token_provider=None
+    )
+    db.attach_controller_rows(
+        ControllerRowTables(
+            cluster="benchmark",
+            job_table=log_stack.job_table,
+            job_config_table=log_stack.job_config_table,
+            task_attempt_table=log_stack.task_attempt_table,
+        )
+    )
     health = WorkerHealthTracker()
     txns = ControllerTestState(db, health=health)
 
@@ -2435,7 +2453,14 @@ def _build_synthetic_reconcile_state(
             ops.task.assign(cur, assignments, health=txns._health)
 
     return SyntheticReconcileState(
-        db=db, txns=txns, health=health, job_id=job_id, worker_ids=worker_ids, task_ids=task_ids, address=worker_address
+        db=db,
+        txns=txns,
+        health=health,
+        job_id=job_id,
+        worker_ids=worker_ids,
+        task_ids=task_ids,
+        address=worker_address,
+        log_stack=log_stack,
     )
 
 
@@ -2807,6 +2832,7 @@ def _run_reconcile_scenario(
     finally:
         if state is not None:
             state.db.close()
+            state.log_stack.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 

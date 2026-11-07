@@ -24,10 +24,11 @@ from dataclasses import dataclass, field
 from itertools import batched
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
+from sqlalchemy import Table, bindparam, case, delete, func, insert, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
+from iris.cluster.controller import controller_rows
 from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
@@ -516,7 +517,16 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
 
     Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
     """
+    changed: list[JobName] = []
     for chunk in batched(job_ids, _ID_CHUNK_SIZE):
+        changed.extend(
+            tx.execute(
+                select(jobs_table.c.job_id).where(
+                    jobs_table.c.job_id.in_(chunk),
+                    or_(jobs_table.c.state == job_pb2.JOB_STATE_PENDING, jobs_table.c.started_at_ms.is_(None)),
+                )
+            ).scalars()
+        )
         tx.execute(
             update(jobs_table)
             .where(jobs_table.c.job_id.in_(chunk))
@@ -528,6 +538,7 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
                 started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
             )
         )
+    controller_rows.record_job_changes(tx, changed)
 
 
 @writes_to(meta_table)
@@ -583,6 +594,7 @@ def insert_attempt(
                     attempt_uid=attempt_uid,
                 )
             )
+            controller_rows.record_attempt_changes(tx, [(task_id, attempt_id)])
             return attempt_uid
         except IntegrityError as exc:
             # Re-mint only on an attempt_uid collision; any other constraint
@@ -767,6 +779,7 @@ def remove_worker(
     ``current_worker_*`` to NULL before the delete so the row history
     is observable to readers in the same write transaction.
     """
+    controller_rows.record_worker_removal(tx, worker_id)
     tx.execute(update(task_attempts_table).where(task_attempts_table.c.worker_id == worker_id).values(worker_id=None))
     tx.execute(update(tasks_table).where(tasks_table.c.current_worker_id == worker_id).values(current_worker_id=None))
     tx.execute(delete(workers_table).where(workers_table.c.worker_id == worker_id))

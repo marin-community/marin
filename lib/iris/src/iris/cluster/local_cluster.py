@@ -228,6 +228,7 @@ class LocalCluster:
             host="127.0.0.1",
             port=port,
             remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
+            cluster_id=self._config.name or "local",
             local_state_dir=Path(self._db_dir.name),
             auth_verifier=auth.verifier,
             auth_provider=auth.provider,

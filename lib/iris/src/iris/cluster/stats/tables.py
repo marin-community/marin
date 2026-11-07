@@ -23,6 +23,11 @@ from here; ``LogStack`` resolves every table from this catalog.
   the autoscaler).
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
+- ``iris.job`` / ``iris.job_config`` / ``iris.task_attempt`` — durable copies of
+  the controller's job, job request and attempt rows: one ``iris.job_config`` row
+  per job, at submit, and one job or attempt row per state change, written by the
+  controller that executes the work (producer:
+  ``iris.cluster.controller.controller_rows``).
 """
 
 from dataclasses import dataclass
@@ -42,6 +47,9 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
+JOB_NAMESPACE = "iris.job"
+JOB_CONFIG_NAMESPACE = "iris.job_config"
+TASK_ATTEMPT_NAMESPACE = "iris.task_attempt"
 
 
 class TaskEventSeverity(StrEnum):
@@ -67,6 +75,16 @@ TASK_EVENT_STORAGE_POLICY = StoragePolicy(
     max_bytes=1024 * 1024 * 1024,
     max_age_seconds=30 * 24 * 60 * 60,
 )
+
+
+# The job, job config and attempt namespaces outlive the controller DB's 7-day
+# window. Their history stays in the archive (remote retention is retain_forever);
+# these policies only bound the hub's local copy, and older segments are read
+# back from the archive.
+_CONTROLLER_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
+JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -222,6 +240,102 @@ class TaskEventRow(TaskEventDiagnostics):
     message: str
     source: str
     count: int
+
+
+@dataclass
+class IrisJob:
+    """A snapshot of one controller ``jobs`` row, written when the job changes state.
+
+    Rows are appended, never replaced: the job's current state is its row with
+    the latest ``(ts, seq)``. A job is identified by ``(cluster, root_job_id,
+    root_submitted_at_ms, job_id, submitted_at_ms)``, because job ids are reused
+    once a job ends, and a live parent can resubmit a child under the same name.
+    """
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    parent_job_id: str | None
+    depth: int
+    name: str
+    user_id: str
+    submitting_user: str
+    state: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    exit_code: int | None
+    error: str | None
+    num_tasks: int
+    ts: datetime
+    # Reserved for submit-time job tags as a JSON object, e.g. {"project": ...,
+    # "category": ...}. Always NULL until Iris accepts job tags at submit.
+    tags: str | None = None
+
+
+@dataclass
+class IrisJobConfig:
+    """A job's resource request, written once when the job is submitted."""
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    constraints_json: str | None
+    has_coscheduling: bool
+    priority_band: str
+    preemption_policy: str
+    max_retries_failure: int
+    max_retries_preemption: int
+    timeout_ms: int | None
+    task_image: str
+    ts: datetime
+
+
+@dataclass
+class IrisTaskAttempt:
+    """A snapshot of one controller ``task_attempts`` row, written when the attempt changes.
+
+    An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` repeats
+    when a job name is reused, so a join to ``iris.task_event`` uses its
+    ``attempt_uid``, and a join to ``iris.task`` (which has none) also needs
+    ``ts`` between ``started_at`` and ``finished_at``; ``(cluster, root_job_id,
+    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.job``. ``node_name`` (Kubernetes)
+    or ``worker_id`` (worker VMs) places the attempt on a machine.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    task_id: str
+    attempt_id: int
+    attempt_uid: str
+    state: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    exit_code: int | None
+    error: str | None
+    terminal_reason: str
+    worker_id: str | None
+    node_name: str
+    pod_name: str
+    pod_uid: str
+    ts: datetime
 
 
 class ProfileType(StrEnum):
