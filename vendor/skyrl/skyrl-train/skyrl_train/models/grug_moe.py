@@ -44,6 +44,11 @@ GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_STACKED_EXPERT_SCHEMA_VERSION = 1
 GRUG_SPLIT_EXPERT_SCHEMA_VERSION = 2
+GRUG_STACKED_EXPERT_SLICE_PATTERNS = (
+    "model.layers.*.mlp.experts.gate_proj.weight",
+    "model.layers.*.mlp.experts.up_proj.weight",
+    "model.layers.*.mlp.experts.down_proj.weight",
+)
 GRUG_DEFAULT_GLOBAL_EVERY = 4
 GRUG_EAGER_ATTENTION_BACKEND = "eager"
 GRUG_FLASH_ATTENTION_BACKEND = "flash_attention_2"
