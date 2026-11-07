@@ -30,6 +30,8 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from eval.chat_benchmarks.GraphWalks import eval_instruct as graphwalks
 from eval.chat_benchmarks.MATH500.eval_instruct import MATH500Benchmark
 from eval.chat_benchmarks.AIME24.eval_instruct import AIME24Benchmark
+from eval.chat_benchmarks.CruxEval.eval_instruct import CruxEvalBenchmark
+from eval.chat_benchmarks.HumanEvalPlus.eval_instruct import HumanEvalPlusBenchmark
 from eval.chat_benchmarks.MMLUPro.eval_instruct import MMLUProBenchmark, generate_cot_prompt
 from eval.chat_benchmarks.LiveBench.eval_instruct import LiveBenchBenchmark
 from eval.chat_benchmarks.RepoBench import eval_instruct as repobench
@@ -43,6 +45,7 @@ from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
 from eval.execution.grading import Graders
 from eval.graders.specs import GRADERS
 from eval.limits import ContextWindowExceededError
+from eval.robust_api import configure_generation_overrides, parse_generation_overrides
 from tests.contracts.source_harness import MemoryCheckpoints
 
 LOCAL_CHAT_COMPLETIONS = "local-chat-completions"
@@ -96,7 +99,7 @@ def _model(endpoint, model_class, model_name="served", **kwargs):
     LocalChatCompletion, LocalCompletionsAPI, OpenAIChatCompletion, OpenAICompletionsAPI,
 ])
 @pytest.mark.parametrize("overrides, official_temperature, local_temperature", [
-    ({}, 0.0, None),
+    ({}, 0.0, 0.0),
     ({"temperature": 0.0, "seed": 1234}, 0.0, 0.0),
     ({"temperature": 0.85, "seed": 27}, 0.85, 0.85),
     ({"do_sample": False, "temperature": 0.85, "seed": 27}, 0.85, 0.85),
@@ -179,12 +182,46 @@ def test_sampling_source_preserves_trial_seeds_before_api_caller_override(endpoi
     assert result["results"]["AIME24"]["accuracy_avg"] == 1.0
     assert len(endpoint.requests) == 10
     for trial, payload in enumerate(endpoint.requests):
+        assert payload["seed"] == trial
         if model_class in (OpenAIChatCompletion, OpenAICompletionsAPI):
             assert payload["temperature"] == 0.7
-            assert payload["seed"] == trial
         else:
             assert payload["temperature"] == 0.0
-            assert "seed" not in payload
+
+
+@pytest.mark.parametrize("model_class", [LocalChatCompletion, LocalCompletionsAPI])
+def test_code_sources_send_declared_sampling_under_caller_generation_settings(endpoint, tmp_path, model_class):
+    # Caller settings without temperature or seed must keep the sources' own sampling.
+    overrides = parse_generation_overrides("max_gen_toks=8192,skip_special_tokens=false,repetition_penalty=1.1")
+    humaneval_row = {"task_id": "HumanEval/0", "prompt": "def f():\n", "test": "", "entry_point": "f"}
+    crux_row = {"id": "sample_0", "code": "def f(x): return x", "input": "1", "output": "1"}
+    (tmp_path / "humanevalplus-python.jsonl").write_text(json.dumps(humaneval_row) + "\n")
+    (tmp_path / "cruxeval.jsonl").write_text(json.dumps(crux_row) + "\n")
+    model = _model(endpoint, model_class)
+    configure_generation_overrides(model, overrides)
+    specs = [
+        next(benchmark.iter_specs(SourceOptions(task, SourceRef("fixture"), generation=overrides, seed=42)))
+        for task, benchmark in (
+            ("HumanEvalPlus", HumanEvalPlusBenchmark(data_dir=str(tmp_path))),
+            ("CruxEval", CruxEvalBenchmark(data_dir=str(tmp_path))),
+        )
+    ]
+
+    async def run():
+        async with LMBackend(model) as backend:
+            for spec in specs:
+                await backend.execute(spec.requests[0])
+
+    asyncio.run(run())
+
+    humaneval, crux = endpoint.requests
+    assert humaneval["temperature"] == 0.0
+    assert "seed" not in humaneval
+    assert crux["temperature"] == 0.2
+    assert crux["seed"] == 42
+    for payload in (humaneval, crux):
+        assert payload["max_tokens"] == 8192
+        assert payload["repetition_penalty"] == 1.1
 
 
 @pytest.mark.parametrize("model_class", [
@@ -883,7 +920,7 @@ def test_unified_driver_persists_mixed_sources_through_one_endpoint(endpoint, tm
     {"max_gen_toks": 16000}, {"do_sample": False}, {"do_sample": True},
     {"do_sample": False, "temperature": 0.85, "seed": 27},
 ])
-def test_native_source_preserves_defaults_and_applies_caller_settings(endpoint, tmp_path, model_class, overrides):
+def test_native_source_sends_declared_sampling_and_applies_caller_settings(endpoint, tmp_path, model_class, overrides):
     dataset = tmp_path / "questions.jsonl"
     dataset.write_text(json.dumps({"question": "Six times seven?", "answer": "\\boxed{42}"}) + "\n")
     config = {
@@ -905,10 +942,10 @@ def test_native_source_preserves_defaults_and_applies_caller_settings(endpoint, 
     payload = endpoint.requests[0]
     if "temperature" in overrides:
         assert payload["temperature"] == overrides["temperature"]
-    elif overrides.get("do_sample") is False:
-        assert payload["temperature"] == 0.0
-    else:
+    elif overrides.get("do_sample") is True:
         assert "temperature" not in payload
+    else:
+        assert payload["temperature"] == 0.0
     assert payload["top_p"] == overrides.get("top_p", 0.4)
     if "seed" in overrides:
         assert payload["seed"] == overrides["seed"]
