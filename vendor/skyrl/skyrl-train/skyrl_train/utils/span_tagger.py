@@ -1,4 +1,4 @@
-"""Tag exact generated-token spans for reward shaping."""
+"""Tag generated-token spans; the loss weights THINK tokens."""
 
 from __future__ import annotations
 
@@ -21,16 +21,9 @@ SPAN_TAG_NAMES: Dict[int, str] = {
     SPAN_EDIT: "edit",
 }
 
-# Markers used to decide ACTION vs EDIT within an assistant turn's non-think text.
-# These are intentionally broad and content-based (mirrors reward_shaping's action
-# payload extraction). The token-level boundary is taken from the <think> delimiter
-# tokens; ACTION-vs-EDIT is a turn-level classification applied to the post-think
-# generated span (sub-think granularity for EDIT is a Stage-C/D refinement, not B).
 _THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
-# An "edit" turn is one whose generated text writes file content: heredocs, file
-# write tool calls, apply_patch / str_replace style payloads. Heuristic, refined
-# in Stage C against the real test-result parser.
+# Edit turns write file content through shell redirection or editing tools.
 _EDIT_PATTERN = re.compile(
     r"(<<\s*['\"]?EOF|>\s*\S+\.\w+|apply_patch|str_replace|create_file|write_file|\bcat\s*>)",
     re.IGNORECASE,

@@ -80,7 +80,6 @@ def convert_prompts_responses_to_batch_tensors(
     rewards: List[List[float]],
     loss_masks: List[List[int]],
     logprobs: Optional[List[np.ndarray]] = None,
-    token_level_shaping: Optional[List[List[float]]] = None,
     response_span_tags: Optional[List[List[int]]] = None,
 ) -> Tuple[
     Float[torch.Tensor, "batch seq_len"],
@@ -88,7 +87,6 @@ def convert_prompts_responses_to_batch_tensors(
     Float[torch.Tensor, "batch response_len"],
     Float[torch.Tensor, "batch response_len"],
     Float[torch.Tensor, "batch response_len"],
-    Optional[Float[torch.Tensor, "batch response_len"]],
     Optional[Float[torch.Tensor, "batch response_len"]],
     Optional[Integer[torch.Tensor, "batch response_len"]],
 ]:
@@ -164,18 +162,6 @@ def convert_prompts_responses_to_batch_tensors(
         for i, sample_logprobs in enumerate(logprobs):
             logprobs_tensor[i, : len(sample_logprobs)] = torch.as_tensor(sample_logprobs, dtype=torch.float)
 
-    # Loop-behavior reward shaping (Stage B / F5 + F4): right-pad the per-token
-    # shaping channel and span tags on the response axis exactly like rewards /
-    # loss_mask. Both are gated upstream (only passed when
-    # enable_token_reward_channel is on), so when off they stay None and the
-    # returned tuple's last two slots are None — the caller attaches the batch keys
-    # only when non-None, keeping the flag-off batch byte-identical.
-    token_level_shaping_tensor = collate_response_token_channel(
-        token_level_shaping,
-        action_mask,
-        dtype=torch.float,
-        expected_lengths=response_token_lens,
-    )
     response_span_tags_tensor = collate_response_token_channel(
         response_span_tags,
         action_mask,
@@ -190,6 +176,5 @@ def convert_prompts_responses_to_batch_tensors(
         ret_rewards,
         ret_loss_masks,
         logprobs_tensor,
-        token_level_shaping_tensor,
         response_span_tags_tensor,
     )
