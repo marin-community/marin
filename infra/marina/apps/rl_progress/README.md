@@ -5,7 +5,7 @@ The stable UUID is declared in `applet.toml`. Preserve it when releasing updates
 
 Each run has one row with its attempts in a dropdown, latest first. Failed attempts
 are marked. The selected attempt supplies the run's graph points and details.
-Campaign and series come from record fields; names do not define a comparison group.
+Series comes from record fields; names do not define a comparison group.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
 run URL; an `issue` field links to the experiment's GitHub issue.
@@ -50,7 +50,7 @@ uv run marina validate infra/marina/apps/rl_progress
 uv run marina release infra/marina/apps/rl_progress --local --json
 ```
 
-Check campaign filtering, each graph's point links, cold-loaded run hash links,
+Check each graph's point links, cold-loaded run hash links,
 coverage exclusions, and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 

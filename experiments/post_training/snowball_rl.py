@@ -95,6 +95,7 @@ from marin.rl.skyrl import (
     artifact_identity,
     read_skyrl_attempt_tracking,
     read_skyrl_launch_receipt,
+    read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
     skyrl_step,
 )
@@ -525,7 +526,15 @@ def build_run(
         runs.append(run)
     gate = (
         snowball_rl_gate.gate_step(
-            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
+            preset,
+            tuple(runs),
+            inputs=snowball_rl_gate.gate_inputs(
+                settings,
+                f"{tasks.name}@{tasks.version}" if tasks is not None else None,
+                f"{init.name}@{init.version}" if init is not None else None,
+                requirements,
+                baselines,
+            ),
         )
         if presets.gated(preset) and not control
         else None
@@ -584,7 +593,7 @@ def _comparison_line(row: dict, *, constraint: bool = False) -> str:
     return f"{values}; {delta}; noise +/-{noise}; {row['change']}"
 
 
-def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = None) -> dict:
+def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = None, stored_only: bool = False) -> dict:
     run = replace(run, gate=snowball_rl_gate.completed_gate(preset, run.runs, run.gate))
     rows = []
     planned = []
@@ -594,12 +603,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
-            context = click.get_current_context(silent=True)
-            receipt = (
-                read_stored_skyrl_receipt(path)
-                if context and context.params.get("do_run")
-                else read_skyrl_launch_receipt(path)
-            )
+            receipt = read_stored_skyrl_receipt(path) if stored_only else read_skyrl_launch_receipt(path)
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
@@ -624,8 +628,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
             if presets.exists(publication_path):
                 published = json.loads(presets.read_text(publication_path))
                 native = receipt.config["run"]
-                if (published["run_id"], published["attempt_id"]) == (native["id"], attempt):
-                    progress_url = published["url"] + "#" + urlencode({"run": native["id"], "attempt": attempt})
+                progress_url = published["url"] + "#" + urlencode({"run": native["id"], "attempt": attempt})
         rows.append(
             {
                 "name": step.name,
@@ -732,17 +735,13 @@ def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | N
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     gate_path = completed_gate.path(prefix) if completed_gate is not None else None
-    result = {"served_records": [], "unserved_records": [], "errors": []}
-    for training in run.runs:
-        published = snowball_rl_publication.publish_run(
-            replace(training, override_path=training.path(prefix)), preset, gate_path=gate_path, issue=issue
-        )
-        for key, value in published.items():
-            if isinstance(value, list):
-                result[key].extend(value)
-            else:
-                result[key] = value
-    return result
+    outputs = [
+        snowball_rl_publication.RunOutput(training.path(prefix), training.name, training.version)
+        for training in run.runs
+    ]
+    return snowball_rl_publication.publish_runs(
+        outputs, preset, gate_path=gate_path, gate_required=completed_gate is not None, issue=issue
+    )
 
 
 def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
@@ -752,11 +751,12 @@ def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
     missing_publication = False
     for training in run.runs:
         path = training.path(prefix)
-        receipt = read_stored_skyrl_receipt(path)
-        if receipt is None or receipt.result.state != "succeeded":
-            return False
         try:
-            for attempt_id in snowball_rl_publication.stored_attempts(path):
+            current_id, attempts = read_stored_skyrl_attempts(path)
+            receipt = attempts.get(current_id) if current_id is not None else None
+            if receipt is None or receipt.result.state != "succeeded":
+                return False
+            for attempt_id in attempts:
                 missing_publication |= not presets.exists(
                     snowball_rl_publication.publication_path(path, attempt_id)
                     / snowball_rl_publication.PUBLICATION_FILENAME
@@ -764,9 +764,7 @@ def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
         except (OSError, ValueError, KeyError):
             return False
     completed = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
-    return missing_publication and (
-        completed is None or presets.exists(StoragePath(completed.path(prefix)) / snowball_rl_gate.GATE_REPORT_FILENAME)
-    )
+    return missing_publication and (completed is None or snowball_rl_publication.gate_complete(completed.path(prefix)))
 
 
 def _finish_run(
@@ -778,7 +776,7 @@ def _finish_run(
 ) -> None:
     run = _from_handles(handles)
     publication = _publish_records(run, preset, issue=issue)
-    snapshot = _status(run, preset, issue=issue)
+    snapshot = _status(run, preset, issue=issue, stored_only=True)
     if publication:
         snapshot["publication"] = publication
     if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
@@ -908,9 +906,10 @@ def main(
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
-    snapshot = _status(run, preset, issue=issue)
+    do_run = click.get_current_context().params.get("do_run", False)
+    snapshot = _status(run, preset, issue=issue, stored_only=do_run)
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
-    if not click.get_current_context().params.get("do_run") and "verdict" in snapshot:
+    if not do_run and "verdict" in snapshot:
         raise click.exceptions.Exit(presets.EXIT_CODES[snapshot["verdict"]])
     return (*run.runs, *((run.gate,) if run.gate else ()))
 

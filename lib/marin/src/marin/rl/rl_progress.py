@@ -66,15 +66,12 @@ class RunSummary(BaseModel):
     run_id: Identity
     attempt_id: Identity
     label: Identity
-    campaign: str | None = None
     series: str | None = None
     issue: StrictInt | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     engine: dict[str, Any] | None = None
     resume_from: str | None = None
-    baseline_step: Count | None = 0
-    planned_updates_valid: bool | None = None
     verdict: Literal["pass", "fail", "invalid"] | None = None
     gate: str | None = None
     failed_facts: list[str] = Field(default_factory=list)

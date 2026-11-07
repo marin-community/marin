@@ -3,6 +3,7 @@
 
 import json
 import subprocess
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -31,6 +32,7 @@ from experiments.post_training import snowball_rl_scoring as scoring
 
 
 def selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
@@ -106,6 +108,27 @@ def native_json():
     return execute
 
 
+def duplicate_first_answer(rows: list[dict]) -> list[dict]:
+    return rows[:1] + rows
+
+
+def omit_last_task_answers(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if row["task_id"] != rows[-1]["task_id"]]
+
+
+def remove_run_receipts(root: Path) -> None:
+    (root / "terminal.json").unlink()
+    (root / "resolved-launch.yaml").unlink()
+
+
+def leave_unresolved_receipt(root: Path) -> None:
+    (root / "terminal.json").unlink()
+    envelope = yaml.safe_load((root / "resolved-launch.yaml").read_text())
+    envelope["config"]["run"]["attempt_id"] = "missing"
+    envelope["config"]["iris"]["job_name"] = "lookup-missing-job"
+    write_json(root / "resolved-launch.yaml", envelope)
+
+
 def recorded_runs(selection, tmp_path, monkeypatch, request):
 
     monkeypatch.setattr(
@@ -141,6 +164,17 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     panel_rates.parent.mkdir()
     pq.write_table(pa.Table.from_pylist(rows), panel_rates)
 
+    @contextmanager
+    def endpoint(**kwargs):
+        yield SimpleNamespace(url="http://iris.test", credentials=None)
+
+    @contextmanager
+    def rpc(*args):
+        yield SimpleNamespace(list_jobs=lambda request: controller_pb2.Controller.ListJobsResponse())
+
+    monkeypatch.setattr(adapter, "connect_controller", endpoint)
+    monkeypatch.setattr(adapter, "rpc_client", rpc)
+
     def write(
         preset,
         name,
@@ -149,20 +183,18 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         score=0.5,
         metrics=None,
         unscored=0,
-        duplicate_task=False,
-        drop_task=False,
+        answer_transform: Callable[[list[dict]], list[dict]] | None = None,
         provenance=None,
         argv=(),
         initial_score=None,
         omit_step=None,
         version=presets.PRESET_REVISION,
         record_version=None,
-        fixed=True,
+        reply_tokens: int | None = None,
         mixed=128,
         fingerprint="",
         answers=None,
-        missing_receipt=False,
-        unresolved_receipt=False,
+        mutations: Sequence[Callable[[Path], None]] = (),
         first_panel_task="task-0",
         quality_unscored=0,
         quality_metrics=None,
@@ -220,9 +252,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 "policy/mismatch/staleness0/kl_k3": speed / 1000,
                 "policy/mismatch/pooled/kl_k3": speed / 1000,
                 "policy/mismatch/staleness0/selected_tokens": 1000,
+                "policy/mismatch/staleness0/finite_fraction": 1.0,
                 "async/performance/loss_tokens_per_configured_policy_gpu_second": speed,
                 "async/performance/response_tokens_per_configured_inference_gpu_second": 4 * speed,
-                "generate/min_num_tokens": 4096 if fixed else 12,
+                "generate/min_num_tokens": reply_tokens if reply_tokens is not None else 4096,
                 "generate/max_num_tokens": 4096,
                 "generate/tokens_per_second_per_gpu": speed,
                 "vllm/median_generation_throughput": 100.0,
@@ -236,8 +269,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             if step != omit_step:
                 write_json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
         launch = {
-            "run": {"id": f"{name}-{version}", "attempt_id": attempt_id},
             "artifacts": {"attempts_root": str(root / "attempts")},
+            "run": {"id": f"{name}-{version}", "attempt_id": attempt_id},
             "runtime": {"task_env": {"NCCL_NET": "Socket", "VLLM_LOGGING_LEVEL": "ERROR"}},
             "iris": {"allocation": {"num_nodes": preset.recipe.layout.role_plan.num_nodes, "gpus_per_node": 8}},
             "skyrl": {
@@ -271,23 +304,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 "evaluation_data": {},
             },
         }
-        if unresolved_receipt:
-            launch |= {
-                "artifacts": {"attempts_root": str(root / "attempts")},
-                "run": {"attempt_id": "missing"},
-                "iris": {"job_name": "lookup-missing-job"},
-            }
-
-            @contextmanager
-            def endpoint(**kwargs):
-                yield SimpleNamespace(url="http://iris.test", credentials=None)
-
-            @contextmanager
-            def rpc(*args):
-                yield SimpleNamespace(list_jobs=lambda request: controller_pb2.Controller.ListJobsResponse())
-
-            monkeypatch.setattr(adapter, "connect_controller", endpoint)
-            monkeypatch.setattr(adapter, "rpc_client", rpc)
         if initial_score is None and any(evaluation.at_start for evaluation in preset.evaluations):
             initial_score = 0.3
         sessions = {-1 if preset.updates == 0 else preset.updates: score}
@@ -363,17 +379,22 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     answer(
                         first_answer_task if i == 0 and evaluation.file != "train" else identifier,
                         (float(i < mixed and attempt == 0) if evaluation.file == "train" else average),
-                        tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed and index == 0 else 1,
+                        tokens=(
+                            (reply_tokens if reply_tokens is not None else preset.recipe.fixed_reply_tokens or 1)
+                            if index == 0
+                            else 1
+                        ),
                         error="GraderUnavailable" if i < failed_answers else None,
                     )
-                    for i, identifier in enumerate(identifiers[: len(identifiers) - drop_task])
+                    for i, identifier in enumerate(identifiers)
                     for attempt in range(evaluation.answers)
                 ]
                 session = "eval_only" if step == -1 else f"global_step_{step}_evals"
                 export = root / "exports" / evaluation.name if index else root / "exports"
                 path = export / "dumped_evals" / session / "panel.jsonl"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                rows = rows[:1] * duplicate_task + rows
+                if answer_transform is not None:
+                    rows = answer_transform(rows)
                 path.write_text("".join(json.dumps(row) + "\n" for row in rows))
                 if evaluation.file != "train":
                     metric_step = 0 if step == -1 else step
@@ -415,10 +436,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 "engine": {"vllm_version": "fixture-vllm"},
             },
         )
-        if not (missing_receipt or unresolved_receipt):
-            write_json(root / "terminal.json", {"config": launch, "result": result})
-        if not missing_receipt:
-            write_json(root / "resolved-launch.yaml", {"config": launch})
+        write_json(root / "terminal.json", {"config": launch, "result": result})
+        write_json(
+            Path(launch["artifacts"]["attempts_root"]) / f"{attempt_id}.json", {"config": launch, "result": result}
+        )
+        write_json(root / "resolved-launch.yaml", {"config": launch})
+        for mutation in mutations:
+            mutation(root)
         return root
 
     return write

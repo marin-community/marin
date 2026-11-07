@@ -53,7 +53,13 @@ def paths(pattern: StoragePath) -> list[StoragePath]:
     return sorted(pattern.glob(), key=str)
 
 
-def _evaluation_answers(dump_root: StoragePath) -> list[tuple[int, StoragePath, dict]]:
+class EvaluationAnswer(NamedTuple):
+    step: int
+    path: StoragePath
+    answer: dict
+
+
+def _evaluation_answers(dump_root: StoragePath) -> list[EvaluationAnswer]:
     answers = []
     for session in paths(dump_root / "*"):
         name = PurePosixPath(str(session)).name
@@ -61,12 +67,14 @@ def _evaluation_answers(dump_root: StoragePath) -> list[tuple[int, StoragePath, 
         for path in paths(session / "*.jsonl"):
             if PurePosixPath(str(path)).name != "aggregated_results.jsonl":
                 answers.extend(
-                    (step, path, json.loads(line)) for line in presets.read_text(path).split("\n") if line.strip()
+                    EvaluationAnswer(step, path, json.loads(line))
+                    for line in presets.read_text(path).split("\n")
+                    if line.strip()
                 )
     return answers
 
 
-def evaluation_answers(run_output: str) -> list[tuple[int, StoragePath, dict]]:
+def evaluation_answers(run_output: str) -> list[EvaluationAnswer]:
     return _evaluation_answers(StoragePath(run_output) / "exports/dumped_evals")
 
 
@@ -129,7 +137,7 @@ def evaluation_protocol(launch: dict, name: str) -> dict:
 
 
 def panel_scores(
-    evaluation: presets.Evaluation, run_output: str, primary_answers: list[tuple[int, StoragePath, dict]] | None = None
+    evaluation: presets.Evaluation, run_output: str, primary_answers: list[EvaluationAnswer] | None = None
 ) -> pa.Table:
     launch = read_skyrl_launch_config(run_output)
     sources = recorded_sources(launch, evaluation.name)

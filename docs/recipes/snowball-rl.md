@@ -54,7 +54,7 @@ candidates require qualified controls before submission.
 ## Dashboard publication
 
 After `--run --wait` observes the coordinator finish, the launcher builds and publishes trained-panel
-records using the caller's Marina login. Each terminal native `(run_id, attempt_id)`, including failures,
+records using the caller's Marina login. Each published terminal native `(run_id, attempt_id)`, including failures,
 has a stored `exports/attempts/<attempt_id>/progress-record.json`. Status includes `rl_progress_url` after
 verification. Controls and train-long have a null gate verdict; standalone gate commands publish nothing.
 
@@ -64,31 +64,22 @@ and the required gate exists, incomplete publication can run directly. Successfu
 the first payload at `publication/<attempt_id>/progress-record.json` are reused. `publication.json` records
 exact database readback and serving verification. Errors report concrete paths and causes; missing
 credentials also suggest `iris login`. Publication errors preserve the experiment verdict and exit code.
-The current `gate_report.json` gives the current verdict; each record keeps its first published verdict.
+A current successful gated attempt stays unserved until its matching gate report exists.
 
 Publish a preset's pinned controls from their recorded paths with one command:
 
 ```bash
-python -m experiments.post_training.publish_rl_progress --preset learning-medium --controls
+python -m experiments.post_training.snowball_rl_publication --preset learning-medium
 ```
 
 Speed presets and data-short publish nothing. Learning-long and data-long use `test_panel_100` for their
 progress measurements. Native failures and failed training invariants set `status: failed` and name the
 `failed_facts`. INVALID records remain visible and unranked; valid FAIL measurements can rank.
 
-`snowball_rl_publication.build_record(run_output, preset, attempt_id=...)` builds a record on any host
-from stored receipts, per-attempt tracking, metrics and evaluations. It measures checkpoint history kept
-in that output directory through the selected attempt. Elapsed time sums the lineage's native receipt
-windows under its own timing scope; a missing window keeps elapsed time unknown and the record unranked.
-For `--resume-from`, the record names the source and covers only its own updates after the resume step.
-Its baseline must be an own evaluation at that step; without one the final measurement stays absent.
-Source and engine facts come from stored outputs. Engine facts are separate from the evaluation request
-protocol. The launcher's `--issue` supplies publication metadata.
-
-The app compares task-content, membership, evaluation request protocol and timing identities. Snowball
-records use the presets' 0.99 coverage threshold. The app computes coverage and comparison eligibility;
-unknown protocol identity stays unranked. Each run has one row with attempts latest first;
-`#run=<run_id>&attempt=<attempt_id>` selects an attempt.
+Records contain stored native identity, lineage timing, measurements, source and engine facts, and the launcher's issue.
+A `--resume-from` record names the source, carries no measurement and stays unranked.
+The app ranks records only with matching task-content, membership, evaluation request protocol and timing identities.
+`--run --wait` publishes when the coordinator ends; publish a run started without `--wait` within 14 days, while its earlier attempts' receipts are kept.
 
 ## Change one input
 

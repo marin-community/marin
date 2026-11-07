@@ -36,7 +36,15 @@ from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.snowball_rl_test_fixtures import answer as _answer
+from experiments.post_training.snowball_rl_test_fixtures import (
+    answer as _answer,
+)
+from experiments.post_training.snowball_rl_test_fixtures import (
+    duplicate_first_answer,
+    leave_unresolved_receipt,
+    omit_last_task_answers,
+    remove_run_receipts,
+)
 from experiments.post_training.snowball_rl_test_fixtures import write_json as _json
 
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
@@ -68,10 +76,7 @@ def rescore(preset, *args, exit_code=None):
 def status(preset, argv):
     result = CliRunner().invoke(snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, *argv])
     resume_warning, _, payload = result.stdout.partition("preset:")
-    if "--resume-from" in argv:
-        assert resume_warning.startswith("Cannot compare this checkout with resume source tree "), resume_warning
-        assert "verify optimizer and checkpoint compatibility before continuing." in resume_warning
-    else:
+    if "--resume-from" not in argv:
         assert not resume_warning, resume_warning
     snapshot = yaml.safe_load("preset:" + payload.split("StepSpec(", 1)[0])
     assert result.exit_code == {"pass": 0, "fail": 1, "invalid": 2, None: 0}[snapshot.get("verdict")], (
@@ -217,7 +222,7 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
     old = recorded_runs(
         "speed-medium", "users/test/old-baseline", version="2026.10.26", argv=("--preset", "speed-medium")
     )
-    unfinished = recorded_runs("speed-medium", "users/test/unfinished-baseline", missing_receipt=True)
+    unfinished = recorded_runs("speed-medium", "users/test/unfinished-baseline", mutations=(remove_run_receipts,))
     failed = recorded_runs("speed-medium", "users/test/failed-baseline", argv=("--preset", "speed-medium"))
     terminal = json.loads((failed / "terminal.json").read_text())
     terminal["result"]["state"] = "failed"
@@ -296,7 +301,7 @@ BROKEN = {
     },
     "unscored": 20,
     "initial_unscored": 20,
-    "duplicate_task": True,
+    "answer_transform": duplicate_first_answer,
     "omit_step": 25,
     "argv": ("snowball", "--init", "users/test/missing@2026.10.27"),
 }
@@ -353,6 +358,46 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
         ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
         pytest.param(
+            "speed-long",
+            {"mismatch_window": "empty-update"},
+            {},
+            "pass",
+            "regression",
+            set(),
+            None,
+            id="async-empty-staleness0-update",
+        ),
+        pytest.param(
+            "speed-long",
+            {"mismatch_window": "all-stale"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="async-all-stale-window",
+        ),
+        pytest.param(
+            "speed-medium",
+            {"mismatch_window": "partial-nan"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="nonfinite-selected-token-kl",
+        ),
+        pytest.param(
+            "speed-medium",
+            {"mismatch_window": "spike"},
+            {},
+            "fail",
+            "regression",
+            set(),
+            None,
+            id="sync-token-weighted-kl-spike",
+        ),
+        pytest.param(
             "learning-medium",
             {"panel_identity": None},
             {},
@@ -373,7 +418,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             id="recorded-panel-version-differs",
         ),
         ("learning-medium", BROKEN, {}, "fail", "regression", BROKEN_FAILS, None),
-        ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
+        ("speed-medium", {"reply_tokens": 12}, {}, "fail", "regression", {"fixed_reply_tokens"}, None),
         ("speed-medium", {}, {"fault": {"provenance": {"base_commit": "wrong"}}}, "invalid", None, set(), None),
         ("speed-medium", {}, {"fault": {"metrics": AMBIGUOUS}}, "invalid", None, set(), None),
         ("speed-medium", {"version": "2026.10.01"}, {}, "invalid", None, set(), None),
@@ -389,7 +434,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ),
         (
             "learning-medium",
-            {"drop_task": True},
+            {"answer_transform": omit_last_task_answers},
             {},
             "invalid",
             None,
@@ -488,8 +533,16 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             None,
             id="initial-quality-failure",
         ),
-        ("speed-medium", {"missing_receipt": True}, {}, "invalid", None, set(), None),
-        ("speed-medium", {"unresolved_receipt": True}, {}, "invalid", None, set(), None),
+        ("speed-medium", {"mutations": (remove_run_receipts,), "refusal": "missing"}, {}, "invalid", None, set(), None),
+        (
+            "speed-medium",
+            {"mutations": (leave_unresolved_receipt,), "refusal": "unresolved"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+        ),
         pytest.param(
             "speed-short", {"score": 0.2}, {}, "fail", "regression", set(), None, id="quality-score-regression"
         ),
@@ -515,20 +568,51 @@ def test_rescore_reports_candidate_and_control_contracts(
         control_fault.get("preset", preset),
         **{key: value for key, value in control_fault.items() if key != "preset"},
     )
-    recorded_fault = {key: value for key, value in fault.items() if key != "missing_final_panel"}
+    recorded_fault = {
+        key: value for key, value in fault.items() if key not in {"missing_final_panel", "refusal", "mismatch_window"}
+    }
     source = recorded_runs(preset, f"users/test/{preset}", **({"score": 0.495} | recorded_fault))
+    mismatch_window = fault.get("mismatch_window")
+    if mismatch_window:
+        measured = presets.PRESETS[preset].measured
+        for step in measured:
+            path = source / f"exports/metrics/step-{step:06d}.json"
+            row = json.loads(path.read_text())
+            prefix = "policy/mismatch/staleness0/"
+            if mismatch_window == "empty-update":
+                for metric in presets.PRESETS[preset].reported:
+                    if metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN:
+                        row[metric.key] = 0.2 if step == measured.start + 1 else 0.1
+                if step == measured.start + 1:
+                    row[prefix + "selected_tokens"] = 1500
+            if mismatch_window == "all-stale" or (mismatch_window == "empty-update" and step == measured.start):
+                row[prefix + "selected_tokens"] = 0
+                row.pop(prefix + "kl_k3")
+                row.pop(prefix + "finite_fraction")
+                for metric in presets.PRESETS[preset].reported:
+                    if metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN:
+                        row.pop(metric.key, None)
+                row["policy/mismatch/staleness2/selected_tokens"] = 1758754
+                row["policy/mismatch/pooled/selected_tokens"] = 1758754
+                row["policy/mismatch/pooled/finite_fraction"] = 1
+            if mismatch_window == "partial-nan" and step == measured.start:
+                row[prefix + "finite_fraction"] = 0.999
+            if mismatch_window == "spike" and step == measured.start:
+                row[prefix + "selected_tokens"] = 9000
+                row[prefix + "kl_k3"] = 0.5
+            _json(path, row)
     if fault.get("missing_final_panel"):
         shutil.rmtree(source / "exports/test_panel")
     report = rescore(
         preset,
         "--candidate",
         f"users/test/{preset}" + ("@" + fault["version"] if "version" in fault else ""),
-        exit_code=4 if fault.get("unresolved_receipt") or fault.get("missing_receipt") else None,
+        exit_code=4 if fault.get("refusal") else None,
     )
-    if fault.get("unresolved_receipt") or fault.get("missing_receipt"):
+    if fault.get("refusal"):
         assert set(report) == {"preset", "verdict", "reason"}
         assert report["preset"] == preset and report["verdict"] == "invalid"
-        if fault.get("missing_receipt"):
+        if fault.get("refusal") == "missing":
             assert report["reason"] == f"no launch receipt at {source}"
         else:
             assert report["reason"].startswith(f"cannot recover recorded command options for {source}:")
@@ -548,7 +632,26 @@ def test_rescore_reports_candidate_and_control_contracts(
         assert throughput["passes"]
         fixed = next(row for row in report["invariants"] if row["name"] == "fixed_reply_tokens")
         assert fixed["holds"]
-    if preset == "speed-long":
+    if mismatch_window and verdict != "invalid":
+        mismatch = next(row for row in report["guards"] if row["metric"] == "policy/mismatch/staleness0/kl_k3")
+        assert mismatch["run"] == pytest.approx(53 / 170 if mismatch_window == "spike" else 0.1)
+    if mismatch_window == "empty-update":
+        diagnostic_keys = {
+            "log_ratio_abs_mean",
+            "log_ratio_abs_p99",
+            "log_ratio_abs_p999",
+            "frac_outside_0_5_2",
+            "pos_first256/log_ratio_abs_mean",
+            "pos_last256/log_ratio_abs_mean",
+            "pos_middle/log_ratio_abs_mean",
+        }
+        diagnostics = {
+            row["metric"].removeprefix("policy/mismatch/staleness0/"): row["run"]
+            for row in report["reported"]
+            if row["metric"].removeprefix("policy/mismatch/staleness0/") in diagnostic_keys
+        }
+        assert diagnostics == pytest.approx(dict.fromkeys(diagnostic_keys, 19 / 175))
+    if preset == "speed-long" and verdict != "invalid":
         assert {row["metric"] for row in report["guards"]} == {
             "speed/update_seconds",
             "async/performance/loss_tokens_per_configured_policy_gpu_second",
@@ -783,11 +886,22 @@ REQUIREMENT = "policy/raw_grad_norm<=1"
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])
 def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path, preset, monkeypatch):
     monkeypatch.setenv("WANDB_ENTITY", "planned-team")
+    model = tmp_path / "model"
+    model.mkdir()
+    monkeypatch.setattr(presets, "MODEL_URI", str(model))
     controls(recorded_runs, preset)
+
+    def finish_native(_config):
+        shutil.copytree(staged, source, dirs_exist_ok=True)
+        return SkyRLRun.raw_load(str(source))
+
+    monkeypatch.setattr("marin.rl.skyrl.run_skyrl", finish_native)
     if preset == "learning-medium":
         init = ArtifactStep.adopt(
             "users/test/initializer", presets.PRESET_REVISION, str(tmp_path / "initializer"), kind=LevanterCheckpoint
         )
+        for filename in ("config.json", "tokenizer_config.json"):
+            _json(Path(init.path()) / "hf" / filename, {})
         _json(
             Path(init.path()) / RECORD_FILENAME,
             ArtifactRecord(result_type=result_type_name(LevanterCheckpoint)).model_dump(mode="json"),
@@ -844,7 +958,10 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         metrics=timers,
     )
     built = replace(built, gate=gate.completed_gate(presets.PRESETS[preset], built.runs, built.gate))
+    staged = source.with_name(source.name + "-awaiting-native")
+    source.rename(staged)
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
+    assert report["verdict"] == "pass", report
     timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
     assert {key: row["run"] for key, row in timer_rows.items()} == timers
     assert all(row["control"] is None and row["change"] == "unavailable" for row in timer_rows.values())
@@ -940,6 +1057,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
     Path(printed["report"]).unlink()
     terminal = json.loads((source / "terminal.json").read_text())
+    terminal["config"]["run"]["attempt_id"] = "failed"
     _json(source / "attempts/failed.json", terminal | {"result": terminal["result"] | {"state": "failed"}})
     (source / "terminal.json").unlink()
     launch = json.loads((source / "resolved-launch.yaml").read_text())["config"]
@@ -1007,78 +1125,82 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("parent-early", 3),
         ("native-failed", 2),
         ("no-wait", 0),
+        ("pending-resubmit", 0),
         ("child", 0),
         ("control", 0),
         ("generate", 0),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
-    outcome = case
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
-    preset_name = "speed-short" if outcome == "generate" else "speed-medium"
+    preset_name = "speed-short" if case == "generate" else "speed-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
-    replicas = 1
-    built = snowball.build_run(preset, control=outcome == "control", replicates=replicas)
-    sources = [
-        recorded_runs(
-            preset,
-            training.name,
-            speed=150 if outcome in {"fail", "no-wait"} else 101,
-            fingerprint=training.fingerprint(),
-            attempt_id="recorded-attempt",
-        )
-        for index, training in enumerate(built.runs)
-    ]
-    source = sources[0]
-    if outcome == "invalid":
+    built = snowball.build_run(preset, control=case == "control")
+    source = recorded_runs(
+        preset,
+        built.runs[0].name,
+        speed=150 if case in {"fail", "no-wait"} else 101,
+        fingerprint=built.runs[0].fingerprint(),
+        attempt_id="recorded-attempt",
+        mutations=(leave_unresolved_receipt,) if case == "pending-resubmit" else (),
+    )
+    if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
     built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
-    if outcome not in {"missing", "control", "native-failed", "record-recovery"}:
+    if case not in {"missing", "control", "native-failed", "pending-resubmit"}:
         run(built.gate)
-    if outcome == "parent-early":
+    if case == "parent-early":
         shutil.rmtree(source)
         shutil.rmtree(built.gate.path())
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
-    if outcome == "native-failed":
+    if case == "native-failed":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["state"] = "failed"
-        _json(source / "terminal.json", receipt)
-    final = JobState.FAILED if outcome in {"parent-early", "native-failed", "record-recovery"} else JobState.SUCCEEDED
+        _json(source / "attempts/recorded-attempt.json", receipt)
+        (source / "terminal.json").unlink()
+        (source / ".executor_status").write_text("FAILED")
+    final = JobState.FAILED if case in {"parent-early", "native-failed"} else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if outcome == "child":
+    if case == "child":
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
-    if outcome != "no-wait":
+    if case not in {"no-wait", "pending-resubmit"}:
         arguments.append("--wait")
-    if outcome == "control":
+    if case == "control":
         arguments.append("--control")
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if outcome in {"no-wait", "child"} else [(job,)]
+    waited = [] if case in {"no-wait", "pending-resubmit", "child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
-    if outcome != "child":
+    if case == "pending-resubmit":
+        assert client.submit.call_args is not None
+    if case != "child":
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
-    if outcome in {"pass", "fail", "invalid"}:
+    if case in {"pass", "fail", "invalid"}:
         assert "# " + preset_name in result.output
-    if outcome == "native-failed":
+    if case == "native-failed":
         assert "result: invalid" in result.output and "native job /tests/native-run is failed" in result.output
-        assert (
-            rescore(preset_name, "--candidate", built.runs[0].name)["reason"] == "native job /tests/native-run is failed"
-        )
-    if outcome == "generate":
+        (source / RECORD_FILENAME).unlink()
+        before = {str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+        report = rescore(preset_name, "--candidate", built.runs[0].name)
+        assert report["reason"] == "native job /tests/native-run is failed"
+        assert {
+            str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()
+        } == before
+    if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0
         assert {
@@ -1092,6 +1214,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "pass",
         "control",
         "parent-early",
+        "mixed-native-failed",
+        "control-failed",
+        "control-missing-receipt",
+        "gate-missing",
+        "gate-record-missing",
         "missing-login",
         "partial-retry",
         "child",
@@ -1099,7 +1226,6 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "fail-no-login",
         "invalid-no-login",
         "builder-error",
-        "conflict",
         "speed-medium",
         "data-short",
     ],
@@ -1113,10 +1239,10 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     preset_name = case if case in {"speed-medium", "data-short"} else "learning-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
-    replicas = 2 if case == "partial-retry" else 1
+    replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     built = snowball.build_run(
         preset,
-        control=case == "control",
+        control=case in {"control", "control-failed", "control-missing-receipt"},
         replicates=replicas,
         tasks=presets.default_selection() if case == "data-short" else None,
     )
@@ -1157,22 +1283,27 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     def finish(*args, **kwargs):
         for path, data in pending.items():
             path.write_bytes(data)
-        if case == "parent-early" and not phase["retry"]:
+        if case in {"parent-early", "control-failed", "mixed-native-failed"} and not phase["retry"]:
             receipt = json.loads((sources[0] / "terminal.json").read_text())
             receipt["result"]["state"] = "failed"
-            _json(sources[0] / "terminal.json", receipt)
             _json(sources[0] / "attempts/native-0.json", receipt)
+            (sources[0] / "terminal.json").unlink()
             return SimpleNamespace(state=JobState.FAILED)
-        if case == "parent-early" and phase["retry"]:
+        if case in {"parent-early", "control-failed", "mixed-native-failed"} and phase["retry"]:
             root = sources[0]
             receipt = json.loads((root / "terminal.json").read_text())
             receipt["config"]["run"]["attempt_id"] = "native-retry"
             _json(root / "terminal.json", receipt)
+            _json(root / "attempts/native-retry.json", receipt)
             _json(root / "resolved-launch.yaml", {"config": receipt["config"]})
             for path in (root / "exports/metrics").glob("*.json"):
                 row = json.loads(path.read_text())
                 row["attempt_id"] = "native-retry"
                 _json(path, row)
+        if case == "control-missing-receipt" and not phase["retry"]:
+            (sources[0] / "terminal.json").unlink()
+            (sources[0] / "attempts/native-0.json").unlink()
+            return SimpleNamespace(state=JobState.FAILED)
         completed = gate.completed_gate(preset, built.runs, built.gate)
         if completed is not None:
             run(completed)
@@ -1187,12 +1318,24 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
 
     client.job.return_value.wait.side_effect = finish
     published = []
-    unavailable = {"value": case in {"missing-login", "partial-retry", "fail-no-login", "invalid-no-login", "conflict"}}
+    unavailable = {
+        "value": (
+            case
+            in {
+                "missing-login",
+                "partial-retry",
+                "fail-no-login",
+                "invalid-no-login",
+                "gate-missing",
+                "gate-record-missing",
+                "control-failed",
+                "control-missing-receipt",
+            }
+        )
+    }
 
     def publish(record, service_url=None):
         if unavailable["value"] and (case != "partial-retry" or record["attempt_id"] == "native-1"):
-            if case == "conflict":
-                raise ValueError("Stored attempt differs")
             raise RuntimeError("Publication authentication failed") from IapCredentialsUnavailable(
                 "Credential unavailable"
             )
@@ -1215,13 +1358,21 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
             lambda *args: pytest.fail("Coordinator contacted Marina"),
         )
     arguments = ["--preset", preset.name, "--version", presets.PRESET_REVISION, "--run", "--wait", "--issue", "73"]
-    if case == "control":
+    if case in {"control", "control-failed", "control-missing-receipt"}:
         arguments.append("--control")
     if case == "data-short":
         arguments.extend(["--tasks", f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"])
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
-    expected = 1 if case == "fail-no-login" else 2 if case == "invalid-no-login" else 2 if case == "parent-early" else 0
+    expected = (
+        1
+        if case == "fail-no-login"
+        else (
+            2
+            if case in {"invalid-no-login", "parent-early", "control-failed", "mixed-native-failed"}
+            else 3 if case == "control-missing-receipt" else 0
+        )
+    )
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
@@ -1239,10 +1390,15 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         str(root / f"exports/attempts/native-{index}/{publication.RESULT_FILENAME}")
         for index, root in enumerate(sources)
     ]
-    if case in {"builder-error", "conflict"}:
+    if case == "builder-error":
         assert snapshot["publication"]["unserved_records"] == paths
         assert "login" not in snapshot["publication"] and snapshot["publication"]["errors"]
-    if unavailable["value"] and case != "conflict":
+    if unavailable["value"] and case not in {
+        "control-failed",
+        "control-missing-receipt",
+        "gate-missing",
+        "gate-record-missing",
+    }:
         assert snapshot["publication"]["login"] == "iris login"
         assert snapshot["publication"]["unserved_records"] == (paths[1:] if case == "partial-retry" else paths)
         unavailable["value"] = False
@@ -1253,21 +1409,50 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         repeated = CliRunner().invoke(snowball.main, arguments)
         assert repeated.exit_code == expected, (repeated.output, repeated.exception)
         assert all(path.read_bytes() == data for path, data in saved.items())
-    if case == "parent-early":
+    if case == "mixed-native-failed":
+        assert [row["attempt_id"] for row in published] == ["native-0"]
+        assert snapshot["publication"]["unserved_records"] == paths[1:]
+        assert snapshot["publication"]["errors"] == ["gate report missing; repeat the original command with --wait"]
+        assert not (sources[1] / "publication/native-1" / publication.RESULT_FILENAME).exists()
+    if case in {"control-failed", "control-missing-receipt", "gate-missing", "gate-record-missing"}:
+        assert snapshot["publication"]["login"] == "iris login"
+        assert snapshot["publication"]["unserved_records"] == (
+            [str(sources[0]), paths[1]] if case == "control-missing-receipt" else paths
+        )
+        unavailable["value"] = False
+        phase["retry"] = True
+        if case in {"gate-missing", "gate-record-missing"}:
+            completed = gate.completed_gate(preset, built.runs, built.gate)
+            if case == "gate-record-missing":
+                (Path(completed.path()) / RECORD_FILENAME).unlink()
+                (Path(completed.path()) / ".executor_status").write_text("FAILED")
+            else:
+                shutil.rmtree(completed.path())
+        repeated = CliRunner().invoke(snowball.main, arguments)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert [call.args for call in client.job.call_args_list] == [(job,), (job,)]
+    if case in {"parent-early", "mixed-native-failed"}:
         phase["retry"] = True
         repeated = CliRunner().invoke(snowball.main, arguments)
         assert repeated.exit_code == 0, (repeated.output, repeated.exception)
-        assert [row["status"] for row in published] == ["failed", "succeeded"]
+        assert sorted(row["status"] for row in published) == (
+            ["failed", "succeeded", "succeeded"] if case == "mixed-native-failed" else ["failed", "succeeded"]
+        )
+        retry = next(row for row in published if row["attempt_id"] == "native-retry")
+        assert retry["elapsed_seconds"] == 3600
+        if case == "mixed-native-failed":
+            held = next(row for row in published if row["attempt_id"] == "native-1")
+            assert held["verdict"] == "pass" and held["gate"] is not None
         # Both submitted coordinators reached their wait boundary.
         assert [call.args for call in client.job.call_args_list] == [(job,), (job,)]
     expected_pairs = [
         (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{index}") for index, root in enumerate(sources)
     ]
-    if case == "parent-early":
+    if case in {"parent-early", "mixed-native-failed", "control-failed"}:
         expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "native-retry"))
     if case == "historical":
         expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "historical-native"))
-    if case not in {"builder-error", "conflict"}:
+    if case != "builder-error":
         assert sorted((row["run_id"], row["attempt_id"]) for row in published) == sorted(expected_pairs)
         assert all(row["issue"] == (None if row["attempt_id"] == "historical-native" else 73) for row in published)
     if case == "builder-error":

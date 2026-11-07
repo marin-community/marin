@@ -212,8 +212,7 @@ Read the constraints next, then the verdict and label. The status block and `gat
 this order. The report also has the full Guards, Reported, Invariants and Breakdown tables, plus
 Vs baseline when requested. The status includes native attempt IDs, job and W&B links, completed
 update, output path, the optional experiment issue and `rl_progress_url` after publication. The dashboard
-keeps the native run/attempt key; its attempt dropdown marks failed attempts. A record keeps its first
-published gate verdict while the current gate report remains authoritative. See
+keeps the native run/attempt key; its attempt dropdown marks failed attempts. See
 [Compare with controls](../../../docs/recipes/snowball-rl.md#compare-with-controls) for tolerances.
 
 - `fail`: a guard fell below its tolerance, or a candidate invariant failed (planned updates, finite

@@ -18,7 +18,6 @@ function svg(tag, attrs = {}, text) {
 }
 const identity = (run) => JSON.stringify([run.run_id, run.attempt_id]);
 const series = (run) => run.series ?? run.label;
-const campaign = (run) => run.campaign ?? 'Unspecified';
 const color = (run) => colors[Array.from(series(run)).reduce((sum, letter) => sum + letter.codePointAt(0), 0) % colors.length];
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
@@ -34,8 +33,7 @@ function groupedRuns() {
   return groups;
 }
 function visibleRuns(groups) {
-  return [...groups.values()].map((attempts) => attempts.find((run) => run.attempt_id === selectedAttempts.get(run.run_id)) ?? attempts[0])
-    .filter((run) => $('campaign').value === 'all' || campaign(run) === $('campaign').value);
+  return [...groups.values()].map((attempts) => attempts.find((run) => run.attempt_id === selectedAttempts.get(run.run_id)) ?? attempts[0]);
 }
 function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id }); }
 function selectedFromHash() {
@@ -103,7 +101,7 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Campaign', campaign(run)], ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id], ['Resume source', run.resume_from], ['Baseline update', run.baseline_step],
+    ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id], ['Resume source', run.resume_from],
     ['Verdict', run.verdict], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
@@ -162,9 +160,6 @@ async function refresh() {
     const response = await fetch('./api/runs');
     if (!response.ok) throw new Error(`Could not load runs (${response.status}).`);
     const data = await response.json(); runs = data.runs;
-    const previous = $('campaign').value;
-    $('campaign').replaceChildren(element('option', 'All campaigns', { value: 'all' }), ...[...new Set(runs.map(campaign))].sort().map((value) => element('option', value, { value })));
-    $('campaign').value = [...$('campaign').options].some((option) => option.value === previous) ? previous : 'all';
     $('warnings').hidden = !(data.skipped_records?.length);
     $('warnings').textContent = (data.skipped_records ?? []).map((record) => `Skipped malformed record ${record.run_id}/${record.attempt_id}: ${record.error}`).join('\n');
     followHash();
@@ -172,7 +167,6 @@ async function refresh() {
   finally { $('refresh').disabled = false; }
 }
 $('refresh').onclick = refresh;
-$('campaign').onchange = render;
 $('close-detail').onclick = () => $('run-detail').close();
 $('run-detail').addEventListener('click', (event) => {
   const dialog = $('run-detail');

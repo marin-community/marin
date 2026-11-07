@@ -18,7 +18,6 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "run_id": "test/control",
         "attempt_id": "native-first",
         "label": "learning-medium lr=2e-06",
-        "campaign": "experiment",
         "series": "learning-medium",
         "issue": 123,
         "gate": "test/gate",
@@ -100,6 +99,17 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "completed_at": None,
     }
     publication.publish_result(unknown_time, "http://localhost")
+    publication.publish_result(
+        record
+        | {
+            "run_id": "test/resumed",
+            "attempt_id": "resumed",
+            "resume_from": "source@1",
+            "baseline": None,
+            "final": None,
+        },
+        "http://localhost",
+    )
     overflow = copy.deepcopy(record)
     overflow.update(run_id="test/overflow", attempt_id="bad")
     overflow["baseline"]["reward"], overflow["final"]["reward"] = -1e308, 1e308
@@ -141,7 +151,8 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     assert api.status_code == 200
     payload = api.json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert len(rows) == 12
+    assert len(rows) == 13
+    assert rows["resumed"]["provisional"] and not rows["resumed"]["pareto_eligible"]
     assert rows["fail"]["pareto_eligible"]
     assert not rows["invalid"]["pareto_eligible"] and rows["invalid"]["provisional"]
     good = rows["native-first"]
