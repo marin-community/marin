@@ -271,9 +271,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     ]
     sampled_rows = [
         json.loads(line)
-        for line in (
-            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
-        )
+        for line in (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl")
+        .read_text()
+        .splitlines()
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
@@ -300,7 +300,7 @@ def train_positive(forkserver_context, root, model, seed=0):
                 "type": "evaluation",
                 "eval_steps": FAST_STEPS,
                 "additional_evaluations": {
-                    "sampled": {"sampling_params": {"temperature": 1.0, "seed": 42}, "n_samples_per_prompt": 8},
+                    "sampled": {"sampling_params": {"temperature": 1.0, "seed": 42}, "n_samples_per_prompt": 8}
                 },
                 "metric_groups": {"eval/reporting/avg_score": ["eval/train/avg_score", "eval/heldout/avg_score"]},
                 "stop_when": {"eval/reporting/avg_score": {"min_improvement": 0.1}},
