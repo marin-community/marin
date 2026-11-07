@@ -337,17 +337,16 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 Add `--run` to publish. The printed `task_selection` path is the artifact root
 to pass to training. Its `summary.json` records the recipe, source artifacts,
 selected counts and evaluation IDs. Check the source and family quotas there
-before launching. A source shortfall fails instead of borrowing from another
-source. Source or selection changes require a new recipe version; preserve
+before launching. A source shortfall stops selection. Source or selection changes require a new recipe version; preserve
 published versions for comparisons.
 
 The artifact contains `train.parquet`, `validation.parquet` and
-`full_validation.parquet`. The training selection's validation panel samples 20 tasks per
-family from the original 910-task development set. All 910 are excluded from
-training by ID, public semantics and exact conversation context. Snowball presets bind the independent test panel described in the
-[experiment recipe](../recipes/snowball-rl.md#tasks-and-evaluation) for held-out quality comparisons. See [selection semantics](#final-task-selection)
-for deduplication and task serialization.
-
+`full_validation.parquet`. The training selection's validation panel samples
+20 tasks per family from the original 910-task development set. All 910 are
+excluded from training by ID, public semantics and exact conversation context.
+Held-out quality comparisons use the independent test panel described in the
+[experiment recipe](../recipes/snowball-rl.md#tasks-and-evaluation). See
+[selection semantics](#final-task-selection) for deduplication and task serialization.
 
 ## Dataset-owned invocation
 
