@@ -102,7 +102,7 @@ _VLLM_ONLY_OPTIONS = {
     "session_router": "--session-router",
     "data_parallel_size": "--data-parallel-size",
     "data_parallel_size_local": "--data-parallel-size-local",
-    "router_timeout": "--router-timeout",
+    "router_request_timeout_secs": "--router-request-timeout-secs",
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
@@ -381,7 +381,9 @@ def _wait_and_report_endpoint(
 @click.option("--data-parallel-size", type=click.IntRange(min=1), default=None, help="Total native GPU DP ranks.")
 @click.option("--data-parallel-size-local", type=click.IntRange(min=1), default=None, help="DP ranks per host.")
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
-@click.option("--router-timeout", type=click.IntRange(min=1), default=VllmRouterConfig.request_timeout_seconds)
+@click.option(
+    "--router-request-timeout-secs", type=click.IntRange(min=1), default=VllmRouterConfig.request_timeout_seconds
+)
 @click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
 @click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
@@ -476,7 +478,7 @@ def main(
     data_parallel_size: int | None,
     data_parallel_size_local: int | None,
     session_router: bool,
-    router_timeout: int,
+    router_request_timeout_secs: int,
     vllm_release: Path | None,
     dtype: str,
     cache_ttl_days: int,
@@ -543,7 +545,7 @@ def main(
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
             extra_metric_families=extra_metric_families,
-            router=VllmRouterConfig(request_timeout_seconds=router_timeout) if session_router else None,
+            router=VllmRouterConfig(request_timeout_seconds=router_request_timeout_secs) if session_router else None,
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,

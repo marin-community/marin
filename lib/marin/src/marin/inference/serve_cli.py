@@ -33,7 +33,7 @@ _LOCAL_VLLM_OPTIONS = {
     "vllm_release": "--vllm-release",
     "session_router": "--session-router",
     "data_parallel_size": "--data-parallel-size",
-    "router_timeout": "--router-timeout",
+    "router_request_timeout_secs": "--router-request-timeout-secs",
     "max_num_batched_tokens": "--max-num-batched-tokens",
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
@@ -64,7 +64,9 @@ def main() -> None:
 @click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option("--data-parallel-size", type=click.IntRange(min=1), default=1)
-@click.option("--router-timeout", type=click.IntRange(min=1), default=VllmRouterConfig.request_timeout_seconds)
+@click.option(
+    "--router-request-timeout-secs", type=click.IntRange(min=1), default=VllmRouterConfig.request_timeout_seconds
+)
 @click.option("--tokenizer", default=None)
 @click.option("--host", default="127.0.0.1")
 @click.option("--port", type=int, default=None)
@@ -93,7 +95,7 @@ def local(
     vllm_release: Path | None,
     session_router: bool,
     data_parallel_size: int,
-    router_timeout: int,
+    router_request_timeout_secs: int,
     tokenizer: str | None,
     host: str,
     port: int | None,
@@ -143,7 +145,7 @@ def local(
             source=source,
             version=vllm_version,
             release=load_vllm_gpu_release(vllm_release),
-            router=VllmRouterConfig(request_timeout_seconds=router_timeout) if session_router else None,
+            router=VllmRouterConfig(request_timeout_seconds=router_request_timeout_secs) if session_router else None,
             startup_timeout_seconds=startup_timeout,
             max_num_batched_tokens=max_num_batched_tokens,
             extra_args=(

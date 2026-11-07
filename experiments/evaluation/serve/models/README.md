@@ -146,7 +146,7 @@ For TP1/PP1/DP16 across four hosts, request four GPUs per task and sixteen total
 ```bash
 uv run marin-serve iris MODEL_URI --cluster cw-us-east-08a --gpu GB200x4 \
   --tensor-parallel-size 1 --data-parallel-size 16 --data-parallel-size-local 4 \
-  --session-router --router-timeout 14400 --proxy-timeout 14400 \
+  --session-router --router-request-timeout-secs 14400 --proxy-timeout 14400 \
   --vllm-source marin-fork --vllm-release promoted-release.json \
   --vllm-arg=--enable-expert-parallel --vllm-arg=--enable-prefix-caching
 ```
