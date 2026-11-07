@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--disk", default="50GB")
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
+    parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
     args = parser.parse_args()
     if min(args.shards, args.concurrency, args.cpu) < 1:
         raise ValueError("Shard count, concurrency and CPU must be positive")
@@ -52,6 +53,8 @@ def main() -> None:
         command += [item for key, value in options.items() for item in (f"--{key}", value)]
         command += [*credentials, *pins, "--", "python", "-m", "forge.driver", "run"]
         command += [item for key, value in driver.items() for item in (f"--{key}", value)]
+        if args.resume_held:
+            command.append("--resume-held")
         subprocess.run(command, check=True)
 
 
