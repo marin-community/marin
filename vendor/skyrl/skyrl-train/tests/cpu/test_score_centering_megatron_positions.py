@@ -145,7 +145,7 @@ def test_packed_cp5_selected_scores_and_centering_gradients_match_dense(tmp_path
 
 
 @pytest.fixture
-def megatron_wrapper(monkeypatch, single_rank_group):
+def megatron_wrapper(megatron_wrapper, monkeypatch, single_rank_group):
     # Fake only the external model scheduler and mesh; scoring and loss math are real.
     def schedule(forward_step_func, data_iterator, model, num_microbatches, forward_only, **kwargs):
         if not mmw.mpu.is_pipeline_last_stage(ignore_virtual=True):
@@ -162,18 +162,12 @@ def megatron_wrapper(monkeypatch, single_rank_group):
     monkeypatch.setattr(mmw, "get_forward_backward_func", lambda: schedule)
     monkeypatch.setattr(mmw.mpu, "get_tensor_model_parallel_group", lambda: single_rank_group, raising=False)
     monkeypatch.setattr(mmw.mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
-    monkeypatch.setattr(mmw.mpu, "get_tensor_model_parallel_world_size", lambda: 1, raising=False)
-    monkeypatch.setattr(mmw.mpu, "get_context_parallel_world_size", lambda: 1, raising=False)
-    monkeypatch.setattr(mmw.mpu, "get_context_parallel_rank", lambda: 0, raising=False)
     monkeypatch.setattr(mmw.mpu, "get_context_parallel_group", lambda: single_rank_group, raising=False)
-    monkeypatch.setattr(mmw.mpu, "is_pipeline_first_stage", lambda **kwargs: True, raising=False)
-    monkeypatch.setattr(mmw.mpu, "is_pipeline_last_stage", lambda **kwargs: True, raising=False)
     monkeypatch.setattr(mmw.mpu, "get_data_parallel_group", lambda **kwargs: single_rank_group, raising=False)
     monkeypatch.setattr(mmw.mpu, "get_pipeline_model_parallel_group", lambda: single_rank_group, raising=False)
     monkeypatch.setattr(mmw.mpu, "get_pipeline_model_parallel_last_rank", lambda: 0, raising=False)
-    wrapper = object.__new__(mmw.MegatronModelWrapper)
-    wrapper.actor_module = [SimpleNamespace(training=True)]
-    wrapper.use_sample_packing = False
+    wrapper = megatron_wrapper(packing=False, controller=None, num_experts=8)
+    wrapper.actor_module[0].training = True
     wrapper._logprob_chunk_size = 2
     return wrapper
 
