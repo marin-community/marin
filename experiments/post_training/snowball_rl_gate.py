@@ -69,9 +69,16 @@ class ControlPin:
 
 
 CONTROLS = {
-    name: (ControlPin(name, "09026fd100", "2026.10.27", count),)
-    for name, count in (("speed-short", 5), ("data-short", 4), ("speed-medium", 4), ("learning-medium", 4))
+    name: (ControlPin(name, "648b5687f0", "2026.11.06.1", count),)
+    for name, count in (
+        ("speed-short", 5),
+        ("data-short", 4),
+        ("speed-medium", 4),
+        ("learning-medium", 4),
+        ("speed-long", 4),
+    )
 }
+
 SHARED_CONTROLS = {"data-medium": "learning-medium", "data-long": "learning-long"}
 
 

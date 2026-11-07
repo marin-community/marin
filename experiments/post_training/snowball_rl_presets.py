@@ -102,7 +102,6 @@ class WindowStatistic(StrEnum):
 
 class Gap(StrEnum):
     LAYOUT_P40_ONLY = "layout-p40-only"
-    NO_ASYNC_SPEED_GATE = "no-async-speed-gate"
     AAII_COVERAGE = "aaii-coverage"
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
@@ -481,7 +480,7 @@ PRESETS = MappingProxyType(
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 reported=_SPEED_REPORTS,
-                gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY, Gap.NO_ASYNC_SPEED_GATE),
+                gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
                 budget="35-40 min; 25 H100-h",
             ),
             Preset(

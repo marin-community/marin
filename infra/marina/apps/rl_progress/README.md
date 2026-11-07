@@ -36,7 +36,7 @@ production table.
 
 The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` adds coverage and
 comparison fields and lists malformed rows in `skipped_records`. See the
-[Snowball publication rules](../../../../../docs/recipes/snowball-rl.md#dashboard-publication)
+[Snowball publication rules](../../../../docs/recipes/snowball-rl.md#dashboard-publication)
 for record semantics, retries and publishing pinned controls.
 
 ## Validate and release
