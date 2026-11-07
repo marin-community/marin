@@ -14,6 +14,15 @@ Count = Annotated[StrictInt, Field(ge=0)]
 Identity = Annotated[str, Field(min_length=1)]
 
 
+def membership_sha256(task_ids: list[str]) -> str:
+    return hashlib.sha256(json.dumps(sorted(task_ids), separators=(",", ":")).encode()).hexdigest()
+
+
+def protocol_sha256(protocol: dict[str, Any]) -> str:
+    encoded = json.dumps(protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 class EvaluationResult(BaseModel):
     model_config = ConfigDict(strict=True)
     reward: FiniteFloat
@@ -33,7 +42,7 @@ class EvaluationIdentity(BaseModel):
     version: Identity
     task_count: Annotated[StrictInt, Field(gt=0)]
     task_set_sha256: Identity | None
-    protocol_sha256: str | None
+    protocol_sha256: Identity | None
     task_ids: list[str] | None = None
     membership_sha256: str | None = None
     protocol: dict[str, Any] | None = None
@@ -41,14 +50,13 @@ class EvaluationIdentity(BaseModel):
     @model_validator(mode="after")
     def matching_evaluation_identity(self):
         if self.task_ids is not None:
-            membership = hashlib.sha256(json.dumps(sorted(self.task_ids), separators=(",", ":")).encode()).hexdigest()
+            membership = membership_sha256(self.task_ids)
             if len(set(self.task_ids)) != len(self.task_ids) or membership != self.membership_sha256:
                 raise ValueError("Evaluation membership does not match its recorded identity")
             if self.task_count != len(self.task_ids):
                 raise ValueError("Evaluation task count disagrees with membership")
         if self.protocol is not None:
-            encoded = json.dumps(self.protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            if hashlib.sha256(encoded.encode()).hexdigest() != self.protocol_sha256:
+            if protocol_sha256(self.protocol) != self.protocol_sha256:
                 raise ValueError("Evaluation protocol does not match its recorded identity")
         return self
 
@@ -61,6 +69,12 @@ class RunSummary(BaseModel):
     campaign: str | None = None
     series: str | None = None
     issue: StrictInt | None = None
+    iris_job_id: str | None = None
+    wandb_url: str | None = None
+    engine: dict[str, Any] | None = None
+    resume_from: str | None = None
+    baseline_step: Count | None = 0
+    planned_updates_valid: bool | None = None
     verdict: Literal["pass", "fail", "invalid"] | None = None
     gate: str | None = None
     failed_facts: list[str] = Field(default_factory=list)
@@ -71,7 +85,7 @@ class RunSummary(BaseModel):
     completed_at: str | None
     elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
     timing_scope: Identity
-    status: Literal["succeeded", "failed", "running"]
+    status: Literal["succeeded", "failed"]
     optimizer_steps: Count
     source_revision: Identity
     data_identity: Identity
@@ -93,7 +107,7 @@ class RunSummary(BaseModel):
 
     @model_validator(mode="after")
     def valid_outcome(self):
-        if self.elapsed_seconds is not None and self.status != "running" and self.completed_at is None:
+        if self.elapsed_seconds is not None and self.completed_at is None:
             raise ValueError("Terminal attempts require a completion timestamp")
         if self.final is not None and (
             self.baseline is None or (self.elapsed_seconds is not None and self.elapsed_seconds <= 0)

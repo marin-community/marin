@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 
 import click
 from marin.rl.rl_progress import RunSummary
-from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, marina_request
 
 APPLET_ID = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
@@ -22,40 +21,25 @@ ON CONFLICT (run_id, attempt_id) DO NOTHING"""
 READ = "SELECT record FROM rl_runs WHERE run_id = :run_id AND attempt_id = :attempt_id"
 
 
-def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL) -> dict[str, Any]:
+def publish_result(record: dict[str, Any], service_url: str | None = None) -> dict[str, Any]:
     """Insert one immutable attempt and verify its exact readback and served identity."""
+    from marina import client  # noqa: PLC0415
+
+    service_url = service_url or client.DEFAULT_MARINA_URL
     summary = RunSummary.model_validate(record)
     encoded = json.dumps(record, allow_nan=False)
-    parsed_service = urlparse(service_url)
-    if service_url.rstrip("/") != DEFAULT_MARINA_URL and not (
-        parsed_service.scheme == "http" and parsed_service.hostname in LOCAL_HOSTS and not parsed_service.path
-    ):
-        raise ValueError("Use the maintained Marina origin or an explicit loopback preview origin")
-    details = marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
-    if not isinstance(details, dict):
-        raise ValueError("Marina metadata response must be an object")
+    query = client.applet_query(service_url, APPLET_ID)
+    details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
     location = urlparse(details["authenticated_url"])
     origin = f"{location.scheme}://{location.netloc}" if location.netloc else service_url.rstrip("/")
-    query_path = f"/a/{APPLET_ID}/query"
     identity = {"run_id": summary.run_id, "attempt_id": summary.attempt_id}
-    inserted = marina_request(
-        origin,
-        "POST",
-        query_path,
-        json_body={"sql": INSERT, "parameters": identity | {"record": encoded}},
-    )
-    if not isinstance(inserted, dict):
-        raise ValueError("Marina insertion response must be an object")
+    inserted = query(INSERT, identity | {"record": encoded})
     if inserted["row_count"] not in (0, 1):
         raise RuntimeError("Unexpected insertion count")
-    readback = marina_request(origin, "POST", query_path, json_body={"sql": READ, "parameters": identity})
-    if not isinstance(readback, dict):
-        raise ValueError("Marina readback response must be an object")
+    readback = query(READ, identity)
     if len(readback["rows"]) != 1 or readback["rows"][0]["record"] != record:
         raise ValueError("Attempt identity already contains a different record; historical data was not overwritten")
-    api = marina_request(origin, "GET", f"/a/{APPLET_ID}/api/runs")
-    if not isinstance(api, dict):
-        raise ValueError("Dashboard response must be an object")
+    api = client.marina_request(origin, "GET", f"/a/{APPLET_ID}/api/runs")
     matching = [run for run in api["runs"] if (run["run_id"], run["attempt_id"]) == (summary.run_id, summary.attempt_id)]
     if len(matching) != 1:
         raise RuntimeError("Published attempt is missing or duplicated in the dashboard API")
@@ -69,10 +53,24 @@ def publish_result(record: dict[str, Any], service_url: str = DEFAULT_MARINA_URL
 
 
 @click.command()
-@click.argument("summary_path", type=click.Path(path_type=Path, exists=True, dir_okay=False))
-@click.option("--url", default=DEFAULT_MARINA_URL, show_default=True, help="Marina origin or loopback preview origin.")
-def main(summary_path: Path, url: str) -> None:
-    """Publish the persisted JSON SUMMARY_PATH and print an exact-readback receipt."""
+@click.argument("summary_path", required=False, type=click.Path(path_type=Path, exists=True, dir_okay=False))
+@click.option("--preset", "preset_name", help="Preset whose pinned controls to publish.")
+@click.option("--controls", is_flag=True, help="Publish every pinned control from its stored native outputs.")
+@click.option("--url", help="Marina origin (defaults to the Marina service).")
+def main(summary_path: Path | None, preset_name: str | None, controls: bool, url: str | None) -> None:
+    """Publish a persisted JSON SUMMARY_PATH or a preset's pinned controls."""
+    if controls:
+        if not preset_name or summary_path is not None:
+            raise click.UsageError("Use --preset NAME --controls without SUMMARY_PATH")
+        from experiments.post_training import snowball_rl_publication  # noqa: PLC0415
+
+        result = snowball_rl_publication.publish_controls(preset_name, service_url=url)
+        click.echo(json.dumps(result))
+        if result["unserved_records"]:
+            raise click.exceptions.Exit(1)
+        return
+    if preset_name is not None or summary_path is None:
+        raise click.UsageError("Supply SUMMARY_PATH or --preset NAME --controls")
     record = json.loads(summary_path.read_text())
     click.echo(json.dumps(publish_result(record, url)))
 

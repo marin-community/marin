@@ -37,7 +37,6 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_test_fixtures import answer as _answer
-from experiments.post_training.snowball_rl_test_fixtures import native_config
 from experiments.post_training.snowball_rl_test_fixtures import write_json as _json
 
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
@@ -1011,41 +1010,24 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("child", 0),
         ("control", 0),
         ("generate", 0),
-        ("publish-pass", 0),
-        ("publish-fail", 1),
-        ("publish-invalid", 2),
-        ("publish-control", 0),
-        ("publish-parent-early", 2),
-        ("publish-missing-login", 0),
-        ("publish-partial-retry", 0),
-        ("publish-child", 0),
-        ("publish-historical", 0),
-        ("publish-fail-no-login", 1),
-        ("publish-invalid-no-login", 2),
-        ("publish-record-recovery", 3),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
-    publishing = case.startswith("publish-")
-    scenario = case.removeprefix("publish-")
-    outcome = (
-        "pass" if scenario in {"missing-login", "partial-retry", "historical"} else scenario.removesuffix("-no-login")
-    )
+    outcome = case
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
-    preset_name = "learning-medium" if publishing else "speed-short" if outcome == "generate" else "speed-medium"
+    preset_name = "speed-short" if outcome == "generate" else "speed-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
-    replicas = 2 if scenario == "partial-retry" else 1
+    replicas = 1
     built = snowball.build_run(preset, control=outcome == "control", replicates=replicas)
     sources = [
         recorded_runs(
             preset,
             training.name,
             speed=150 if outcome in {"fail", "no-wait"} else 101,
-            score=0.1 if publishing and outcome == "fail" else 0.5,
             fingerprint=training.fingerprint(),
-            attempt_id=f"native-{index}" if publishing else "recorded-attempt",
+            attempt_id="recorded-attempt",
         )
         for index, training in enumerate(built.runs)
     ]
@@ -1055,11 +1037,9 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
     built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
-    if outcome not in {"missing", "control", "native-failed", "record-recovery"} and not (
-        publishing and outcome == "parent-early"
-    ):
+    if outcome not in {"missing", "control", "native-failed", "record-recovery"}:
         run(built.gate)
-    if outcome == "parent-early" and not publishing:
+    if outcome == "parent-early":
         shutil.rmtree(source)
         shutil.rmtree(built.gate.path())
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
@@ -1073,81 +1053,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
-    published = []
-    outage = scenario in {"missing-login", "partial-retry", "fail-no-login", "invalid-no-login"}
-    available = {"ready": not outage}
-
-    pending_receipts = {}
-    if publishing:
-        if outcome != "child":
-            for root in sources:
-                for filename in ("terminal.json", "resolved-launch.yaml"):
-                    path = root / filename
-                    pending_receipts[path] = path.read_bytes()
-                    path.unlink()
-
-        def native(config):
-            if outcome == "parent-early":
-                raise RuntimeError("native failed")
-            return SkyRLRun.raw_load(str(Path(config.output.export_root).parent))
-
-        monkeypatch.setattr(publication, "run_skyrl", native)
-
-        def finish_native(*args, **kwargs):
-            for path, data in pending_receipts.items():
-                path.write_bytes(data)
-            for training, root in zip(built.runs, sources, strict=True):
-                launch = read_skyrl_launch_config(str(root))
-                if outcome == "parent-early":
-                    receipt = json.loads((root / "terminal.json").read_text())
-                    receipt["result"]["state"] = "failed"
-                    _json(root / "terminal.json", receipt)
-                    _json(root / f"attempts/{launch['run']['attempt_id']}.json", receipt)
-                    with pytest.raises(RuntimeError, match="native failed"):
-                        training.run(native_config(root, launch))
-                else:
-                    training.run(native_config(root, launch))
-                    if scenario == "historical":
-                        current = root / f"exports/attempts/{launch['run']['attempt_id']}/loop-result.json"
-                        old = json.loads(current.read_text())
-                        old.update(attempt_id="historical-native", status="failed", failed_facts=["native_attempt"])
-                        _json(root / "exports/attempts/historical-native/loop-result.json", old)
-                if scenario in {"parent-early", "record-recovery"}:
-                    (root / f"exports/attempts/{launch['run']['attempt_id']}/loop-result.json").unlink()
-                    (root / ".executor_status").write_text("FAILED")
-            return SimpleNamespace(state=final)
-
-        if outcome == "child":
-            finish_native()
-        else:
-            client.job.return_value.wait.side_effect = finish_native
-
-        def publish(record):
-            if not available["ready"] and (scenario != "partial-retry" or record["attempt_id"] == "native-1"):
-                raise RuntimeError("Marina login unavailable; run iris login")
-            published.append(record)
-            return {
-                "run_id": record["run_id"],
-                "attempt_id": record["attempt_id"],
-                "url": "https://progress.test/",
-                "verified": True,
-                "inserted": True,
-            }
-
-        monkeypatch.setattr("experiments.post_training.publish_rl_progress.publish_result", publish)
-        if outcome == "child":
-            monkeypatch.setattr(
-                "experiments.post_training.publish_rl_progress.publish_result",
-                lambda record: pytest.fail("Coordinator contacted Marina"),
-            )
-
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     if outcome == "child":
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
-    if publishing:
-        arguments.extend(["--issue", "73"])
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
     if outcome != "no-wait":
@@ -1177,55 +1087,183 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             f"timing/{phase}/{stat}" for phase in ("grading", "setup") for stat in ("mean", "p50", "p95", "max")
         } <= {row["key"] for row in snapshot["reported_metrics"]}
 
-    if publishing and outcome != "child":
-        if outage:
-            output = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
-            paths = [str(root / f"exports/attempts/native-{i}/loop-result.json") for i, root in enumerate(sources)]
-            assert output["publication"]["unserved_records"] == (paths[1:] if scenario == "partial-retry" else paths)
-            assert output["publication"]["served_records"] == (paths[:1] if scenario == "partial-retry" else [])
-            assert "iris login" in result.output
-            saved_receipts = {
-                path: path.read_bytes() for root in sources for path in (root / "publication").glob("*/publication.json")
-            }
-            available["ready"] = True
-            client.submit.side_effect = AssertionError("Publication retry submitted a coordinator")
-            monkeypatch.setattr(
-                publication, "run_skyrl", lambda config: pytest.fail("Publication retry ran native work")
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "pass",
+        "control",
+        "parent-early",
+        "missing-login",
+        "partial-retry",
+        "child",
+        "historical",
+        "fail-no-login",
+        "invalid-no-login",
+        "record-recovery",
+        "builder-error",
+        "conflict",
+    ],
+)
+def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, monkeypatch, case):
+    from rigging.auth import IapCredentialsUnavailable  # noqa: PLC0415
+
+    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    monkeypatch.setenv("WANDB_ENTITY", "submission-team")
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    controls(recorded_runs, "learning-medium")
+    preset = presets.PRESETS["learning-medium"]
+    replicas = 2 if case == "partial-retry" else 1
+    built = snowball.build_run(preset, control=case == "control", replicates=replicas)
+    sources = [
+        recorded_runs(
+            preset,
+            training.name,
+            score=0.1 if case == "fail-no-login" else 0.5,
+            fingerprint=training.fingerprint(),
+            attempt_id=f"native-{index}",
+        )
+        for index, training in enumerate(built.runs)
+    ]
+    if case == "invalid-no-login":
+        receipt = json.loads((sources[0] / "terminal.json").read_text())
+        receipt["result"]["provenance"] = None
+        _json(sources[0] / "terminal.json", receipt)
+    if case == "historical":
+        receipt = json.loads((sources[0] / "terminal.json").read_text())
+        receipt["config"]["run"]["attempt_id"] = "historical-native"
+        receipt["result"].update(
+            state="failed", started_at="2026-11-05T00:00:00+00:00", finished_at="2026-11-05T00:10:00+00:00"
+        )
+        _json(sources[0] / "attempts/historical-native.json", receipt)
+    pending = {}
+    for root in sources:
+        for filename in ("terminal.json", "resolved-launch.yaml"):
+            path = root / filename
+            pending[path] = path.read_bytes()
+            path.unlink()
+    client = MagicMock(spec=IrisClient)
+    job = JobName.from_wire("/atqamar/dashboard-coordinator")
+    client.submit.return_value.job_id = job
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
+    phase = {"retry": False}
+
+    def finish(*args, **kwargs):
+        for path, data in pending.items():
+            path.write_bytes(data)
+        if case == "parent-early" and not phase["retry"]:
+            receipt = json.loads((sources[0] / "terminal.json").read_text())
+            receipt["result"]["state"] = "failed"
+            _json(sources[0] / "terminal.json", receipt)
+            _json(sources[0] / "attempts/native-0.json", receipt)
+            return SimpleNamespace(state=JobState.FAILED)
+        if case == "parent-early" and phase["retry"]:
+            root = sources[0]
+            receipt = json.loads((root / "terminal.json").read_text())
+            receipt["config"]["run"]["attempt_id"] = "native-retry"
+            _json(root / "terminal.json", receipt)
+            _json(root / "resolved-launch.yaml", {"config": receipt["config"]})
+            for path in (root / "exports/metrics").glob("*.json"):
+                row = json.loads(path.read_text())
+                row["attempt_id"] = "native-retry"
+                _json(path, row)
+        completed = gate.completed_gate(preset, built.runs, built.gate)
+        if completed is not None:
+            run(completed)
+        if case == "builder-error":
+            launch = read_skyrl_launch_config(str(sources[0]))
+            descriptor = launch["inputs"]["validation_data"][0]
+            pq.write_table(
+                pa.Table.from_pylist([{"task_spec": "invalid-json"}]),
+                Path(descriptor["uri"]) / descriptor["relative_path"],
             )
-            repeated = CliRunner().invoke(snowball.main, arguments)
-            assert repeated.exit_code == expected, (repeated.output, repeated.exception)
-            assert all(path.read_bytes() == payload for path, payload in saved_receipts.items())
-            assert all((root / f"publication/native-{i}/publication.json").is_file() for i, root in enumerate(sources))
-        if scenario in {"parent-early", "record-recovery"}:
-            for i, root in enumerate(sources):
-                (root / f"exports/attempts/native-{i}/loop-result.json").unlink()
-            client.submit.side_effect = AssertionError("Record recovery submitted a coordinator")
-            monkeypatch.setattr(publication, "run_skyrl", lambda config: pytest.fail("Record recovery ran native work"))
-            repeated = CliRunner().invoke(snowball.main, arguments)
-            assert repeated.exit_code == expected, (repeated.output, repeated.exception)
-            assert all(
-                (root / f"exports/attempts/native-{i}/loop-result.json").is_file() for i, root in enumerate(sources)
+        return SimpleNamespace(state=JobState.SUCCEEDED)
+
+    client.job.return_value.wait.side_effect = finish
+    published = []
+    unavailable = {"value": case in {"missing-login", "partial-retry", "fail-no-login", "invalid-no-login", "conflict"}}
+
+    def publish(record, service_url=None):
+        if unavailable["value"] and (case != "partial-retry" or record["attempt_id"] == "native-1"):
+            if case == "conflict":
+                raise ValueError("Stored attempt differs")
+            raise RuntimeError("Publication authentication failed") from IapCredentialsUnavailable(
+                "Credential unavailable"
             )
-        expected_pairs = {
-            (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{i}") for i, root in enumerate(sources)
+        published.append(record)
+        return {
+            "run_id": record["run_id"],
+            "attempt_id": record["attempt_id"],
+            "url": "https://progress.test/",
+            "verified": True,
+            "inserted": True,
         }
-        if scenario == "historical":
-            expected_pairs.add((read_skyrl_launch_config(str(source))["run"]["id"], "historical-native"))
-        assert {(row["run_id"], row["attempt_id"]) for row in published} == expected_pairs
-        assert all(row["issue"] == 73 for row in published)
-        expected_verdict = None if outcome in {"control", "parent-early", "record-recovery"} else outcome
-        assert all(
-            row["verdict"] == (None if row["attempt_id"] == "historical-native" else expected_verdict)
-            for row in published
+
+    monkeypatch.setattr("experiments.post_training.publish_rl_progress.publish_result", publish)
+    if case == "child":
+        finish()
+        monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
+        monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: SkyRLRun.raw_load(str(sources[0])))
+        monkeypatch.setattr(
+            "experiments.post_training.publish_rl_progress.publish_result",
+            lambda *args: pytest.fail("Coordinator contacted Marina"),
         )
-        if scenario == "historical":
-            assert next(row for row in published if row["attempt_id"] == "historical-native")["gate"] is None
-        snapshot = status(
-            preset_name, ["--control"] if outcome == "control" else (["--replicates", "2"] if replicas == 2 else [])
-        )
-        for row in snapshot["runs"]:
-            fragment = parse_qs(urlsplit(row["rl_progress_url"]).fragment)
-            assert (fragment["run"][0], fragment["attempt"][0]) in expected_pairs
+    arguments = ["--preset", preset.name, "--version", presets.PRESET_REVISION, "--run", "--wait", "--issue", "73"]
+    if case == "control":
+        arguments.append("--control")
+    if replicas == 2:
+        arguments.extend(["--replicates", "2"])
+    expected = 1 if case == "fail-no-login" else 2 if case == "invalid-no-login" else 2 if case == "parent-early" else 0
+    try:
+        result = CliRunner().invoke(snowball.main, arguments)
+    finally:
+        set_job_info(None)
+    assert result.exit_code == expected, (result.output, result.exception)
+    if case == "child":
+        assert published == [] and list(sources[0].rglob(publication.RESULT_FILENAME)) == []
+        return
+    snapshot = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    paths = [
+        str(root / f"exports/attempts/native-{index}/{publication.RESULT_FILENAME}")
+        for index, root in enumerate(sources)
+    ]
+    if case in {"builder-error", "conflict"}:
+        assert snapshot["publication"]["unserved_records"] == paths
+        assert "login" not in snapshot["publication"] and snapshot["publication"]["errors"]
+    if unavailable["value"] and case != "conflict":
+        assert snapshot["publication"]["login"] == "iris login"
+        assert snapshot["publication"]["unserved_records"] == (paths[1:] if case == "partial-retry" else paths)
+        unavailable["value"] = False
+        saved = {
+            path: path.read_bytes() for root in sources for path in (root / "publication").glob("*/publication.json")
+        }
+        client.submit.side_effect = AssertionError("Publication retry submitted a coordinator")
+        repeated = CliRunner().invoke(snowball.main, arguments)
+        assert repeated.exit_code == expected, (repeated.output, repeated.exception)
+        assert all(path.read_bytes() == data for path, data in saved.items())
+    if case == "parent-early":
+        phase["retry"] = True
+        repeated = CliRunner().invoke(snowball.main, arguments)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert [row["status"] for row in published] == ["failed", "succeeded"]
+        # Both submitted coordinators reached their wait boundary.
+        assert [call.args for call in client.job.call_args_list] == [(job,), (job,)]
+    expected_pairs = [
+        (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{index}") for index, root in enumerate(sources)
+    ]
+    if case == "parent-early":
+        expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "native-retry"))
+    if case == "historical":
+        expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "historical-native"))
+    if case not in {"builder-error", "conflict"}:
+        assert sorted((row["run_id"], row["attempt_id"]) for row in published) == sorted(expected_pairs)
+        assert all(row["issue"] == (None if row["attempt_id"] == "historical-native" else 73) for row in published)
+    if case == "builder-error":
+        assert snapshot["verdict"] == "pass" and snapshot["runs"][0]["state"] == "succeeded"
+    if case == "historical":
+        old = next(row for row in published if row["attempt_id"] == "historical-native")
+        assert old["gate"] is None and old["verdict"] is None and old["final"] is None
 
 
 def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):

@@ -28,12 +28,12 @@ def rl_progress_client(tmp_path, database_url, monkeypatch):
         )
         query_path = f"/a/{publication.APPLET_ID}/query"
 
-        def request(origin, method, path, *, json_body=None):
+        def request(origin, method, path, *, json_body=None, **kwargs):
             response = client.request(method, path, json=json_body)
             response.raise_for_status()
             return response.json()
 
-        monkeypatch.setattr(publication, "marina_request", request)
+        monkeypatch.setattr("marina.client.marina_request", request)
         request(
             "http://localhost",
             "POST",

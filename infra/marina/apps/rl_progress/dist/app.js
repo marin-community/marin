@@ -22,7 +22,7 @@ const campaign = (run) => run.campaign ?? 'Unspecified';
 const color = (run) => colors[Array.from(series(run)).reduce((sum, letter) => sum + letter.codePointAt(0), 0) % colors.length];
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
-const gain = (run) => run.gain_per_hour;
+const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
 function groupedRuns() {
   const groups = new Map();
@@ -30,7 +30,7 @@ function groupedRuns() {
     if (!groups.has(run.run_id)) groups.set(run.run_id, []);
     groups.get(run.run_id).push(run);
   }
-  for (const attempts of groups.values()) attempts.sort((a, b) => (Date.parse(b.started_at ?? b.run_date ?? b.completed_at) || 0) - (Date.parse(a.started_at ?? a.run_date ?? a.completed_at) || 0) || b.attempt_id.localeCompare(a.attempt_id));
+  for (const attempts of groups.values()) attempts.sort((a, b) => attemptTime(b) - attemptTime(a) || b.attempt_id.localeCompare(a.attempt_id));
   return groups;
 }
 function visibleRuns(groups) {
@@ -96,14 +96,14 @@ function showDetails(run) {
   const warning = run.status === 'failed' ? 'The native attempt failed. Its retained evidence is descriptive.' : run.provisional ? 'Unranked: the recorded coverage, timing or evaluation identity does not permit comparison.' : run.partial_coverage ? 'This attempt meets its recorded coverage threshold with some unscored answers.' : 'Complete comparison metadata.';
   body.append(element('p', warning, { class: run.partial_coverage ? 'warning' : 'note' }));
   const links = element('div', null, { class: 'links' });
-  const explicitWandb = run.wandb_url ?? run.links?.wandb;
+  const explicitWandb = run.wandb_url;
   if (explicitWandb && /^https:\/\/wandb\.ai\//.test(explicitWandb)) links.append(element('a', 'W&B run ↗', { href: explicitWandb, target: '_blank', rel: 'noopener noreferrer' }));
   if (run.issue) links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Campaign', campaign(run)], ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
+    ['Campaign', campaign(run)], ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id], ['Resume source', run.resume_from], ['Baseline update', run.baseline_step],
     ['Verdict', run.verdict], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
@@ -118,7 +118,7 @@ function showDetails(run) {
   for (const [title, value] of facts) addField(fields, title, value);
   body.append(fields, element('h3', 'Evidence and caveats'));
   const evidence = element('ul', null, { class: 'evidence' });
-  for (const text of run.evidence ?? []) evidence.append(element('li', typeof text === 'string' ? text : JSON.stringify(text)));
+  for (const text of run.evidence ?? []) evidence.append(element('li', text));
   body.append(evidence);
   if (!$('run-detail').open) $('run-detail').showModal();
 }
@@ -136,12 +136,12 @@ function render() {
   chart('pareto', selected, hours, (run) => run.final?.reward, 'Elapsed hours', 'Final reward', { labelDots: true });
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
-  chart('gain', selected, (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
+  chart('gain', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.gain_per_hour, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
   $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'No eligible comparison points in this view; see each run’s coverage, timing and evaluation identity.';
   $('legend').replaceChildren(...[...new Set(selected.map(series))].map((name) => {
     const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${color(selected.find((run) => series(run) === name))}` }), document.createTextNode(name)); return item;
   }));
-  $('attempts').replaceChildren(...[...selected].sort((a, b) => Date.parse(b.run_date) - Date.parse(a.run_date)).map((run) => {
+  $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
     const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); }; name.append(button);
     const attempts = element('select', null, { 'aria-label': `Attempt for ${run.label}` });

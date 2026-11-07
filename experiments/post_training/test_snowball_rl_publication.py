@@ -11,9 +11,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
+from click.testing import CliRunner
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext, resolve
-from marin.rl.rl_progress import RunSummary
 from marin.rl.skyrl import SkyRLRun, read_skyrl_launch_config
 
 from experiments.post_training import publish_rl_progress as publisher
@@ -30,18 +30,18 @@ pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_con
     "case",
     [
         "partial",
+        "lineage",
+        "lineage-missing-window",
+        "external-resume",
         "native-failed",
+        "builder-error",
         "invariant-failed",
-        "stale-initial",
-        "control",
         "train-long",
+        "learning-long",
         "unknown-time",
-        "missing-start",
-        "missing-finish",
         "missing-tracking",
         "historical",
         "wrong-cohort",
-        "wrong-final-cohort",
         "native-composed",
         "speed-medium",
         "data-short",
@@ -50,18 +50,16 @@ pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_con
 @pytest.mark.timeout(180)
 def test_native_attempt_records_keep_identity_measurements_and_failures(recorded_runs, monkeypatch, native_json, case):
     publishing = case not in {"speed-medium", "data-short"}
-    original = presets.PRESETS[case if case in {"train-long", "speed-medium", "data-short"} else "learning-medium"]
+    original = presets.PRESETS[
+        case if case in {"learning-long", "train-long", "speed-medium", "data-short"} else "learning-medium"
+    ]
     preset = replace(original, updates=2, measured=range(1, 3))
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {preset.name: preset})
     monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: native(config))
     built = snowball.build_run(
         preset,
-        settings=(
-            ()
-            if case == "control" or not publishing
-            else (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)
-        ),
-        control=case == "control" or not publishing,
+        settings=(() if not publishing else (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)),
+        control=not publishing,
     )
     training = built.runs[0]
     stored_preset = (
@@ -77,6 +75,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
         score=0.5,
         fingerprint=training.fingerprint(),
         unscored=15 if case == "partial" else 0,
+        argv=["--preset", preset.name, "--set=+trainer.policy.optimizer_config={lr: 2.0e-6}"],
     )
     tracking_path = source / "exports/attempts/native-attempt/tracking.json"
     tracking = json.loads(tracking_path.read_text())
@@ -112,14 +111,39 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
     receipt["config"] = launch
     write_json(source / "terminal.json", receipt)
     (source / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
+    if case in {"lineage", "lineage-missing-window"}:
+        ancestor = json.loads(json.dumps(receipt))
+        ancestor["config"]["run"]["attempt_id"] = "ancestor"
+        ancestor["result"].update(
+            state="failed",
+            started_at="2026-11-06T16:40:00+00:00",
+            finished_at=None if case == "lineage-missing-window" else "2026-11-06T17:40:00+00:00",
+        )
+        write_json(attempts / "ancestor.json", ancestor)
+        for step in (0, 1):
+            path = source / f"exports/metrics/step-{step:06d}.json"
+            row = json.loads(path.read_text())
+            row["attempt_id"] = "ancestor"
+            write_json(path, row)
+    if case == "external-resume":
+        receipt["result"]["provenance"]["command_line"].extend(["--resume-from", "source-run@2026.11.01"])
+        write_json(source / "terminal.json", receipt)
+        initial = source / "exports/metrics/step-000000.json"
+        first = source / "exports/metrics/step-000001.json"
+        if case == "external-resume":
+            baseline = json.loads(initial.read_text())
+            baseline["step"] = 1
+            write_json(first, baseline)
+            (source / "exports/dumped_evals/global_step_0_evals").rename(
+                source / "exports/dumped_evals/global_step_1_evals"
+            )
+        initial.unlink()
     config = native_config(source, launch)
 
     def native(edge_config):
-        if case in {"unknown-time", "missing-start", "missing-finish"}:
+        if case == "unknown-time":
             receipt = json.loads((source / "terminal.json").read_text())
-            for key in ("started_at", "finished_at"):
-                if case == "unknown-time" or key == ("started_at" if case == "missing-start" else "finished_at"):
-                    receipt["result"][key] = None
+            receipt["result"]["started_at"] = None
             write_json(source / "terminal.json", receipt)
         if case == "missing-tracking":
             (source / "exports/attempts/native-attempt/tracking.json").unlink()
@@ -130,25 +154,20 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             current = json.loads(json.dumps(launch))
             current["run"]["attempt_id"] = "newer-attempt"
             (source / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": current}))
-        if case in {"wrong-cohort", "wrong-final-cohort"}:
+        if case == "builder-error":
             descriptor = launch["inputs"]["validation_data"][0]
-            selection = Path(descriptor["uri"])
-            if case == "wrong-cohort":
-                path = selection / descriptor["relative_path"]
-                rows = pq.read_table(path).to_pylist()
-                task = json.loads(rows[0]["task_spec"])
-                task["id"] = "different-task"
-                rows[0]["task_spec"] = json.dumps(task)
-                pq.write_table(pa.Table.from_pylist(rows), path)
-            else:
-                manifest_path = selection / presets.TASK_MANIFEST_FILENAME
-                manifest = pq.read_table(manifest_path).to_pylist()
-                manifest.append(dict(manifest[0], task_id="different-task"))
-                pq.write_table(pa.Table.from_pylist(manifest), manifest_path)
-                path = source / "exports/dumped_evals/global_step_2_evals/panel.jsonl"
-                rows = [json.loads(line) for line in path.read_text().splitlines()]
-                rows[0]["task_id"] = "different-task"
-                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            pq.write_table(
+                pa.Table.from_pylist([{"task_spec": "invalid-json"}]),
+                Path(descriptor["uri"]) / descriptor["relative_path"],
+            )
+        if case == "wrong-cohort":
+            descriptor = launch["inputs"]["validation_data"][0]
+            path = Path(descriptor["uri"]) / descriptor["relative_path"]
+            rows = pq.read_table(path).to_pylist()
+            task = json.loads(rows[0]["task_spec"])
+            task["id"] = "different-task"
+            rows[0]["task_spec"] = json.dumps(task)
+            pq.write_table(pa.Table.from_pylist(rows), path)
         if case == "native-failed":
             shutil.rmtree(source / "exports")
             receipt = json.loads((source / "terminal.json").read_text())
@@ -156,33 +175,36 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             write_json(source / "terminal.json", receipt)
             write_json(attempts / "native-attempt.json", receipt)
             raise RuntimeError("native failed")
-        if case in {"invariant-failed", "stale-initial"}:
-            step = 1 if case == "invariant-failed" else 0
+        if case == "invariant-failed":
+            step = 1
             path = source / f"exports/metrics/step-{step:06d}.json"
             row = json.loads(path.read_text())
-            row.update({"policy/raw_grad_norm": float("nan")} if step else {"attempt_id": "old-attempt"})
+            row["policy/raw_grad_norm"] = float("nan")
             write_json(path, row)
         return SkyRLRun.raw_load(str(source))
 
-    monkeypatch.setattr(publication, "run_skyrl", native)
     if case == "native-failed":
         with pytest.raises(RuntimeError, match="native failed"):
             training.run(config)
     else:
-        training.run(config)
-    if not publishing:
-        assert list(source.rglob("loop-result.json")) == []
+        result = training.run(config)
+        assert result.path == str(source)
+    assert list(source.rglob(publication.RESULT_FILENAME)) == []
+    if case == "builder-error":
+        with pytest.raises(json.JSONDecodeError):
+            publication.retain_record(str(source), preset)
         return
-    path = source / "exports/attempts/native-attempt/loop-result.json"
-    row = json.loads(path.read_text())
-    RunSummary.model_validate(row)
+    if not publishing:
+        return
+    row = publication.retain_record(str(source), preset, attempt_id="native-attempt")
+    path = Path(row["artifact_uri"])
     assert (row["run_id"], row["attempt_id"]) == (launch["run"]["id"], "native-attempt")
     assert row["label"] == preset.name + ("" if case == "control" else " lr=2e-06")
     assert row["issue"] is None and row["verdict"] is None
-    assert row["min_scored_fraction"] == 0.99
-    assert row["evaluation"]["task_count"] == (100 if case == "train-long" else 1500)
-    assert row["elapsed_seconds"] == (None if case in {"unknown-time", "missing-start", "missing-finish"} else 3600)
-    assert row["timing_scope"] == "native_job_start_to_finish"
+    assert row["evaluation"]["task_count"] == (100 if case in {"learning-long", "train-long"} else 1500)
+    assert row["elapsed_seconds"] == (
+        None if case in {"unknown-time", "lineage-missing-window"} else 7200 if case == "lineage" else 3600
+    )
     assert row["wandb_url"] == (None if case in {"missing-tracking", "native-failed"} else tracking["wandb_url"])
     assert row["engine"] == (None if case in {"missing-tracking", "native-failed"} else tracking["engine"])
     if case in {"native-failed", "invariant-failed"}:
@@ -190,14 +212,20 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         assert ("native_attempt" if case == "native-failed" else "finite_losses_and_gradients") in row["failed_facts"]
     else:
         assert row["status"] == "succeeded" and row["failed_facts"] == []
-    if case in {"native-failed", "stale-initial", "wrong-cohort"}:
+    if case in {"native-failed", "wrong-cohort", "external-resume"}:
         assert row["baseline"] is None and row["final"] is None
-    elif case == "wrong-final-cohort":
-        assert row["baseline"]["reward"] == pytest.approx(0.3) and row["final"] is None
     else:
         assert row["baseline"]["reward"] == pytest.approx(0.3)
         assert row["final"]["reward"] == pytest.approx(0.5)
         assert row["optimizer_steps"] == 2
+    if case.startswith("external-"):
+        assert row["resume_from"] == "source-run@2026.11.01" and row["baseline_step"] is None
+        assert row["planned_updates_valid"] is None
+        assert row["optimizer_steps"] == 1
+    if case == "lineage":
+        old = publication.build_record(str(source), preset, attempt_id="ancestor")
+        assert old["final"] is None and old["baseline"]["reward"] == pytest.approx(0.3)
+        assert old["optimizer_steps"] == 1 and old["elapsed_seconds"] == 3600
     if case == "partial":
         assert row["final"]["attempted"] == 1500 and row["final"]["scored"] == 1485
         saved = path.read_bytes()
@@ -210,12 +238,13 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         def forbid_live(*args, **kwargs):
             raise AssertionError("Host rebuilding requested live execution or state")
 
-        monkeypatch.setattr(publication, "run_skyrl", forbid_live)
+        monkeypatch.setattr("marin.rl.skyrl.run_skyrl", forbid_live)
         monkeypatch.setattr("marin.rl.skyrl.read_skyrl_launch_receipt", forbid_live)
         monkeypatch.setattr("rigging.provenance.Provenance.capture", forbid_live)
         monkeypatch.setattr("marin.rl.cli.iris_client", forbid_live)
         rebuilt = publication.build_record(str(source), preset)
         assert rebuilt["elapsed_seconds"] == 7200 and rebuilt["final"] == row["final"]
+        assert rebuilt["label"] == row["label"]
         assert rebuilt["source_revision"] == row["source_revision"] and path.read_bytes() == saved
     assert "vllm_version" not in row["evaluation"]["protocol"]
     if case == "native-composed":
@@ -226,9 +255,7 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
 
 
 @pytest.mark.integration
-def test_snowball_publication_retries_keep_the_first_gate_without_native_execution(
-    rl_progress_client, recorded_runs, monkeypatch, tmp_path
-):
+def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, recorded_runs, monkeypatch, tmp_path):
     client, request = rl_progress_client
     preset = replace(presets.PRESETS["learning-medium"], updates=2, measured=range(1, 3))
     source = recorded_runs(
@@ -239,9 +266,8 @@ def test_snowball_publication_retries_keep_the_first_gate_without_native_executi
     tracking = json.loads(tracking_path.read_text())
     tracking.update(wandb_url="https://wandb.ai/test/publication/runs/native-one", engine={"model_dtype": "bfloat16"})
     write_json(tracking_path, tracking)
-    monkeypatch.setattr(publication, "run_skyrl", lambda config: SkyRLRun.raw_load(str(source)))
-    publication.run_loop(native_config(source, launch), preset, preset.name)
-    raw_path = source / "exports/attempts/native-one/loop-result.json"
+    raw = publication.retain_record(str(source), preset)
+    raw_path = Path(raw["artifact_uri"])
 
     def forbid_native(config):
         raise AssertionError("Publication launched native execution")
@@ -254,7 +280,6 @@ def test_snowball_publication_retries_keep_the_first_gate_without_native_executi
         run=forbid_native,
         override_path=str(source),
     )
-    (source / ".executor_status").write_text("FAILED")
 
     def saved_gate(name, verdict):
         path = tmp_path / name
@@ -286,23 +311,23 @@ def test_snowball_publication_retries_keep_the_first_gate_without_native_executi
     second_gate = saved_gate("current-gate", "fail")
     interrupted = {"once": True}
 
-    def unavailable_readback(origin, method, path, *, json_body=None):
+    def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
         if method == "POST" and json_body["sql"] == publisher.READ and interrupted["once"]:
             interrupted["once"] = False
             raise RuntimeError("Readback unavailable after insert")
         return request(origin, method, path, json_body=json_body)
 
-    monkeypatch.setattr(publisher, "marina_request", unavailable_readback)
-    step = publication.publication_step(training, str(raw_path), gate_path=first_gate, issue=73)
-    with pytest.raises(RuntimeError, match="step\\(s\\) failed"):
+    monkeypatch.setattr("marina.client.marina_request", unavailable_readback)
+    step = publication.publication_step(training, json.loads(raw_path.read_text()), gate_path=first_gate, issue=73)
+    with pytest.raises(RuntimeError):
         resolve(step)
     frozen = Path(step.path()) / publication.RESULT_FILENAME
     first_bytes = frozen.read_bytes()
     raw = json.loads(raw_path.read_text())
     raw["elapsed_seconds"] = 7200
     write_json(raw_path, raw)
-    monkeypatch.setattr(publisher, "marina_request", request)
-    retried = publication.publication_step(training, str(raw_path), gate_path=second_gate, issue=74)
+    monkeypatch.setattr("marina.client.marina_request", request)
+    retried = publication.publication_step(training, json.loads(raw_path.read_text()), gate_path=second_gate, issue=74)
     resolve(retried)
     assert frozen.read_bytes() == first_bytes
     receipt = json.loads((Path(retried.path()) / publication.PUBLICATION_FILENAME).read_text())
@@ -315,7 +340,6 @@ def test_snowball_publication_retries_keep_the_first_gate_without_native_executi
     assert served["elapsed_seconds"] == 3600 and served["evaluation"]["task_count"] == 1500
     assert served["final"]["scored"] == 1485 and served["pareto_eligible"] and served["trusted_gain_eligible"]
     assert served["wandb_url"] == tracking["wandb_url"] and served["engine"] == tracking["engine"]
-    assert json.loads((Path(second_gate) / gate.GATE_REPORT_FILENAME).read_text())["verdict"] == "fail"
     for change in ("engine", "request", "content", "membership"):
         variant = tmp_path / f"stored-{change}"
         shutil.copytree(source, variant)
@@ -367,3 +391,33 @@ def test_snowball_publication_retries_keep_the_first_gate_without_native_executi
         assert variants[f"tests/{change}"]["comparison_key"] != served["comparison_key"]
     assert variants["tests/content"]["evaluation"]["task_set_sha256"] != served["evaluation"]["task_set_sha256"]
     assert variants["tests/membership"]["evaluation"]["membership_sha256"] != served["evaluation"]["membership_sha256"]
+
+    monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {preset.name: preset})
+    pin = gate.ControlPin("learning-medium", "pinned-source-abbrev", presets.PRESET_REVISION, 2)
+    monkeypatch.setattr(gate, "CONTROLS", {"learning-medium": (pin,)})
+    controls = [
+        recorded_runs(
+            preset,
+            presets.control_name("learning-medium", "pinned-source-abbrev", index),
+            initial_score=0.3,
+            score=0.5,
+            attempt_id=f"pinned-{index}",
+        )
+        for index in range(2)
+    ]
+    command = CliRunner().invoke(publisher.main, ["--preset", "data-medium", "--controls", "--url", "http://localhost"])
+    assert command.exit_code == 0, (command.output, command.exception)
+    published = json.loads(command.output)
+    assert published["unserved_records"] == []
+    assert sorted(published["served_records"]) == sorted(
+        str(root / f"exports/attempts/pinned-{index}/{publication.RESULT_FILENAME}")
+        for index, root in enumerate(controls)
+    )
+    pairs = [
+        (row["run_id"], row["attempt_id"])
+        for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]
+        if row["attempt_id"].startswith("pinned-")
+    ]
+    assert sorted(pairs) == sorted(
+        (read_skyrl_launch_config(str(root))["run"]["id"], f"pinned-{index}") for index, root in enumerate(controls)
+    )

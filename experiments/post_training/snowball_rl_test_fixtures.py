@@ -237,6 +237,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 write_json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
         launch = {
             "run": {"id": f"{name}-{version}", "attempt_id": attempt_id},
+            "artifacts": {"attempts_root": str(root / "attempts")},
             "runtime": {"task_env": {"NCCL_NET": "Socket", "VLLM_LOGGING_LEVEL": "ERROR"}},
             "iris": {"allocation": {"num_nodes": preset.recipe.layout.role_plan.num_nodes, "gpus_per_node": 8}},
             "skyrl": {

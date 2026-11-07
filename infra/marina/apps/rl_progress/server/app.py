@@ -37,6 +37,7 @@ def comparison_fields(run: RunSummary) -> dict:
     baseline_full, final_full = complete(run.baseline), complete(run.final)
     baseline_eligible, final_eligible = eligible(run.baseline), eligible(run.final)
     timed = run.elapsed_seconds is not None and run.elapsed_seconds > 0
+    updates_known = run.resume_from is None or run.planned_updates_valid is not None
     gain = (
         (run.final.reward - run.baseline.reward) / run.elapsed_seconds * 3600
         if run.elapsed_seconds is not None and timed and run.final is not None and run.baseline is not None
@@ -44,13 +45,24 @@ def comparison_fields(run: RunSummary) -> dict:
     )
     if gain is not None and not math.isfinite(gain):
         raise ValueError("Derived reward gain per hour must be finite")
-    pareto = key is not None and run.status == "succeeded" and final_eligible and timed
+    pareto = (
+        key is not None
+        and run.status == "succeeded"
+        and run.verdict != "invalid"
+        and final_eligible
+        and timed
+        and updates_known
+    )
     return {
         "comparison_key": key,
         "expected_membership_count": expected,
         "gain_per_hour": gain,
         "partial_coverage": not (baseline_full and final_full),
-        "provisional": key is None or not (baseline_eligible and final_eligible and timed),
+        "provisional": (
+            run.verdict == "invalid"
+            or key is None
+            or not (baseline_eligible and final_eligible and timed and updates_known)
+        ),
         "trusted_gain_eligible": pareto and baseline_eligible,
         "pareto_eligible": pareto,
     }

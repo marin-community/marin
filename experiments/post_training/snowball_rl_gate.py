@@ -1101,7 +1101,18 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
         raise InvalidComparison(f"cannot recover recorded command options for {path}: {error}") from error
     if receipt is None:
         raise InvalidComparison(f"no launch receipt at {path}")
-    argv = (receipt.result.provenance or {}).get("command_line", [])
+    options = recorded_run_options((receipt.result.provenance or {}).get("command_line", []))
+    return options.preset_name, options.inputs
+
+
+class RecordedRunOptions(BaseModel):
+    preset_name: str | None
+    inputs: GateInputs
+    resume_from: str | None
+
+
+def recorded_run_options(argv: Sequence[str]) -> RecordedRunOptions:
+    """Parse stored launcher arguments into the gate inputs and preset name."""
     context = presets.run_command()(lambda **kwargs: ()).make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
@@ -1109,12 +1120,16 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     settings = tuple(
         leaf for text in params.get("settings", ()) for leaf in presets.setting_leaves(presets.parse_setting(text))
     )
-    return params.get("preset_name"), gate_inputs(
-        settings,
-        params.get("tasks_name"),
-        params.get("init_name"),
-        params.get("requirements", ()),
-        params.get("baselines", ()),
+    return RecordedRunOptions(
+        preset_name=params.get("preset_name"),
+        inputs=gate_inputs(
+            settings,
+            params.get("tasks_name"),
+            params.get("init_name"),
+            params.get("requirements", ()),
+            params.get("baselines", ()),
+        ),
+        resume_from=params.get("resume_name"),
     )
 
 
