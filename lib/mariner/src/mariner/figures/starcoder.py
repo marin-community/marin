@@ -255,6 +255,10 @@ EPOCH_MATCHING_COLUMNS = [
     "compute_flops",
 ]
 SELECTION_TOLERANCE = 1e-12  # the target's follow-up run trains the matched selection, a mean of grid shares
+# The realized StarCoder share of each arm at each of the design's grid weights, the untrained ones among them.
+EPOCH_MATCHING_GRID_TABLE = "starcoder_epoch_matching_grid"
+REALIZED_SHARE = "realized_starcoder_fraction"
+GRID_SHARE_TOLERANCE = 1e-15  # the grid's realized shares against the runs' at the weights they trained
 
 
 class Arm(StrEnum):
@@ -386,6 +390,29 @@ def epoch_matching(root: Path) -> EpochMatching:
         },
         compute_flops={Arm(arm): float(row["compute_flops"]) for arm, row in first.iterrows()},
     )
+
+
+def realized_share_grid(root: Path, matching: EpochMatching, arm: Arm) -> pd.Series:
+    """The StarCoder share that ``arm``'s runs draw at each of the design's grid weights, by nominal share, from
+    ``starcoder_epoch_matching_grid``: the trained weights and those between them.
+
+    Raises ``ValueError`` unless the shares rise with the weight and, at every weight that the arm's runs trained,
+    equal the share that they drew (``EpochMatching.realized_shares``) within 1e-15.
+    """
+    grid = read_table(root, EPOCH_MATCHING_GRID_TABLE)
+    require_columns(grid, ["arm", "starcoder_weight", REALIZED_SHARE], EPOCH_MATCHING_GRID_TABLE)
+    shares = grid[grid["arm"] == arm].set_index("starcoder_weight")[REALIZED_SHARE].sort_index()
+    if not (shares.index.is_unique and (np.diff(shares.to_numpy(float)) > 0).all()):
+        raise ValueError(f"the {arm} rows of {EPOCH_MATCHING_GRID_TABLE} repeat a weight or do not rise with it")
+    trained = matching.realized_shares(arm)
+    gap = (shares.reindex(trained.index) - trained).abs()
+    differing = gap.index[~(gap <= GRID_SHARE_TOLERANCE)]  # a weight that the grid lacks has no gap
+    if len(differing):
+        raise ValueError(
+            f"{EPOCH_MATCHING_GRID_TABLE} lacks or differs from the realized share of the {arm} runs at weights"
+            f" {', '.join(f'{weight:g}' for weight in differing)}"
+        )
+    return shares
 
 
 def selection_values(matching: EpochMatching) -> pd.DataFrame:

@@ -43,7 +43,15 @@ from mariner.figures.layout import (
     mosaic,
     panel_legend,
 )
-from mariner.figures.starcoder import DIAMOND, Arm, EpochMatching, draw_repetition, epoch_matching, fit_shares
+from mariner.figures.starcoder import (
+    DIAMOND,
+    Arm,
+    EpochMatching,
+    draw_repetition,
+    epoch_matching,
+    fit_shares,
+    realized_share_grid,
+)
 from mariner.olmix import fit_log_linear
 
 SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
@@ -316,19 +324,21 @@ def curve_point(curves: pd.DataFrame, position: int, model: str) -> dict[str, st
     }
 
 
-def surrogate_values(matching: EpochMatching) -> dict[str, pd.DataFrame]:
+def surrogate_values(matching: EpochMatching, realized_grid: pd.Series) -> dict[str, pd.DataFrame]:
     """The surrogate panel: the matched track's means from 10%, and MARINER's, Olmix's and the trees' fits to six.
 
+    ``realized_grid`` is the share that the matched proxy draws at each of the design's grid weights
+    (``realized_share_grid``). Each fit takes the grid's share at a fitted mean's weight, the share that its runs drew,
+    and the panel draws the fits at nominal shares, each mapped to the share interpolated between the grid's weights.
     MARINER is fitted as Figures 3 and 4 fit it (``fit_shares``), with Nemotron-CC at the proxy's epochs of its finite
     pool, and its optimum is the least of its curve on the panel's grid. Olmix's law is monotone in the share, so it
     picks the end of the grid that its slope falls toward. The trees' optimum is every plateau at their least
     prediction.
     """
-    realized = matching.realized_shares(Arm.MATCHED)
     track = matching.matched.mean()
     track = track[track.index >= SURROGATE_SHARES[0]]
     means = pd.DataFrame(
-        {"share": track.index, "realized_share": realized.loc[track.index].to_numpy(), "bpb": track.to_numpy()}
+        {"share": track.index, "realized_share": realized_grid.loc[track.index].to_numpy(), "bpb": track.to_numpy()}
     )
     means["fitted"] = means["share"].isin(SURROGATE_SHARES)
     fitted = means[means["fitted"]]
@@ -337,7 +347,7 @@ def surrogate_values(matching: EpochMatching) -> dict[str, pd.DataFrame]:
     olmix = fit_log_linear(np.column_stack([1.0 - shares, shares]), bpb)
     trees = fit_trees(shares, bpb)
     grid = np.linspace(SURROGATE_SHARES[0], 1.0, SURROGATE_POINTS)
-    nominal, drawn = realized.index.to_numpy(float), realized.to_numpy(float)
+    nominal, drawn = realized_grid.index.to_numpy(float), realized_grid.to_numpy(float)
     grid_realized = np.asarray(np.interp(grid, nominal, drawn))
     weights = np.column_stack([1.0 - grid_realized, grid_realized])
     curves = pd.DataFrame(
@@ -436,7 +446,7 @@ def draw_pipeline(root: Path) -> FigureData:
     repetition = draw_repetition(
         axes["proxy"], axes["target"], matching, mean_track, "their mean", (FIRST_SHARE, FIRST_SHARE)
     )
-    surrogates = surrogate_values(matching)
+    surrogates = surrogate_values(matching, realized_share_grid(root, matching, Arm.MATCHED))
     draw_surrogates(axes["surrogates"], surrogates)
     scaling, accuracy = scaling_values(root, SCALING_OBJECTIVE), accuracy_values(root)
     draw_scaling(axes["scaling"], scaling, SCALING_OBJECTIVE)

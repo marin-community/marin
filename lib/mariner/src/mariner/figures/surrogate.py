@@ -34,6 +34,7 @@ from mariner.data import (
     OUTCOME_PREFIX,
     TRAINED_MARINER,
     TRAINED_OLMIX,
+    VALIDATION_TABLE,
     read_table,
     require_columns,
 )
@@ -436,9 +437,9 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
 
     The summary is the mean over the three trainer seeds and the half-width of the figure's 95% interval.
     """
-    runs = read_table(root, "validation_3e18")
+    runs = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in PROPOSAL_MIXTURES]
-    require_columns(runs, [OBSERVATION_ID, "mixture_id", "launch", "trainer_seed", *outcomes], "validation_3e18")
+    require_columns(runs, [OBSERVATION_ID, "mixture_id", "launch", "trainer_seed", *outcomes], VALIDATION_TABLE)
     released = read_table(root, "fits_proposal_predictions")
     columns = [OBSERVATION_ID, "objective", "predictor", "predicted_bpb"]
     require_columns(released, columns, "fits_proposal_predictions")

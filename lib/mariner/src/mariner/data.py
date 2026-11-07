@@ -85,7 +85,7 @@ RUN_COLUMNS = (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, FIT_INCLUSION)
 PARTITION_COLUMNS = (BUCKET_ID, POOL_TOKENS)
 TASK_COLUMNS = (TASK_ID, OBJECTIVE_COLUMN, AGGREGATE_WEIGHT)
 RUN_TABLE = "run"
-# The snapshot's MANIFEST.json names these three tables too.
+# The snapshot's MANIFEST.json names these tables too.
 PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
 HELDOUT_TABLE = "heldout"
@@ -131,6 +131,7 @@ DOWNLOAD_PATTERNS = (
     "data/starcoder/starcoder_curves.*",
     "data/starcoder/starcoder_diagonal.*",
     "data/starcoder/starcoder_epoch_matching.*",
+    "data/starcoder/starcoder_epoch_matching_grid.*",
     "data/starcoder/starcoder_curricula.*",
     "data/starcoder/starcoder_curricula_matched_nd.*",
     "data/starcoder/starcoder_curricula_matched_nd_confirmation.*",
@@ -585,11 +586,12 @@ def download(local_dir: Path, repo_id: str = DATASET_REPO, revision: str | None 
 
     The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits (Figure 20's
     fits_path_predictions among them), which the commands and figures read; ladder_accuracy, the domain sweeps and the
-    StarCoder observations, curves, curve membership, diagonal, epoch-matching sweep, two-phase gains
-    (starcoder_curricula and its two matched_nd tables), mixture switches (starcoder_transition) and ramp designs,
-    which the figures also read; and ladder_compute_equivalence, the baselines' released ladder laws, which the tests
-    compare Figure 1's fits with. The StarCoder trajectories, dense grid, fit parameters and repeat noise,
-    ladder_unimax_cap_sweep and run_sets stay on the Hub. Returns the directory's path.
+    StarCoder observations, curves, curve membership, diagonal, epoch-matching sweep and its design grid's realized
+    shares (starcoder_epoch_matching_grid), two-phase gains (starcoder_curricula and its two matched_nd tables),
+    mixture switches (starcoder_transition) and ramp designs, which the figures also read; and
+    ladder_compute_equivalence, the baselines' released ladder laws, which the tests compare Figure 1's fits with. The
+    StarCoder trajectories, dense grid, fit parameters and repeat noise, ladder_unimax_cap_sweep and run_sets stay on
+    the Hub. Returns the directory's path.
     """
     try:
         from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)

@@ -31,11 +31,13 @@ from matplotlib.lines import Line2D
 from mariner.data import (
     OBJECTIVES,
     OLMIX_CAP,
+    PARTITION_TABLE,
     RELIABILITY_COLLAPSED_SOURCE,
     RELIABILITY_SOURCES,
     RELIABILITY_TABLE,
     TRAINED_MARINER,
     TRAINED_OLMIX,
+    VALIDATION_TABLE,
     mixture_weights,
     pool_fractions,
     read_table,
@@ -339,7 +341,7 @@ def epoch_text(epochs: float) -> str:
 
 def bucket_sources(partition: pd.DataFrame) -> pd.Series:
     """Each bucket's source, by bucket id: Common Crawl for the topics at a quality tier, else its pool's."""
-    require_columns(partition, ["bucket_id", "pool", "quality_tier"], "partition")
+    require_columns(partition, ["bucket_id", "pool", "quality_tier"], PARTITION_TABLE)
     source = np.where(
         partition["quality_tier"].notna(),
         COMMON_CRAWL,
@@ -353,7 +355,7 @@ def bucket_sources(partition: pd.DataFrame) -> pd.Series:
 
 def bucket_names(partition: pd.DataFrame) -> pd.Series:
     """Each bucket's name in the paper, by bucket id, with the table's LaTeX ampersands as plain text."""
-    require_columns(partition, ["bucket_id", "paper_name"], "partition")
+    require_columns(partition, ["bucket_id", "paper_name"], PARTITION_TABLE)
     return partition.set_index("bucket_id")["paper_name"].str.replace("\\&", "&", regex=False)
 
 
@@ -368,15 +370,15 @@ def mixture_epochs(
     mixture = column.mixture_id
     runs = validation[validation["mixture_id"] == mixture]
     if runs.empty:
-        raise ValueError(f"no validation_3e18 run trains {mixture}")
+        raise ValueError(f"no {VALIDATION_TABLE} run trains {mixture}")
     recorded = set(zip(runs["method"], runs["proposal_objective"], runs["variant"], strict=True))
     if recorded != {(column.method.value, column.objective, column.variant)}:
         raise ValueError(
             f"the runs of {mixture} record (method, proposal objective, variant) {sorted(recorded)}, not"
             f" {(column.method.value, column.objective, column.variant)}"
         )
-    weights = mixture_weights(runs, bucket_ids, "validation_3e18")
-    fractions = pool_fractions(runs, bucket_ids, "validation_3e18")
+    weights = mixture_weights(runs, bucket_ids, VALIDATION_TABLE)
+    fractions = pool_fractions(runs, bucket_ids, VALIDATION_TABLE)
     if not ((weights == weights[0]).all() and (fractions == fractions[0]).all()):
         raise ValueError(f"the runs of {mixture} do not share one mixture")
     return weights[0] * per_weight / fractions[0]
@@ -384,10 +386,10 @@ def mixture_epochs(
 
 def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each column's epochs per bucket, the rows' sources and names, and proportional mixing's epochs."""
-    table = read_table(root, "partition")
+    table = read_table(root, PARTITION_TABLE)
     partition = release_partition(root)
-    validation = read_table(root, "validation_3e18")
-    require_columns(validation, ["mixture_id", "method", "proposal_objective", "variant"], "validation_3e18")
+    validation = read_table(root, VALIDATION_TABLE)
+    require_columns(validation, ["mixture_id", "method", "proposal_objective", "variant"], VALIDATION_TABLE)
     sources = bucket_sources(table)
     names = bucket_names(table)
     order = [bucket for source in SOURCES for bucket in partition.bucket_ids if sources[bucket] == source]

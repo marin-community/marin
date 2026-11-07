@@ -69,6 +69,7 @@ from mariner.data import (
     reliability_rows,
     require_columns,
 )
+from mariner.design import UNIMAX
 from mariner.figures.layout import (
     BAND_ALPHA,
     METHOD_COLORS,
@@ -113,7 +114,7 @@ TRANSFER_PROPOSALS = {
     Method.REGMIX_RELEASED: "mix_0a09804c6e21af02",  # released RegMix's recipe, rgref_u_endpoint_cap64
 }
 # The baselines among the designs, by run label (the swarms name UniMax-8's run without its cap).
-TRANSFER_BASELINES = {Method.PROPORTIONAL: CALIBRATION_RUN, Method.UNIMAX: f"{BASELINE_PREFIX}unimax"}
+TRANSFER_BASELINES = {Method.PROPORTIONAL: CALIBRATION_RUN, Method.UNIMAX: f"{BASELINE_PREFIX}{UNIMAX}"}
 TRANSFER_MARKERS = {
     Method.MARINER: ("*", 12.0),
     Method.OLMIX: ("D", 6.0),

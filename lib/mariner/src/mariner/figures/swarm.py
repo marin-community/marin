@@ -284,8 +284,8 @@ def draw_deletion_matrix(root: Path) -> FigureData:
     axis.set_yticks(range(len(rows)), row_labels)
     axis.tick_params(length=0, labelsize=6.5)
     axis.grid(False)
-    for side in axis.spines.values():
-        side.set_visible(False)
+    for spine in axis.spines.values():
+        spine.set_visible(False)
     for column in range(1, len(tasks)):
         axis.axvline(2 * column - 0.5, color="white", linewidth=0.6)
     groups = columns["group"].fillna("").to_numpy()

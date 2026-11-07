@@ -43,6 +43,7 @@ from mariner.data import (
     RELIABILITY_TABLE,
     TRAINED_MARINER,
     TRAINED_OLMIX,
+    VALIDATION_TABLE,
     read_table,
     reliability_rows,
     require_columns,
@@ -481,12 +482,12 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
         "obe_easy": repeat_means(reliability, "obe_easy"),
     }
     rows = {objective: tradeoff_rows(reliability, objective, proportional[objective]) for objective in OBJECTIVES}
-    validation = read_table(root, "validation_3e18")
+    validation = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{task}" for objective in OBJECTIVES for row in rows[objective] for task in row.tasks]
     require_columns(
         validation,
         ["observation_id", "mixture_id", "launch", "trainer_seed", "proposal_objective", *OBJECTIVE_OUTCOMES, *outcomes],
-        "validation_3e18",
+        VALIDATION_TABLE,
     )
     bars, runs_used = [], []
     for panel in TRADEOFF_PANELS:

@@ -519,8 +519,8 @@ def check_matched_compute_scaling(values: dict[str, pd.DataFrame]) -> None:
     assert (flops.max(axis=0) / flops.min(axis=0) - 1 <= COMPUTE_MATCH).all()
     # Its insets' printed optima and compute, and each path's printed optimum-share law.
     for track, rows in minima.groupby("track"):
-        assert [round(epochs, 1) for epochs in rows["epochs"]] == PRINTED_OPTIMUM_EPOCHS[Track(track)]
-        assert [f"{flops:.2g}" for flops in rows["compute_flops"]] == PRINTED_FLOPS
+        assert [round(optimum, 1) for optimum in rows["epochs"]] == PRINTED_OPTIMUM_EPOCHS[Track(track)]
+        assert [f"{compute:.2g}" for compute in rows["compute_flops"]] == PRINTED_FLOPS
     for law in values["path_laws"].itertuples():
         rounded = float(f"{law.reference:.3g}")
         coefficient = law.share_coefficient * (rounded / law.reference) ** law.share_exponent
@@ -970,8 +970,8 @@ def check_deletion_matrix(values: dict[str, pd.DataFrame]) -> None:
     """Figure 23 and sections/appendix_analysis.tex:103-120: the OlmoBaseEval Easy mean's two detectable removals and
     their printed T, its swarm-to-repeat ratio of 12.6, Holm's first-step threshold of 4.4, the two Common Crawl topic
     removals that move any task, and the paper figure's 24 annotated cells, 20 of them red. Its rows
-    (``REMOVAL_ROWS``): each topic's (H) bucket on the left and its (L) bucket on the right, by decreasing pool within
-    each source."""
+    (``REMOVAL_ROWS``): each Common Crawl topic's row, labeled by the topic, with the topic's (H) bucket on the left and
+    its (L) bucket on the right, by decreasing pool within each source."""
     cells = values["cells"]
     rows = values["rows"]
     names = cells.drop_duplicates(BUCKET_ID).set_index(BUCKET_ID)["bucket"]
@@ -979,6 +979,9 @@ def check_deletion_matrix(values: dict[str, pd.DataFrame]) -> None:
     topic_rows = rows[rows["source"] == COMMON_CRAWL]
     assert names[topic_rows["left"]].str.endswith(QUALITY_SIDES[0]).all()
     assert names[topic_rows["right"]].str.endswith(QUALITY_SIDES[1]).all()
+    left_topics = names[topic_rows["left"]].str.removesuffix(QUALITY_SIDES[0]).to_numpy()
+    assert (names[topic_rows["right"]].str.removesuffix(QUALITY_SIDES[1]).to_numpy() == left_topics).all()
+    assert (topic_rows["label"].to_numpy() == left_topics).all()
     other_rows = rows[rows["source"] != COMMON_CRAWL]
     assert (other_rows["left"] == other_rows["right"]).all()
     assert rows.groupby("source", sort=False)["pool_tokens"].apply(lambda pools: pools.is_monotonic_decreasing).all()
