@@ -331,6 +331,13 @@ def read_metrics(root: StoragePath) -> dict[int, dict]:
     }
 
 
+def _mismatch_counts(rows: Sequence[Mapping[str, float]], prefix: str) -> list[float] | None:
+    counts = [row.get(prefix + "/selected_tokens", math.nan) for row in rows]
+    if all(math.isfinite(count) and count >= 0 for count in counts) and math.fsum(counts) > 0:
+        return counts
+    return None
+
+
 def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> dict[str, float]:
     rows = [metrics.get(step, {}) for step in preset.measured]
     phases = [
@@ -346,6 +353,19 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
             first = next((row[metric.key] for _, row in sorted(metrics.items()) if metric.key in row), None)
             if first is not None:
                 values[metric.key] = float(first)
+            continue
+        if metric in preset.guards and metric.key == "policy/mismatch/staleness0/kl_k3":
+            prefix = metric.key.rsplit("/", 1)[0]
+            counts = _mismatch_counts(rows, prefix)
+            if counts is None:
+                continue
+            total = math.fsum(counts)
+            nonempty = [(row, count) for row, count in zip(rows, counts, strict=True) if count > 0]
+            if all(
+                math.isfinite(row.get(metric.key, math.nan)) and row.get(prefix + "/finite_fraction") == 1
+                for row, _ in nonempty
+            ):
+                values[metric.key] = math.fsum(count / total * row[metric.key] for row, count in nonempty)
             continue
         if metric.key == "speed/update_seconds":
             series = [math.fsum(row[key] for key in phases) for row in rows if phases and set(phases) <= set(row)]
@@ -564,10 +584,7 @@ def _load_run(
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=fixed, holds=holds))
     missing = any(
         metric.key.startswith("policy/mismatch/")
-        and any(
-            metrics.get(step, {}).get(metric.key.rsplit("/", 1)[0] + "/selected_tokens", 0) <= 0
-            for step in preset.measured
-        )
+        and _mismatch_counts([metrics.get(step, {}) for step in preset.measured], metric.key.rsplit("/", 1)[0]) is None
         for metric in preset.guards
     )
     final = pa.concat_tables(scores)

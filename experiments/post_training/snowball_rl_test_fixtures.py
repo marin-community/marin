@@ -219,6 +219,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 "policy/mismatch/staleness0/kl_k3": speed / 1000,
                 "policy/mismatch/pooled/kl_k3": speed / 1000,
                 "policy/mismatch/staleness0/selected_tokens": 1000,
+                "policy/mismatch/staleness0/finite_fraction": 1.0,
                 "async/performance/loss_tokens_per_configured_policy_gpu_second": speed,
                 "async/performance/response_tokens_per_configured_inference_gpu_second": 4 * speed,
                 "generate/min_num_tokens": 4096 if fixed else 12,
