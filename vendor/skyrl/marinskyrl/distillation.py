@@ -89,6 +89,29 @@ class TeacherResourceSpec:
         return self.tensor_parallel_size * self.data_parallel_size
 
 
+@dataclass(frozen=True)
+class TeacherPromptInsertion:
+    """Insert teacher-only context after an exact token prefix."""
+
+    after_prefix: tuple[int, ...]
+    tokens: tuple[int, ...]
+
+
+def conditioned_teacher_prompt(prompt: list[int], insertions: tuple[TeacherPromptInsertion, ...]) -> list[int]:
+    """Insert teacher context using exactly one matching prefix rule."""
+    if not insertions:
+        return list(prompt)
+    matching = [rule for rule in insertions if tuple(prompt[: len(rule.after_prefix)]) == rule.after_prefix]
+    if len(matching) != 1:
+        raise ValueError("teacher prompt must match exactly one insertion prefix")
+    rule = matching[0]
+    return [*rule.after_prefix, *rule.tokens, *prompt[len(rule.after_prefix) :]]
+
+
+def max_insertion_length(insertions: tuple[TeacherPromptInsertion, ...]) -> int:
+    return max((len(rule.tokens) for rule in insertions), default=0)
+
+
 class TeacherSpec(Protocol):
     id: str
     source: TeacherSource
@@ -97,6 +120,7 @@ class TeacherSpec(Protocol):
     evidence: TeacherEvidenceKind
     resources: TeacherResourceSpec | None
     top_k: int | None
+    prompt_insertions: tuple[TeacherPromptInsertion, ...]
 
 
 @dataclass(frozen=True)
@@ -112,6 +136,7 @@ class OpenAICompatibleTeacherSpec:
     request_timeout_seconds: float
     resources: TeacherResourceSpec | None = None
     top_k: int | None = None
+    prompt_insertions: tuple[TeacherPromptInsertion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -124,6 +149,7 @@ class LocalInferenceTeacherSpec:
     backend: str
     resources: TeacherResourceSpec | None = None
     top_k: int | None = None
+    prompt_insertions: tuple[TeacherPromptInsertion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +161,7 @@ class FrozenWorkerTeacherSpec:
     evidence: TeacherEvidenceKind
     resources: TeacherResourceSpec | None = None
     top_k: int | None = None
+    prompt_insertions: tuple[TeacherPromptInsertion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -146,6 +173,7 @@ class ResidentTeacherSpec:
     evidence: TeacherEvidenceKind
     resources: TeacherResourceSpec | None = None
     top_k: int | None = None
+    prompt_insertions: tuple[TeacherPromptInsertion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -445,6 +473,26 @@ def _tokenizer_fingerprint(config: Mapping[str, object], path: str) -> str:
     return fingerprint
 
 
+def _teacher_prompt_insertion(raw: object, path: str) -> TeacherPromptInsertion:
+    config = _mapping(raw, path)
+    _reject_unknown(config, frozenset({"after_prefix", "tokens"}), path)
+    values = {}
+    for key in ("after_prefix", "tokens"):
+        row = config.get(key)
+        if not isinstance(row, (list, tuple)) or not row:
+            raise ValueError(f"{path}.{key} must be a non-empty token sequence")
+        if any(isinstance(token, bool) or not isinstance(token, int) or token < 0 for token in row):
+            raise ValueError(f"{path}.{key} must contain nonnegative integer token IDs")
+        values[key] = tuple(row)
+    return TeacherPromptInsertion(**values)
+
+
+def _teacher_prompt_insertions(raw: object, path: str) -> tuple[TeacherPromptInsertion, ...]:
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(f"{path} must be a sequence of prompt insertions")
+    return tuple(_teacher_prompt_insertion(value, f"{path}[{index}]") for index, value in enumerate(raw))
+
+
 def _teacher_spec(teacher_id: str, raw: object) -> TeacherSpec:
     path = f"teachers.{teacher_id}"
     config = _mapping(raw, path)
@@ -463,6 +511,7 @@ def _teacher_spec(teacher_id: str, raw: object) -> TeacherSpec:
                 "tokenizer_fingerprint",
                 "max_sequence_length",
                 "request_timeout_seconds",
+                "prompt_insertions",
             }
         ),
         path,
@@ -529,6 +578,9 @@ def _teacher_spec(teacher_id: str, raw: object) -> TeacherSpec:
         "evidence": evidence,
         "resources": resources,
         "top_k": top_k,
+        "prompt_insertions": _teacher_prompt_insertions(
+            config.get("prompt_insertions", []), f"{path}.prompt_insertions"
+        ),
     }
     if source is TeacherSource.OPENAI_COMPATIBLE:
         return OpenAICompatibleTeacherSpec(
