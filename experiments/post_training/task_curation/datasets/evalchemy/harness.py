@@ -152,6 +152,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     metric_kind=MetricKind.CONTINUOUS if name == "truthfulqa_mc2" else MetricKind.BINARY,
                     scoring="probability_mass" if name == "truthfulqa_mc2" else "most_likely",
                     version="2026.11.05.2" if count and name in {"boolq", "piqa", "truthfulqa_mc2"} else "2026.11.02",
+                    fewshot_group=name,
                 )
             )
     result.append(
@@ -364,7 +365,7 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
     return result
 
 
-def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+def short_answer_sources() -> list[RlDataSource[EvalDataset]]:
     """Zero-shot completion variants of the short-answer source families."""
     result = []
     for source in generation_sources():

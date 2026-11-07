@@ -7,16 +7,16 @@ from taskcompendium.evaluation.spec import LikelihoodMetric, LikelihoodNormaliza
 from taskcompendium.importers.evalchemy.commonsense import commonsense_qa_template, copa_template, wsc_template
 from taskcompendium.pipeline.inputs import SourceFormat
 
-from experiments.post_training.task_curation.datasets.evalchemy.protocols import checkpoint_choice_source
+from experiments.post_training.task_curation.datasets.evalchemy.protocols import fewshot_choice_source
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource
 
 
-def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvalDataset]]:
     raw_accuracy = (LikelihoodMetric(name="acc,none", normalization=LikelihoodNormalization.RAW),)
     return [
-        checkpoint_choice_source(
+        fewshot_choice_source(
             "commonsense_qa",
             "commonsense_qa",
             HfSource(
@@ -29,7 +29,7 @@ def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
             commonsense_qa_template(10, pool_file="data/train-00000-of-00001.parquet"),
             raw_accuracy,
         ),
-        checkpoint_choice_source(
+        fewshot_choice_source(
             "copa",
             "copa",
             HfSource(
@@ -42,7 +42,7 @@ def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
             copa_template(),
             raw_accuracy,
         ),
-        checkpoint_choice_source(
+        fewshot_choice_source(
             "wsc273",
             "wsc273",
             HfSource(

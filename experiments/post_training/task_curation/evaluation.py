@@ -52,6 +52,7 @@ class EvalDataset:
     recipe: CurationRecipe
     protocol: EvaluationProtocol
     item_builder: ItemBuilder
+    fewshot_group: str | None = None
 
     def __post_init__(self) -> None:
         for source in (self.recipe.source, *self.recipe.inputs.values()):

@@ -33,7 +33,7 @@ from taskcompendium.pipeline.models import Converter, IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
 from experiments.post_training.task_curation.datasets.evalchemy.protocols import (
-    checkpoint_choice_source,
+    fewshot_choice_source,
     fewshot_generation_source,
 )
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
@@ -46,11 +46,11 @@ MMLU_TEST_FILE = "data/test-00000-of-00001.parquet"
 BBH_REVISION = "b5306be6f827cfafbb545ff5a51f96916029b0fd"
 
 
-def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
+def likelihood_sources() -> list[RlDataSource[EvalDataset]]:
     raw = LikelihoodMetric(name="acc,none", normalization=LikelihoodNormalization.RAW)
     normalized = LikelihoodMetric(name="acc_norm,none", normalization=LikelihoodNormalization.CHARACTERS)
     result = [
-        checkpoint_choice_source(
+        fewshot_choice_source(
             "agieval_lsat_ar",
             "agieval_lsat_ar",
             HfSource(
@@ -63,7 +63,7 @@ def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
             agieval_template(),
             (raw, normalized),
         ),
-        checkpoint_choice_source(
+        fewshot_choice_source(
             "leaderboard_mmlu_pro",
             "leaderboard_mmlu_pro",
             HfSource("TIGER-Lab/MMLU-Pro", MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET),
@@ -74,7 +74,7 @@ def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
     ]
     for subject, population in (("diamond", 198), ("main", 448), ("extended", 546)):
         result.append(
-            checkpoint_choice_source(
+            fewshot_choice_source(
                 "leaderboard_gpqa-" + subject,
                 "leaderboard_gpqa",
                 HfSource("Idavidrein/gpqa", GPQA_REVISION, ("gpqa_" + subject + ".csv",), SourceFormat.CSV),
@@ -97,7 +97,7 @@ def checkpoint_sources() -> list[RlDataSource[EvalDataset]]:
         )
         if variant == "bbh":
             result.append(
-                checkpoint_choice_source(
+                fewshot_choice_source(
                     "leaderboard_bbh-" + subject,
                     "leaderboard_bbh",
                     source,

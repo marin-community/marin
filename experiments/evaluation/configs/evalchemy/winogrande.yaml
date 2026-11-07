@@ -1,4 +1,5 @@
 name: winogrande
+num_fewshot: 5
 sources:
 - evalchemy-winogrande
 max_tokens: 256
