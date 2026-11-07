@@ -364,35 +364,14 @@ before applying these declarations. See [Loom's watch documentation](https://git
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
 the IaC fields. Custom script files must already exist on the Loom server.
 
-## Google Doc sessions
+## Doc sessions
 
-The `gdoc` profile ([instructions](profiles/gdoc/AGENTS.md)) runs a session
-whose record of the work is a Google Doc. Launch it with the doc's link in the
-goal. The agent reads, edits, and comments on the doc with
-`python3 -m infra.loom.gdoc` from the marin checkout, which needs only the
-system Python and gcloud. `agent-status` sets the `Agent status` chip that the
-Loom doc templates put in a doc's header.
-
-A session reaches the doc as `loom-vm@hai-gcp-models.iam.gserviceaccount.com`:
-share the doc, or the folder or Shared Drive that holds it, with that account
-as an editor. The account impersonates itself for the Docs and Drive scopes
-through the `roles/iam.serviceAccountTokenCreator` grant on itself in
-`infra/pulumi/src/iac/gcp/loom.py`, so no key is stored. Every session runs as
-this account, so every session can reach every doc shared with it. Doc edits
-and comments direct the doc and the session's work, but anyone with comment
-access can write them, so the agent takes approval for an outward-facing step,
-such as a push or a pull request, only from the Loom session.
-
-A ```` ```dot ```` block renders with Graphviz and a ```` ```mermaid ```` block
-with a pinned mermaid-cli that `npx` installs on first use. The PNG goes to
-`gs://marin-us-central1/tmp/ttl=1d/loom-gdoc/diagrams/`, which expires after a
-day, and Docs copies it in through a 15-minute URL that the account signs by
-impersonating itself. Doc changes do not reach a session on their own yet; the
-agent reads the doc and its comments at the points its instructions name.
-
-Outside Loom, the command uses a person's gcloud login, which needs Drive
-access (`gcloud auth login --enable-gdrive-access`). That login cannot sign
-diagram URLs, so it writes only text.
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
+record of the work is the branch artifact `doc`, with progress updates in the
+artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
+The profile sets `docArtifact: doc`. Loom's
+[session doc](https://github.com/marin-community/loom/blob/main/docs/artifacts.md#the-session-doc)
+describes the Doc tab, comments, and the message that a person's edit sends.
 
 ## claude.ai connector
 
