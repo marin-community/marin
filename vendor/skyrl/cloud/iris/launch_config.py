@@ -9,14 +9,21 @@ import posixpath
 import tempfile
 from typing import Any, Mapping
 
-from omegaconf import MISSING, DictConfig, OmegaConf
+from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
+
+from skyrl_train.evaluation_profiles import named_evaluation_profiles
 
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
-from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.role_plan import (
+    derive_generation_role_plan,
+    derive_num_nodes,
+    derive_policy_export_role_plan,
+    derive_role_plan,
+)
 from cloud.iris.rl_config_translation import (
     RL_ENTRYPOINTS,
     RLEntrypoint,
@@ -52,6 +59,7 @@ class RunConfig:
 
     id: str = MISSING
     attempt_id: str = MISSING
+    coordinator_iris_job_id: str | None = None
     seed: int = 42
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value
@@ -153,6 +161,7 @@ class InputsConfig:
     data_kind: str = "tasks"
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
+    evaluation_data: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -173,6 +182,9 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
     schema = OmegaConf.structured(SkyRLLaunchConfig)
     composed = OmegaConf.merge(schema, raw)
+    if not composed.inputs.evaluation_data:
+        with open_dict(composed.inputs):
+            del composed.inputs["evaluation_data"]
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     return composed
 
@@ -230,6 +242,7 @@ def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
     if _is_source_recipe(config.skyrl):
+        _validate_evaluation_data(config, source_recipe=True)
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)
@@ -256,8 +269,9 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
         LaunchModelLocator(**model)
     except TypeError as error:
         raise ValueError(f"inputs.model is invalid: {error}") from error
-    for name in ("train_data", "validation_data"):
-        values = inputs.get(name)
+    groups = {name: inputs.get(name) for name in ("train_data", "validation_data")}
+    groups.update({f"evaluation_data.{name}": values for name, values in inputs.get("evaluation_data", {}).items()})
+    for name, values in groups.items():
         if not isinstance(values, list):
             raise TypeError(f"inputs.{name} must be a list")
         for index, value in enumerate(values):
@@ -266,30 +280,44 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             data_source(value)
 
 
+def _validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None:
+    for name in config.inputs.get("evaluation_data", {}):
+        profile = named_evaluation_profiles(config.skyrl).get(name)
+        if profile is None:
+            raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
+        if source_recipe and profile.get("data_files") is not None:
+            raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
+
+
 def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     """Validate explicit Iris resources against the launch mode's active roles."""
     skyrl = config["skyrl"]
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
     checkpoint_export = config["run"]["mode"] == RunMode.CHECKPOINT_EXPORT
-    plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
+    if checkpoint_export:
+        plan = derive_policy_export_role_plan(skyrl)
+    elif config["runtime"]["entrypoint"] == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
+        plan = derive_generation_role_plan(skyrl)
+    else:
+        plan = derive_role_plan(skyrl)
     allocation = config["iris"]["allocation"]
-    policy = plan.claim("policy")
     expected_nodes = derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:
         raise ValueError(
             f"iris.allocation.num_nodes={allocation['num_nodes']} does not match SkyRL role plan's "
             f"{expected_nodes} physical nodes"
         )
+    role_gpus_per_node = plan.gpus_per_node
     gpu_mismatch = (
-        allocation["gpus_per_node"] < policy.gpus_per_node
+        allocation["gpus_per_node"] < role_gpus_per_node
         if checkpoint_export
-        else allocation["gpus_per_node"] != policy.gpus_per_node
+        else allocation["gpus_per_node"] != role_gpus_per_node
     )
     if gpu_mismatch:
         raise ValueError(
-            f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL policy "
-            f"placement ({policy.gpus_per_node})"
+            f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL role "
+            f"placement ({role_gpus_per_node})"
         )
     return IrisAllocationConfig(**allocation)
 
@@ -308,12 +336,9 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if raw["iris"]["timeout"] < 0:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
+    _validate_evaluation_data(config, source_recipe=False)
     ray = raw["ray"]
-    if (
-        ray["rendezvous_timeout"] <= 0
-        or ray["cluster_join_timeout"] <= 0
-        or ray["driver_liveness_timeout"] < 0
-    ):
+    if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(
             "ray rendezvous timeout and cluster join timeout must be positive; "
             "driver liveness timeout cannot be negative"

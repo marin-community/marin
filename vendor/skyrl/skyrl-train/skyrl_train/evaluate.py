@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
 from skyrl_train.io import io
 from marinskyrl.resource_locator import join_resource_path
 
@@ -216,6 +217,13 @@ def _calculate_eval_metrics(
         if average is not None:
             metrics["eval/all/avg_verifier_score"] = average
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
+    metrics.update(
+        {
+            EVAL_OUTCOME_METRIC_PREFIX + key.removeprefix(GENERATE_OUTCOME_METRIC_PREFIX): value
+            for key, value in (batch.get("rollout_metrics") or {}).items()
+            if key.startswith(GENERATE_OUTCOME_METRIC_PREFIX)
+        }
+    )
     return metrics
 
 
@@ -361,6 +369,7 @@ async def evaluate_step_wise(
                 val for val, is_last_step in zip(concatenated_batch[key], is_last_step_mask) if is_last_step
             ]
     uids_last_step = [uid for uid, is_last_step in zip(rollouts.uids, is_last_step_mask) if is_last_step]
+    trajectory_batch_last_step["rollout_metrics"] = concatenated_batch.get("rollout_metrics") or {}
     data_sources_last_step = [
         data_source for data_source, is_last_step in zip(concat_data_sources, is_last_step_mask) if is_last_step
     ]

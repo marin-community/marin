@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
+    task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
@@ -244,6 +245,7 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
     stops = trajectory_batch.get("stop_reasons")
     metrics = {key.removeprefix("consumed/"): value for key, value in consumed_stop_metrics(stops, count).items()}
     if trajectory_batch.get("env_metrics") is not None:
+        metrics.update(task_timing_metrics(trajectory_batch["env_metrics"]))
         environments = set(trajectory_batch["env_classes"])
         for environment in environments:
             indices = [i for i, name in enumerate(trajectory_batch["env_classes"]) if name == environment]
@@ -362,6 +364,7 @@ def dump_per_dataset_eval_results(
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
+                    "task_id": (trajectory_batch.get("task_ids") or [None] * len(input_prompts))[i],
                     "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
                     "response_token_ids": trajectory_batch["response_ids"][i],
                     "input_prompt": input_prompts[i],

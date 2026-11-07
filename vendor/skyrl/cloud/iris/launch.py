@@ -42,6 +42,8 @@ class LaunchOutcome:
     job_id: str
     job_state: str
     exit_code: int
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,8 @@ class LaunchResult:
     runtime_profile: str
     model: ExportedPolicy | None
     failure: str | None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class LaunchBackend(Protocol):
@@ -100,6 +104,10 @@ def _prepare_config(config: DictConfig) -> DictConfig:
     OmegaConf.set_struct(prepared, False)
     prepared.inputs.train_data = _prepared_sources(list(config.inputs.train_data))
     prepared.inputs.validation_data = _prepared_sources(list(config.inputs.validation_data))
+    if config.inputs.get("evaluation_data"):
+        prepared.inputs.evaluation_data = {
+            name: _prepared_sources(list(sources)) for name, sources in config.inputs.evaluation_data.items()
+        }
     OmegaConf.set_struct(prepared, True)
     return prepared
 
@@ -141,6 +149,8 @@ def _result(
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
+        started_at=outcome.started_at if outcome else None,
+        finished_at=outcome.finished_at if outcome else None,
     )
 
 
@@ -186,7 +196,13 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
-            outcome = LaunchOutcome(job_id=str(error.job_id), job_state=error.status.state.value, exit_code=1)
+            outcome = LaunchOutcome(
+                job_id=str(error.job_id),
+                job_state=error.status.state.value,
+                exit_code=1,
+                started_at=error.status.started_at.as_formatted_date() if error.status.started_at else None,
+                finished_at=error.status.finished_at.as_formatted_date() if error.status.finished_at else None,
+            )
 
         if outcome.exit_code != 0:
             return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")

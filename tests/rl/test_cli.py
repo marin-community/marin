@@ -16,6 +16,7 @@ import click
 import pytest
 from click.testing import CliRunner
 from iris.client.client import IrisClient
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import _coordinator_request, rl_build_options
@@ -90,6 +91,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch: pytest.MonkeyPatch, missing_name: str | None
 ) -> None:
     client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = JobName.from_wire("/atqamar/submitted-coordinator")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     expected_env = {

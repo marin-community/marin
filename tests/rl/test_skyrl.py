@@ -13,24 +13,30 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO
 
 import pytest
 import yaml
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
     MegatronGeometry,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
+    read_skyrl_launch_receipt,
+    read_stored_skyrl_attempts,
+    read_stored_skyrl_receipt,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -421,8 +427,14 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
 
 @pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
-    # Evaluation previously passed preflight, then failed in the GPU engine factory.
     spec = _spec()
+    if entrypoint == "generate":
+        spec = dataclasses.replace(
+            spec,
+            topology=dataclasses.replace(
+                spec.topology, role_plan=dataclasses.replace(spec.topology.role_plan, generate_only=True)
+            ),
+        )
     recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
     with pytest.raises(ValueError, match="expert_block requires non-colocated"):
         dataclasses.replace(spec, config_yaml=recipe)
@@ -450,13 +462,41 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
     assert base.fingerprint() == resized.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
+    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
+    source = ArtifactDataSource(panel, relative_path="validation.parquet")
+    profiled_spec = dataclasses.replace(
+        spec, config_yaml=yaml.safe_dump(recipe), evaluation_data=(("quality", (source,)),)
+    )
+    profiled = skyrl_step(profiled_spec, _execution())
+    changed_panel = dataclasses.replace(source, step=dataclasses.replace(panel, version="2026.11.05.1"))
+    assert (
+        profiled.fingerprint()
+        != skyrl_step(
+            dataclasses.replace(profiled_spec, evaluation_data=(("quality", (changed_panel,)),)), _execution()
+        ).fingerprint()
+    )
+
 
 def test_skyrl_step_declares_model_and_data_dependencies() -> None:
-    step = skyrl_step(_spec(), _execution())
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"quality": {}}}]
+    panel = dataclasses.replace(_data_step(), name="tests/heldout-panel", version="2026.11.05")
+    step = skyrl_step(
+        dataclasses.replace(
+            spec,
+            config_yaml=yaml.safe_dump(recipe),
+            evaluation_data=(("quality", (ArtifactDataSource(panel, relative_path="validation.parquet"),)),),
+        ),
+        _execution(),
+    )
 
     assert [(dep.name, dep.version) for dep in step.deps] == [
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
+        ("tests/heldout-panel", "2026.11.05"),
     ]
 
 
@@ -467,8 +507,18 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         "marin.rl.skyrl.skyrl_temporary_run_path",
         lambda _output_path, *, ttl_days: f"s3://temp/ttl={ttl_days}d/skyrl/users/alice/run",
     )
-    spec = dataclasses.replace(_spec(), name="users/alice/tests/iceball-rl", version="dev")
+    recipe = yaml.safe_load(_spec().config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": "wrong-model"}]
+    spec = dataclasses.replace(
+        _spec(), name="users/alice/tests/iceball-rl", version="dev", config_yaml=yaml.safe_dump(recipe)
+    )
+    monkeypatch.setattr("marin.rl.skyrl.get_job_info", lambda: None)
+    outside = skyrl_step(spec, _execution()).fingerprint()
+    monkeypatch.setattr("marin.rl.skyrl.get_job_info", lambda: SimpleNamespace(job_id="/tests/coordinator"))
     step = skyrl_step(spec, _execution())
+    assert step.fingerprint() == outside
+    fingerprint_config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    assert "issue" not in yaml.safe_load(fingerprint_config.launch_config_yaml)["run"]
     output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
     config = step.build_config(
         StepContext.for_run(
@@ -483,6 +533,9 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     assert config.output.checkpoint_root == "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints"
     assert config.output.export_root == f"{output_path}/exports"
     launch = yaml.safe_load(config.launch_config_yaml)
+    assert "issue" not in launch["run"]
+    assert launch["run"]["coordinator_iris_job_id"] == "/tests/coordinator"
+    assert launch["skyrl"]["trainer"]["callbacks"][0]["initial_model_uri"] == config.model.uri
     assert launch["artifacts"] == {
         "checkpoint_root": "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
         "export_root": f"{output_path}/exports",
@@ -512,7 +565,9 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
         cluster_config.reset_data_config_cache()
 
 
-def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -587,6 +642,45 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
+
+    monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
+    launch["artifacts"]["attempts_root"] = str(tmp_path / "attempts")
+    (tmp_path / "resolved-launch.yaml").write_text(json.dumps({"config": launch}))
+    (tmp_path / "terminal.json").write_text(json.dumps({"config": launch, "result": response}))
+    receipt = read_stored_skyrl_receipt(str(tmp_path))
+    assert receipt is not None and receipt.result.model is not None
+    assert receipt.result.model.policy_export_uri == model.hf_model_uri
+    assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
+    earlier = launch | {"run": launch["run"] | {"attempt_id": "earlier-failed-attempt"}}
+    attempts = tmp_path / "attempts"
+    attempts.mkdir()
+    (attempts / "earlier-failed-attempt.json").write_text(
+        json.dumps({"config": earlier, "result": {"state": "failed", "failure": "worker lost"}})
+    )
+    (attempts / f"{config.attempt_id}.json").write_text(json.dumps({"config": launch, "result": response}))
+    (attempts / "wrong-attempt.json").write_text(json.dumps({"config": launch, "result": response}))
+    current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
+    assert current_id == config.attempt_id
+    assert set(stored) == {config.attempt_id, "earlier-failed-attempt"}
+    assert stored[current_id] == receipt
+    assert stored["earlier-failed-attempt"].result.failure == "worker lost"
+    assert read_stored_skyrl_receipt(str(tmp_path), "wrong-attempt") is None
+    historical = read_stored_skyrl_receipt(str(tmp_path), "earlier-failed-attempt")
+    assert historical is not None and historical.result.state == "failed"
+    assert historical.result.failure == "worker lost"
+    assert read_stored_skyrl_receipt(str(tmp_path), "not-written") is None
+    (tmp_path / "terminal.json").unlink()
+    current_attempt = attempts / f"{config.attempt_id}.json"
+    current_attempt.write_text(json.dumps({"config": launch, "result": {"state": "failed"}}))
+    failed = read_stored_skyrl_receipt(str(tmp_path))
+    assert failed is not None and failed.result.state == "failed"
+    assert read_skyrl_launch_receipt(str(tmp_path)) == failed
+    current_attempt.unlink()
+    assert read_stored_skyrl_receipt(str(tmp_path)) is None
+    current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
+    assert current_id == config.attempt_id and set(stored) == {"earlier-failed-attempt"}
+    (tmp_path / "resolved-launch.yaml").unlink()
+    assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -804,3 +898,27 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
     # Unsupported curriculum strategies must fail before the launcher allocates workers.
     with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
+
+
+def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
+    root = tmp_path / "finished"
+    root.mkdir()
+    result = SkyRLRun(
+        path=str(root),
+        hf_model_uri=str(root / "policy"),
+        global_step=100,
+        tokenizer_uri="tests/tokenizer",
+        tokenizer_revision="tokenizer-commit",
+        checkpoint_root=str(root / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(root / "terminal.json"),
+        iris_job_id="/test/run",
+    )
+    record = ArtifactRecord(result_type=result_type_name(SkyRLRun), result=result.result_payload())
+    (root / RECORD_FILENAME).write_text(record.model_dump_json())
+    source = ArtifactStep.adopt("tests/finished", "2026.10.26", str(root), kind=SkyRLRun)
+    model = SkyRLPolicyModel(source)
+    context = StepContext.for_run(str(tmp_path / "evaluation"), str(tmp_path), deps=model.deps())
+    resolved = model.resolve(context)
+    assert resolved.uri == str(root / "policy")
+    assert (resolved.tokenizer_uri, resolved.tokenizer_revision) == ("tests/tokenizer", "tokenizer-commit")

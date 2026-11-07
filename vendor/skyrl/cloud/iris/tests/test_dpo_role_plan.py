@@ -1,6 +1,12 @@
 import pytest
 
-from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_num_nodes, derive_role_plan
+from cloud.iris.role_plan import (
+    ModelRoleKind,
+    RoleExecution,
+    derive_num_nodes,
+    derive_role_plan,
+    derive_generation_role_plan,
+)
 
 
 def skyrl_config(**overrides) -> dict:
@@ -60,6 +66,21 @@ def test_generation_launch_keeps_its_rollout_role():
     rollout = plan.claim(ModelRoleKind.ROLLOUT)
     assert rollout.execution is RoleExecution.LOCAL
     assert derive_num_nodes(plan) == 2
+
+
+def test_generate_launch_reserves_local_resources():
+    config = skyrl_config(
+        **{
+            "trainer.placement.colocate_all": True,
+            "trainer.placement.policy_num_nodes": 4,
+            "generator.num_inference_engines": 1,
+            "generator.run_engines_locally": True,
+        }
+    )
+    config["generator"].update(inference_engine_data_parallel_size=8, inference_engine_expert_parallel_size=8)
+    plan = derive_generation_role_plan(config)
+    assert [claim.kind for claim in plan.claims] == [ModelRoleKind.ROLLOUT]
+    assert derive_num_nodes(plan) == 1
 
 
 @pytest.mark.parametrize("runner", ["task", "harbor"])
