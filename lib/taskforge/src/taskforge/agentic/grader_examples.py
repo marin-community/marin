@@ -11,9 +11,11 @@ draws its data from it, so other task ids give other data and other reference an
 - ``exact_task``: one short text, compared after normalizing case and whitespace.
 - ``json_task``: a JSON object with fixed fields, compared field by field.
 - ``choice_task``: one option letter. The correct option's position comes from the task id, so answers vary.
-- ``judge_task``: prose, which a judge model compares with reference answers. Leave the judge's model empty.
+- ``judge_task``: prose, which a judge model compares with reference answers. Leave the judge's model empty. The
+  ``reference`` rubric scores 0, 0.5 or 1 and adds its own reply format, so the question sets no scale or format.
 - ``script_task``: a Python grader that runs in its own Linux machine, with its expected values in a file of
-  ``resources.verifier``. It prints the reward, a number from 0 to 1, as its last line.
+  ``resources.verifier``. It prints the reward, a number from 0 to 1, as its last line. A verifier file at path
+  ``P`` is staged at ``/tests/P``, so ``grade.py`` is run as ``/tests/grade.py``.
 - ``shell_task``: a solver with a shell and files in /workspace; see ``/workspace/example_build.py``.
 """
 
@@ -39,6 +41,9 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import ExactSpec, JudgeSpec, McqSpec, NumericSpec, StructuredExactSpec
+
+JUDGE_RETRY_TOKENS = 32768
+"""A judge's ``incomplete_retry_tokens``: one larger retry for a reply that runs past its first budget."""
 
 SOURCE = Source(dataset="taskforge-agentic-drafts", revision="example", row="example", importer_revision="example")
 NO_MACHINE = EnvironmentRequirements()
@@ -120,8 +125,9 @@ def judge_task(task_id: str) -> TaskSpec:
     )
     saving = price * discount / 100
     reference = f"You pay {price - saving:g} euros, a saving of {saving:g} euros on the price of {price} euros."
-    # The reference rubric: the judge decides whether the answer matches a reference. Its model stays empty.
-    spec = JudgeSpec(references=(reference,), question=question)
+    # The reference rubric: the judge decides whether the answer matches a reference. Its model stays empty. The
+    # question is the solver's question: no score scale, weights or reply format, which verifyit sets itself.
+    spec = JudgeSpec(references=(reference,), question=question, incomplete_retry_tokens=JUDGE_RETRY_TOKENS)
     return _task(task_id, question, verifyit_package(spec))
 
 
@@ -145,16 +151,18 @@ def script_task(task_id: str) -> TaskSpec:
     prompt = f"List every prime from {low} to {high}, separated by spaces. Reply with the numbers alone."
     grader = ScriptGrader(
         argv=("python3", "/tests/grade.py"),
-        # The grader's machine: Linux with Python. List PyPI packages with their versions when it needs them.
+        # The grader's machine: Linux with Python. List PyPI packages with exact versions when it needs them, for
+        # example ("sympy==1.13.3",).
         environment=EnvironmentRequirements(
             command_semantics=CommandSemantics.LINUX_PROCESS, package_spec=PackageSpec(pypi_packages=())
         ),
         answer_path="/app/answer.txt",
         reward=StdoutReward(),
     )
+    # A verifier file at path P is staged at /tests/P: "grade.py" is /tests/grade.py, which argv runs.
     verifier = (
-        inline_resource("tests/grade.py", GRADE_SCRIPT.encode()),
-        inline_resource("tests/expected.json", json.dumps(primes).encode()),
+        inline_resource("grade.py", GRADE_SCRIPT.encode()),
+        inline_resource("expected.json", json.dumps(primes).encode()),
     )
     return TaskSpec(
         id=task_id,

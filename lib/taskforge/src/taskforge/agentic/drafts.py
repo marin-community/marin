@@ -10,7 +10,8 @@ workspace that the program reads, so ``task_instances`` can make more tasks of i
 """
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+import re
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -31,12 +32,15 @@ from taskcompendium.models import (
     PlainText,
     ProviderRequirement,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
 )
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import RUBRIC_LABELS, JudgeSpec, StructuredExactSpec, spec_from_table
 
 from taskforge.agentic import grader_examples
 from taskforge.agentic.agent import SHELL_OUTPUT_BYTES, example_program, verifyit_reference
@@ -49,6 +53,7 @@ from taskforge.agentic.tools import (
     keyword_grader_problems,
     machine_runtime,
     malformed_files,
+    needs_machine,
     program_problems,
     read_task,
     rollout_tokens,
@@ -60,7 +65,7 @@ from taskforge.agentic.tools import (
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "2"
+DRAFT_REVISION = "3"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -69,6 +74,23 @@ put 6 on one letter about 1% of the time. The later validation step judges wheth
 on."""
 VERIFIER_BACKEND = Backend.LOCAL
 """The machines of graders that run in an environment: a bubblewrap sandbox that installs the grader's packages."""
+VERIFIER_ROOT = "/tests"
+"""Where the engine stages each file ``P`` of ``resources.verifier``: at ``/tests/P``."""
+MIN_LEAKED_REFERENCE_CHARS = 40
+"""The length from which a judge reference that the solver's prompt or files contain counts as given away."""
+MIN_LEAKED_LEAVES = 2
+"""The (field, value) pairs of the reference that an example object in the prompt may share before it gives the
+answer away."""
+PINNED_REQUIREMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[A-Za-z0-9.+!_-]+")
+OWN_SCALE = re.compile(
+    r"out of 100|\b0\s*(-|\u2013|to)\s*100\b|points?\s*/\s*100|weighted score|\bscore\b[^.]{0,20}\bweighted\b"
+    r"|\bweighted (sum|total|average) of (the )?(passed|rubric|criteri|items?|points|scores)"
+    r"|\bcap(s|ped)?\b[^.]{0,60}\bat\s+0?\.\d|\"score\"\s*:|\bscore\s*:\s*<"
+    r"|\boutput format\b|\b(return|reply with|respond with) (only )?(a|one) json\b",
+    re.IGNORECASE,
+)
+"""Words of a judge question that set its own scale or reply format: a ``reference`` or ``checklist`` judge must end
+with verifyit's ``SCORE`` line, so such a question leaves every answer ungraded."""
 
 
 class Environment(StrEnum):
@@ -228,11 +250,15 @@ class DraftTools:
 
     def problems(self, task: TaskSpec) -> list[str]:
         """What keeps ``task`` from being a draft: the checks of the agentic tools, with judges, script graders and
-        graders with an environment allowed."""
+        graders with an environment allowed, and ``draft_task_problems``."""
         limits = self.config.solver_limits
         spec = solver_spec(task, self.backend, limits, judge=self.config.judge, verifier_backend=VERIFIER_BACKEND)
         semantics = COMMAND_SEMANTICS[self.backend]
-        return unsupported(task, self.solver_engine, spec, semantics, draft_grader_problems) + malformed_files(task)
+        problems = unsupported(task, self.solver_engine, spec, semantics, draft_grader_problems) + malformed_files(task)
+        try:
+            return problems + draft_task_problems(task, self.proposal.solver_machine)
+        except (TypeError, ValueError) as error:
+            return [*problems, f"The grader is invalid: {error}"]
 
 
 def draft_grader_problems(grader: Grader) -> list[str]:
@@ -240,6 +266,186 @@ def draft_grader_problems(grader: Grader) -> list[str]:
     if isinstance(grader, NoGrader):
         return ["The task needs a grader"]
     return keyword_grader_problems(grader)
+
+
+def draft_task_problems(task: TaskSpec, solver_machine: SolverMachine) -> list[str]:
+    """The defects of a draft that validation found and that need no model to see. ``program_problems`` applies
+    them to every variant too, so a program cannot write them for other task ids."""
+    return [
+        *machine_problems(task, solver_machine),
+        *script_path_problems(task),
+        *judge_problems(task),
+        *unpinned_package_problems(task),
+        *leaked_reference_problems(task),
+        *example_answer_problems(task),
+    ]
+
+
+def machine_problems(task: TaskSpec, solver_machine: SolverMachine) -> list[str]:
+    if solver_machine is SolverMachine.NONE and needs_machine(task):
+        return ["The proposal's solver_machine is none: the task must give the solver no shell and no files"]
+    if solver_machine is not SolverMachine.NONE and not needs_machine(task):
+        return [f"The proposal's solver_machine is {solver_machine}: the task must give the solver that machine"]
+    return []
+
+
+def script_path_problems(task: TaskSpec) -> list[str]:
+    """The files under ``/tests`` that a script grader's command names and that no verifier resource stages."""
+    grader = task.grader
+    if not isinstance(grader, ScriptGrader):
+        return []
+    staged = [f"{VERIFIER_ROOT}/{resource.path}" for resource in task.resources.verifier]
+    return [
+        f"The grader runs {argument}, but resources.verifier stages no file there: the engine stages a verifier "
+        f"file P at {VERIFIER_ROOT}/P, so stage {argument.removeprefix(VERIFIER_ROOT + '/')!r}"
+        for argument in grader.argv
+        if argument.startswith(VERIFIER_ROOT + "/")
+        and not any(path == argument or path.startswith(argument.rstrip("/") + "/") for path in staged)
+    ]
+
+
+def _judge_spec(task: TaskSpec) -> JudgeSpec | None:
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader):
+        return None
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    return spec if isinstance(spec, JudgeSpec) else None
+
+
+def judge_problems(task: TaskSpec) -> list[str]:
+    spec = _judge_spec(task)
+    if spec is None:
+        return []
+    problems = []
+    # A thinking judge can run past its first budget of 8,192 tokens, and without a retry that answer is never graded.
+    if spec.incomplete_retry_tokens < grader_examples.JUDGE_RETRY_TOKENS:
+        problems.append(
+            f"Set the judge's incomplete_retry_tokens to {grader_examples.JUDGE_RETRY_TOKENS}: a judge reply that "
+            "runs past max_completion_tokens is otherwise never graded"
+        )
+    scale = OWN_SCALE.search(spec.question) if spec.rubric != RUBRIC_LABELS else None
+    if scale is not None:
+        problems.append(
+            f"The judge question sets its own scale or reply format ({scale.group(0)!r}). "
+            f"A {spec.rubric} judge scores only 0, 0.5 or 1 and verifyit adds the reply format itself, so the "
+            "question must give no format, scale, weights or caps. For weighted items or caps, use the labels "
+            "rubric with its own prompt_template and label_scores, or a checklist with one yes/no criterion each"
+        )
+    return problems
+
+
+def unpinned_package_problems(task: TaskSpec) -> list[str]:
+    """The PyPI requirements of the solver's or the grader's machine without one exact version."""
+    environments = [task.environment_requirements]
+    if isinstance(task.grader, (ScriptGrader, VerifyitGrader)) and task.grader.environment is not None:
+        environments.append(task.grader.environment)
+    requirements = [
+        requirement
+        for environment in environments
+        if environment.package_spec is not None
+        for requirement in environment.package_spec.pypi_packages or ()
+    ]
+    return [
+        f"Pin the package {requirement!r} to one version, as name==version, so that the machine is fixed"
+        for requirement in requirements
+        if PINNED_REQUIREMENT.fullmatch(requirement.strip()) is None
+    ]
+
+
+def _collapsed(text: str) -> str:
+    return " ".join(text.split()).lower()
+
+
+def _solver_text(task: TaskSpec) -> str:
+    """The prompt and the solver's inline files, which the solver sees."""
+    messages = [event.content for event in task.context.events if isinstance(event, TextMessage)]
+    files = [resource_bytes(resource).decode(errors="replace") for resource in task.resources.worker]
+    return "\n".join(str(text) for text in (*messages, *files))
+
+
+def leaked_reference_problems(task: TaskSpec) -> list[str]:
+    """A long judge reference that the solver's prompt or files contain: the solver sees its own answer."""
+    spec = _judge_spec(task)
+    if spec is None:
+        return []
+    seen = _collapsed(_solver_text(task))
+    leaked = [
+        reference
+        for reference in spec.references
+        if len(_collapsed(reference)) >= MIN_LEAKED_REFERENCE_CHARS and _collapsed(reference) in seen
+    ]
+    if not leaked:
+        return []
+    return [
+        "A judge reference is a passage of the prompt or of the solver's files, so the solver sees it. The reference "
+        "must be the answer, which the solver does not see, not the task's text"
+    ]
+
+
+def _leaves(value: object) -> Iterator[tuple[str, str]]:
+    """The (field, value) pairs of a JSON value, at any depth, with each value as JSON. Booleans and nulls say too
+    little about an answer to count."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                if isinstance(item, list) and item and all(isinstance(x, (str, int, float)) for x in item):
+                    yield str(key), json.dumps(item, sort_keys=True)
+                yield from _leaves(item)
+            elif isinstance(item, (str, int, float)) and not isinstance(item, bool):
+                yield str(key), json.dumps(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _leaves(item)
+
+
+def _json_objects(text: str) -> Iterator[object]:
+    """The JSON objects written in ``text``, for example the format example of a prompt."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        yield value
+        start = text.find("{", end)
+
+
+def _reference_values(task: TaskSpec) -> list[object]:
+    """The structured reference of the grader: a StructuredExactSpec's expected value, or the JSON files of a
+    script grader."""
+    grader = task.grader
+    if isinstance(grader, VerifyitGrader):
+        spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+        return [spec.expected] if isinstance(spec, StructuredExactSpec) else []
+    if not isinstance(grader, ScriptGrader):
+        return []
+    values = []
+    for resource in task.resources.verifier:
+        if resource.path.endswith(".json"):
+            try:
+                values.append(json.loads(resource_bytes(resource)))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+    return values
+
+
+def example_answer_problems(task: TaskSpec) -> list[str]:
+    """An example object in the prompt that shares field values with the reference: a solver copies them."""
+    reference = {leaf for value in _reference_values(task) for leaf in _leaves(value)}
+    if not reference:
+        return []
+    messages = [str(event.content) for event in task.context.events if isinstance(event, TextMessage)]
+    for example in (value for message in messages for value in _json_objects(message)):
+        shared = sorted(set(_leaves(example)) & reference)
+        if len(shared) >= MIN_LEAKED_LEAVES:
+            fields = ", ".join(f"{key}={value}" for key, value in shared[:4])
+            return [
+                f"An example in the prompt holds values of the reference answer ({fields}). Write format examples "
+                'with placeholders such as "<tier>", or with values that are not in the answer'
+            ]
+    return []
 
 
 class DraftSession:

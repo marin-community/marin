@@ -3,6 +3,7 @@
 
 """``draft_task`` with a scripted agent on real ShellSim machines and the real ``submit`` checks."""
 
+import dataclasses
 import io
 import json
 import shlex
@@ -17,13 +18,14 @@ from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUs
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import VerifyitGrader
+from taskcompendium.models import ResourceGroups, ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import JudgeSpec
+from verifyit.spec import JudgeSpec, spec_from_table
 
 from taskforge.agentic import example_build
 from taskforge.agentic.drafts import DRAFT_MAX_ANSWER_SHARE, DraftConfig, DraftProposal, DraftTools, draft_task
-from taskforge.agentic.grader_examples import EXAMPLES
+from taskforge.agentic.grader_examples import EXAMPLES, json_task, judge_task, script_task
 from taskforge.agentic.instances import task_instances
 from taskforge.agentic.tools import VARIANT_SUFFIX, VARIANTS, reference_answer
 
@@ -161,7 +163,8 @@ async def test_a_draft_needs_a_program_whose_ids_give_varied_tasks():
 
 
 async def test_a_draft_may_grade_with_a_judge_that_it_does_not_call():
-    package = verifyit_package(JudgeSpec(references=(EXPECTED,), question="How many units are left?"))
+    spec = JudgeSpec(references=(EXPECTED,), question="How many units are left?", incomplete_retry_tokens=32768)
+    package = verifyit_package(spec)
     judged = SHELL_TASK.model_copy(update={"grader": package.grader})
     # The program changes the reference answer that the judge compares with for other ids.
     build = (
@@ -186,3 +189,88 @@ def test_the_grader_examples_of_the_agent_pass_the_draft_checks(kind: str):
     # The program check refuses ids whose reference answers repeat too often.
     [(_, repeats)] = Counter(reference_answer(task) for task in tasks).most_common(1)
     assert repeats <= DRAFT_MAX_ANSWER_SHARE * VARIANTS
+
+
+def _judge(task: TaskSpec, **changes) -> TaskSpec:
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    spec = dataclasses.replace(spec_from_table({"mode": grader.mode, **grader.parameters}), **changes)
+    return task.model_copy(update={"grader": verifyit_package(spec).grader})
+
+
+def _prompt(task: TaskSpec) -> str:
+    [event] = task.context.events
+    assert isinstance(event, TextMessage)
+    return str(event.content)
+
+
+def _with_prompt(task: TaskSpec, prompt: str) -> TaskSpec:
+    context = task.context.model_copy(update={"events": (TextMessage(role="user", content=prompt),)})
+    return task.model_copy(update={"context": context})
+
+
+def nested_script_files() -> TaskSpec:
+    task = script_task("example")
+    verifier = tuple(
+        inline_resource(f"tests/{resource.path}", resource_bytes(resource)) for resource in task.resources.verifier
+    )
+    return task.model_copy(update={"resources": ResourceGroups(verifier=verifier)})
+
+
+def judge_with_own_scale() -> TaskSpec:
+    task = judge_task("example")
+    return _judge(task, question=_prompt(task) + ' Reply with a JSON object {"score": <a number from 0 to 1>}.')
+
+
+def judge_without_retry() -> TaskSpec:
+    return _judge(judge_task("example"), incomplete_retry_tokens=0)
+
+
+def reference_in_prompt() -> TaskSpec:
+    task = judge_task("example")
+    return _judge(task, references=(_prompt(task),))
+
+
+def unpinned_package() -> TaskSpec:
+    task = script_task("example")
+    grader = task.grader
+    assert isinstance(grader, ScriptGrader)
+    environment = grader.environment.model_copy(update={"package_spec": PackageSpec(pypi_packages=("sympy",))})
+    return task.model_copy(update={"grader": grader.model_copy(update={"environment": environment})})
+
+
+def example_with_the_answer() -> TaskSpec:
+    task = json_task("example")
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    example = json.dumps(grader.parameters["expected"])
+    return _with_prompt(task, f"{_prompt(task)} For example: {example}")
+
+
+DEFECTS = {
+    "script file staged under tests/tests": (nested_script_files, "stages no file there"),
+    "judge question with its own scale": (judge_with_own_scale, "own scale or reply format"),
+    "judge without a retry budget": (judge_without_retry, "incomplete_retry_tokens"),
+    "judge reference in the prompt": (reference_in_prompt, "the solver sees it"),
+    "package without a version": (unpinned_package, "name==version"),
+    "format example with the answer": (example_with_the_answer, "holds values of the reference"),
+}
+
+
+@pytest.mark.parametrize("defect", sorted(DEFECTS))
+def test_submit_refuses_the_defects_that_validation_found(defect: str):
+    """Validation found these defects in revision 2 drafts; each needs no model to see."""
+    build, problem = DEFECTS[defect]
+    tools = DraftTools(proposal(solver_machine="none"), config(ScriptedAgent([])))
+
+    problems = tools.problems(build())
+
+    assert len(problems) == 1 and problem in problems[0], problems
+
+
+def test_submit_refuses_a_task_without_the_machine_of_the_proposal():
+    tools = DraftTools(proposal(solver_machine="shellsim"), config(ScriptedAgent([])))
+
+    assert tools.problems(EXAMPLES["numeric"]("example")) == [
+        "The proposal's solver_machine is shellsim: the task must give the solver that machine"
+    ]

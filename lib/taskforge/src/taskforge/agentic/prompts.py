@@ -206,12 +206,23 @@ writes the TaskSpec with the task id that it gets.
 Every task id must give a valid task with different data, and the reference answers of different ids must vary: \
 for options, put the correct one at a position drawn from the id. Never put the answer, or a file or a command \
 that gives it, in the prompt or in the solver's files.
+- Write every number and fact of the prompt from the same variables that the program computes the reference \
+from, and never type a value twice: a prompt whose data differs from the key's fails every careful solver.
+- Define in the prompt every string that the grader compares exactly: list each allowed value of an enum with \
+its meaning, and give the format of times, dates and ids, for example "day4_0900".
+- Write format examples with placeholders such as "<tier>" or with values that are not in the answer: a solver \
+copies an example's values.
+- A judge's reference is the answer, never the task's text, which the solver sees. A judge question gives no \
+score scale, weights, caps or reply format: verifyit sets those. Set incomplete_retry_tokens to 32768, as the \
+judge example does.
+- Pin every PyPI package of a machine to one version, as name==version.
 - Run the program for one task id, then call submit with the TaskSpec's path and the program's path.
 
 # Tools
 
-- submit: checks that the task can run, that its CSV and JSON files parse, and that the program writes the same \
-task again from its id and valid tasks with varied answers from other ids. It needs no model. When it reports \
+- submit: checks that the task can run, that its CSV and JSON files parse, that its machine matches the \
+proposal's solver_machine, the rules above that need no model, and that the program writes the same task again \
+from its id and valid tasks with varied answers from other ids. It needs no model. When it reports \
 problems, fix only those and submit again. The session ends when submit accepts the task.
 - finish: stop, with a report, only when the proposal cannot become a task with these tools.
 
