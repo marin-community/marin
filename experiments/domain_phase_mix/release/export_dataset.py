@@ -121,6 +121,10 @@ KEYING = {
     "fits_reliability": NO_IDS,
     "fits_learning_curves": NO_IDS,
     "fits_proposal_predictions": "The validation_3e18 ids of every run of each predicted proposal's mixture.",
+    "fits_path_predictions": (
+        "The table has no observation ids; start_mixture_id, end_mixture_id and midpoint_mixture_id name the mixtures "
+        "of each path's validation_3e18 runs."
+    ),
     "fits_olmix_task_laws": NO_IDS,
     "fits_surrogate_benchmark": NO_IDS,
     "run_sets": "The ids of the run tables.",
@@ -214,6 +218,11 @@ NOTES = {
         "are not exported; fits_learning_curves and fits_reliability hold the out-of-fold metrics.",
     ],
     "fits_learning_curves": ["The out-of-fold predictions behind these metrics are not exported."],
+    "fits_path_predictions": [
+        "A path's mixture at position s is (1 - s) times its start mixture's weights plus s times its end mixture's. "
+        "Olmix's proposals have a fourth validation_3e18 run, olmix_cap_kl_sweep's retraining of the same mixture; "
+        "Figure 20 draws the three matched_olmix runs at each Olmix endpoint.",
+    ],
 }
 RELEASE_NOTES = [
     "observation_id is a training run's W&B run id in the public project marin-community/marin, whose logs are at "

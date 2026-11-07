@@ -347,6 +347,38 @@ def test_figure26_ramp_designs(out):
     assert sorted(shown.arm) == ["abrupt", "ramp0128", "ramp0256", "ramp0512", "ramp2048", "ramp5632"]
 
 
+def test_ramp_designs_carry_the_loaders_starcoder_counts(out):
+    # Figure 27 plots the StarCoder share of each 2,048-sequence block as the loader allocated it. The ramps keep each
+    # bucket's total: every run draws as many StarCoder sequences as the abrupt run of its data seed, and its full
+    # blocks hold 204,387 of them. A centred ramp moves some of them to just before the decay onset.
+    designs = out["starcoder_ramp_designs"]
+    runs = designs.groupby("observation_id")
+    first, totals = runs.first(), runs.starcoder_stage_sequences.sum()
+    assert (totals == first.realized_starcoder_sequences).all() and (totals == first.target_starcoder_sequences).all()
+    abrupt = first[first.arm == "abrupt"].set_index("data_seed").realized_starcoder_sequences
+    assert len(abrupt) == 5 and (totals == first.data_seed.map(abrupt)).all()
+    # A stage's full blocks end at the next stage's first step, or at training's last full block.
+    last_block = designs.total_steps - designs.total_steps % designs.steps_per_block
+    stop = runs.start_step.shift(-1).fillna(last_block)
+    blocks = (stop - designs.start_step) // designs.steps_per_block
+    assert set((blocks * designs.starcoder_block_sequences).groupby(designs.observation_id).sum()) == {204_387}
+    before = (
+        designs[designs.start_step < designs.boundary_step].groupby("observation_id").starcoder_stage_sequences.sum()
+    )
+    moved = before.groupby(first.arm).agg(set).to_dict()
+    assert moved == {
+        "abrupt": {0},
+        "ramp0128": {581},
+        "ramp0256": {1163},
+        "ramp0512": {2327},
+        "ramp2048": {9312},
+        "ramp5632": {25622},
+    }
+    # The loader's counts are not the design weights times the block: they differ by up to 4.5 sequences.
+    gap = (designs.starcoder_block_sequences - designs.starcoder_weight * 2048).abs()
+    assert 1 < gap.max() < 4.5
+
+
 def test_no_internal_strings_anywhere(out):
     # Every string a table holds: its column names and the values of its non-numeric columns.
     patterns = [

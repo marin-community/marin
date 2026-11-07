@@ -272,6 +272,46 @@ def test_olmix_task_laws_reproduce_the_matched_olmix_predictions(ctx, out, valid
         assert ((own.predicted_bpb - predicted).abs() <= 1e-9).all() and len(own) == len(run)
 
 
+def test_path_predictions_and_validation_runs_redraw_figure20(ctx, out, validation_table):
+    # Figure 20: on each objective, five paths from MARINER's proposal to a baseline's, with MARINER's curve and the
+    # baseline's at 61 positions, three trainer seeds at each endpoint (matched_olmix's at Olmix's) and one run at the
+    # trained midpoint.
+    t = out["fits_path_predictions"]
+    assert len(t) == 1220 and set(t.path) == {"olmix", "quadratic", "spline", "regmix", "krr"}
+    curves = t.groupby(["objective", "path"]).predictor.agg(lambda p: frozenset(p.value_counts().items()))
+    assert all(c == {("mariner", 61), (path, 61)} for (_, path), c in curves.items())
+    runs = validation_table.set_index("mixture_id")
+    weights = [f"w__{b}" for b in naming.BUCKETS]
+    laws = out["fits_olmix_task_laws"]
+    errors = {}
+    for (objective, path), rows in t.groupby(["objective", "path"]):
+        start, end, midpoint = (rows[f"{role}_mixture_id"].iloc[0] for role in ("start", "end", "midpoint"))
+        endpoint_runs = runs.loc[[end]]
+        endpoint_runs = endpoint_runs[endpoint_runs.launch != "olmix_cap_kl_sweep"]
+        assert len(runs.loc[[start]]) == len(endpoint_runs) == 3 and runs.loc[[midpoint]].launch.tolist() == [
+            "path_midpoints"
+        ]
+        # Olmix's curve is its released laws at each blend of the endpoints' weights.
+        if path == "olmix":
+            s = np.sort(rows.position.unique())
+            w = (1 - s)[:, None] * runs.loc[[start], weights].iloc[0].to_numpy() + s[:, None] * runs.loc[
+                [end], weights
+            ].iloc[0].to_numpy()
+            task_laws = laws[laws.objective == objective].set_index("task_id")
+            per_task = np.exp(task_laws.log_c.to_numpy()) + np.exp(
+                w @ task_laws[[f"coef__{b}" for b in naming.BUCKETS]].to_numpy().T
+            )
+            predicted = per_task @ pd.Series(ctx.weights[objective]).reindex(task_laws.index).to_numpy()
+            olmix = rows[rows.predictor == "olmix"].sort_values("position").predicted_bpb.to_numpy()
+            assert np.allclose(predicted, olmix, rtol=0, atol=1e-12)
+        measured = endpoint_runs[f"bpb__{objective}"].mean()
+        at_end = rows[rows.position == 1.0].set_index("predictor").predicted_bpb
+        errors[objective, path] = (abs(at_end["mariner"] - measured), abs(at_end[path] - measured))
+    # appendix.tex: at every baseline's endpoint except Olmix's, MARINER's prediction is closer to the measured loss.
+    for (objective, path), (mariner, own) in errors.items():
+        assert (own < mariner) if path == "olmix" else (mariner < own), (objective, path)
+
+
 def test_factorial_predictions_reproduce_the_predicted_effects(out):
     # tab:a-factorial-predictions: MARINER's predicted centre loss and main effects (mean prediction at a factor's
     # upper setting minus that at its lower setting over the 16 corners; corners are named by their A-E settings).

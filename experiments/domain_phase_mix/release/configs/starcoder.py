@@ -64,8 +64,14 @@ family (COUPLED_RELEASE) puts before its runs' W&B run ids. These runs appear in
 - `starcoder_ramp_designs`: the launched schedules of the 30 ramp and abrupt runs, one row per stage (a 16-step
   mixture block of a ramp, or the constant stretch before or after it) with its first step and StarCoder weight, and
   the run's August abrupt source run and tied comparator. The loader fills each block's 2,048 sequences in integers
-  (Levanter's `MixtureDataset`, which gives the remainder to the largest component), so a block's StarCoder count
-  differs from weight x 2,048 by up to 4.5 sequences.
+  (Levanter's `MixtureDataset` truncates each of the seven leaves, Nemotron-CC's six quality splits and StarCoder, and
+  gives the remainder to the largest), so a block's StarCoder count differs from weight x 2,048 by up to 4.5
+  sequences. `starcoder_block_sequences` is that count in each full block of the stage, the share that Figure 27 plots,
+  and `starcoder_stage_sequences` the stage's StarCoder sequences, with the final partial block, which the loader fills
+  by the data seed's permutation. The export computes both with the launcher's rule
+  (`launch_starcoder_wsd80_transition_ramp.realized_starcoder_sequences`) and checks them against the design: every
+  run draws as many StarCoder sequences as the abrupt run of its data seed (204,520 to 204,529, of which 204,387 fall
+  in full blocks).
 - `starcoder_trajectories`: the training loss at every logged step of the 50 runs whose seed means the switch-trace
   figure plots, re-pulled from W&B by `release/pull_switch_traces.py`, with the step of each run's switch; `run_label`
   is the series' label in `train_loss_jump`.
@@ -110,6 +116,7 @@ from `programming_languages_bpb` by at most 1.3e-6. Observation ids are the runs
 
 import gzip
 import hashlib
+import itertools
 import json
 import re
 from pathlib import Path
@@ -117,6 +124,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from experiments.domain_phase_mix import launch_starcoder_wsd80_transition_ramp as ramp_launch
 from experiments.domain_phase_mix.release import paths, run_names, tables
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
@@ -597,13 +605,40 @@ def _matched_confirmation() -> pd.DataFrame:
     return pairs
 
 
+def _loader_sequences(design: dict, run: dict) -> tuple[list[int], list[int]]:
+    """Each stage's StarCoder sequences in one full mixture block and in the whole stage, as the loader allocates them.
+
+    `realized_starcoder_sequences` builds the run's Levanter `MixtureDataset` and counts each stage's sequences, the
+    final partial block included. Stopping at the last full block leaves whole blocks only, which gives the per-block
+    counts. Raises unless the run's total and its sequences before the boundary are the design's.
+    """
+    stages = [(int(step), float(weight)) for step, weight in run["stages"]]
+    total_steps, steps_per_block, seed = design["total_steps"], design["steps_per_block"], run["data_seed"]
+    total, per_stage = ramp_launch.realized_starcoder_sequences(stages, total_steps=total_steps, data_seed=seed)
+    full_steps = total_steps - total_steps % steps_per_block
+    _, full = ramp_launch.realized_starcoder_sequences(stages, total_steps=full_steps, data_seed=seed)
+    starts = [step for step, _ in stages]
+    blocks = [(stop - start) // steps_per_block for start, stop in itertools.pairwise([*starts, full_steps])]
+    if any(count % n for count, n in zip(full, blocks, strict=True)):
+        raise ValueError(f"{run['run_name']}: a stage's full blocks hold different StarCoder counts")
+    before = sum(count for start, count in zip(starts, per_stage, strict=True) if start < design["boundary_step"])
+    recorded = (run["realized_starcoder_sequences"], run["target_starcoder_sequences"])
+    if recorded != (total, total) or before != run["pre_boundary_starcoder_sequences"]:
+        raise ValueError(f"{run['run_name']}: the loader's StarCoder counts differ from the design's")
+    return [count // n for count, n in zip(full, blocks, strict=True)], per_stage
+
+
 def _ramp_designs() -> pd.DataFrame:
-    """The launched ramp and abrupt schedules, one row per stage of each run."""
+    """The launched ramp and abrupt schedules, one row per stage of each run, with the loader's StarCoder counts.
+
+    Raises unless every run draws as many StarCoder sequences as the abrupt run of its data seed.
+    """
     rows = []
     for path in RAMP_DESIGNS:
         design = json.loads(paths.require(path).read_text())
         for run in design["runs"]:
             ids = {f"{role}observation_id": run[f"{role}run_name"] for role in ("", "source_", "tied_")}
+            block_sequences, stage_sequences = _loader_sequences(design, run)
             for stage, (start_step, weight) in enumerate(run["stages"]):
                 rows.append(
                     {
@@ -614,6 +649,8 @@ def _ramp_designs() -> pd.DataFrame:
                         "stage": stage,
                         "start_step": start_step,
                         "starcoder_weight": weight,
+                        "starcoder_block_sequences": block_sequences[stage],
+                        "starcoder_stage_sequences": stage_sequences[stage],
                     }
                 )
     table = pd.DataFrame(rows).astype({"ramp_width": "Int64"})
@@ -622,6 +659,11 @@ def _ramp_designs() -> pd.DataFrame:
         raise ValueError("a ramp run appears twice or its stages do not start at increasing steps")
     if not (starts.min().eq(0).all() and table.start_step.mod(table.steps_per_block).eq(0).all()):
         raise ValueError("a ramp schedule does not start at step 0 or a stage starts inside a mixture block")
+    totals = table.groupby(["data_seed", "arm", "observation_id"]).starcoder_stage_sequences.sum()
+    abrupt = totals.xs("abrupt", level="arm").droplevel("observation_id")
+    seeds = totals.index.get_level_values("data_seed")
+    if not abrupt.index.is_unique or not (totals.to_numpy() == abrupt.reindex(seeds).to_numpy()).all():
+        raise ValueError("ramp runs whose StarCoder total differs from the abrupt run of their data seed")
     return table
 
 

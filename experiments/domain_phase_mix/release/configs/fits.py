@@ -44,6 +44,14 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
   full-swarm fits that the path-midpoint launch froze. They add the 12 that no launch recorded: Olmix's predictions of
   the other three proposals and the other three models' predictions of Olmix's. The other 20 agree with the launches'
   within 5e-15.
+- `fits_path_predictions`: the curves of Figure 20. On each objective, a path joins MARINER's proposal to one of five
+  baselines' proposals (`path`: `olmix`, `quadratic`, `spline`, `regmix`, `krr`) through the mixtures w(s) = (1 - s)
+  w_MARINER + s w_baseline at 61 positions s from 0 to 1, and carries MARINER's and that baseline's predictions at each
+  (PATHS; the midpoint launch's frozen fits reproduce all 1,220 within 2.2e-16). `start_mixture_id` and
+  `end_mixture_id` name the two proposals' mixtures and `midpoint_mixture_id` the sampler-rounded 50% blend that the
+  midpoint launch trained, all three as `validation_3e18` names them (PATH_MIXTURES). The predictions at the endpoints
+  equal `fits_proposal_predictions`' and those at s = 0.5 the midpoint launch's frozen predictions at the exact blend,
+  within AGREEMENT.
 - `fits_olmix_task_laws`: the matched Olmix baseline's per-task log-linear laws on the Qwen3 swarm, one row per
   objective and task: BPB(w) = exp(log_c) + exp(sum over buckets b of coef__b * w_b), fitted to the 280 fit runs with
   a Huber loss (delta 0.01; `huber_loss` is the fit's loss) (`delphi_matched_olmix_3e18_20260908/laws_*.json`). The
@@ -66,7 +74,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.release import naming, paths, tables
+from experiments.domain_phase_mix.release import keys, naming, paths, tables
 from experiments.domain_phase_mix.release.configs import heldout, swarm_qwen3, validation
 from experiments.domain_phase_mix.release.context import ExportContext
 from experiments.domain_phase_mix.release.regenerate_mixture_selection_data import (
@@ -151,6 +159,12 @@ OLMIX_SUBSET = paths.RO / "delphi_olmix_subset_optima_3e18_20260929/summary.json
 REGMIX_ARGMIN = paths.RO / "regmix_tuned_argmin_3e18_20260930/summary.json"
 SNR_SUBSET = paths.RO / "delphi_table9_snr_subset_3e18_20260928/subset_validation.csv"
 MIDPOINTS = paths.RO / "delphi_path_midpoints_3e18_20260912/prediction_freeze/midpoint_predictions.csv"
+# Figure 20's path predictions (`plot_comparator_proposal_diagnostics_20260909.py` wrote them), and the midpoint launch's
+# record of each path's endpoint weights (`mariner_weight`, `baseline_weight`) and trained midpoint (`runtime_weight`).
+PATHS = paths.RO / "delphi_path_midpoints_3e18_20260912/figure10_path_reference.csv"
+PATH_MIXTURES = paths.RO / "delphi_path_midpoints_3e18_20260912/exact_midpoints.csv"
+PATH_POSITIONS = np.linspace(0.0, 1.0, 61)  # 0.5 among them exactly
+PATH_ROLES = {"start": "mariner_weight", "end": "baseline_weight", "midpoint": "runtime_weight"}
 # Figure 7's inputs: each of four models' predictions of each one's trained proposal on both objectives, from the
 # full-swarm fits that the midpoint launch froze, and the proposals' measured runs, which name each proposal's candidate
 # (collect_proposal_cross_predictions_20261024.py writes both).
@@ -242,6 +256,8 @@ def required_sources() -> list[Path]:
         REGMIX_ARGMIN,
         SNR_SUBSET,
         MIDPOINTS,
+        PATHS,
+        PATH_MIXTURES,
         *(CROSS_PREDICTIONS / name for name in CROSS_PREDICTION_FILES),
         *(REGMIX_REFERENCE / name for name in REGMIX_REFERENCE_FILES),
         *(THREE_COMPONENT / name for name in THREE_COMPONENT_FILES),
@@ -659,6 +675,86 @@ def _proposal_predictions(validation_table: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns="mixture_id").reset_index(drop=True)
 
 
+def _path_mixtures() -> pd.DataFrame:
+    """One row per path, named by the sources' `target` and `comparator`, with the mixture ids of its endpoints and its
+    trained midpoint (`<role>_mixture_id` for each role of PATH_ROLES)."""
+    weights = _csv(PATH_MIXTURES)
+    weights["bucket"] = weights.domain.map(naming.bucket_public)
+    return pd.DataFrame(
+        [
+            {
+                "target": target,
+                "comparator": baseline,
+                **{
+                    f"{role}_mixture_id": keys.mixture_id(dict(zip(rows.bucket, rows[column], strict=True)))
+                    for role, column in PATH_ROLES.items()
+                },
+            }
+            for (target, baseline), rows in weights.groupby(["target", "baseline"])
+        ]
+    )
+
+
+def _path_predictions(proposals: pd.DataFrame, validation_table: pd.DataFrame) -> pd.DataFrame:
+    """Figure 20's path predictions, each path keyed by the mixture ids of its endpoints and its trained midpoint.
+
+    Raises unless every path holds MARINER's and its baseline's predictions at PATH_POSITIONS, its three mixtures are
+    `validation_3e18` mixtures, and its predictions at the two endpoints and at s = 0.5 agree within AGREEMENT with the
+    proposal predictions (`proposals`, the `fits_proposal_predictions` table) and with the midpoint launch's frozen
+    predictions at the exact blend.
+    """
+    curves = _csv(PATHS)
+    mixtures = _path_mixtures()
+    joined = curves.merge(mixtures, on=["target", "comparator"], how="left", validate="many_to_one")
+    ids = [f"{role}_mixture_id" for role in PATH_ROLES]
+    if joined[ids].isna().any().any() or len(mixtures) != len(curves.groupby(["target", "comparator"])):
+        raise ValueError(f"{PATHS.name} and {PATH_MIXTURES.name} hold different paths")
+    table = pd.DataFrame(
+        {
+            "objective": joined.target.map(naming.objective_public),
+            "path": joined.comparator.map(MODEL_CODES),
+            "predictor": joined.predictor.map(MODEL_CODES),
+            "position": joined.position,
+            **{column: joined[column] for column in ids},
+            "predicted_bpb": joined.prediction,
+        }
+    )
+    for (objective, path, predictor), curve in table.groupby(["objective", "path", "predictor"]):
+        if predictor not in ("mariner", path) or not np.array_equal(curve.position.to_numpy(), PATH_POSITIONS):
+            raise ValueError(f"{PATHS.name}: the {objective} path to {path} holds {predictor} at other positions")
+    named = set(table[ids].to_numpy().ravel())
+    if not named <= set(validation_table.mixture_id):
+        raise ValueError(
+            f"path mixtures that no validation_3e18 run trained: {sorted(named - set(validation_table.mixture_id))}"
+        )
+
+    # Each endpoint's proposal predictions, by mixture, and the frozen predictions at each path's exact midpoint.
+    variants = validation_table.drop_duplicates("variant").set_index("variant").mixture_id
+    key = ["mixture_id", "objective", "predictor"]
+    recorded = proposals.assign(mixture_id=proposals.variant.map(variants)).drop_duplicates(key).set_index(key)
+    frozen = _csv(MIDPOINTS)
+    frozen = frozen[frozen.coordinate == "exact"]
+    exact = frozen.set_index(
+        [frozen.target.map(naming.objective_public), frozen.baseline.map(MODEL_CODES), frozen.predictor.map(MODEL_CODES)]
+    ).prediction_bpb
+    start, end, middle = (table[table.position == s] for s in (0.0, 1.0, 0.5))
+    lookups = [
+        (recorded.predicted_bpb, start, ["start_mixture_id", "objective", "predictor"]),
+        (recorded.predicted_bpb, end, ["end_mixture_id", "objective", "predictor"]),
+        (exact, middle, ["objective", "path", "predictor"]),
+    ]
+    expected = np.concatenate(
+        [
+            values.reindex(pd.MultiIndex.from_arrays([rows[c] for c in columns])).to_numpy()
+            for values, rows, columns in lookups
+        ]
+    )
+    observed = np.concatenate([start.predicted_bpb, end.predicted_bpb, middle.predicted_bpb])
+    if not (np.abs(expected - observed) <= AGREEMENT).all():  # a prediction that no source records is null and fails
+        raise ValueError(f"{PATHS.name}: path predictions that the proposal or midpoint predictions do not match")
+    return table
+
+
 def export(
     ctx: ExportContext,
     *,
@@ -673,13 +769,15 @@ def export(
         validation_table = validation.export(ctx)["validation_3e18"]
     runs = _heldout_runs(heldout_table)
     exposures = runs.drop_duplicates("coordinate_id").set_index("coordinate_id").exposure_id
+    proposal_predictions = _proposal_predictions(validation_table)
     return {
         "fits_task_parameters": _task_parameters(),
         "fits_swarm_predictions": _swarm_predictions(),
         "fits_heldout_predictions": _heldout_predictions(runs),
         "fits_reliability": _reliability(),
         "fits_learning_curves": _learning_curves(exposures),
-        "fits_proposal_predictions": _proposal_predictions(validation_table),
+        "fits_proposal_predictions": proposal_predictions,
+        "fits_path_predictions": _path_predictions(proposal_predictions, validation_table),
         "fits_olmix_task_laws": _olmix_task_laws(ctx),
         "fits_surrogate_benchmark": _surrogate_benchmark(),
     }
