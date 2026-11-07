@@ -21,7 +21,7 @@ from typing import NamedTuple
 
 import pandas as pd
 
-from mariner.data import OBJECTIVES, OUTCOME_PREFIX, read_table
+from mariner.data import OBJECTIVES, OUTCOME_PREFIX, read_table, require_columns
 
 COMPUTE_SCALES = (3e18, 2e19, 3e20, 1e21)  # training FLOPs: the ladder's rungs, the table's loss columns
 REPEATED_SCALE = 3e18  # the rung whose runs repeat, printed as mean and standard deviation
@@ -86,10 +86,14 @@ def scaling_main_table(root: Path) -> pd.DataFrame:
     """``tab:scaling-main`` from the snapshot at ``root``: one row per mixture in the paper's order.
 
     The columns are the paper's nine, keyed (quantity, compute FLOPs, statistic): each objective's loss at the four
-    compute scales, its 3e18 entry a mean with its standard deviation, and the mean accuracy (%) at 1e21 FLOPs.
+    compute scales, its 3e18 entry a mean with its standard deviation, and the mean accuracy (%) at 1e21 FLOPs. Raises
+    ``ValueError`` naming the table and column when ``ladder`` or ``ladder_accuracy`` lacks a column the queries read.
     """
     ladder = read_table(root, "ladder")
     accuracy = read_table(root, "ladder_accuracy")
+    outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in OBJECTIVES]
+    require_columns(ladder, ["method", "proposal_objective", "compute_flops", *outcomes], "ladder")
+    require_columns(accuracy, ["method", ACCURACY], "ladder_accuracy")
     rows = {}
     for mixture in MIXTURES:
         cells: dict[tuple[str, float, Statistic], float] = {}
@@ -138,16 +142,13 @@ def format_scaling_main(table: pd.DataFrame) -> str:
         *([entry_text(row, quantity, compute) for quantity, compute in columns] for _, row in table.iterrows()),
     ]
     widths = [max(len(line[index]) for line in cells) for index in range(len(columns))]
-    # Each title spans its quantity's columns; the last of them widens when the title is longer.
-    for quantity, title in COLUMN_TITLES.items():
-        indices = [index for index, (column, _) in enumerate(columns) if column == quantity]
-        span = sum(widths[index] for index in indices) + len(COLUMN_GAP) * (len(indices) - 1)
-        widths[indices[-1]] += max(len(title) - span, 0)
     titles = []
     for quantity, title in COLUMN_TITLES.items():
         indices = [index for index, (column, _) in enumerate(columns) if column == quantity]
         span = sum(widths[index] for index in indices) + len(COLUMN_GAP) * (len(indices) - 1)
-        titles.append(title.ljust(span))
+        # The title spans its quantity's columns; the last of them widens when the title is longer.
+        widths[indices[-1]] += max(len(title) - span, 0)
+        titles.append(title.ljust(max(len(title), span)))
     name_width = max(len(name) for name in names)
     lines = [MIXTURE_TITLE.ljust(name_width) + COLUMN_GAP + COLUMN_GAP.join(titles)]
     for name, line in zip(names[1:], cells, strict=True):

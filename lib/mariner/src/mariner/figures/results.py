@@ -13,12 +13,14 @@
 - ``fig:component-tradeoffs`` (Figure 11): each component's change of BPB from proportional mixing at 3e18 FLOPs,
   for MARINER's and Olmix's mixtures proposed for each objective and for a subset of its components.
 
-Figures 9 and 10 read the ``ladder`` table alone. Its 3e18 rung holds the main swarm's ten proportional repeats and
-the validation launches' runs of the other mixtures, which the dataset's index names beside it as their sources.
+Figures 9 and 10 read the ``ladder`` table alone. Its 3e18 rung holds the main swarm's ten proportional repeats, the
+June proportional run (``proportional_3e18-ebc4aa``, ``mariner.data.june_run``) and the validation launches' runs of
+the other mixtures, so that the figures' 3e18 proportional point averages eleven runs; the dataset's index names the
+swarm and the validation launches beside the ladder as those runs' sources.
 
 Figure 11 measures each change from ``fits_reliability``'s proportional means, the means of the main swarm's ten
-proportional repeats. The paper's Uncheatable panels averaged eleven proportional runs, those ten and the June run:
-their bars differ from these by at most 2.4e-4 BPB, and none changes sign.
+proportional repeats alone. The paper's Uncheatable panels averaged eleven proportional runs, those ten and the June
+run: its bars differ from the redraw's by at most 2.4e-4 BPB, and none changes sign.
 """
 
 from __future__ import annotations
@@ -33,8 +35,18 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import FixedLocator, FormatStrFormatter, FuncFormatter, MultipleLocator, NullLocator
 
-from mariner.data import OBJECTIVES, OUTCOME_PREFIX, TRAINED_MARINER, TRAINED_OLMIX, read_table
+from mariner.data import (
+    OBJECTIVES,
+    OUTCOME_PREFIX,
+    RELIABILITY_SOURCES,
+    RELIABILITY_TABLE,
+    TRAINED_MARINER,
+    TRAINED_OLMIX,
+    read_table,
+    reliability_rows,
+)
 from mariner.figures.layout import (
+    LOSS_LABELS,
     METHOD_COLORS,
     METHOD_LABELS,
     NEUTRAL,
@@ -50,7 +62,6 @@ from mariner.figures.pipeline import (
     ALL_TASKS,
     LADDER_METHODS,
     LAW_POINTS,
-    LOSS_LABELS,
     accuracy_values,
     draw_scaling,
     fit_scaling_law,
@@ -284,9 +295,6 @@ def draw_on_off_objective(root: Path) -> FigureData:
 # Figure 11: each component's change from proportional mixing at 3e18 FLOPs
 # ---------------------------------------------------------------------------------------------------------------
 
-RELIABILITY_TABLE = "fits_reliability"
-# fits_reliability's rows of each objective: one per task, and the aggregate's, which has no task id.
-RELIABILITY_SOURCES = {"uncheatable": "snr_fit_uncheatable_delphi", "obe_easy": "snr_fit_components_delphi"}
 # Uncheatable's rows in the paper's order: code, science, then the three corpora of general English text that its
 # subset objective, uncheatable_worsened, weights.
 UNCHEATABLE_ROWS = (
@@ -378,9 +386,10 @@ def obe_easy_group(task_id: str, group: str) -> str:
 def tradeoff_rows(reliability: pd.DataFrame, objective: str) -> list[TradeoffRow]:
     """``objective``'s rows with their proportional means from ``fits_reliability``, the aggregate's last.
 
-    Raises ``ValueError`` when the table lacks the aggregate's row or one of Uncheatable's tasks.
+    Raises ``ValueError`` when the table lacks the objective's rows, its aggregate's row or one of Uncheatable's tasks,
+    or puts an OlmoBaseEval Easy task in a group that the figure does not draw.
     """
-    rows = reliability[reliability["source_table"] == RELIABILITY_SOURCES[objective]]
+    rows = reliability_rows(reliability, RELIABILITY_SOURCES[objective])
     aggregate = rows[rows["task_id"].isna()]
     if len(aggregate) != 1:
         raise ValueError(f"{RELIABILITY_TABLE} has {len(aggregate)} aggregate rows for {objective}, not one")
@@ -392,6 +401,12 @@ def tradeoff_rows(reliability: pd.DataFrame, objective: str) -> list[TradeoffRow
         items = [(task, str(tasks.loc[task, "task"]), (task,)) for task in UNCHEATABLE_ROWS]
     else:
         groups = pd.Series({task: obe_easy_group(task, row["group"]) for task, row in tasks.iterrows()})
+        unknown = groups[~groups.isin(OBE_EASY_GROUPS)]
+        if len(unknown):
+            raise ValueError(
+                f"{RELIABILITY_TABLE} puts OlmoBaseEval Easy tasks in groups the figure does not draw:"
+                f" {', '.join(f'{task} ({group})' for task, group in unknown.items())}"
+            )
         items = []
         for group in OBE_EASY_GROUPS:
             members = tuple(groups.index[groups == group])

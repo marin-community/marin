@@ -99,6 +99,11 @@ FIGURES_INDEX = "figures_tables.csv"  # the paper's figures and tables with the 
 SWARM_PREDICTIONS_TABLE = "fits_swarm_predictions"
 HELDOUT_PREDICTIONS_TABLE = "fits_heldout_predictions"
 COEFFICIENT_PREFIX = "coef__"
+# fits_reliability holds rows from three sources, named in its source_table column: each objective's tasks, with the
+# objective's aggregate as the row without a task id, and OlmoBaseEval Easy's tasks with their subtasks collapsed.
+RELIABILITY_TABLE = "fits_reliability"
+RELIABILITY_SOURCES = {"uncheatable": "snr_fit_uncheatable_delphi", "obe_easy": "snr_fit_components_delphi"}
+RELIABILITY_COLLAPSED_SOURCE = "snr_fit_tasks_delphi"
 # Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
 # differ from their calibration run by 3.1e-16 at most.
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12
@@ -517,6 +522,15 @@ def released_task_predictions(root: Path, table: str, objective: str) -> pd.Data
     frame = frame[frame[OBJECTIVE_COLUMN] == objective]
     wide = frame.pivot(index=OBSERVATION_ID, columns=TASK_ID, values="predicted_bpb")
     return wide.loc[frame[OBSERVATION_ID].unique(), frame[TASK_ID].unique()]
+
+
+def reliability_rows(reliability: pd.DataFrame, source: str) -> pd.DataFrame:
+    """The rows of a ``fits_reliability`` table from ``source``; raises ``ValueError`` naming it when it has none."""
+    require_columns(reliability, ["source_table"], RELIABILITY_TABLE)
+    rows = reliability[reliability["source_table"] == source]
+    if rows.empty:
+        raise ValueError(f"the {RELIABILITY_TABLE} table has no rows from {source}")
+    return rows
 
 
 def released_task_parameters(root: Path, swarm: str, objective: str) -> pd.DataFrame:

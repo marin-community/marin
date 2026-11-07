@@ -31,12 +31,16 @@ from matplotlib.lines import Line2D
 from mariner.data import (
     OBJECTIVES,
     OLMIX_CAP,
+    RELIABILITY_COLLAPSED_SOURCE,
+    RELIABILITY_SOURCES,
+    RELIABILITY_TABLE,
     TRAINED_MARINER,
     TRAINED_OLMIX,
     mixture_weights,
     pool_fractions,
     read_table,
     release_partition,
+    reliability_rows,
 )
 from mariner.figures.layout import (
     METHOD_COLORS,
@@ -48,7 +52,6 @@ from mariner.figures.layout import (
     figure_legend,
     panels,
 )
-from mariner.figures.results import RELIABILITY_SOURCES, RELIABILITY_TABLE
 from mariner.figures.starcoder import ARM_COLORS, Arm, parameters_label, tokens_label
 from mariner.olmix import LogLinearLaw, fit_log_linear
 
@@ -76,8 +79,8 @@ CAP_COLOR = "#8A9099"
 SCALE_COLUMNS = {"parameters": "model_total_parameters", "tokens": "train_tokens"}
 # The styles of Figure 12's series, shared by its panels and its legend.
 CURVE_STYLES = {
-    "proxy": {"color": ARM_COLORS[Arm.MATCHED], "marker": "o"},
-    "target": {"color": ARM_COLORS[Arm.TARGET], "marker": "s", "markerfacecolor": "white", "linestyle": "--"},
+    PROXY: {"color": ARM_COLORS[Arm.MATCHED], "marker": "o"},
+    TARGET: {"color": ARM_COLORS[Arm.TARGET], "marker": "s", "markerfacecolor": "white", "linestyle": "--"},
 }
 FIT_STYLE = {"color": METHOD_COLORS[Method.OLMIX], "linestyle": ":", "linewidth": 1.6}
 MINIMUM_STYLE = {
@@ -159,7 +162,7 @@ def domain_repetition_values(root: Path) -> dict[str, pd.DataFrame]:
     Under a cap of K epochs the feasible shares run from 0 to K over the target's epochs per unit of share.
     """
     sweeps = read_table(root, "domain_sweeps")
-    series: dict[str, list[pd.DataFrame]] = {name: [] for name in ("proxy", "target", "fit_curves")}
+    series: dict[str, list[pd.DataFrame]] = {name: [] for name in (PROXY, TARGET, "fit_curves")}
     fits, minima, selections, scales = [], [], [], []
     for sweep in DOMAIN_SWEEPS:
         for scale in (PROXY, TARGET):
@@ -171,8 +174,8 @@ def domain_repetition_values(root: Path) -> dict[str, pd.DataFrame]:
         proxy, target = matched_proxy(sweeps, sweep), sweep_curve(target_rows)
         law = sweep_olmix_law(proxy)
         shares = np.linspace(0.0, 1.0, FIT_POINTS)
-        series["proxy"].append(proxy.assign(domain=sweep.domain))
-        series["target"].append(target.assign(domain=sweep.domain))
+        series[PROXY].append(proxy.assign(domain=sweep.domain))
+        series[TARGET].append(target.assign(domain=sweep.domain))
         series["fit_curves"].append(pd.DataFrame({"domain": sweep.domain, "share": shares, "bpb": law_bpb(law, shares)}))
         domain, web = law.coefficients
         fits.append(
@@ -252,8 +255,8 @@ def draw_domain_repetition(root: Path) -> FigureData:
         axis.set_ylabel("Loss (BPB)")
         axis.set_title(sweep.title)
     handles = [
-        Line2D([], [], label=scale_label(values["scales"], PROXY, "matched proxy"), **CURVE_STYLES["proxy"]),
-        Line2D([], [], label=scale_label(values["scales"], TARGET, "target"), **CURVE_STYLES["target"]),
+        Line2D([], [], label=scale_label(values["scales"], PROXY, "matched proxy"), **CURVE_STYLES[PROXY]),
+        Line2D([], [], label=scale_label(values["scales"], TARGET, "target"), **CURVE_STYLES[TARGET]),
         Line2D([], [], label="Olmix's law of the matched proxy", **FIT_STYLE),
         Line2D([], [], label="its minimum", **MINIMUM_STYLE),
         Line2D([], [], label="its selection under each cap", **SELECTION_STYLE),
@@ -269,26 +272,37 @@ def draw_domain_repetition(root: Path) -> FigureData:
 
 
 class EpochColumn(NamedTuple):
-    """A column of Figure 13: the objective its mixture was proposed for, its printed name and the mixture."""
+    """A column of Figure 13: the objective its mixture was proposed for, its printed name, the mixture, and the
+    ``method`` and ``variant`` that ``validation_3e18`` records for the mixture's runs."""
 
     objective: str
     name: str
     mixture_id: str
+    method: Method
+    variant: str
 
 
-# Olmix's proposals without a cap or KL penalty, which the Olmix cap and KL sweep trained.
+# The variants of each column's runs, by objective: MARINER's proposal, Olmix's deployed proposal (cap 4 and the KL
+# weight of mariner.data.TRAINED_OLMIX), and Olmix's proposal without a cap or KL penalty, which the Olmix cap and KL
+# sweep trained.
+COLUMN_VARIANTS = {
+    "uncheatable": ("lwspu_u_snc_cap06", "olmixq_u_kl0p05_cap04", "olmixq_u_kl0_nocap_cap17"),
+    "obe_easy": ("lwspu_t9_snc_cap08", "olmixq_t9_kl0p005_cap04", "olmixq_t9_kl0_nocap_cap17"),
+}
 UNREGULARIZED_OLMIX = {"uncheatable": "mix_522b7ad988b71710", "obe_easy": "mix_d5cbd56954690512"}
 EPOCH_COLUMNS = tuple(
-    column
+    EpochColumn(objective, name, mixture, method, variant)
     for objective in OBJECTIVES
-    for column in (
-        EpochColumn(objective, METHOD_LABELS[Method.MARINER], TRAINED_MARINER[objective]),
-        EpochColumn(
-            objective,
+    for name, mixture, method, variant in zip(
+        (
+            METHOD_LABELS[Method.MARINER],
             f"Olmix, cap {OLMIX_CAP:g}, KL {TRAINED_OLMIX[objective].kl:g}",
-            TRAINED_OLMIX[objective].mixture_id,
+            "Olmix, no cap, no KL",
         ),
-        EpochColumn(objective, "Olmix, no cap, no KL", UNREGULARIZED_OLMIX[objective]),
+        (TRAINED_MARINER[objective], TRAINED_OLMIX[objective].mixture_id, UNREGULARIZED_OLMIX[objective]),
+        (Method.MARINER, Method.OLMIX, Method.OLMIX),
+        COLUMN_VARIANTS[objective],
+        strict=True,
     )
 )
 # The buckets' sources, in the order of the figure's rows: the Common Crawl topics at two quality tiers, Dolma 3's
@@ -334,15 +348,23 @@ def bucket_sources(partition: pd.DataFrame) -> pd.Series:
 
 
 def mixture_epochs(
-    validation: pd.DataFrame, mixture: str, bucket_ids: tuple[str, ...], per_weight: np.ndarray
+    validation: pd.DataFrame, column: EpochColumn, bucket_ids: tuple[str, ...], per_weight: np.ndarray
 ) -> np.ndarray:
-    """The epochs of each bucket in ``mixture``: weight times epochs per unit weight, over the pool fraction.
+    """The epochs of each bucket in ``column``'s mixture: weight times epochs per unit weight, over the pool fraction.
 
-    Raises ``ValueError`` unless the mixture's runs share one mixture.
+    Raises ``ValueError`` unless the mixture's runs share one mixture and record the column's method, objective and
+    variant.
     """
+    mixture = column.mixture_id
     runs = validation[validation["mixture_id"] == mixture]
     if runs.empty:
         raise ValueError(f"no validation_3e18 run trains {mixture}")
+    recorded = set(zip(runs["method"], runs["proposal_objective"], runs["variant"], strict=True))
+    if recorded != {(column.method.value, column.objective, column.variant)}:
+        raise ValueError(
+            f"the runs of {mixture} record (method, proposal objective, variant) {sorted(recorded)}, not"
+            f" {(column.method.value, column.objective, column.variant)}"
+        )
     weights = mixture_weights(runs, bucket_ids, "validation_3e18")
     fractions = pool_fractions(runs, bucket_ids, "validation_3e18")
     if not ((weights == weights[0]).all() and (fractions == fractions[0]).all()):
@@ -361,7 +383,7 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
     rows = []
     for column in EPOCH_COLUMNS:
         epochs = pd.Series(
-            mixture_epochs(validation, column.mixture_id, partition.bucket_ids, partition.epochs_per_unit_weight),
+            mixture_epochs(validation, column, partition.bucket_ids, partition.epochs_per_unit_weight),
             index=partition.bucket_ids,
         )
         rows += [
@@ -452,10 +474,9 @@ def draw_mixture_epochs(root: Path) -> FigureData:
 # ---------------------------------------------------------------------------------------------------------------
 
 R2_MODELS = (Method.MARINER, Method.OLMIX, Method.REGMIX)
-# fits_reliability's OlmoBaseEval Easy tasks with their subtasks collapsed (Minerva MATH, MT MBPP, Basic Skills, ...).
-TASKS_SOURCE = "snr_fit_tasks_delphi"
 # The OlmoBaseEval Easy components below this SNR, both Basic Skills subtasks, are drawn uncollapsed as well.
 UNCOLLAPSED_SNR = 2.0
+OLMIX_R2 = f"{Method.OLMIX.value}_r2"
 OBE_EASY, UNCHEATABLE = "OlmoBaseEval Easy", "Uncheatable"
 EVALUATION_MARKERS = {OBE_EASY: "o", UNCHEATABLE: "D"}
 SNR_TICKS = (1, 2, 5, 10, 20, 40)
@@ -465,14 +486,13 @@ CEILING_POINTS = 200
 
 def r2_points(root: Path) -> pd.DataFrame:
     """Each plotted task's SNR and each surrogate's out-of-fold R^2, 1 - MSE / Var over the swarm; ``labeled`` marks
-    the tasks on which some surrogate's R^2 is negative."""
+    the tasks with a negative Olmix R^2, the rule of the paper's caption."""
     reliability = read_table(root, RELIABILITY_TABLE)
-    by_source = {source: rows for source, rows in reliability.groupby("source_table")}
-    tasks = by_source[TASKS_SOURCE]
+    tasks = reliability_rows(reliability, RELIABILITY_COLLAPSED_SOURCE)
     tasks = tasks[tasks["group"].notna()]
-    components = by_source[RELIABILITY_SOURCES["obe_easy"]]
+    components = reliability_rows(reliability, RELIABILITY_SOURCES["obe_easy"])
     uncollapsed = components[components["task_id"].notna() & (components["snr"] < UNCOLLAPSED_SNR)]
-    uncheatable = by_source[RELIABILITY_SOURCES["uncheatable"]]
+    uncheatable = reliability_rows(reliability, RELIABILITY_SOURCES["uncheatable"])
     uncheatable = uncheatable[uncheatable["task_id"].notna()]
     points = pd.concat(
         [
@@ -488,7 +508,7 @@ def r2_points(root: Path) -> pd.DataFrame:
     columns = [f"{model.value}_r2" for model in R2_MODELS]
     for model, column in zip(R2_MODELS, columns, strict=True):
         points[column] = 1.0 - points[f"{model.value}_mse"] / points["panel_sd"] ** 2
-    points["labeled"] = points[columns].min(axis=1) < 0.0
+    points["labeled"] = points[OLMIX_R2] < 0.0
     return points[["name", "evaluation", "snr", *columns, "labeled"]]
 
 
@@ -528,7 +548,7 @@ def draw_r2_vs_snr(root: Path) -> FigureData:
     for row in points[points["labeled"]].itertuples():
         axis.annotate(
             row.name,
-            xy=(row.snr, min(getattr(row, column) for column in columns)),
+            xy=(row.snr, getattr(row, OLMIX_R2)),
             xytext=(4, -2),
             textcoords="offset points",
             ha="left",

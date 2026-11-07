@@ -53,7 +53,8 @@ FIGURES: dict[str, FigureSpec] = {
         ),
         FigureSpec("fig:accuracy", "r_accuracy_vs_bpb", ("ladder_accuracy",), results.draw_accuracy_vs_bpb),
         # Figures 9 and 10 read the ladder alone: its 3e18 rung holds the runs of the other configs their rows of
-        # figures_tables.csv name, the main swarm's proportional repeats and the validation launches' runs.
+        # figures_tables.csv name, the main swarm's proportional repeats and the validation launches' runs, beside
+        # the June proportional run, so that their 3e18 proportional point averages eleven runs.
         FigureSpec(
             "fig:r1",
             "r1_scaling_curves_placeholder",

@@ -3,8 +3,9 @@
 
 import re
 
+import pandas as pd
 import pytest
-from mariner.cli import main
+from mariner.cli import INPUT_ERROR_STATUS, main
 from mariner.tables import format_scaling_main, scaling_main_table
 
 NUMBER = re.compile(r"\d+\.\d+")
@@ -37,6 +38,14 @@ def test_cli_tables_prints_the_table(capsys, small_ladder_snapshot):
     rows = printed_rows(printed)
     assert list(rows) == list(PRINTED_SCALING_MAIN)  # paper order
     assert rows["MARINER"] == SMALL_LADDER_MARINER
+
+
+def test_cli_tables_names_a_column_the_ladder_lacks(capsys, small_ladder_snapshot):
+    ladder = small_ladder_snapshot / "data" / "ladder" / "ladder.csv"
+    pd.read_csv(ladder).drop(columns="bpb__obe_easy").to_csv(ladder, index=False)
+    assert main(["tables", "--data", str(small_ladder_snapshot)]) == INPUT_ERROR_STATUS
+    error = capsys.readouterr().err
+    assert "ladder" in error and "bpb__obe_easy" in error
 
 
 @pytest.mark.data_integration

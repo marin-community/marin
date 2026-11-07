@@ -12,7 +12,16 @@ import pytest
 from mariner.cli import main
 from mariner.data import FIGURES_INDEX, OBJECTIVES, objective_from_tasks, read_table, release_tasks
 from mariner.figures import FIGURES, write_figures
-from mariner.figures.analysis import EPOCH_CAPS, FINEMATH, FLAN, epoch_text, matched_proxy, sweep_olmix_law
+from mariner.figures.analysis import (
+    EPOCH_CAPS,
+    FINEMATH,
+    FLAN,
+    PROXY,
+    TARGET,
+    epoch_text,
+    matched_proxy,
+    sweep_olmix_law,
+)
 from mariner.figures.epochs import Track
 from mariner.figures.layout import Method
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
@@ -410,13 +419,13 @@ def check_domain_repetition(values: dict[str, pd.DataFrame]) -> None:
         assert selections.loc[(FLAN.domain, cap), "share"] == 0.0
         assert selections.loc[(FINEMATH.domain, cap), "epochs"] == pytest.approx(cap, rel=1e-12)
     minima = {}
-    for scale in ("proxy", "target"):
+    for scale in (PROXY, TARGET):
         curves = values[scale]
         minima[scale] = curves.loc[curves.groupby("domain")["bpb"].idxmin()].set_index("domain")
-    assert (minima["proxy"]["share"] == minima["target"]["share"]).all()
-    for domain, row in minima["target"].iterrows():
+    assert (minima[PROXY]["share"] == minima[TARGET]["share"]).all()
+    for domain, row in minima[TARGET].iterrows():
         assert not np.isclose(selections.xs(domain, level="domain")["share"], row["share"]).any()
-    target_epochs = minima["target"]["epochs"]
+    target_epochs = minima[TARGET]["epochs"]
     assert round(target_epochs[FINEMATH.domain] / target_epochs[FLAN.domain]) == PRINTED_EPOCH_RATIO
 
 
@@ -429,10 +438,10 @@ def check_mixture_epochs(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_r2_vs_snr(values: dict[str, pd.DataFrame]) -> None:
-    """Figure 15's caption (sections/analysis.tex:61): "labels identify tasks with negative Olmix $R^2$"."""
+    """Figure 15's caption (sections/analysis.tex:61): "labels identify tasks with negative Olmix $R^2$". The redraw
+    labels the paper's three tasks."""
     points = values["points"]
-    labeled = set(points.loc[points["labeled"], "name"])
-    assert labeled == set(points.loc[points[f"{Method.OLMIX.value}_r2"] < 0, "name"]) == LABELED_TASKS
+    assert set(points.loc[points["labeled"], "name"]) == LABELED_TASKS
 
 
 PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {

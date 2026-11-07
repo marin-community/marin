@@ -8,7 +8,8 @@ with and without simulated epoching, the target's loss, and the excess loss that
 surrogate panel fits MARINER, Olmix and LightGBM's boosted trees to six of the matched proxy's means
 (``surrogate_values``). The lower panels draw each mixture's Uncheatable loss across the compute ladder with its
 fitted power law and MARINER's compute multiples (``scaling_values``), and downstream accuracy at 1e21 FLOPs
-(``accuracy_values``). Figures 8 and 9 (``mariner.figures.results``) draw the same values for both objectives.
+(``accuracy_values``). Figure 9 (``mariner.figures.results``) draws the loss panel for both objectives, and Figure
+8 draws the accuracy values against each task group's OlmoBaseEval Easy BPB.
 
 The paper's surrogate panel fitted MARINER with Nemotron-CC at the proxy's web epochs, 165,937,152 tokens over a pool
 of 3,639,928,832, which the dataset does not record; this module fits it as Figures 3 and 4 do, at one Nemotron-CC
@@ -37,6 +38,7 @@ from scipy.optimize import curve_fit
 
 from mariner.data import read_table
 from mariner.figures.layout import (
+    LOSS_LABELS,
     METHOD_COLORS,
     METHOD_LABELS,
     NEUTRAL,
@@ -50,7 +52,6 @@ from mariner.figures.starcoder import DIAMOND, Arm, EpochMatching, draw_repetiti
 from mariner.olmix import fit_log_linear
 
 SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
-LOSS_LABELS = {"uncheatable": "Uncheatable Eval loss (BPB)", "obe_easy": "OlmoBaseEval Easy loss (BPB)"}
 LADDER_METHODS = (Method.PROPORTIONAL, Method.UNIMAX, Method.OLMIX, Method.MARINER)
 PROPOSED_METHODS = (Method.OLMIX, Method.MARINER)  # the ladder trains their proposals for each objective
 MULTIPLE_BASELINES = (Method.OLMIX, Method.PROPORTIONAL)  # Figure 1 prints MARINER's compute multiples over these

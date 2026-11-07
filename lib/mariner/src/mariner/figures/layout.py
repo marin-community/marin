@@ -85,6 +85,7 @@ METHOD_COLORS = {
     Method.SPLINE: "#0072B2",
 }
 OBJECTIVE_TITLES = {"uncheatable": "Uncheatable", "obe_easy": "OlmoBaseEval Easy"}  # a panel's title per objective
+LOSS_LABELS = {"uncheatable": "Uncheatable Eval loss (BPB)", "obe_easy": "OlmoBaseEval Easy loss (BPB)"}  # loss axes
 SCALE_COLORMAP = "plasma"  # a ladder of model or data scales, smallest first
 SCALE_COLOR_RANGE = (0.0, 0.85)  # plasma's lightest yellow would vanish on white
 
