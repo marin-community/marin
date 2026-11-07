@@ -12,8 +12,9 @@ from mariner import figures
 from mariner.cli import main
 from mariner.data import FIGURES_INDEX, OBJECTIVES, read_table
 from mariner.figures import FIGURES, FigureSpec, write_figures
-from mariner.figures.epochs import Track, draw_pipeline_lower_panels
+from mariner.figures.epochs import Track
 from mariner.figures.layout import METHOD_LABELS, FigureData, Method
+from mariner.figures.pipeline import draw_pipeline_lower_panels
 from mariner.figures.surrogate import proposal_values
 from matplotlib.figure import Figure
 

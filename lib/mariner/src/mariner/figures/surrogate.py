@@ -28,15 +28,6 @@ from matplotlib.lines import Line2D
 from scipy import stats
 
 from mariner.data import OBJECTIVES, OBSERVATION_ID, TRAINED_MARINER, TRAINED_OLMIX, read_table
-from mariner.figures.epochs import (
-    CURVE_POINTS,
-    FIXED_PARAMETERS_CURVES,
-    atlas_sweeps,
-    fit_sweep,
-    fitted_minimum,
-    sweep_prediction,
-    tokens_label,
-)
 from mariner.figures.layout import (
     METHOD_COLORS,
     METHOD_LABELS,
@@ -47,6 +38,13 @@ from mariner.figures.layout import (
     panel_legend,
     panels,
     scale_colors,
+)
+from mariner.figures.starcoder import (
+    FIXED_PARAMETERS_CURVES,
+    SHARE_AXIS_LIMITS,
+    atlas_sweeps,
+    fitted_sweep,
+    tokens_label,
 )
 from mariner.model import Head, Shape, benefit, design_matrix, harm
 from mariner.olmix import fit_log_linear
@@ -67,14 +65,12 @@ def draw_olmix_capacity_failure(root: Path) -> FigureData:
     handles = []
     for sweep, color in zip(sweeps.values(), scale_colors(len(sweeps)), strict=True):
         weights = np.column_stack([1.0 - sweep.shares, sweep.shares])
-        fit = fit_sweep(sweep)
+        curve = fitted_sweep(sweep)
+        optimum, dense = curve.optimum, curve.shares
         law = fit_log_linear(weights, sweep.bpb)
-        optimum = fitted_minimum(fit, float(sweep.shares[0]), float(sweep.shares[-1]))
         pick = int(np.argmin(law.predict(weights)))
-        dense = np.linspace(sweep.shares[0], sweep.shares[-1], CURVE_POINTS)
-        mariner_curve = sweep_prediction(fit, dense)
         olmix_curve = law.predict(np.column_stack([1.0 - dense, dense]))
-        axis.plot(dense, mariner_curve, color=color)
+        axis.plot(dense, curve.predicted_bpb, color=color)
         axis.plot(dense, olmix_curve, color=METHOD_COLORS[Method.OLMIX], linestyle="--", linewidth=1.0)
         axis.scatter(sweep.shares, sweep.bpb, s=12, facecolor="white", edgecolor=color, linewidth=0.8, zorder=4)
         axis.scatter([optimum.share], [optimum.bpb], s=70, marker="*", color=color, edgecolor=NEUTRAL, zorder=5)
@@ -89,7 +85,7 @@ def draw_olmix_capacity_failure(root: Path) -> FigureData:
             zorder=6,
             clip_on=False,
         )
-        epochs = optimum.share * sweep.starcoder_epochs_at_p1
+        epochs = curve.optimum_epochs
         label = f"{tokens_label(sweep.train_tokens)} tokens: MARINER's minimum at {epochs:.1f} epochs"
         handles.append(Line2D([], [], color=color, marker="o", markerfacecolor="white", label=label))
         observations += [
@@ -98,7 +94,7 @@ def draw_olmix_capacity_failure(root: Path) -> FigureData:
         ]
         mariner_rows += [
             {"curve": sweep.name, "share": share, "predicted_bpb": value}
-            for share, value in zip(dense, mariner_curve, strict=True)
+            for share, value in zip(dense, curve.predicted_bpb, strict=True)
         ]
         olmix_rows += [
             {"curve": sweep.name, "share": share, "predicted_bpb": value}
@@ -106,7 +102,7 @@ def draw_olmix_capacity_failure(root: Path) -> FigureData:
         ]
         minima.append({"curve": sweep.name, "share": optimum.share, "epochs": epochs, "bpb": optimum.bpb})
         picks.append({"curve": sweep.name, "share": sweep.shares[pick], "measured_bpb": sweep.bpb[pick]})
-    axis.set_xlim(0.0, 0.95)
+    axis.set_xlim(*SHARE_AXIS_LIMITS)
     axis.set_xlabel("StarCoder share of the mixture, p")
     axis.set_ylabel("Programming-languages loss (BPB)")
     axis.set_title("Fits to the fixed-model sweeps (210M parameters)")
