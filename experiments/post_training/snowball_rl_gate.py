@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import logging
 import math
 import re
 import statistics
@@ -53,8 +52,6 @@ from taskcompendium.grading_result import Outcome
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
-
-logger = logging.getLogger(__name__)
 
 GATE_REVISION = "2026.11.06"
 GATE_REPORT_FILENAME = "gate_report.json"

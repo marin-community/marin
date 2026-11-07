@@ -54,7 +54,6 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
 from __future__ import annotations
 
 import json
-import logging
 import math
 import os
 import subprocess
@@ -108,8 +107,6 @@ from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     GraderKind,
 )
-
-logger = logging.getLogger(__name__)
 
 # Iris limit for one Snowball run, coordinator and job alike.
 RUN_TIMEOUT_HOURS = 72
