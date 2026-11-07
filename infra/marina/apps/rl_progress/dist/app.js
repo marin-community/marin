@@ -21,7 +21,7 @@ const series = (run) => run.series ?? run.label;
 const campaign = (run) => run.campaign ?? 'Unspecified';
 const color = (run) => colors[Array.from(series(run)).reduce((sum, letter) => sum + letter.codePointAt(0), 0) % colors.length];
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
-const hours = (run) => run.elapsed_seconds / 3600;
+const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const gain = (run) => run.gain_per_hour;
 const day = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
 function groupedRuns() {
@@ -30,7 +30,7 @@ function groupedRuns() {
     if (!groups.has(run.run_id)) groups.set(run.run_id, []);
     groups.get(run.run_id).push(run);
   }
-  for (const attempts of groups.values()) attempts.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) || b.attempt_id.localeCompare(a.attempt_id));
+  for (const attempts of groups.values()) attempts.sort((a, b) => (Date.parse(b.started_at ?? b.run_date ?? b.completed_at) || 0) - (Date.parse(a.started_at ?? a.run_date ?? a.completed_at) || 0) || b.attempt_id.localeCompare(a.attempt_id));
   return groups;
 }
 function visibleRuns(groups) {
@@ -73,12 +73,13 @@ function chart(id, rows, xValue, yValue, xLabel, yLabel, { dateAxis = false, lab
   }
   root.append(svg('text', { x: margin.left, y: 15, class: 'axis-label' }, yLabel));
   root.append(svg('text', { x: width / 2, y: height - 8, 'text-anchor': 'middle', class: 'axis-label' }, xLabel));
-  const eligible = rows.filter((run) => run.pareto_eligible);
+  const eligibleForChart = (run) => id === 'gain' ? run.trusted_gain_eligible : run.pareto_eligible;
+  const eligible = rows.filter(eligibleForChart);
   const frontier = new Set(eligible.filter((a) => !eligible.some((b) => a.comparison_key === b.comparison_key && hours(b) <= hours(a) && b.final.reward >= a.final.reward && (hours(b) < hours(a) || b.final.reward > a.final.reward))).map(identity));
   for (const point of points) {
     const { run, phase } = point;
     const link = svg('a', { href: route(run), class: 'dot', tabindex: '0', 'aria-label': `View ${run.label}: ${yLabel.toLowerCase()} ${number(point.y)}${phase === 'baseline' ? ' (baseline)' : ''}, ${number(hours(run), 2)} elapsed hours` });
-    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${run.pareto_eligible ? 'Eligible for comparison' : run.status === 'failed' ? 'Failed attempt; descriptive' : 'Provisional; unranked'}\nClick for run details`));
+    link.append(svg('title', {}, `${run.label}\n${yLabel}${phase === 'baseline' ? ' (baseline)' : ''}: ${number(point.y)}\n${eligibleForChart(run) ? 'Eligible for comparison' : run.status === 'failed' ? 'Failed attempt; descriptive' : 'Provisional; unranked'}\nClick for run details`));
     link.append(svg('circle', { cx: px(point.x), cy: py(point.y), r: phase === 'baseline' ? 5 : 6, fill: phase === 'baseline' || run.partial_coverage ? 'var(--panel)' : color(run), stroke: color(run), 'stroke-width': id === 'pareto' && frontier.has(identity(run)) ? 4 : 2, 'stroke-dasharray': run.partial_coverage ? '2 2' : 'none' }));
     root.append(link);
     if (labelDots && phase === 'final') root.append(svg('text', { x: px(point.x) + 10, y: py(point.y) - 10, class: 'dot-label' }, series(run)));
@@ -92,7 +93,7 @@ function addField(list, title, value) {
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
-  const warning = run.status === 'failed' ? 'The native attempt failed. Its retained evidence is descriptive.' : run.provisional ? 'Unranked: coverage or evaluation identity is insufficient for comparison.' : run.partial_coverage ? 'This attempt meets its recorded coverage threshold with some unscored answers.' : 'Complete comparison metadata.';
+  const warning = run.status === 'failed' ? 'The native attempt failed. Its retained evidence is descriptive.' : run.provisional ? 'Unranked: the recorded coverage, timing or evaluation identity does not permit comparison.' : run.partial_coverage ? 'This attempt meets its recorded coverage threshold with some unscored answers.' : 'Complete comparison metadata.';
   body.append(element('p', warning, { class: run.partial_coverage ? 'warning' : 'note' }));
   const links = element('div', null, { class: 'links' });
   const explicitWandb = run.wandb_url ?? run.links?.wandb;
@@ -103,7 +104,7 @@ function showDetails(run) {
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
     ['Campaign', campaign(run)], ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id],
-    ['Verdict', run.verdict], ['Gate', run.gate],
+    ['Verdict', run.verdict], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
     ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
@@ -112,6 +113,7 @@ function showDetails(run) {
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
     ['Evaluation protocol', run.evaluation.protocol_sha256 ?? 'Unknown · unranked'], ['Artifact location', run.artifact_uri],
+    ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];
   for (const [title, value] of facts) addField(fields, title, value);
   body.append(fields, element('h3', 'Evidence and caveats'));
@@ -122,7 +124,9 @@ function showDetails(run) {
 }
 function followHash() {
   const run = selectedFromHash();
-  if (run) { selectedAttempts.set(run.run_id, run.attempt_id); render(); showDetails(run); }
+  if (run) selectedAttempts.set(run.run_id, run.attempt_id);
+  render();
+  if (run) showDetails(run);
   else if ($('run-detail').open) $('run-detail').close();
 }
 
@@ -133,7 +137,7 @@ function render() {
   chart('reward', selected, (run) => Date.parse(run.run_date ?? run.started_at), (run) => run.final?.reward, 'Run date (Los Angeles)', 'Reward', { dateAxis: true, baseline: true });
   chart('duration', selected, (run) => Date.parse(run.run_date ?? run.started_at), hours, 'Run date (Los Angeles)', 'Elapsed hours', { dateAxis: true });
   chart('gain', selected, (run) => Date.parse(run.run_date ?? run.started_at), gain, 'Run date (Los Angeles)', 'Reward gain / hour', { dateAxis: true });
-  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'These points are descriptive. No verified frontier is drawn because the runtime evaluation protocol is not recorded.';
+  $('frontier-note').textContent = selected.some((run) => run.pareto_eligible) ? 'Rings mark the frontier within each verified comparison group.' : 'No eligible comparison points in this view; see each run’s coverage, timing and evaluation identity.';
   $('legend').replaceChildren(...[...new Set(selected.map(series))].map((name) => {
     const item = element('span'); item.append(element('i', null, { class: 'swatch', style: `background:${color(selected.find((run) => series(run) === name))}` }), document.createTextNode(name)); return item;
   }));
@@ -142,7 +146,7 @@ function render() {
     const name = element('td'), button = element('button', run.label); button.onclick = () => { location.hash = route(run); }; name.append(button);
     const attempts = element('select', null, { 'aria-label': `Attempt for ${run.label}` });
     for (const attempt of groups.get(run.run_id)) {
-      const option = element('option', `${attempt.started_at} · ${attempt.attempt_id} · ${attempt.status}`, { value: attempt.attempt_id });
+      const option = element('option', `${attempt.started_at ?? attempt.run_date ?? attempt.completed_at ?? 'Time unavailable'} · ${attempt.attempt_id} · ${attempt.status}`, { value: attempt.attempt_id });
       option.selected = attempt.attempt_id === run.attempt_id;
       attempts.append(option);
     }
@@ -163,7 +167,7 @@ async function refresh() {
     $('campaign').value = [...$('campaign').options].some((option) => option.value === previous) ? previous : 'all';
     $('warnings').hidden = !(data.skipped_records?.length);
     $('warnings').textContent = (data.skipped_records ?? []).map((record) => `Skipped malformed record ${record.run_id}/${record.attempt_id}: ${record.error}`).join('\n');
-    render(); followHash();
+    followHash();
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
   finally { $('refresh').disabled = false; }
 }

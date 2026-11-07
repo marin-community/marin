@@ -11,13 +11,11 @@ from urllib.parse import urlparse
 
 import click
 from marin.rl.rl_progress import RunSummary
-from marina.client import marina_request
+from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, marina_request
 
 APPLET_ID = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "infra/marina/apps/rl_progress/applet.toml").read_text()
 )["applet_id"]
-DEFAULT_MARINA_URL = "https://marina.oa.dev"
-LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
 INSERT = """INSERT INTO rl_runs (run_id, attempt_id, record)
 VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
 ON CONFLICT (run_id, attempt_id) DO NOTHING"""

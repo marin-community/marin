@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import math
 from datetime import datetime
 
 from fastapi import FastAPI
@@ -35,18 +36,21 @@ def comparison_fields(run: RunSummary) -> dict:
 
     baseline_full, final_full = complete(run.baseline), complete(run.final)
     baseline_eligible, final_eligible = eligible(run.baseline), eligible(run.final)
+    timed = run.elapsed_seconds is not None and run.elapsed_seconds > 0
     gain = (
-        (run.final.reward - run.baseline.reward) / (run.elapsed_seconds / 3600)
-        if run.final is not None and run.baseline is not None
+        (run.final.reward - run.baseline.reward) / run.elapsed_seconds * 3600
+        if run.elapsed_seconds is not None and timed and run.final is not None and run.baseline is not None
         else None
     )
-    pareto = key is not None and run.status == "succeeded" and final_eligible
+    if gain is not None and not math.isfinite(gain):
+        raise ValueError("Derived reward gain per hour must be finite")
+    pareto = key is not None and run.status == "succeeded" and final_eligible and timed
     return {
         "comparison_key": key,
         "expected_membership_count": expected,
         "gain_per_hour": gain,
         "partial_coverage": not (baseline_full and final_full),
-        "provisional": key is None or not (baseline_eligible and final_eligible),
+        "provisional": key is None or not (baseline_eligible and final_eligible and timed),
         "trusted_gain_eligible": pareto and baseline_eligible,
         "pareto_eligible": pareto,
     }
@@ -70,6 +74,8 @@ def create_api(services):
                     summary = RunSummary.model_validate(row["record"])
                     if (summary.run_id, summary.attempt_id) != (row["run_id"], row["attempt_id"]):
                         raise ValueError("Stored key disagrees with the record identity")
+                    comparison = comparison_fields(summary)
+                    json.dumps(dict(row["record"]) | comparison, allow_nan=False)
                 except (ValidationError, ValueError) as error:
                     reason = (
                         "; ".join(
@@ -85,7 +91,7 @@ def create_api(services):
                 for field in ("run_date", "started_at", "completed_at"):
                     if run.get(field):
                         run[field] = datetime.fromisoformat(run[field]).isoformat().replace("+00:00", "Z")
-                records.append(run | comparison_fields(summary))
+                records.append(run | comparison)
                 imported_at = row["imported_at"]
                 updated_at = imported_at if updated_at is None else max(updated_at, imported_at)
         return {"runs": records, "updated_at": updated_at, "skipped_records": skipped}

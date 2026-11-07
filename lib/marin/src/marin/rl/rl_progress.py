@@ -10,28 +10,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
-
-def validate_evaluation_identity(
-    *,
-    task_ids: list[str] | None,
-    task_count: int | None,
-    membership_sha256: str | None,
-    protocol: dict[str, Any] | None,
-    protocol_sha256: str | None,
-) -> None:
-    """Reject supplied identity mismatches while preserving unknown historical fields."""
-    if task_ids is not None:
-        membership = hashlib.sha256(json.dumps(sorted(task_ids), separators=(",", ":")).encode()).hexdigest()
-        if len(set(task_ids)) != len(task_ids) or membership != membership_sha256:
-            raise ValueError("Evaluation membership does not match its recorded identity")
-        if task_count is not None and task_count != len(task_ids):
-            raise ValueError("Evaluation task count disagrees with membership")
-    if protocol is not None:
-        encoded = json.dumps(protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
-        if hashlib.sha256(encoded.encode()).hexdigest() != protocol_sha256:
-            raise ValueError("Evaluation protocol does not match its recorded identity")
-
-
 Count = Annotated[StrictInt, Field(ge=0)]
 Identity = Annotated[str, Field(min_length=1)]
 
@@ -62,13 +40,16 @@ class EvaluationIdentity(BaseModel):
 
     @model_validator(mode="after")
     def matching_evaluation_identity(self):
-        validate_evaluation_identity(
-            task_ids=self.task_ids,
-            task_count=self.task_count,
-            membership_sha256=self.membership_sha256,
-            protocol=self.protocol,
-            protocol_sha256=self.protocol_sha256,
-        )
+        if self.task_ids is not None:
+            membership = hashlib.sha256(json.dumps(sorted(self.task_ids), separators=(",", ":")).encode()).hexdigest()
+            if len(set(self.task_ids)) != len(self.task_ids) or membership != self.membership_sha256:
+                raise ValueError("Evaluation membership does not match its recorded identity")
+            if self.task_count != len(self.task_ids):
+                raise ValueError("Evaluation task count disagrees with membership")
+        if self.protocol is not None:
+            encoded = json.dumps(self.protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            if hashlib.sha256(encoded.encode()).hexdigest() != self.protocol_sha256:
+                raise ValueError("Evaluation protocol does not match its recorded identity")
         return self
 
 
@@ -79,15 +60,16 @@ class RunSummary(BaseModel):
     label: Identity
     campaign: str | None = None
     series: str | None = None
-    issue: Annotated[StrictInt, Field(gt=0)] | None = None
+    issue: StrictInt | None = None
     verdict: Literal["pass", "fail", "invalid"] | None = None
     gate: str | None = None
+    failed_facts: list[str] = Field(default_factory=list)
     min_scored_fraction: Annotated[FiniteFloat, Field(gt=0, le=1)] = 1.0
-    run_date: str
+    run_date: str | None
     date_basis: Literal["submission_acknowledged", "launch_started"]
-    started_at: str
+    started_at: str | None
     completed_at: str | None
-    elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)]
+    elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
     timing_scope: Identity
     status: Literal["succeeded", "failed", "running"]
     optimizer_steps: Count
@@ -111,10 +93,12 @@ class RunSummary(BaseModel):
 
     @model_validator(mode="after")
     def valid_outcome(self):
-        if self.status != "running" and self.completed_at is None:
+        if self.elapsed_seconds is not None and self.status != "running" and self.completed_at is None:
             raise ValueError("Terminal attempts require a completion timestamp")
-        if self.final is not None and (self.baseline is None or self.elapsed_seconds <= 0):
-            raise ValueError("A final measurement requires a baseline and positive elapsed time")
+        if self.final is not None and (
+            self.baseline is None or (self.elapsed_seconds is not None and self.elapsed_seconds <= 0)
+        ):
+            raise ValueError("A final measurement requires a baseline and positive elapsed time when known")
         for phase in (self.baseline, self.final):
             if phase is not None and phase.attempted > self.evaluation.task_count:
                 raise ValueError("Attempted count exceeds the fixed evaluation cohort")

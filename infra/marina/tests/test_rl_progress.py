@@ -4,51 +4,16 @@
 import copy
 import hashlib
 import json
-from pathlib import Path
-from uuid import UUID
 
 import pytest
-from marina.applets import AppletStore, package_applet, read_applet_package
-from marina.database_setup import ensure_applet_provisioning
-from marina.db import UrlDatabase
-from marina.server import MarinaConfig, create_app
 from pydantic import ValidationError
-from starlette.testclient import TestClient
 
 from experiments.post_training import publish_rl_progress as publication
 
 
-def test_progress_publication_retains_attempts_and_serves_valid_comparisons(tmp_path, database_url, monkeypatch):
-    database = UrlDatabase(database_url)
-    store = AppletStore(database)
-    ensure_applet_provisioning(store.engine)
-    store.migrate()
-    source = Path(__file__).parents[1] / "apps/rl_progress"
-    store.publish(read_applet_package(package_applet(source)), "test", UUID(publication.APPLET_ID))
-    client = TestClient(
-        create_app(MarinaConfig(data_root=str(tmp_path), iap_audience=None, database=database)),
-        client=("127.0.0.1", 40000),
-    )
+def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_progress_client):
+    client, request = rl_progress_client
     query_path = f"/a/{publication.APPLET_ID}/query"
-
-    def request(origin, method, path, *, json_body=None):
-        response = client.request(method, path, json=json_body)
-        response.raise_for_status()
-        return response.json()
-
-    monkeypatch.setattr(publication, "marina_request", request)
-    request(
-        "http://localhost",
-        "POST",
-        query_path,
-        json_body={
-            "sql": (
-                "CREATE TABLE rl_runs (run_id text, attempt_id text, record jsonb NOT NULL, "
-                "imported_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (run_id, attempt_id))"
-            ),
-            "parameters": {},
-        },
-    )
     membership = [f"task-{index}" for index in range(100)]
     record = {
         "run_id": "test/control",
@@ -119,27 +84,48 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(tmp_
     for field, value in (
         ("label", "arbitrary label"),
         ("issue", 987),
-        ("task_set_sha256", "c" * 64),
-        ("protocol_sha256", None),
         ("timing_scope", "launcher_start_to_finish"),
     ):
         distinct = copy.deepcopy(record)
         distinct.update(run_id="test/" + field, attempt_id=field)
-        if field in {"task_set_sha256", "protocol_sha256"}:
-            distinct["evaluation"][field] = value
-            if field == "protocol_sha256":
-                distinct["evaluation"]["protocol"] = {"temperature": 1}
-                distinct["evaluation"][field] = hashlib.sha256(b'{"temperature":1}').hexdigest()
-        else:
-            distinct[field] = value
+        distinct[field] = value
         publication.publish_result(distinct, "http://localhost")
+    unknown = copy.deepcopy(record)
+    unknown.update(run_id="test/unknown-protocol", attempt_id="unknown")
+    unknown["evaluation"].update(protocol=None, protocol_sha256=None)
+    publication.publish_result(unknown, "http://localhost")
+    unknown_time = record | {
+        "run_id": "test/unknown-time",
+        "attempt_id": "unknown-time",
+        "elapsed_seconds": None,
+        "run_date": None,
+        "started_at": None,
+        "completed_at": None,
+    }
+    publication.publish_result(unknown_time, "http://localhost")
     malformed = copy.deepcopy(record)
     malformed.update(run_id="test/malformed", attempt_id="bad")
-    malformed["evaluation"]["task_ids"] = ["duplicate"] * 100
+    malformed["evaluation"]["task_ids"] = [f"replacement-{index}" for index in range(100)]
     with pytest.raises(ValidationError, match="membership"):
         publication.publish_result(malformed, "http://localhost")
+    underflow = copy.deepcopy(record)
+    underflow.update(run_id="test/underflow", attempt_id="bad", elapsed_seconds=1e-323)
+    overflow = copy.deepcopy(record)
+    overflow.update(run_id="test/overflow", attempt_id="bad")
+    overflow["baseline"]["reward"], overflow["final"]["reward"] = -1e308, 1e308
+    duplicate = copy.deepcopy(malformed)
+    duplicate.update(run_id="test/duplicate-membership")
+    duplicate["evaluation"]["task_ids"] = ["duplicate"] * 100
+    duplicate["evaluation"]["membership_sha256"] = hashlib.sha256(
+        json.dumps(duplicate["evaluation"]["task_ids"], separators=(",", ":")).encode()
+    ).hexdigest()
     for run_id, invalid in (
+        ("test/underflow", underflow),
+        ("test/overflow", overflow),
+        ("test/duplicate-membership", duplicate),
         (malformed["run_id"], malformed),
+        ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
+        ("test/missing-baseline", record | {"run_id": "test/missing-baseline", "attempt_id": "bad", "baseline": None}),
         ("test/bad-shape", ["unexpected"]),
         (
             "test/bad-timestamp",
@@ -159,6 +145,18 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(tmp_
                 },
             },
         )
+    huge_extra = json.dumps(
+        record | {"run_id": "test/huge-extra", "attempt_id": "bad", "extra": "large-number"}
+    ).replace('"large-number"', "1" + "0" * 400 + ".5")
+    request(
+        "http://localhost",
+        "POST",
+        query_path,
+        json_body={
+            "sql": publication.INSERT,
+            "parameters": {"run_id": "test/huge-extra", "attempt_id": "bad", "record": huge_extra},
+        },
+    )
     api = client.get(f"/a/{publication.APPLET_ID}/api/runs")
     assert api.status_code == 200
     payload = api.json()
@@ -175,15 +173,23 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(tmp_
     assert rows["native-fourth"]["comparison_key"] != good["comparison_key"]
     assert rows["native-fifth"]["pareto_eligible"] and not rows["native-fifth"]["trusted_gain_eligible"]
     assert rows["label"]["comparison_key"] == rows["issue"]["comparison_key"] == good["comparison_key"]
-    assert (
-        len(
-            {
-                rows[key]["comparison_key"]
-                for key in ("native-first", "task_set_sha256", "protocol_sha256", "timing_scope")
-            }
-        )
-        == 4
-    )
+    assert rows["timing_scope"]["comparison_key"] != good["comparison_key"]
+    assert rows["unknown-time"]["final"]["reward"] == 0.4
+    assert rows["unknown-time"]["elapsed_seconds"] is None and rows["unknown-time"]["gain_per_hour"] is None
+    assert rows["unknown-time"]["provisional"] and not rows["unknown-time"]["pareto_eligible"]
+    assert rows["unknown"]["comparison_key"] is None
+    assert rows["unknown"]["provisional"] and not rows["unknown"]["pareto_eligible"]
+    assert not rows["unknown"]["trusted_gain_eligible"]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
-    assert set(skipped) == {"test/malformed", "test/bad-shape", "test/bad-timestamp"}
+    assert set(skipped) == {
+        "test/malformed",
+        "test/bad-shape",
+        "test/bad-timestamp",
+        "test/underflow",
+        "test/overflow",
+        "test/duplicate-membership",
+        "test/huge-extra",
+        "test/wrong-sql-key",
+        "test/missing-baseline",
+    }
     assert "evaluation" in skipped["test/malformed"]

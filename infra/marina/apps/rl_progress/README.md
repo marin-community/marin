@@ -40,9 +40,12 @@ initializer identities, evaluation identity, baseline/final reward and attempted
 scored counts, artifact URI, and evidence. `GET api/runs` adds coverage and
 comparison fields and a `skipped_records` list for malformed rows. Structural validation
 is shared with the publisher through `marin.rl.rl_progress`. The publisher command is
-`python -m experiments.post_training.publish_rl_progress <summary_path>`. A runtime evaluation protocol hash is distinct from a declared
-source protocol; absent runtime identity remains null. Names do not define a
+`python -m experiments.post_training.publish_rl_progress <summary_path>`. The stored
+evaluation request protocol has its own hash. Engine facts are retained separately
+and do not split comparison groups. Absent evaluation identity remains null. Names do not define a
 comparison group. Use `wandb_url` for an exact W&B run link when recorded.
+Missing native timestamps keep elapsed time unknown; those attempts retain their
+observed rewards and participate in descriptive views without gain or ranking.
 
 ## Validate and release
 
