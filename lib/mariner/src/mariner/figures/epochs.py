@@ -23,12 +23,20 @@ import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
-from mariner.figures.layout import NEUTRAL, FigureData, data_limits, figure_legend, panel_legend, panels, scale_colors
+from mariner.figures.layout import (
+    NEUTRAL,
+    FigureData,
+    data_limits,
+    figure_legend,
+    flops_label,
+    panel_legend,
+    panels,
+    rounded_label,
+    scale_colors,
+)
 from mariner.figures.starcoder import (
     ARM_COLORS,
-    AVOIDED_COLOR,
     CURVE_POINTS,
-    DIAMOND,
     EPOCH_SCALE_TOLERANCE,
     FIXED_PARAMETERS_CURVES,
     FIXED_TOKENS_CURVES,
@@ -38,12 +46,10 @@ from mariner.figures.starcoder import (
     StarcoderSweep,
     atlas_sweeps,
     diagonal_sweeps,
-    draw_proxies,
-    draw_target,
+    draw_repetition,
     epoch_matching,
     fitted_sweep,
     parameters_label,
-    selection_values,
     tokens_label,
 )
 
@@ -57,15 +63,6 @@ PROXY_FIRST_SHARE = 0.1
 TARGET_FIRST_SHARE = 0.3
 EPOCH_TICK_SHARES = (0.6, 0.8, 1.0)  # the shares at which Figure 2's top axes print materialized epochs
 EPOCH_ROW_PITCH = 10.0  # points between stacked rows of epochs above a panel
-
-
-def rounded_label(value: float) -> str:
-    """Two decimals below one and one from one up, as the paper prints epochs and tokens per parameter."""
-    return f"{value:.2f}" if value < 1 else f"{value:.1f}"
-
-
-def flops_label(flops: float) -> str:
-    return f"{flops:.3g}".replace("e+", "e")
 
 
 def epoch_rows(axis: Axes, matching: EpochMatching, arms: Sequence[Arm]) -> None:
@@ -88,101 +85,19 @@ def draw_epoch_matching(root: Path) -> FigureData:
     """Figure 2: proxy and target loss over the StarCoder share at ten tokens per parameter, the share that each proxy
     selects, and the target's loss at each selection."""
     matching = epoch_matching(root)
-    selections = selection_values(matching).set_index("arm")
-    optimum = matching.target_optimum()
-    figure, axes = panels(2, legend_height=1.0)
+    figure, axes = panels(2, legend_height=1.1)
     proxy, target = axes
-    draw_proxies(proxy, matching, matching.matched, PROXY_FIRST_SHARE)
-    draw_target(target, matching, TARGET_FIRST_SHARE)
+    values = draw_repetition(
+        proxy, target, matching, matching.matched, "each subset", (PROXY_FIRST_SHARE, TARGET_FIRST_SHARE)
+    )
     epoch_rows(proxy, matching, (Arm.UNMATCHED, Arm.MATCHED))
     epoch_rows(target, matching, (Arm.TARGET,))
-    matched, unmatched = selections.loc[Arm.MATCHED], selections.loc[Arm.UNMATCHED]
-    with_color, without_color = ARM_COLORS[Arm.MATCHED], ARM_COLORS[Arm.UNMATCHED]
-    panel_legend(
-        proxy,
-        [
-            Line2D(
-                [], [], color=with_color, marker="o", markersize=3, label="with simulated epoching (3 subsets, range)"
-            ),
-            Line2D([], [], color=without_color, marker="o", markerfacecolor="white", label="without simulated epoching"),
-            Line2D(
-                [],
-                [],
-                color=with_color,
-                **DIAMOND,
-                label=f"selected with: p = {matched['share']:.3f}, {rounded_label(matched['epochs'])} epochs",
-            ),
-            Line2D(
-                [],
-                [],
-                color=without_color,
-                **DIAMOND,
-                label=f"selected without: p = {unmatched['share']:.2f}, {rounded_label(unmatched['epochs'])} epochs",
-            ),
-        ],
-    )
-    panel_legend(
-        target,
-        [
-            Line2D([], [], color=ARM_COLORS[Arm.TARGET], marker="o", markerfacecolor="white", label="target run"),
-            Line2D(
-                [],
-                [],
-                color=ARM_COLORS[Arm.TARGET],
-                marker="*",
-                linestyle="none",
-                markersize=11,
-                label=f"optimum: p = {optimum.share:.2f}, {optimum.bpb:.3f}",
-            ),
-            Line2D([], [], color=with_color, **DIAMOND, label=f"at the selection with: {matched['target_bpb']:.3f}"),
-            Line2D(
-                [], [], color=without_color, **DIAMOND, label=f"at the selection without: {unmatched['target_bpb']:.3f}"
-            ),
-            Line2D(
-                [],
-                [],
-                color=AVOIDED_COLOR,
-                label=f"{100 * matching.excess_loss_avoided:.1f}% less excess loss with simulated epoching",
-            ),
-        ],
-    )
-    proxy.set_title(f"Proxy runs, {flops_label(matching.compute_flops[Arm.MATCHED])} FLOPs")
-    target.set_title(f"Target run, {flops_label(matching.compute_flops[Arm.TARGET])} FLOPs")
-    proxy.set_ylabel("Proxy loss (BPB)")
-    target.set_ylabel("Target loss (BPB)")
-    for axis in axes:
-        axis.set_xlabel("StarCoder share of the mixture, p")
-    shown = matching.shares >= PROXY_FIRST_SHARE
-    proxy_curves = [
-        {"arm": Arm.MATCHED.value, "subset_seed": seed, "share": share, "bpb": bpb}
-        for seed, curve in matching.matched.iterrows()
-        for share, bpb in zip(matching.shares[shown], curve.to_numpy(float)[shown], strict=True)
-    ]
-    proxy_curves += [
-        {"arm": Arm.UNMATCHED.value, "subset_seed": np.nan, "share": share, "bpb": bpb}
-        for share, bpb in zip(matching.shares[shown], matching.unmatched.to_numpy(float)[shown], strict=True)
-    ]
-    target_curve = matching.target[matching.target.index >= TARGET_FIRST_SHARE]
     epochs = [
         {"arm": arm.value, "share": share, "epochs": matching.epochs_at(arm, share)}
         for arm in Arm
         for share in EPOCH_TICK_SHARES
     ]
-    values = {
-        "proxy_curves": pd.DataFrame(proxy_curves),
-        "target_curve": target_curve.rename_axis("share").rename("bpb").reset_index(),
-        "selections": selections.reset_index(),
-        "target_optimum": pd.DataFrame([optimum._asdict()]),
-        "epochs": pd.DataFrame(epochs),
-        "summary": pd.DataFrame(
-            {
-                "excess_loss_avoided": [matching.excess_loss_avoided],
-                "proxy_flops": [matching.compute_flops[Arm.MATCHED]],
-                "target_flops": [matching.compute_flops[Arm.TARGET]],
-            }
-        ),
-    }
-    return FigureData(figure, values)
+    return FigureData(figure, {**values, "epochs": pd.DataFrame(epochs)})
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -254,7 +169,7 @@ def sweep_label(sweep: StarcoderSweep, epochs: float) -> str:
         f"N {parameters_label(sweep.total_parameters)}, D {tokens_label(sweep.train_tokens)},"
         f" D/N {rounded_label(sweep.train_tokens / sweep.total_parameters)}"
     )
-    return f"{label}, {sweep.compute_flops:.2g} FLOPs: E* {epochs:.1f}"
+    return f"{label}, {flops_label(sweep.compute_flops)} FLOPs: E* {epochs:.1f}"
 
 
 def law_label(law: PathLaw, symbol: str) -> str:

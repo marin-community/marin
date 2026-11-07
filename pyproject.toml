@@ -436,6 +436,9 @@ ignore-missing-imports = [
     # Optional extra marin-mariner[olmix]; only mariner.olmix imports it, lazily.
     "cvxpy",
     "cvxpy.*",
+    # Optional extra marin-mariner[figures]; only mariner.figures imports it.
+    "lightgbm",
+    "lightgbm.*",
     # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
     "cutlass",
     "cutlass.*",

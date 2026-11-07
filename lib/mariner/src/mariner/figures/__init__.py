@@ -3,10 +3,10 @@
 
 """The paper's main-text figures, redrawn in a plain layout from a mariner-data snapshot.
 
-Each redraw reads only the snapshot's tables and this package's models. It shows the paper figure's data, fitted
-curves and comparisons in the shared layout of ``mariner.figures.layout``, and returns every series it plots.
-``write_figures`` writes them as PDFs, as ``mariner figures`` does. The package needs matplotlib, which
-marin-mariner's figures extra installs.
+Each redraw reads only the snapshot's tables, and fits this package's models and, for Figure 1's surrogate panel,
+LightGBM's boosted trees. It shows the paper figure's data, fitted curves and comparisons in the shared layout of
+``mariner.figures.layout``, and returns every series it plots. ``write_figures`` writes them as PDFs, as ``mariner
+figures`` does. The package needs matplotlib and LightGBM, which marin-mariner's figures extra installs.
 """
 
 from __future__ import annotations

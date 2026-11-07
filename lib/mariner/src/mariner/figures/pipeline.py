@@ -1,13 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Redraw of the paper's Figure 1 (``fig:pipeline``): its proxy and target repetition, loss and accuracy panels.
+"""Redraw of the paper's Figure 1 (``fig:pipeline``): its repetition, surrogate, loss and accuracy panels.
 
 The repetition panels draw the epoch-matching sweep of Figure 2 (``mariner.figures.starcoder``): the proxies' loss
-with and without simulated epoching, the target's loss, and the excess loss that matching repetition avoids. The lower
-panels draw each mixture's Uncheatable loss across the compute ladder with its fitted power law and MARINER's compute
-multiples (``scaling_values``), and downstream accuracy at 1e21 FLOPs (``accuracy_values``). The paper's top-right
-panel, which illustrates the surrogates' shapes on six of the matched proxy's points, is not redrawn.
+with and without simulated epoching, the target's loss, and the excess loss that matching repetition avoids. The
+surrogate panel fits MARINER, Olmix and LightGBM's boosted trees to six of the matched proxy's means
+(``surrogate_values``). The lower panels draw each mixture's Uncheatable loss across the compute ladder with its
+fitted power law and MARINER's compute multiples (``scaling_values``), and downstream accuracy at 1e21 FLOPs
+(``accuracy_values``).
+
+The paper's surrogate panel fitted MARINER with Nemotron-CC at the proxy's web epochs, 165,937,152 tokens over a pool
+of 3,639,928,832, which the dataset does not record; this module fits it as Figures 3 and 4 do, at one Nemotron-CC
+epoch per unit weight (``mariner.figures.starcoder``). Both select the same shape family, and the two curves differ
+by at most 2.4e-4 BPB, with the optimum at the same share.
+
+LightGBM brings its own OpenMP runtime, and on macOS two OpenMP runtimes in one process can crash once both have
+started thread pools: scikit-learn's k-means starts one. The trees run on one thread (``num_threads``), ``mariner
+figures`` sets ``OMP_NUM_THREADS=1`` and ``OMP_THREAD_LIMIT=1`` before it imports this module, and it runs every fit
+inside ``threadpool_limits(limits=1)``; a program that imports this module should do the same.
 """
 
 from __future__ import annotations
@@ -16,6 +27,7 @@ import dataclasses
 import math
 from pathlib import Path
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
@@ -27,22 +39,15 @@ from mariner.data import read_table
 from mariner.figures.layout import (
     METHOD_COLORS,
     METHOD_LABELS,
+    NEUTRAL,
     FigureData,
     Method,
     figure_legend,
+    mosaic,
     panel_legend,
-    panels,
 )
-from mariner.figures.starcoder import (
-    ARM_COLORS,
-    AVOIDED_COLOR,
-    DIAMOND,
-    Arm,
-    draw_proxies,
-    draw_target,
-    epoch_matching,
-    selection_values,
-)
+from mariner.figures.starcoder import DIAMOND, Arm, EpochMatching, draw_repetition, epoch_matching, fit_shares
+from mariner.olmix import fit_log_linear
 
 SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
 LADDER_METHODS = (Method.PROPORTIONAL, Method.UNIMAX, Method.OLMIX, Method.MARINER)
@@ -237,94 +242,199 @@ def draw_accuracy(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
     axis.set_title("OlmoBaseEval Easy accuracy, 1e21 FLOPs")
 
 
-def draw_pipeline(root: Path) -> FigureData:
-    """Figure 1: proxy and target loss over the StarCoder share with and without simulated epoching, loss across
-    compute scales, and downstream accuracy at 1e21 FLOPs."""
-    matching = epoch_matching(root)
-    selections = selection_values(matching).set_index("arm")
-    optimum = matching.target_optimum()
-    figure, axes = panels(2, rows=2, legend_height=1.3)
-    proxy, target, scaling_axis, accuracy_axis = axes
-    # The figure draws the matched subsets' mean, where Figure 2 draws each subset.
-    mean_track = matching.matched.mean().to_frame().T
-    draw_proxies(proxy, matching, mean_track, FIRST_SHARE)
-    draw_target(target, matching, FIRST_SHARE)
-    with_color, without_color = ARM_COLORS[Arm.MATCHED], ARM_COLORS[Arm.UNMATCHED]
-    panel_legend(
-        proxy,
-        [
-            Line2D([], [], color=with_color, marker="o", markersize=3, label="proxy with simulated epoching (range)"),
-            Line2D(
-                [],
-                [],
-                color=without_color,
-                marker="o",
-                markerfacecolor="white",
-                label="proxy without simulated epoching",
-            ),
-            Line2D(
-                [],
-                [],
-                color=with_color,
-                **DIAMOND,
-                label=f"selected with: {100 * matching.selections[Arm.MATCHED]:.0f}%",
-            ),
-            Line2D(
-                [],
-                [],
-                color=without_color,
-                **DIAMOND,
-                label=f"selected without: {100 * matching.selections[Arm.UNMATCHED]:.0f}%",
-            ),
-        ],
+# ---------------------------------------------------------------------------------------------------------------
+# The surrogate panel: MARINER, Olmix and boosted trees fitted to six means of the matched proxy's track
+# ---------------------------------------------------------------------------------------------------------------
+
+# The means of the proxy with simulated epoching that the paper's panel fits (its saved response selection
+# A-matched-59366c24ded7073e): six shares through 90%, the 10% mean calibrating MARINER's floor. Each mean averages the
+# three subsets' two trainer seeds, and every fit takes the StarCoder share that the runs drew.
+SURROGATE_SHARES = (0.1, 0.3, 0.4, 0.5, 0.7, 0.9)
+SURROGATE_POINTS = 400  # nominal shares from 10% to 100% at which the panel draws the fits
+# The panel's LightGBM fit to six observations: its settings, one thread and LightGBM's deterministic mode.
+TREE_PARAMETERS = {
+    "boosting_type": "gbdt",
+    "objective": "regression",
+    "num_leaves": 2,
+    "learning_rate": 0.1,
+    "min_data_in_leaf": 1,
+    "min_data_in_bin": 1,
+    "max_bin": 255,
+    "seed": 42,
+    "num_threads": 1,
+    "deterministic": True,
+    "force_col_wise": True,
+    "verbosity": -1,
+}
+TREE_ROUNDS = 64
+TREE_TIE_TOLERANCE = 1e-12  # BPB: the plateaus within this of the least form the trees' optimum
+TREE_COLOR = "#B77B2B"
+UNFITTED_COLOR = "#A5AEB6"
+
+
+def fit_trees(shares: np.ndarray, bpb: np.ndarray) -> lgb.Booster:
+    """LightGBM's boosted trees on the StarCoder share alone, with the panel's settings."""
+    data = lgb.Dataset(shares[:, None], label=bpb, feature_name=["starcoder_share"])
+    return lgb.train(TREE_PARAMETERS, data, num_boost_round=TREE_ROUNDS)
+
+
+def tree_splits(node: dict) -> list[float]:
+    if "leaf_value" in node:
+        return []
+    return [float(node["threshold"]), *tree_splits(node["left_child"]), *tree_splits(node["right_child"])]
+
+
+def tree_plateaus(trees: lgb.Booster, low: float, high: float) -> pd.DataFrame:
+    """The trees' prediction on [``low``, ``high``], one row per plateau between their split thresholds."""
+    splits = {split for tree in trees.dump_model()["tree_info"] for split in tree_splits(tree["tree_structure"])}
+    edges = np.array([low, *sorted(split for split in splits if low < split < high), high])
+    values = trees.predict(((edges[:-1] + edges[1:]) / 2)[:, None], num_threads=1)
+    rows: list[dict[str, float]] = []
+    for left, right, value in zip(edges[:-1], edges[1:], values, strict=True):
+        if rows and rows[-1]["bpb"] == value:
+            rows[-1]["realized_right"] = float(right)
+        else:
+            rows.append({"realized_left": float(left), "realized_right": float(right), "bpb": float(value)})
+    return pd.DataFrame(rows)
+
+
+def curve_point(curves: pd.DataFrame, position: int, model: str) -> dict[str, str | float]:
+    """A model's point at row ``position`` of the panel's curves: the nominal and realized share and its loss."""
+    row = curves.iloc[position]
+    return {
+        "model": model,
+        "share": float(row["share"]),
+        "realized_share": float(row["realized_share"]),
+        "bpb": float(row[f"{model}_bpb"]),
+    }
+
+
+def surrogate_values(matching: EpochMatching) -> dict[str, pd.DataFrame]:
+    """The surrogate panel: the matched track's means from 10%, and MARINER's, Olmix's and the trees' fits to six.
+
+    MARINER is fitted as Figures 3 and 4 fit it (``fit_shares``) and its optimum is the least of its curve on the
+    panel's grid. Olmix's law is monotone in the share, so it picks the end of the grid that its slope falls toward.
+    The trees' optimum is every plateau at their least prediction.
+    """
+    realized = matching.realized_shares(Arm.MATCHED)
+    track = matching.matched.mean()
+    track = track[track.index >= SURROGATE_SHARES[0]]
+    means = pd.DataFrame(
+        {"share": track.index, "realized_share": realized.loc[track.index].to_numpy(), "bpb": track.to_numpy()}
     )
+    means["fitted"] = means["share"].isin(SURROGATE_SHARES)
+    fitted = means[means["fitted"]]
+    shares, bpb = fitted["realized_share"].to_numpy(float), fitted["bpb"].to_numpy(float)
+    mariner = fit_shares(shares, bpb, matching.epochs_at_p1[Arm.MATCHED])
+    olmix = fit_log_linear(np.column_stack([1.0 - shares, shares]), bpb)
+    trees = fit_trees(shares, bpb)
+    grid = np.linspace(SURROGATE_SHARES[0], 1.0, SURROGATE_POINTS)
+    nominal, drawn = realized.index.to_numpy(float), realized.to_numpy(float)
+    grid_realized = np.asarray(np.interp(grid, nominal, drawn))
+    weights = np.column_stack([1.0 - grid_realized, grid_realized])
+    curves = pd.DataFrame(
+        {
+            "share": grid,
+            "realized_share": grid_realized,
+            "mariner_bpb": mariner.predict(weights),
+            "olmix_bpb": olmix.predict(weights),
+            "trees_bpb": trees.predict(grid_realized[:, None], num_threads=1),
+        }
+    )
+    plateaus = tree_plateaus(trees, grid_realized[0], grid_realized[-1])
+    for side in ("left", "right"):
+        plateaus[f"share_{side}"] = np.interp(plateaus[f"realized_{side}"], drawn, nominal)
+    plateaus["optimum"] = plateaus["bpb"] <= plateaus["bpb"].min() + TREE_TIE_TOLERANCE
+    lowest = int(np.argmin(curves["mariner_bpb"].to_numpy()))
+    pick = len(curves) - 1 if olmix.coefficients[1] < olmix.coefficients[0] else 0
+    optima = pd.DataFrame([curve_point(curves, lowest, "mariner"), curve_point(curves, pick, "olmix")])
+    return {
+        "surrogate_means": means,
+        "surrogate_curves": curves,
+        "surrogate_trees": plateaus,
+        "surrogate_optima": optima,
+    }
+
+
+def draw_surrogates(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
+    """The surrogate panel from ``surrogate_values``."""
+    means, curves, plateaus = values["surrogate_means"], values["surrogate_curves"], values["surrogate_trees"]
+    optima = values["surrogate_optima"].set_index("model")
+    mariner_color, olmix_color = METHOD_COLORS[Method.MARINER], METHOD_COLORS[Method.OLMIX]
+    axis.plot(curves["share"], curves["mariner_bpb"], color=mariner_color, linewidth=1.6)
+    axis.plot(curves["share"], curves["olmix_bpb"], color=olmix_color, linestyle="--")
+    steps = plateaus[["share_left", "share_right"]].to_numpy().ravel()
+    axis.plot(steps, np.repeat(plateaus["bpb"].to_numpy(), 2), color=TREE_COLOR, linewidth=1.0)
+    for plateau in plateaus[plateaus["optimum"]].itertuples():
+        axis.plot([plateau.share_left, plateau.share_right], [plateau.bpb] * 2, color=TREE_COLOR, alpha=0.3, linewidth=5)
+    unfitted = means[~means["fitted"]]
+    axis.scatter(unfitted["share"], unfitted["bpb"], s=18, color=UNFITTED_COLOR, edgecolor="white", zorder=4)
+    fitted = means[means["fitted"]]
+    axis.scatter(fitted["share"], fitted["bpb"], s=18, facecolor="white", edgecolor=NEUTRAL, zorder=5)
+    mariner, olmix = optima.loc["mariner"], optima.loc["olmix"]
+    axis.plot([mariner["share"]], [mariner["bpb"]], "*", color=mariner_color, markersize=11, markeredgecolor="white")
+    axis.plot([olmix["share"]], [olmix["bpb"]], color=olmix_color, **DIAMOND)
+    lowest = plateaus[plateaus["optimum"]]
     panel_legend(
-        target,
+        axis,
         [
-            Line2D([], [], color=ARM_COLORS[Arm.TARGET], marker="o", markerfacecolor="white", label="target scale"),
+            Line2D([], [], color=mariner_color, linewidth=1.6, label="MARINER fit"),
             Line2D(
                 [],
                 [],
-                color=ARM_COLORS[Arm.TARGET],
+                color=mariner_color,
                 marker="*",
                 linestyle="none",
                 markersize=11,
-                label=f"target optimum: {100 * optimum.share:.0f}%",
+                label=f"MARINER's interior optimum: p = {mariner['share']:.3f}",
             ),
-            Line2D([], [], color=with_color, **DIAMOND, label="at the selection with simulated epoching"),
-            Line2D([], [], color=without_color, **DIAMOND, label="at the selection without"),
-            Line2D([], [], color=AVOIDED_COLOR, label=f"excess loss avoided: {100 * matching.excess_loss_avoided:.0f}%"),
+            Line2D([], [], color=olmix_color, linestyle="--", label="Olmix fit (monotone)"),
+            Line2D([], [], color=olmix_color, **DIAMOND, label=f"Olmix's pick: p = {olmix['share']:.2f}"),
+            Line2D([], [], color=TREE_COLOR, label="boosted trees (piecewise constant)"),
+            Line2D(
+                [],
+                [],
+                color=TREE_COLOR,
+                alpha=0.3,
+                linewidth=5,
+                label=(f"trees' optimum: p = {lowest['share_left'].min():.2f} to {lowest['share_right'].max():.2f}"),
+            ),
+            Line2D([], [], color=NEUTRAL, marker="o", markerfacecolor="white", linestyle="none", label="fitted means"),
+            Line2D([], [], color=UNFITTED_COLOR, marker="o", linestyle="none", label="means not fitted"),
         ],
     )
-    for axis, title, label in (
-        (proxy, "Proxy scale", "Proxy loss (BPB)"),
-        (target, "Target scale", "Target loss (BPB)"),
-    ):
-        axis.set_title(f"{title}: StarCoder repetition")
-        axis.set_xlabel("StarCoder share of the mixture, p")
-        axis.set_ylabel(label)
+    axis.set_title(f"Surrogates fitted to {int(means['fitted'].sum())} proxy means")
+    axis.set_xlabel("StarCoder share of the mixture, p")
+    axis.set_ylabel("Proxy loss (BPB)")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Figure 1
+# ---------------------------------------------------------------------------------------------------------------
+
+PIPELINE_PANELS = (
+    ("proxy", "proxy", "target", "target", "surrogates", "surrogates"),
+    ("scaling", "scaling", "scaling", "accuracy", "accuracy", "accuracy"),
+)
+
+
+def draw_pipeline(root: Path) -> FigureData:
+    """Figure 1: proxy and target loss over the StarCoder share with and without simulated epoching, the surrogates'
+    fits to the proxy's means, loss across compute scales, and downstream accuracy at 1e21 FLOPs."""
+    matching = epoch_matching(root)
+    figure, axes = mosaic(PIPELINE_PANELS, columns=3, rows=2, legend_height=1.7)
+    # Figure 1 draws the matched subsets' mean, where Figure 2 draws each subset.
+    mean_track = matching.matched.mean().to_frame("mean of the subsets").T
+    repetition = draw_repetition(
+        axes["proxy"], axes["target"], matching, mean_track, "their mean", (FIRST_SHARE, FIRST_SHARE)
+    )
+    surrogates = surrogate_values(matching)
+    draw_surrogates(axes["surrogates"], surrogates)
     scaling, accuracy = scaling_values(root), accuracy_values(root)
-    draw_scaling(scaling_axis, scaling)
-    draw_accuracy(accuracy_axis, accuracy)
+    draw_scaling(axes["scaling"], scaling)
+    draw_accuracy(axes["accuracy"], accuracy)
     handles = [
         Line2D([], [], color=METHOD_COLORS[method], marker="o", label=METHOD_LABELS[method]) for method in LADDER_METHODS
     ]
     figure_legend(figure, handles, columns=len(LADDER_METHODS))
-    shown = matching.shares >= FIRST_SHARE
-    proxy_curves = pd.DataFrame(
-        {
-            "share": matching.shares[shown],
-            Arm.MATCHED.value: mean_track.iloc[0].to_numpy(float)[shown],
-            Arm.UNMATCHED.value: matching.unmatched.to_numpy(float)[shown],
-        }
-    )
-    repetition = {
-        "proxy_curves": proxy_curves,
-        "target_curve": (
-            matching.target[matching.target.index >= FIRST_SHARE].rename_axis("share").rename("bpb").reset_index()
-        ),
-        "selections": selections.reset_index(),
-        "target_optimum": pd.DataFrame([optimum._asdict()]),
-        "summary": pd.DataFrame({"excess_loss_avoided": [matching.excess_loss_avoided]}),
-    }
-    return FigureData(figure, {**repetition, **scaling, **accuracy})
+    return FigureData(figure, {**repetition, **surrogates, **scaling, **accuracy})

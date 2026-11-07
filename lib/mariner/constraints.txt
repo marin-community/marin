@@ -28,3 +28,5 @@ pyparsing==3.3.1
 python-dateutil==2.9.0.post0
 packaging==26.3
 six==1.17.0
+lightgbm==4.7.0
+narwhals==2.15.0

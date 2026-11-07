@@ -51,6 +51,7 @@ STYLE = {
 }
 PDF_METADATA = {"CreationDate": None}  # matplotlib stamps the time otherwise
 NEUTRAL = "#4D4D4D"  # marks that belong to no method: measured points, reference lines, path fits
+BAND_ALPHA = 0.16  # opacity of a shaded band: a range or an interval around a curve
 
 
 class Method(StrEnum):
@@ -105,21 +106,30 @@ def style() -> AbstractContextManager[Any]:
 
 
 def panels(
-    columns: int, rows: int = 1, legend_width: float = 0.0, legend_height: float = 0.0, **subplot_options: Any
+    columns: int, legend_width: float = 0.0, legend_height: float = 0.0, **subplot_options: Any
 ) -> tuple[Figure, np.ndarray]:
-    """A figure of ``rows`` x ``columns`` panels of the shared size, and its axes in reading order.
+    """A figure of one row of ``columns`` panels of the shared size, and its axes from left to right.
 
     ``legend_width`` and ``legend_height`` are the inches added for legends outside the panels.
     """
-    figsize = (columns * PANEL_WIDTH + legend_width, rows * PANEL_HEIGHT + legend_height)
+    figsize = (columns * PANEL_WIDTH + legend_width, PANEL_HEIGHT + legend_height)
     figure = Figure(figsize=figsize, layout="constrained")
-    axes = figure.subplots(rows, columns, squeeze=False, **subplot_options)
+    axes = figure.subplots(1, columns, squeeze=False, **subplot_options)
     return figure, axes.ravel()
 
 
 def figure_legend(figure: Figure, handles: Sequence[Artist], columns: int) -> None:
     """A legend of ``handles`` under the panels, in ``columns`` columns."""
     figure.legend(handles=handles, loc="outside lower center", ncols=columns)
+
+
+def mosaic(
+    layout: Sequence[Sequence[str]], columns: float, rows: int, legend_height: float = 0.0
+) -> tuple[Figure, dict]:
+    """A figure of named panels arranged as ``layout`` (matplotlib's subplot mosaic), ``columns`` panels wide and
+    ``rows`` panels tall at the shared panel size, plus ``legend_height`` inches for legends outside the panels."""
+    figure = Figure(figsize=(columns * PANEL_WIDTH, rows * PANEL_HEIGHT + legend_height), layout="constrained")
+    return figure, figure.subplot_mosaic([list(row) for row in layout])
 
 
 def panel_legend(axis: Axes, handles: Sequence[Artist] | None = None, **options: Any) -> None:
@@ -132,6 +142,16 @@ def data_limits(values: Sequence[float] | np.ndarray) -> tuple[float, float]:
     low, high = float(np.min(values)), float(np.max(values))
     margin = DATA_MARGIN * (high - low)
     return low - margin, high + margin
+
+
+def rounded_label(value: float) -> str:
+    """Two decimals below one and one from one up, as the paper prints epochs and tokens per parameter."""
+    return f"{value:.2f}" if value < 1 else f"{value:.1f}"
+
+
+def flops_label(flops: float) -> str:
+    """Training FLOPs to three significant digits, as 2.49e16."""
+    return f"{flops:.3g}".replace("e+", "e")
 
 
 def scale_colors(count: int) -> list[tuple[float, ...]]:

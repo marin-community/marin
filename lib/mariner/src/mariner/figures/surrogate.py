@@ -28,6 +28,7 @@ from scipy import stats
 
 from mariner.data import OBJECTIVES, OBSERVATION_ID, TRAINED_MARINER, TRAINED_OLMIX, read_table
 from mariner.figures.layout import (
+    BAND_ALPHA,
     METHOD_COLORS,
     METHOD_LABELS,
     NEUTRAL,
@@ -292,7 +293,9 @@ def draw_learning_curves(root: Path) -> FigureData:
             rows = ratios[(ratios["objective"] == objective) & (ratios["model"] == model)].sort_values("mixtures")
             ranked, constant = rows[~rows["constant_fit"]], rows[rows["constant_fit"]]
             color = METHOD_COLORS[model]
-            axis.fill_between(ranked["mixtures"], ranked["low"], ranked["high"], color=color, alpha=0.16, linewidth=0)
+            axis.fill_between(
+                ranked["mixtures"], ranked["low"], ranked["high"], color=color, alpha=BAND_ALPHA, linewidth=0
+            )
             axis.plot(ranked["mixtures"], ranked["ratio"], color=color, marker="o", markerfacecolor="white")
             if len(constant):
                 joined = pd.concat([constant, ranked.iloc[:1]])
@@ -315,7 +318,7 @@ def draw_learning_curves(root: Path) -> FigureData:
         for model in LEARNING_CURVE_MODELS
     ]
     handles += [
-        Patch(color=NEUTRAL, alpha=0.16, linewidth=0, label=f"{CONFIDENCE:.0%} t-interval over the draws"),
+        Patch(color=NEUTRAL, alpha=BAND_ALPHA, linewidth=0, label=f"{CONFIDENCE:.0%} t-interval over the draws"),
         Line2D([], [], color=RANDOM_COLOR, linestyle="--", label="random pick"),
         Line2D(
             [],

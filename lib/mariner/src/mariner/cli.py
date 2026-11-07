@@ -21,6 +21,7 @@ import dataclasses
 import importlib.util
 import json
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from enum import StrEnum
@@ -98,9 +99,11 @@ INPUT_ERROR_STATUS = 2  # argparse's status for a malformed argument
 LOG_FORMAT = "%(asctime)s %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
 OBJECTIVE_HELP = f"objective of the tasks table ({' or '.join(OBJECTIVES)} in mariner-data)"
-MATPLOTLIB = "matplotlib"
+FIGURES_MODULES = ("matplotlib", "lightgbm")
 FONTTOOLS = "fontTools"
-MATPLOTLIB_MISSING = "redrawing the figures needs matplotlib, which marin-mariner's figures extra installs"
+FIGURES_MISSING = "redrawing the figures needs matplotlib and lightgbm, which marin-mariner's figures extra installs"
+# LightGBM's OpenMP runtime can crash beside scikit-learn's on macOS unless OpenMP runs on one thread from the start.
+ONE_OPENMP_THREAD = {"OMP_NUM_THREADS": "1", "OMP_THREAD_LIMIT": "1"}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -465,9 +468,10 @@ def run_design(args: argparse.Namespace) -> int:
 
 
 def run_figures(args: argparse.Namespace) -> int:
-    # mariner.figures imports matplotlib, an optional dependency; find it without importing it, as olmix finds cvxpy.
-    if importlib.util.find_spec(MATPLOTLIB) is None:
-        raise ImportError(MATPLOTLIB_MISSING)
+    # mariner.figures imports the figures extra's modules; find them without importing them, as olmix finds cvxpy.
+    if any(importlib.util.find_spec(module) is None for module in FIGURES_MODULES):
+        raise ImportError(FIGURES_MISSING)
+    os.environ.update(ONE_OPENMP_THREAD)  # before mariner.figures imports lightgbm and its OpenMP runtime
     from mariner.figures import write_figures  # noqa: PLC0415  (optional dependency: the figures extra)
 
     logging.getLogger(FONTTOOLS).setLevel(logging.WARNING)  # it logs each font it subsets into a PDF at INFO
