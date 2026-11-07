@@ -285,68 +285,24 @@ provenance and removed-default counts are in
 Rebuilds consume those immutable upgraded inputs through the ordinary selection
 path; they need no schema-migration curation mode.
 
-### Snowball source curation
+### Train on a Snowball selection
 
-Declare new tasks through the
-[dataset-owned curation pipeline](#dataset-owned-invocation).
-Pin their source revision, converter and grader dependencies. The training pool
-comes from FULL curation's admitted `final/*.parquet` files; QUICK conversions
-and SAMPLE panels do not qualify.
+To change the Snowball training tasks, copy `recipes/snowball-100k.json` under a new
+name or version and run a FULL [campaign](#run-a-campaign) with `--selection` set to
+that recipe. Repeat `--source` for each recipe source, using its invocation name from
+[`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py):
+recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. To select again from a
+finished campaign, pass its `corpus.json` with `--corpus` as shown in
+[Final task selection](#final-task-selection). Check the source and family counts in
+`summary.json` before training.
 
-Use the [curation campaign procedure](#run-a-campaign)
-to review and verify the sources. For example, inside an Iris coordinator with
-the pipeline dependencies and review credentials available:
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.driver \
-  --mode full --source SOURCE_NAME \
-  --review-mode chat --model-revision "$REVIEW_MODEL_REVISION" \
-  --review-cache "$CURATION_CACHE" \
-  --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
-  --normalized-shards 32 --image-backend gvisor \
-  --worker-image "$WORKER_IMAGE" \
-  --report-path "$CAMPAIGN/full.json" \
-  --selection experiments/post_training/task_curation/recipes/snowball-100k.json
-```
-
-Repeat `--source` for every source in the selection recipe, using its invocation
-name from
-[`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py).
-For example, recipe ID `MarinSkyRL:eurus2_code` is invoked as
-`--source eurus2_code`. The CLI names differ from the stable IDs in the recipe.
-Set `REVIEW_MODEL_REVISION` to the pinned reviewer, `WORKER_IMAGE` to a
-digest-pinned worker image, and `CURATION_CACHE` and `CAMPAIGN` to retained,
-region-local storage prefixes. Build the declared
-[grader environments](#run-a-campaign) first.
-The command prints a plan; add `--run` to execute it. Successful source artifacts
-and exact review requests remain cached across campaigns.
-
-### Publish a Snowball selection
-
-If a completed FULL campaign already has the required source artifacts, reuse
-its `corpus.json` without rerunning curation:
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.driver \
-  --corpus "$CAMPAIGN/corpus.json" \
-  --selection experiments/post_training/task_curation/recipes/snowball-100k.json
-```
-
-Add `--run` to publish. The printed `task_selection` path is the artifact root
-to pass to training. Its `summary.json` records the recipe, source artifacts,
-selected counts and evaluation IDs. Check the source and family quotas there
-before launching. A source shortfall stops selection. Source or selection changes require a new recipe version; preserve
-published versions for comparisons.
-
-The artifact contains `train.parquet`, `validation.parquet` and
-`full_validation.parquet`. The training selection's validation panel samples
-20 tasks per family from the original 910-task development set. All 910 are
-excluded from training by ID, public semantics and exact conversation context.
-Held-out quality comparisons use the independent test panel described in the
-[experiment recipe](../recipes/snowball-rl.md#tasks-and-evaluation). See
-[selection semantics](#final-task-selection) for deduplication and task serialization.
+Train with `snowball_rl --preset data-short --tasks NAME@VERSION`, then data-medium
+(see [Snowball RL experiments](../recipes/snowball-rl.md#change-one-input)). The launcher
+reads `rl-data/task-selection/NAME/VERSION` under `s3://marin-us-east-02a/marin`, the
+driver's default `--artifact-root`. It refuses selections that contain AI-judged tasks,
+and data presets require the default selection's heldout input. Snowball presets do not
+evaluate the selection's `validation.parquet`; held-out comparisons use the
+[test panel](../recipes/snowball-rl.md#tasks-and-evaluation).
 
 ## Dataset-owned invocation
 

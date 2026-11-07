@@ -105,7 +105,7 @@ window, or a panel slice. It refuses other keys before launch.
 
 ### Data: tasks and curriculum
 
-1. Build an immutable selection through [task curation](../../../docs/references/task-curation.md). It
+1. Build an immutable selection through [task curation](../../../docs/references/task-curation.md#train-on-a-snowball-selection). It
    must name the same held-out input as the default selection.
 2. Screen it, then train on it:
 

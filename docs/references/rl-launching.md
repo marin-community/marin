@@ -233,4 +233,4 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 For the current curation, training and evaluation recipe, see the
 [Snowball RL experiments](../recipes/snowball-rl.md) and the
-[selection handoff](task-curation.md#publish-a-snowball-selection).
+[selection handoff](task-curation.md#train-on-a-snowball-selection).
