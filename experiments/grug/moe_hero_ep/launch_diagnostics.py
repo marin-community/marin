@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded GB200 diagnostics for the production EP64 MoE hero recipe."""
+"""Bounded GB200 diagnostics for the production MoE hero recipe."""
 
 import dataclasses
 import os
@@ -44,6 +44,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
     HERO_RACK_GPUS,
+    HERO_SCHEDULE_EXTENSION,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
@@ -113,7 +114,7 @@ def build_diagnostic_run(
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build a bounded diagnostic run for the production EP64 hero recipe.
+    """Build a bounded diagnostic run for the production hero recipe.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
@@ -125,6 +126,9 @@ def build_diagnostic_run(
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+
+    ``HERO_SCHEDULE_EXTENSION`` sets the learning rate past ``schedule_steps``, and ``num_steps`` can reach its
+    last step.
     """
     if expert_axis_size is None:
         expert_axis_size = hero_expert_axis_size(context_axis_size)
@@ -143,7 +147,8 @@ def build_diagnostic_run(
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
-    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
+    # run stops at (a restore resumes mid-schedule, so a stop at the restored step trains nothing and one
+    # before it fails).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
@@ -152,8 +157,12 @@ def build_diagnostic_run(
     # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
     if schedule_steps is not None and schedule_steps <= 0:
         raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
-    if schedule_steps is not None and schedule_steps < num_steps:
-        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+    extension_steps = HERO_SCHEDULE_EXTENSION.steps if HERO_SCHEDULE_EXTENSION is not None else 0
+    if schedule_steps is not None and schedule_steps + extension_steps < num_steps:
+        raise ValueError(
+            f"num_steps={num_steps} must not pass schedule_steps={schedule_steps} "
+            f"plus the {extension_steps}-step schedule extension"
+        )
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
     model = HERO_MODEL_CONFIG
     overrides = {
@@ -191,6 +200,7 @@ def build_diagnostic_run(
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
+    optimizer = dataclasses.replace(optimizer, schedule_extension=HERO_SCHEDULE_EXTENSION)
     batch_axes = validated_batch_axis_size(
         device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
@@ -579,7 +589,7 @@ def build_diagnostic_run(
     "--qk-mult-long-scale",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to the hero configuration.",
 )
 @click.option(
     "--log-scaling-n-floor",
