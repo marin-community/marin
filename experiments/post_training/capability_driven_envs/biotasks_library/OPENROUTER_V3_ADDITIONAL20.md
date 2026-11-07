@@ -69,9 +69,19 @@ Preserve all attempts and choose a versioned effective 20 with fewer
 weak/format-failing models. `openrouter_v3_topup16.json` freezes 16
 non-overlapping additional candidate routes for another 12-item pilot using
 *the same* frozen tasks, policy, and $40 budget baseline. Their pilot is
-separate and no original model/task is called twice. Choose exactly 13 new
-models only after pilot review, alongside seven retained, previously piloted
-models; new full jobs must reuse those 12 pilot generations per model.
+separate and no original model/task is called twice. **Second pilot complete.** The 16 new routes produced 113/175 scored
+correct, with 16 ungraded and one infrastructure-missing. The versioned
+`openrouter_v3_effective20.json` selects **seven** initial models and
+**13** top-up models, excluding the unroutable Scout, the MiniMax route
+with unresolved metadata, the zero-correct Nemotron Lightning pilot,
+and two expensive, near-duplicate Qwen anchors. The selected 20 have
+121/212 scored correct (**57.1%**) and 121/240 assigned correct (**50.4%**)
+on the stratified pilot; their full-bank rate can differ. Retaining the
+lower/mid anchors targets ~50% without treating ungraded/infrastructure
+failures as zeros in IRT. **$2.455** in total OpenRouter API spend so far
+includes both pilots under the shared **$40** ceiling. The full drivers
+submit only the 218 non-pilot items for each of these 20; immutable batch
+sizes in the selection keep premium reserve checks below the ceiling.
 
 This remains a *provisional* research bank. After all 20 batches, freeze a
 separate scored snapshot with raw-source hashes and provider evidence; refit

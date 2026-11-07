@@ -30,6 +30,7 @@ from experiments.post_training.capability_driven_envs.biotasks_library.calibrate
     CalibrationConfig,
     _calibrate,
 )
+from experiments.post_training.capability_driven_envs.biotasks_library.effective20_batches import full_batches
 from experiments.post_training.capability_driven_envs.biotasks_library.finalize_combined_v1 import _write_new
 from experiments.post_training.capability_driven_envs.biotasks_library.run_openrouter_first_wave import (
     PinnedModel,
@@ -208,10 +209,18 @@ def main() -> None:
         parser.error("full run needs a frozen effective-20 selection manifest")
     cohort = load_cohort()
     models, panel_sha = load_panel()
-    if args.selected_manifest is not None:
-        selected = json.loads(args.selected_manifest.read_text())["initial_models"]
-        if len(selected) != 7 or len(set(selected)) != 7 or not set(selected) <= {m.model for m in models}:
-            raise ValueError("Expected exactly seven selected initial models")
+    selection = json.loads(args.selected_manifest.read_text()) if args.selected_manifest else None
+    if selection is not None:
+        selected = selection["initial_models"]
+        if (
+            selection["selection_id"] != "biotasks-v3-openrouter-effective20-v2"
+            or selection["initial_panel_sha256"] != panel_sha
+            or len(selected) != 7
+            or len(set(selected)) != 7
+            or not set(selected) <= {m.model for m in models}
+            or set(selection["batch_sizes"]) != set(selected) | set(selection["topup_models"])
+        ):
+            raise ValueError("Invalid effective20 selection of seven initial models")
         models = [m for m in models if m.model in selected]
     tasks = {row["task_id"]: TaskSpec.model_validate(row["task"]) for row in cohort.rows}
     pilot_ids = load_pilot_ids(set(tasks))
@@ -248,23 +257,24 @@ def main() -> None:
         if args.pilot_only:
             continue
         rest = [tasks[item] for item in sorted(tasks) if item not in pilot_ids]
-        uri = prefix + "results.jsonl"
-        existing = _read_completed(uri, rest, model, panel_sha)
-        if existing is None:
-            budget_gate(model, len(rest), panel_sha)
-            _run(
-                rest,
-                model,
-                panel_sha,
-                uri,
-                args.max_workers,
-                campaign_id=CAMPAIGN_ID,
-                name_prefix="biotasks-additional20",
-            )
-            existing = _read_completed(uri, rest, model, panel_sha)
+        assert selection is not None
+        for uri, batch in full_batches(rest, model.model, prefix, selection["batch_sizes"]):
+            existing = _read_completed(uri, batch, model, panel_sha)
             if existing is None:
-                raise RuntimeError(f"Missing full batch: {model.model}")
-        _verify_routes(existing, model, uri)
+                budget_gate(model, len(batch), panel_sha)
+                _run(
+                    batch,
+                    model,
+                    panel_sha,
+                    uri,
+                    args.max_workers,
+                    campaign_id=CAMPAIGN_ID,
+                    name_prefix="biotasks-additional20",
+                )
+                existing = _read_completed(uri, batch, model, panel_sha)
+                if existing is None:
+                    raise RuntimeError(f"Missing full batch: {model.model}")
+            _verify_routes(existing, model, uri)
         print(f"DONE model={model.model} pairs={len(pilot) + len(rest)}", flush=True)
     print("ADDITIONAL20_PILOT_COMPLETE" if args.pilot_only else "ADDITIONAL20_COMPLETE", flush=True)
 

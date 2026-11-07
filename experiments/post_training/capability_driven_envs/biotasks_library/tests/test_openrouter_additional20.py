@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from experiments.post_training.capability_driven_envs.biotasks_library.effective20_batches import full_batches
 from experiments.post_training.capability_driven_envs.biotasks_library.finalize_openrouter_v3_effective20 import (
     SELECTION_ID,
     selected_models,
@@ -42,6 +43,7 @@ def test_effective_selection_requires_seven_plus_thirteen_distinct_models(tmp_pa
         "topup_panel_sha256": topup_sha,
         "initial_models": [m.model for m in initial[:7]],
         "topup_models": [m.model for m in topup[:13]],
+        "batch_sizes": {m.model: 109 for m in [*initial[:7], *topup[:13]]},
     }
     path = tmp_path / "selection.json"
     path.write_text(json.dumps(selection))
@@ -51,6 +53,17 @@ def test_effective_selection_requires_seven_plus_thirteen_distinct_models(tmp_pa
     path.write_text(json.dumps(selection))
     with pytest.raises(ValueError, match="Effective20 selection"):
         selected_models(path)
+
+
+def test_full_batches_are_disjoint_and_preserve_input_order() -> None:
+    tasks = list(range(218))
+    chunks = full_batches(tasks, "m", "s3://private/", {"m": 55})
+    assert [len(rows) for _, rows in chunks] == [55, 55, 55, 53]
+    assert [item for _, rows in chunks for item in rows] == tasks
+    assert len({uri for uri, _ in chunks}) == len(chunks)
+    assert full_batches(tasks, "m", "s3://private/", {"m": 218}) == [("s3://private/results.jsonl", tasks)]
+    with pytest.raises(ValueError, match="Expected exactly 218"):
+        full_batches(tasks[:-1], "m", "s3://private/", {"m": 55})
 
 
 def test_pilot_spans_prior_difficulties_without_repeated_item() -> None:

@@ -16,6 +16,7 @@ from pathlib import Path
 import fsspec
 from taskcompendium.models import TaskSpec
 
+from experiments.post_training.capability_driven_envs.biotasks_library.effective20_batches import full_batches
 from experiments.post_training.capability_driven_envs.biotasks_library.run_openrouter_first_wave import (
     PinnedModel,
     _key_budget,
@@ -92,10 +93,18 @@ def main() -> None:
     if not args.pilot_only and args.selected_manifest is None:
         parser.error("full run needs a frozen effective-20 selection manifest")
     models, panel_sha = load_panel()
-    if args.selected_manifest is not None:
-        selected = json.loads(args.selected_manifest.read_text())["topup_models"]
-        if len(selected) != 13 or len(set(selected)) != 13 or not set(selected) <= {m.model for m in models}:
-            raise ValueError("Expected exactly 13 selected top-up models")
+    selection = json.loads(args.selected_manifest.read_text()) if args.selected_manifest else None
+    if selection is not None:
+        selected = selection["topup_models"]
+        if (
+            selection["selection_id"] != "biotasks-v3-openrouter-effective20-v2"
+            or selection["topup_panel_sha256"] != panel_sha
+            or len(selected) != 13
+            or len(set(selected)) != 13
+            or not set(selected) <= {m.model for m in models}
+            or set(selection["batch_sizes"]) != set(selected) | set(selection["initial_models"])
+        ):
+            raise ValueError("Invalid effective20 selection of 13 top-up models")
         models = [m for m in models if m.model in selected]
     cohort = load_cohort()
     tasks = {row["task_id"]: TaskSpec.model_validate(row["task"]) for row in cohort.rows}
@@ -133,23 +142,24 @@ def main() -> None:
         if args.pilot_only:
             continue
         rest = [tasks[item] for item in sorted(tasks) if item not in pilot_ids]
-        full_uri = prefix + "results.jsonl"
-        existing = _read_completed(full_uri, rest, model, panel_sha)
-        if existing is None:
-            budget_gate(model, len(rest))
-            _run(
-                rest,
-                model,
-                panel_sha,
-                full_uri,
-                args.max_workers,
-                campaign_id=CAMPAIGN_ID,
-                name_prefix="biotasks-topup16",
-            )
-            existing = _read_completed(full_uri, rest, model, panel_sha)
+        assert selection is not None
+        for full_uri, batch in full_batches(rest, model.model, prefix, selection["batch_sizes"]):
+            existing = _read_completed(full_uri, batch, model, panel_sha)
             if existing is None:
-                raise RuntimeError(f"Missing full top-up batch: {model.model}")
-        _verify_routes(existing, model, full_uri)
+                budget_gate(model, len(batch))
+                _run(
+                    batch,
+                    model,
+                    panel_sha,
+                    full_uri,
+                    args.max_workers,
+                    campaign_id=CAMPAIGN_ID,
+                    name_prefix="biotasks-topup16",
+                )
+                existing = _read_completed(full_uri, batch, model, panel_sha)
+                if existing is None:
+                    raise RuntimeError(f"Missing full top-up batch: {model.model}")
+            _verify_routes(existing, model, full_uri)
         print(f"DONE model={model.model} pairs=230", flush=True)
     print("TOPUP16_PILOT_COMPLETE" if args.pilot_only else "TOPUP_SELECTED_COMPLETE", flush=True)
 

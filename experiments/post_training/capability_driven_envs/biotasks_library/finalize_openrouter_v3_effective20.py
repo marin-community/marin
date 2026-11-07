@@ -15,6 +15,7 @@ import fsspec
 from taskcompendium.models import TaskSpec
 from taskforge.content_hash import digest
 
+from experiments.post_training.capability_driven_envs.biotasks_library.effective20_batches import full_batches
 from experiments.post_training.capability_driven_envs.biotasks_library.finalize_combined_v1 import _write_new
 from experiments.post_training.capability_driven_envs.biotasks_library.finalize_openrouter_first_wave_v3 import (
     _read,
@@ -68,6 +69,8 @@ def selected_models(path: Path) -> tuple[list[tuple[PinnedModel, str, str, str]]
         or len(set(manifest["topup_models"])) != 13
         or not set(manifest["initial_models"]) <= {m.model for m in first}
         or not set(manifest["topup_models"]) <= {m.model for m in second}
+        or set(manifest["batch_sizes"]) != set(manifest["initial_models"]) | set(manifest["topup_models"])
+        or any(not isinstance(size, int) or not 1 <= size <= 218 for size in manifest["batch_sizes"].values())
     ):
         raise ValueError("Effective20 selection changed or mismatches source panels")
     chosen: list[tuple[PinnedModel, str, str, str]] = [
@@ -84,17 +87,16 @@ def freeze(commit: str, selection_path: Path) -> dict[str, Any]:
     tasks = {row["task_id"]: TaskSpec.model_validate(row["task"]) for row in cohort.rows}
     pilot_ids = load_pilot_ids(set(tasks))
     selected, selection_sha = selected_models(selection_path)
+    sizes = json.loads(selection_path.read_text())["batch_sizes"]
     results: list[dict[str, Any]] = []
     inputs: list[dict[str, Any]] = []
     for model, root, campaign_id, source_panel_sha in selected:
         prefix = root + f"attempts/{_model_path(model)}/"
-        expected = {
-            "pilot.jsonl": [tasks[item] for item in pilot_ids],
-            "results.jsonl": [tasks[item] for item in sorted(tasks) if item not in pilot_ids],
-        }
+        rest = [tasks[item] for item in sorted(tasks) if item not in pilot_ids]
+        expected = [(prefix + "pilot.jsonl", [tasks[item] for item in pilot_ids])]
+        expected.extend(full_batches(rest, model.model, prefix, sizes))
         raw_by_id: dict[str, tuple[dict[str, Any], str]] = {}
-        for filename, subset in expected.items():
-            uri = prefix + filename
+        for uri, subset in expected:
             if _read_completed(uri, subset, model, source_panel_sha) is None:
                 raise ValueError(f"Missing completed batch: {uri}")
             rows, source = _read(uri)
@@ -106,8 +108,12 @@ def freeze(commit: str, selection_path: Path) -> dict[str, Any]:
         if set(raw_by_id) != set(tasks):
             raise ValueError(f"Incomplete raw model coverage: {model.model}")
         backfill = {}
-        for filename in ("route-metadata-backfill-pilot.jsonl", "route-metadata-backfill.jsonl"):
-            uri = prefix + filename
+        for batch_uri, _ in expected:
+            filename = Path(batch_uri).name
+            overlay_name = (
+                "route-metadata-backfill.jsonl" if filename == "results.jsonl" else f"route-metadata-backfill-{filename}"
+            )
+            uri = prefix + overlay_name
             fs, path = fsspec.core.url_to_fs(uri)
             if fs.exists(path):
                 entries, source = _read(uri)
