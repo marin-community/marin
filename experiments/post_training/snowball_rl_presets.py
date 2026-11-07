@@ -39,6 +39,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from rolloutengine.models import TASK_TIMING_KEYS
@@ -96,6 +97,7 @@ class Duration(StrEnum):
 class WindowStatistic(StrEnum):
     MEAN = "mean"
     MEDIAN = "median"
+    SELECTED_TOKEN_WEIGHTED_MEAN = "selected-token-weighted-mean"
 
 
 class Gap(StrEnum):
@@ -330,7 +332,7 @@ _TIMER_REPORTS = tuple(
     for statistic in ("mean", "p50", "p95", "max")
 )
 _MISMATCH_REPORTS = tuple(
-    Metric(f"policy/mismatch/staleness0/{name}", False)
+    Metric(f"policy/mismatch/staleness0/{name}", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN)
     for name in (
         "log_ratio_abs_mean",
         "log_ratio_abs_p99",
@@ -476,7 +478,7 @@ PRESETS = MappingProxyType(
                 measured=range(2, 11),
                 guards=(
                     Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
-                    Metric("policy/mismatch/staleness0/kl_k3", False),
+                    Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 reported=_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY, Gap.NO_ASYNC_SPEED_GATE),
@@ -497,7 +499,7 @@ PRESETS = MappingProxyType(
                     Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
                     Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
                     Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
-                    Metric("policy/mismatch/staleness0/kl_k3", False),
+                    Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 reported=_ASYNC_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
@@ -793,6 +795,7 @@ class SnowballCommand(click.Command):
             raise
 
     def invoke(self, context):
+        configure_coreweave_s3()
         try:
             return super().invoke(context)
         except click.UsageError as error:

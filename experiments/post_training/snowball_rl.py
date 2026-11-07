@@ -94,6 +94,7 @@ from marin.rl.skyrl import (
     artifact_identity,
     read_skyrl_attempt_tracking,
     read_skyrl_launch_receipt,
+    read_stored_skyrl_receipt,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -582,7 +583,7 @@ def _comparison_line(row: dict, *, constraint: bool = False) -> str:
     return f"{values}; {delta}; noise +/-{noise}; {row['change']}"
 
 
-def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = None) -> dict:
+def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = None, stored_only: bool = False) -> dict:
     run = replace(run, gate=snowball_rl_gate.completed_gate(preset, run.runs, run.gate))
     rows = []
     planned = []
@@ -592,7 +593,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
-            receipt = read_skyrl_launch_receipt(path)
+            receipt = read_stored_skyrl_receipt(path) if stored_only else read_skyrl_launch_receipt(path)
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
@@ -825,9 +826,10 @@ def main(
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
-    snapshot = _status(run, preset, issue=issue)
+    do_run = click.get_current_context().params.get("do_run", False)
+    snapshot = _status(run, preset, issue=issue, stored_only=do_run)
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
-    if not click.get_current_context().params.get("do_run") and "verdict" in snapshot:
+    if not do_run and "verdict" in snapshot:
         raise click.exceptions.Exit(presets.EXIT_CODES[snapshot["verdict"]])
     return (*run.runs, *((run.gate,) if run.gate else ()))
 

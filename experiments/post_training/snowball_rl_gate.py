@@ -53,7 +53,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.11.06"
+GATE_REVISION = "2026.11.07"
 GATE_REPORT_FILENAME = "gate_report.json"
 GRADER_ERROR_LIMIT = 0.01
 OUTCOME_PREFIX = "generate/outcome/"
@@ -354,8 +354,8 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
             if first is not None:
                 values[metric.key] = float(first)
             continue
-        if metric in preset.guards and metric.key == "policy/mismatch/staleness0/kl_k3":
-            prefix = metric.key.rsplit("/", 1)[0]
+        if metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN:
+            prefix = "/".join(metric.key.split("/")[:3])
             counts = _mismatch_counts(rows, prefix)
             if counts is None:
                 continue
