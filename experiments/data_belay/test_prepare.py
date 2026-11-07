@@ -15,6 +15,7 @@ def write_manifest(root, share: float = 0.2) -> None:
         split="train",
         text_field="text",
         licenses=("odc-by",),
+        license_from_card=True,
         license_verdict=LicenseVerdict.ALLOWED,
         gated=False,
         num_rows=100,

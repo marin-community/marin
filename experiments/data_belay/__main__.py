@@ -63,6 +63,12 @@ def _dataset_options(command):
             click.option("--split", default="train", show_default=True),
             click.option("--text-field", default="text", show_default=True),
             click.option("--share", type=float, default=0.2, show_default=True, help="Share of the rung's tokens."),
+            click.option(
+                "--license",
+                "license_id",
+                default=None,
+                help="For a card that lists no license: the one a person found in its README or terms.",
+            ),
         ]
     ):
         command = option(command)
@@ -78,11 +84,11 @@ def _training_prefix() -> str:
     return prefix
 
 
-def _intake(repo, config_name, split, text_field, share) -> IntakeReport:
+def _intake(repo, config_name, split, text_field, share, license_id) -> IntakeReport:
     configure_coreweave_s3()
     tokenizer = load_tokenizer(V16384_TOKENIZER)
     needs = {rung: rung_tokens(rung) for rung in DATA_BELAY_RUNGS}
-    return run_intake(DatasetRequest(repo, config_name, split, text_field), share, needs, tokenizer)
+    return run_intake(DatasetRequest(repo, config_name, split, text_field, license_id), share, needs, tokenizer)
 
 
 @click.group()
@@ -99,15 +105,17 @@ def check(
     split: str,
     text_field: str,
     share: float,
+    license_id: str | None,
     as_json: bool,
 ) -> None:
     """Pin the head commit, check the license and estimate the dataset's size at each rung."""
-    report = _intake(repo, config_name, split, text_field, share)
+    report = _intake(repo, config_name, split, text_field, share, license_id)
     if as_json:
         click.echo(report.to_json())
     else:
         click.echo(f"dataset: {report.repo}@{report.revision} config={report.config} split={report.split}")
-        click.echo(f"license: {', '.join(report.licenses) or 'none on the card'} -> {report.license_verdict}")
+        source = "card" if report.license_from_card else "given by a person"
+        click.echo(f"license ({source}): {', '.join(report.licenses) or 'none on the card'} -> {report.license_verdict}")
         if report.gated:
             click.echo("gated: yes (the terms of access must allow training)")
         click.echo(
@@ -137,6 +145,7 @@ def prepare(
     split: str,
     text_field: str,
     share: float,
+    license_id: str | None,
     submit: bool,
 ) -> None:
     """Tokenize a seeded file sample that covers the largest rung's new-data tokens into a cache."""
@@ -144,7 +153,7 @@ def prepare(
         name = "-".join(part for part in (repo.replace("/", "-"), config_name, f"p{round(share * 100)}") if part)
         _submit_cpu_job(f"data-belay-prepare-{name.lower()}", cpu=4, memory="16GB")
     logging.basicConfig(level=logging.INFO)
-    report = _intake(repo, config_name, split, text_field, share)
+    report = _intake(repo, config_name, split, text_field, share, license_id)
     if not report.passed:
         raise click.ClickException(f"intake did not pass: license {report.license_verdict}, needs {report.needs}")
     need_tokens = max(need.new_tokens for need in report.needs)

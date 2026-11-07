@@ -65,6 +65,8 @@ class DatasetRequest:
     config: str | None
     split: str
     text_field: str
+    license: str | None = None
+    """The license a person found in the dataset's README or terms, for a card that lists none."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,6 +96,8 @@ class IntakeReport:
     split: str
     text_field: str
     licenses: tuple[str, ...]
+    license_from_card: bool
+    """False when the card lists no license and ``licenses`` is the one a person gave."""
     license_verdict: LicenseVerdict
     gated: bool
     num_rows: int
@@ -214,6 +218,10 @@ def run_intake(
     """
     info = HfApi().dataset_info(request.repo)
     licenses = _card_licenses(info)
+    if request.license is not None:
+        if licenses:
+            raise ValueError(f"{request.repo}'s card lists {licenses}; --license is only for a card that lists none")
+        licenses = (request.license,)
     # One config name for the sample, the row count and the cache plan: with no config given, the builder's default.
     # The size endpoint lists every config, so counting rows without a name would sum all of them.
     config = load_dataset_builder(request.repo, request.config, revision=info.sha).config.name
@@ -231,6 +239,7 @@ def run_intake(
         split=request.split,
         text_field=request.text_field,
         licenses=licenses,
+        license_from_card=request.license is None,
         license_verdict=license_verdict(licenses),
         gated=bool(info.gated),
         num_rows=num_rows,
