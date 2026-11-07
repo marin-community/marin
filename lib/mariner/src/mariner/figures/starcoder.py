@@ -24,7 +24,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from scipy.optimize import minimize_scalar
 
-from mariner.data import OBSERVATION_ID, read_table, require_columns
+from mariner.data import OBSERVATION_ID, TRAINER_SEED, read_table, require_columns
 from mariner.figures.layout import BAND_ALPHA, NEUTRAL, flops_label, panel_legend, rounded_label
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
@@ -42,6 +42,7 @@ MINIMUM_XATOL = 1e-12
 CURVE_POINTS = 400  # shares at which a fitted curve is drawn
 EPOCH_SCALE_TOLERANCE = 1e-12  # relative: a diagonal cell's epochs over its shares, one value up to rounding
 CURVES_TABLE = "starcoder_curves"
+CURRICULA_TABLE = "starcoder_curricula"  # the two-phase sweeps and their StarCoder pools
 MEMBERSHIP_TABLE = "starcoder_curve_membership"
 OBSERVATIONS_TABLE = "starcoder_observations"
 SWEEP_SCALE_COLUMNS = ["total_parameters", "train_tokens", "starcoder_epochs_at_p1", "compute_flops"]
@@ -243,7 +244,7 @@ def tokens_label(count: float) -> str:
 
 EPOCH_MATCHING_TABLE = "starcoder_epoch_matching"
 EPOCH_MATCHING_BPB = "programming_languages_bpb"
-RUN_KEYS = ["arm", "subset_seed", "trainer_seed", "starcoder_weight"]  # one run of the sweep each
+RUN_KEYS = ["arm", "subset_seed", TRAINER_SEED, "starcoder_weight"]  # one run of the sweep each
 EPOCH_MATCHING_COLUMNS = [
     OBSERVATION_ID,
     *RUN_KEYS,
@@ -362,9 +363,9 @@ def epoch_matching(root: Path) -> EpochMatching:
     without = unmatched[unmatched["starcoder_weight"] == 0.0]
     matched = pd.concat([matched, *(without.assign(subset_seed=seed) for seed in matched["subset_seed"].unique())])
     matched_curves = matched.pivot(
-        index=["subset_seed", "trainer_seed"], columns="starcoder_weight", values=EPOCH_MATCHING_BPB
+        index=["subset_seed", TRAINER_SEED], columns="starcoder_weight", values=EPOCH_MATCHING_BPB
     )
-    unmatched_curves = unmatched.pivot(index="trainer_seed", columns="starcoder_weight", values=EPOCH_MATCHING_BPB)
+    unmatched_curves = unmatched.pivot(index=TRAINER_SEED, columns="starcoder_weight", values=EPOCH_MATCHING_BPB)
     if not matched_curves.columns.equals(unmatched_curves.columns):
         raise ValueError("the proxies' curves cover different StarCoder shares")
     if matched_curves.isna().any().any() or unmatched_curves.isna().any().any():

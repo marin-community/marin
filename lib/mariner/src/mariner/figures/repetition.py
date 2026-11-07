@@ -37,10 +37,16 @@ from mariner.figures.layout import (
     panels,
     scale_colors,
 )
-from mariner.figures.starcoder import CURVES_TABLE, Optimum, StarcoderSweep, atlas_sweeps, tokens_label
+from mariner.figures.starcoder import (
+    CURRICULA_TABLE,
+    CURVES_TABLE,
+    Optimum,
+    StarcoderSweep,
+    atlas_sweeps,
+    tokens_label,
+)
 
 REPLAY_FAMILY = "dense_horizon_replay"  # starcoder_curves' family of the 28 sweeps
-SUPPORTS_TABLE = "starcoder_curricula"
 FULL_POOL = "full"  # starcoder_curricula's support_id of the whole StarCoder pool, whose multiplier is NaN
 # A sweep's pool is the support whose budget and pool size (SUPPORT_KEYS) equal the sweep's (CURVE_KEYS).
 CURVE_KEYS = ["train_tokens", "starcoder_subset_tokens"]
@@ -83,8 +89,8 @@ def replay_sweeps(root: Path) -> list[ReplaySweep]:
     """
     curves = read_table(root, CURVES_TABLE)
     require_columns(curves, ["curve_ref", "family", *CURVE_KEYS], CURVES_TABLE)
-    supports = read_table(root, SUPPORTS_TABLE)
-    require_columns(supports, [*SUPPORT_KEYS, *SUPPORT_COLUMNS], SUPPORTS_TABLE)
+    supports = read_table(root, CURRICULA_TABLE)
+    require_columns(supports, [*SUPPORT_KEYS, *SUPPORT_COLUMNS], CURRICULA_TABLE)
     replay = curves.loc[curves["family"] == REPLAY_FAMILY, ["curve_ref", *CURVE_KEYS]]
     pools = supports[[*SUPPORT_KEYS, *SUPPORT_COLUMNS]].drop_duplicates()
     matched = replay.merge(pools, how="left", left_on=CURVE_KEYS, right_on=SUPPORT_KEYS)
@@ -93,7 +99,7 @@ def replay_sweeps(root: Path) -> list[ReplaySweep]:
     if len(unmatched):
         raise ValueError(
             f"the {REPLAY_FAMILY} curves {', '.join(unmatched.index)} match"
-            f" {', '.join(map(str, unmatched))} {SUPPORTS_TABLE} pools by token budget and pool size, not one each"
+            f" {', '.join(map(str, unmatched))} {CURRICULA_TABLE} pools by token budget and pool size, not one each"
         )
     matched = matched.sort_values(["train_tokens", "support_order"])
     atlas = atlas_sweeps(root, matched["curve_ref"])

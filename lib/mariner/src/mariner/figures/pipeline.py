@@ -31,7 +31,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import FormatStrFormatter
 from scipy.optimize import curve_fit
 
-from mariner.data import OUTCOME_PREFIX, read_table, require_columns
+from mariner.data import LADDER_ACCURACY_TABLE, LADDER_TABLE, OUTCOME_PREFIX, ObjectiveName, read_table, require_columns
 from mariner.figures.layout import (
     LOSS_LABELS,
     METHOD_COLORS,
@@ -52,11 +52,11 @@ from mariner.figures.starcoder import (
 )
 from mariner.methods import METHOD_LABELS, Method
 from mariner.olmix import fit_log_linear
-from mariner.tables import UNPROPOSED, ladder_track
+from mariner.tables import LADDER_COLUMNS, MIXTURES, UNPROPOSED, ladder_track
 
-SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
-LADDER_METHODS = (Method.PROPORTIONAL, Method.UNIMAX, Method.OLMIX, Method.MARINER)
-PROPOSED_METHODS = (Method.OLMIX, Method.MARINER)  # the ladder trains their proposals for each objective
+SCALING_OBJECTIVE = ObjectiveName.UNCHEATABLE  # the lower-left panel's evaluation
+LADDER_METHODS = tuple(mixture.method for mixture in MIXTURES)  # tab:scaling-main's rows, in its order
+PROPOSED_METHODS = tuple(mixture.method for mixture in MIXTURES if mixture.proposed)  # with a proposal per objective
 MULTIPLE_BASELINES = (Method.OLMIX, Method.PROPORTIONAL)  # Figure 1 prints MARINER's compute multiples over these
 COMPUTE_UNIT = 1e18
 # A mixture's ladder law, L = E + A (C / 1e18)^-alpha, fitted to its mean loss at each rung by scipy's curve_fit from
@@ -112,9 +112,9 @@ def ladder_means(root: Path, objective: str) -> pd.DataFrame:
 
     The mixtures are proportional, UniMax-8, and Olmix's and MARINER's proposals for ``objective``.
     """
-    ladder = read_table(root, "ladder")
+    ladder = read_table(root, LADDER_TABLE)
     outcome = f"{OUTCOME_PREFIX}{objective}"
-    require_columns(ladder, ["method", "proposal_objective", "compute_flops", outcome], "ladder")
+    require_columns(ladder, [*LADDER_COLUMNS, outcome], LADDER_TABLE)
     tracks = [
         ladder_track(ladder, method, objective if method in PROPOSED_METHODS else UNPROPOSED, outcome).assign(
             method=method.value
@@ -222,8 +222,8 @@ def accuracy_values(root: Path) -> dict[str, pd.DataFrame]:
     The ``ladder_accuracy`` runs train each mixture at 1e21 FLOPs, Olmix's and MARINER's proposals for OlmoBaseEval
     Easy; ``All`` is the mean of the 51 tasks.
     """
-    accuracy = read_table(root, "ladder_accuracy")
-    require_columns(accuracy, ["group", "method", "accuracy", "bpb"], "ladder_accuracy")
+    accuracy = read_table(root, LADDER_ACCURACY_TABLE)
+    require_columns(accuracy, ["group", "method", "accuracy", "bpb"], LADDER_ACCURACY_TABLE)
     groups = [*ACCURACY_GROUPS, (ALL_TASKS, tuple(accuracy["group"].unique()))]
     rows = []
     for name, members in groups:

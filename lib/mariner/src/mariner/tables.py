@@ -21,7 +21,16 @@ from typing import NamedTuple
 
 import pandas as pd
 
-from mariner.data import OBJECTIVES, OUTCOME_PREFIX, read_table, require_columns
+from mariner.data import (
+    LADDER_ACCURACY_TABLE,
+    LADDER_TABLE,
+    OBJECTIVES,
+    OUTCOME_PREFIX,
+    PROPOSAL_OBJECTIVE,
+    ObjectiveName,
+    read_table,
+    require_columns,
+)
 from mariner.methods import METHOD_LABELS, Method
 
 COMPUTE_SCALES = (3e18, 2e19, 3e20, 1e21)  # training FLOPs: the ladder's rungs, the table's loss columns
@@ -29,9 +38,14 @@ REPEATED_SCALE = 3e18  # the rung whose runs repeat, printed as mean and standar
 ACCURACY = "accuracy"
 ACCURACY_SCALE = 1e21
 UNPROPOSED = "none"  # the proposal objective of the mixtures that no surrogate proposed
+LADDER_COLUMNS = ["method", PROPOSAL_OBJECTIVE, "compute_flops"]  # what selects a mixture's runs at one scale
 BPB_DECIMALS = 3
 ACCURACY_DECIMALS = 1
-COLUMN_TITLES = {"uncheatable": "Uncheatable BPB", "obe_easy": "OlmoBaseEval Easy mean BPB", ACCURACY: "Accuracy"}
+COLUMN_TITLES = {
+    ObjectiveName.UNCHEATABLE: "Uncheatable BPB",
+    ObjectiveName.OBE_EASY: "OlmoBaseEval Easy mean BPB",
+    ACCURACY: "Accuracy",
+}
 MIXTURE_TITLE = "Mixture"
 COLUMN_GAP = "   "
 PLUS_MINUS = "\N{PLUS-MINUS SIGN}"
@@ -69,7 +83,7 @@ def ladder_track(ladder: pd.DataFrame, method: Method, proposal: str, outcome: s
     surrogate proposed. Raises ``ValueError`` unless the mixture has runs at each of ``COMPUTE_SCALES`` and at no other
     scale, and every run has a value of ``outcome``.
     """
-    runs = ladder[(ladder["method"] == method) & (ladder["proposal_objective"] == proposal)]
+    runs = ladder[(ladder["method"] == method) & (ladder[PROPOSAL_OBJECTIVE] == proposal)]
     missing = runs[outcome].isna()
     if missing.any():
         raise ValueError(f"the ladder lacks {outcome} for {int(missing.sum())} runs of {method}'s {proposal} mixture")
@@ -121,11 +135,11 @@ def scaling_main_table(root: Path) -> pd.DataFrame:
     ``ValueError`` naming the table and column when ``ladder`` or ``ladder_accuracy`` lacks a column the queries read,
     and naming the entry when a mixture lacks its runs or their values (``ladder_track``, ``loss_entries``).
     """
-    ladder = read_table(root, "ladder")
-    accuracy = read_table(root, "ladder_accuracy")
+    ladder = read_table(root, LADDER_TABLE)
+    accuracy = read_table(root, LADDER_ACCURACY_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in OBJECTIVES]
-    require_columns(ladder, ["method", "proposal_objective", "compute_flops", *outcomes], "ladder")
-    require_columns(accuracy, ["method", ACCURACY], "ladder_accuracy")
+    require_columns(ladder, [*LADDER_COLUMNS, *outcomes], LADDER_TABLE)
+    require_columns(accuracy, ["method", ACCURACY], LADDER_ACCURACY_TABLE)
     rows = {}
     for mixture in MIXTURES:
         name = METHOD_LABELS[mixture.method]

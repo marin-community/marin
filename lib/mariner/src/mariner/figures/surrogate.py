@@ -29,12 +29,17 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from mariner.data import (
+    LAUNCH,
+    MIXTURE_ID,
     OBJECTIVES,
     OBSERVATION_ID,
     OUTCOME_PREFIX,
+    PROPOSAL_OBJECTIVE,
     TRAINED_MARINER,
     TRAINED_OLMIX,
+    TRAINER_SEED,
     VALIDATION_TABLE,
+    ObjectiveName,
     read_table,
     require_columns,
 )
@@ -452,15 +457,15 @@ PROPOSAL_MODELS = (Method.MARINER, Method.OLMIX, Method.SPLINE, Method.REGMIX)
 # The trained proposal of each model, by mixture id: MARINER's and Olmix's as mariner.data names them, and the
 # spline's and tuned RegMix's comparator proposals.
 PROPOSAL_MIXTURES = {
-    "uncheatable": {
-        Method.MARINER: TRAINED_MARINER["uncheatable"],
-        Method.OLMIX: TRAINED_OLMIX["uncheatable"].mixture_id,
+    ObjectiveName.UNCHEATABLE: {
+        Method.MARINER: TRAINED_MARINER[ObjectiveName.UNCHEATABLE],
+        Method.OLMIX: TRAINED_OLMIX[ObjectiveName.UNCHEATABLE].mixture_id,
         Method.SPLINE: "mix_60ff53ad7686c66a",
         Method.REGMIX: "mix_2ffc67cf6a7d478e",
     },
-    "obe_easy": {
-        Method.MARINER: TRAINED_MARINER["obe_easy"],
-        Method.OLMIX: TRAINED_OLMIX["obe_easy"].mixture_id,
+    ObjectiveName.OBE_EASY: {
+        Method.MARINER: TRAINED_MARINER[ObjectiveName.OBE_EASY],
+        Method.OLMIX: TRAINED_OLMIX[ObjectiveName.OBE_EASY].mixture_id,
         Method.SPLINE: "mix_5031e9bf4ca27afa",
         Method.REGMIX: "mix_40e3c45f36f0c460",
     },
@@ -481,13 +486,11 @@ def seed_runs(validation: pd.DataFrame, mixture: str, proposal_objective: str) -
 
     Raises ``ValueError`` unless they are one run at each seed, proposed for ``proposal_objective``.
     """
-    runs = validation[(validation["mixture_id"] == mixture) & (validation["launch"] != RERUN_LAUNCH)]
-    if sorted(runs["trainer_seed"]) != list(TRAINER_SEEDS):
-        raise ValueError(f"{mixture} has trainer seeds {sorted(runs['trainer_seed'])}, not {TRAINER_SEEDS}")
-    if set(runs["proposal_objective"]) != {proposal_objective}:
-        raise ValueError(
-            f"{mixture} was proposed for {sorted(set(runs['proposal_objective']))}, not {proposal_objective}"
-        )
+    runs = validation[(validation[MIXTURE_ID] == mixture) & (validation[LAUNCH] != RERUN_LAUNCH)]
+    if sorted(runs[TRAINER_SEED]) != list(TRAINER_SEEDS):
+        raise ValueError(f"{mixture} has trainer seeds {sorted(runs[TRAINER_SEED])}, not {TRAINER_SEEDS}")
+    if set(runs[PROPOSAL_OBJECTIVE]) != {proposal_objective}:
+        raise ValueError(f"{mixture} was proposed for {sorted(set(runs[PROPOSAL_OBJECTIVE]))}, not {proposal_objective}")
     return runs
 
 
@@ -498,7 +501,7 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
     """
     runs = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in PROPOSAL_MIXTURES]
-    columns = [OBSERVATION_ID, "mixture_id", "launch", "trainer_seed", "proposal_objective", *outcomes]
+    columns = [OBSERVATION_ID, MIXTURE_ID, LAUNCH, TRAINER_SEED, PROPOSAL_OBJECTIVE, *outcomes]
     require_columns(runs, columns, VALIDATION_TABLE)
     released = read_table(root, "fits_proposal_predictions")
     columns = [OBSERVATION_ID, "objective", "predictor", "predicted_bpb"]
@@ -512,11 +515,11 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
                     "objective": objective,
                     "proposal": proposal.value,
                     OBSERVATION_ID: run,
-                    "trainer_seed": seed,
+                    TRAINER_SEED: seed,
                     "bpb": bpb,
                 }
                 for run, seed, bpb in zip(
-                    rows[OBSERVATION_ID], rows["trainer_seed"], rows[f"{OUTCOME_PREFIX}{objective}"], strict=True
+                    rows[OBSERVATION_ID], rows[TRAINER_SEED], rows[f"{OUTCOME_PREFIX}{objective}"], strict=True
                 )
             ]
             own = released[(released[OBSERVATION_ID].isin(rows[OBSERVATION_ID])) & (released["objective"] == objective)]

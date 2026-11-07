@@ -37,8 +37,10 @@ from mariner.data import (
     DELETION,
     DESIGN_KIND,
     MAIN_SWARM,
+    MIXTURE_ID,
     PARTITION_TABLE,
     POOL_TOKENS,
+    PROPOSAL_OBJECTIVE,
     RELIABILITY_COLLAPSED_SOURCE,
     RELIABILITY_SOURCES,
     RELIABILITY_TABLE,
@@ -46,7 +48,9 @@ from mariner.data import (
     RUN_LABEL,
     RUN_TABLE,
     SOURCES,
+    TASK_ID,
     VALIDATION_TABLE,
+    ObjectiveName,
     bucket_names,
     bucket_sources,
     measured_outcomes,
@@ -62,11 +66,20 @@ from mariner.data import (
     swarm_from_runs,
 )
 from mariner.figures.analysis import EPOCH_COLUMNS, mixture_epochs
-from mariner.figures.layout import METHOD_COLORS, NEUTRAL, OBJECTIVE_TITLES, FigureData, figure_legend
+from mariner.figures.layout import (
+    METHOD_COLORS,
+    NEUTRAL,
+    OBJECTIVE_TITLES,
+    SEPARATOR,
+    FigureData,
+    figure_legend,
+    frameless,
+    source_rows,
+    text_color,
+)
 from mariner.methods import Method
 
 BUCKET_COLUMNS = [BUCKET_ID, "paper_name", "pool", "quality_tier", POOL_TOKENS]
-SEPARATOR = {"color": NEUTRAL, "linewidth": 1.0}
 
 
 def partition_table(root: Path) -> pd.DataFrame:
@@ -80,9 +93,9 @@ def partition_table(root: Path) -> pd.DataFrame:
 # Figure 23: the single-bucket removals' effects on each OlmoBaseEval Easy task
 # ---------------------------------------------------------------------------------------------------------------
 
-REMOVAL_OBJECTIVE = "obe_easy"
+REMOVAL_OBJECTIVE = ObjectiveName.OBE_EASY
 MEAN_TASK = "OlmoBaseEval Easy mean"
-RELIABILITY_COLUMNS = ["task_id", "group", "task", "subtasks", "snr"]
+RELIABILITY_COLUMNS = [TASK_ID, "group", "task", "subtasks", "snr"]
 HOLM_LEVEL = 0.05
 T_LIMIT = 6.0  # the colors clip |T| here
 QUALITY_SUFFIXES = {"high": " (H)", "low": " (L)"}  # how a Common Crawl topic bucket's name ends, by its quality
@@ -130,10 +143,10 @@ def removal_tasks(root: Path, components: tuple[str, ...]) -> tuple[list[Removal
     reliability = read_table(root, RELIABILITY_TABLE)
     rows = reliability_rows(reliability, RELIABILITY_SOURCES[REMOVAL_OBJECTIVE])
     require_columns(rows, RELIABILITY_COLUMNS, RELIABILITY_TABLE)
-    named = rows[rows["task_id"].notna()]
-    if set(named["task_id"]) != set(components):
+    named = rows[rows[TASK_ID].notna()]
+    if set(named[TASK_ID]) != set(components):
         raise ValueError(f"{RELIABILITY_TABLE}'s components are not the {REMOVAL_OBJECTIVE} tasks of the tasks table")
-    task_of = named.set_index("task_id")["task"]
+    task_of = named.set_index(TASK_ID)["task"]
     columns = [RemovalTask(MEAN_TASK, None, list(components))]
     tasks = reliability_rows(reliability, RELIABILITY_COLLAPSED_SOURCE)
     for task, group, count in tasks.loc[tasks["group"].notna(), ["task", "group", "subtasks"]].itertuples(index=False):
@@ -141,7 +154,7 @@ def removal_tasks(root: Path, components: tuple[str, ...]) -> tuple[list[Removal
         if len(members) != count:
             raise ValueError(f"{RELIABILITY_TABLE} gives {task} {count} components, not {len(members)}")
         columns.append(RemovalTask(str(task), str(group), members))
-    mean = rows.loc[rows["task_id"].isna(), "snr"]
+    mean = rows.loc[rows[TASK_ID].isna(), "snr"]
     if len(mean) != 1:
         raise ValueError(f"{RELIABILITY_TABLE} has {len(mean)} rows of the {REMOVAL_OBJECTIVE} mean, not one")
     return columns, float(mean.iloc[0])
@@ -265,7 +278,7 @@ def draw_deletion_matrix(root: Path) -> FigureData:
                 cell = statistic.loc[(task, row[side])]
                 if not cell["significant"]:
                     continue
-                dark = abs(float(norm(np.clip(cell["t"], -T_LIMIT, T_LIMIT))) - 0.5) > DARK_CELL
+                color = text_color(float(norm(np.clip(cell["t"], -T_LIMIT, T_LIMIT))), DARK_CELL)
                 axis.text(
                     2 * column + (offset if split else 0.5),
                     index,
@@ -273,7 +286,7 @@ def draw_deletion_matrix(root: Path) -> FigureData:
                     ha="center",
                     va="center",
                     fontsize=5.0 if split else 6.0,
-                    color="white" if dark else "black",
+                    color=color,
                 )
     labels = [task if count == 1 else f"{task} ({count})" for task, count in columns["components"].items()]
     axis.set_xticks(2 * np.arange(len(tasks)) + 0.5, labels, rotation=90)
@@ -281,9 +294,7 @@ def draw_deletion_matrix(root: Path) -> FigureData:
     row_labels = [f"{label} (H | L)" if split else label for label, split in zip(rows["label"], split_rows, strict=True)]
     axis.set_yticks(range(len(rows)), row_labels)
     axis.tick_params(length=0, labelsize=6.5)
-    axis.grid(False)
-    for spine in axis.spines.values():
-        spine.set_visible(False)
+    frameless(axis)
     for column in range(1, len(tasks)):
         axis.axvline(2 * column - 0.5, color="white", linewidth=0.6)
     groups = columns["group"].fillna("").to_numpy()
@@ -304,21 +315,7 @@ def draw_deletion_matrix(root: Path) -> FigureData:
             fontsize=7.5,
             fontweight="bold",
         )
-    sources = rows["source"].ne(rows["source"].shift()).to_numpy().nonzero()[0]
-    for start in sources[1:]:
-        axis.axhline(start - 0.5, **SEPARATOR)
-    for start, source in zip(sources, rows["source"].iloc[sources], strict=True):
-        axis.annotate(
-            source,
-            xy=(1.0, start - 0.5),
-            xycoords=("axes fraction", "data"),
-            xytext=(4, -2),
-            textcoords="offset points",
-            ha="left",
-            va="top",
-            fontsize=7.5,
-            fontweight="bold",
-        )
+    source_rows(axis, rows["source"])
     colorbar = figure.colorbar(image, ax=axis, location="bottom", shrink=0.5, aspect=40)
     colorbar.set_ticks([-T_LIMIT, -T_LIMIT / 2, 0.0, T_LIMIT / 2, T_LIMIT], labels=["≤ -6", "-3", "0", "3", "≥ 6"])
     colorbar.set_label("T: the removal's loss minus the proportional runs' mean, in their standard deviations")
@@ -336,8 +333,11 @@ def draw_deletion_matrix(root: Path) -> FigureData:
 # Figure 24: the epochs the swarm sampled, against MARINER's proposals
 # ---------------------------------------------------------------------------------------------------------------
 
-PROPOSAL_COLUMNS = ["mixture_id", "method", "proposal_objective", "variant"]  # what mixture_epochs checks of a run
-SUPPORT_MARKERS = {"uncheatable": ("D", METHOD_COLORS[Method.MARINER]), "obe_easy": ("o", "#D95F02")}
+PROPOSAL_COLUMNS = [MIXTURE_ID, "method", PROPOSAL_OBJECTIVE, "variant"]  # what mixture_epochs checks of a run
+SUPPORT_MARKERS = {
+    ObjectiveName.UNCHEATABLE: ("D", METHOD_COLORS[Method.MARINER]),
+    ObjectiveName.OBE_EASY: ("o", "#D95F02"),
+}
 SWARM_DOTS = {"marker": ".", "markersize": 1.6, "color": "#7D93AB", "alpha": 0.35, "linestyle": "none"}
 JITTER = 0.3  # a bucket's dots spread this far above and below its row
 JITTER_SEED = 20_261_107

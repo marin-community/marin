@@ -24,7 +24,17 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
-from mariner.data import OBJECTIVES, OUTCOME_PREFIX, VALIDATION_TABLE, read_table, require_columns
+from mariner.data import (
+    LAUNCH,
+    MIXTURE_ID,
+    OBJECTIVES,
+    OUTCOME_PREFIX,
+    PROPOSAL_OBJECTIVE,
+    TRAINER_SEED,
+    VALIDATION_TABLE,
+    read_table,
+    require_columns,
+)
 from mariner.figures.layout import (
     BAND_ALPHA,
     LOSS_LABELS,
@@ -134,9 +144,7 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
             raise ValueError(f"{PATHS_TABLE}'s {objective} paths lead to {held}, not to {baselines}")
     validation = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in OBJECTIVES]
-    require_columns(
-        validation, ["mixture_id", "launch", "trainer_seed", "proposal_objective", *outcomes], VALIDATION_TABLE
-    )
+    require_columns(validation, [MIXTURE_ID, LAUNCH, TRAINER_SEED, PROPOSAL_OBJECTIVE, *outcomes], VALIDATION_TABLE)
     paths, endpoints, midpoints = [], [], []
     for (objective, path), rows in predictions.groupby(["objective", "path"], sort=False):
         mixtures = rows[MIXTURE_COLUMNS].drop_duplicates()
@@ -156,15 +164,15 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
                     "objective": objective,
                     "path": path,
                     "position": position,
-                    "mixture_id": mixture,
-                    "trainer_seed": seed,
+                    MIXTURE_ID: mixture,
+                    TRAINER_SEED: seed,
                     "bpb": bpb,
                 }
-                for seed, bpb in zip(runs["trainer_seed"], runs[measured], strict=True)
+                for seed, bpb in zip(runs[TRAINER_SEED], runs[measured], strict=True)
             ]
-        run = validation[(validation["mixture_id"] == midpoint) & (validation["launch"] == MIDPOINT_LAUNCH)]
-        if run["trainer_seed"].tolist() != [MIDPOINT_SEED]:
-            seeds = run["trainer_seed"].tolist()
+        run = validation[(validation[MIXTURE_ID] == midpoint) & (validation[LAUNCH] == MIDPOINT_LAUNCH)]
+        if run[TRAINER_SEED].tolist() != [MIDPOINT_SEED]:
+            seeds = run[TRAINER_SEED].tolist()
             raise ValueError(
                 f"{MIDPOINT_LAUNCH} holds runs of {midpoint} at trainer seeds {seeds}, not one at seed {MIDPOINT_SEED}"
             )
@@ -173,8 +181,8 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
                 "objective": objective,
                 "path": path,
                 "position": MIDPOINT,
-                "mixture_id": midpoint,
-                "trainer_seed": run["trainer_seed"].iloc[0],
+                MIXTURE_ID: midpoint,
+                TRAINER_SEED: run[TRAINER_SEED].iloc[0],
                 "bpb": run[measured].iloc[0],
             }
         )

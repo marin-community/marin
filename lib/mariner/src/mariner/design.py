@@ -38,6 +38,7 @@ from mariner.data import (
     REPEAT,
     RUN_LABEL,
     SAMPLED,
+    TRAINER_SEED,
     WEIGHT_PREFIX,
 )
 
@@ -53,7 +54,7 @@ STRATIFIED = "stratified"
 SAMPLED_RUN_PREFIX = "run_"  # run labels run_00000, ..., deletion_<bucket_id> and proportional_repeat_00, ...
 DELETION_RUN_PREFIX = "deletion_"
 REPEAT_RUN_INFIX = "_repeat_"
-TRAINER_SEED = 0
+DESIGN_TRAINER_SEED = 0  # the trainer seed of every run of a designed swarm
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -276,7 +277,7 @@ def swarm_table(
             DESIGN_KIND: [group.kind for group in groups for _ in group.labels],
             FIT_INCLUSION: [group.fit_inclusion for group in groups for _ in group.labels],
             "data_seed": data_seed_start + np.arange(len(labels)),
-            "trainer_seed": TRAINER_SEED,
+            TRAINER_SEED: DESIGN_TRAINER_SEED,
         }
     )
     weights = np.vstack([group.weights for group in groups])

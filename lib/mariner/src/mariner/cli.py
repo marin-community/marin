@@ -152,7 +152,6 @@ def self_test(
     epoch cap and KL weight, must equal that mixture block for block. Raises ``ImportError`` before any fit when the
     olmix extra is not installed.
     """
-    olmix_laws = OlmixLaws(olmix_laws)  # also takes the value, "released" or "refit"
     olmix.require_cvxpy()
     heldout_runs = read_table(root, HELDOUT_TABLE).set_index(OBSERVATION_ID)
     checks = []

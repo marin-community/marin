@@ -48,6 +48,7 @@ from mariner.data import (
     HELDOUT_PREDICTIONS_TABLE,
     HELDOUT_TABLE,
     MAIN_SWARM,
+    MIXTURE_ID,
     OBSERVATION_ID,
     OUTCOME_PREFIX,
     RELIABILITY_SOURCES,
@@ -57,6 +58,7 @@ from mariner.data import (
     TRAINED_MARINER,
     TRAINED_OLMIX,
     WEIGHT_PREFIX,
+    ObjectiveName,
     heldout_bank,
     mixture_weights,
     objective_from_tasks,
@@ -92,7 +94,7 @@ EDGE = "#222222"  # the outline of a marker drawn over others
 # Figure 14: transfer of the swarm's designs and the proposals across proxy settings
 # ---------------------------------------------------------------------------------------------------------------
 
-TRANSFER_OBJECTIVE = "uncheatable"
+TRANSFER_OBJECTIVE = ObjectiveName.UNCHEATABLE
 SETTING_LABELS = {
     "llama_160m_1p2b": "Llama 160M/1.2B",
     "llama_200m_6b": "Llama 200M/6B",
@@ -136,7 +138,7 @@ def setting_designs(root: Path, setting: str) -> pd.Series:
 def proposal_bpb(heldout: pd.DataFrame, mixture: str, setting: str) -> tuple[float, int]:
     """A proposal's mean Uncheatable BPB at one setting and its number of runs: its runs at the main swarm's setting,
     and its one ``scale_transfer`` run at each other setting."""
-    runs = heldout[(heldout["mixture_id"] == mixture) & (heldout["swarm"] == setting)]
+    runs = heldout[(heldout[MIXTURE_ID] == mixture) & (heldout["swarm"] == setting)]
     if setting != MAIN_SWARM:
         runs = runs[runs["cohort"] == SCALE_TRANSFER]
         if len(runs) != 1:
@@ -162,8 +164,8 @@ def transfer_values(root: Path) -> dict[str, pd.DataFrame]:
         raise ValueError(f"the swarms {', '.join(missing)} lack the Uncheatable BPB of some of {MAIN_SWARM}'s designs")
     ranks = bpb.rank(method="min")
     heldout = read_table(root, HELDOUT_TABLE)
-    require_columns(heldout, ["mixture_id", "swarm", "cohort", f"{OUTCOME_PREFIX}{TRANSFER_OBJECTIVE}"], HELDOUT_TABLE)
-    transferred = set(heldout.loc[heldout["cohort"] == SCALE_TRANSFER, "mixture_id"])
+    require_columns(heldout, [MIXTURE_ID, "swarm", "cohort", f"{OUTCOME_PREFIX}{TRANSFER_OBJECTIVE}"], HELDOUT_TABLE)
+    transferred = set(heldout.loc[heldout["cohort"] == SCALE_TRANSFER, MIXTURE_ID])
     if transferred != set(TRANSFER_PROPOSALS.values()):
         raise ValueError(f"the {SCALE_TRANSFER} cohort trains {sorted(transferred)}, not Figure 14's proposals")
     proposals = []
@@ -328,11 +330,11 @@ class FrontierColumn(NamedTuple):
 
 
 FRONTIER_COLUMNS = (  # the objectives, then three components in ascending SNR, as the paper orders them
-    FrontierColumn(OBJECTIVE_TITLES["uncheatable"], "uncheatable", None),
-    FrontierColumn(OBJECTIVE_TITLES["obe_easy"], "obe_easy", None),
-    FrontierColumn("Arithmetic", "obe_easy", "basic_skills_arithmetic"),
-    FrontierColumn("arXiv physics", "uncheatable", "uncheatable/arxiv_physics"),
-    FrontierColumn("SciQ", "obe_easy", "sciq"),
+    FrontierColumn(OBJECTIVE_TITLES[ObjectiveName.UNCHEATABLE], ObjectiveName.UNCHEATABLE, None),
+    FrontierColumn(OBJECTIVE_TITLES[ObjectiveName.OBE_EASY], ObjectiveName.OBE_EASY, None),
+    FrontierColumn("Arithmetic", ObjectiveName.OBE_EASY, "basic_skills_arithmetic"),
+    FrontierColumn("arXiv physics", ObjectiveName.UNCHEATABLE, "uncheatable/arxiv_physics"),
+    FrontierColumn("SciQ", ObjectiveName.OBE_EASY, "sciq"),
 )
 FRONTIER_MODELS = (Method.MARINER, Method.OLMIX)
 FRONTIER_BEST = 30  # the lowest-loss held-out mixtures of each column
@@ -391,7 +393,7 @@ def frontier_values(root: Path) -> dict[str, pd.DataFrame]:
             {
                 "column": column.title,
                 "objective": column.objective,
-                "task_id": column.task_id,
+                TASK_ID: column.task_id,
                 "snr": float(row["snr"]),
                 "repeat_sd": float(row["repeat_sd"]),
                 "exposures": len(measured),
@@ -493,8 +495,8 @@ class ResidualComponent(NamedTuple):
 
 
 EXTRAPOLATION_COMPONENTS = (
-    ResidualComponent("arXiv physics", "uncheatable", "uncheatable/arxiv_physics", "#8A9099"),
-    ResidualComponent("SciQ", "obe_easy", "sciq", "#D55E00"),
+    ResidualComponent("arXiv physics", ObjectiveName.UNCHEATABLE, "uncheatable/arxiv_physics", "#8A9099"),
+    ResidualComponent("SciQ", ObjectiveName.OBE_EASY, "sciq", "#D55E00"),
 )
 BEST_MARKED = 5  # each component's five best held-out mixtures are circled, the best starred
 RESIDUAL_FLOOR = -0.3  # BPB: the axis ends here, as the paper's does, and lower residuals are drawn on it

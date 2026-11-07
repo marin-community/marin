@@ -7,7 +7,9 @@ A redraw builds its figure from panels of one shared size, in a row (``panels``)
 several cells (``mosaic``); the heatmaps of Figures 13 and 23 and the bucket rows of Figure 24 instead size the figure
 to their rows. It names each quantity and its unit on the axes, and names every series in a legend that sits outside
 the data. A method has the same color in every figure. The PDFs carry no creation date and ignore local matplotlib
-settings, so redrawing them from one snapshot gives the same bytes.
+settings, so redrawing them from one snapshot gives the same values, up to floating-point rounding, and the same
+drawing on any platform, and the same bytes only on the same platform and library builds (a BLAS build can change a
+fit's last digits).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from matplotlib.figure import Figure
 from matplotlib.style import context as style_context
 from scipy import stats
 
+from mariner.data import ObjectiveName
 from mariner.methods import Method
 
 PANEL_WIDTH = 3.4  # inches
@@ -73,8 +76,15 @@ METHOD_COLORS = {
     Method.MARINER_ADDITIVE: "#9A9A1E",
     Method.MARINER_BUCKET_THRESHOLDS: "#B83D8F",
 }
-OBJECTIVE_TITLES = {"uncheatable": "Uncheatable", "obe_easy": "OlmoBaseEval Easy"}  # a panel's title per objective
-LOSS_LABELS = {"uncheatable": "Uncheatable Eval loss (BPB)", "obe_easy": "OlmoBaseEval Easy loss (BPB)"}  # loss axes
+OBJECTIVE_TITLES: dict[str, str] = {  # a panel's title per objective
+    ObjectiveName.UNCHEATABLE: "Uncheatable",
+    ObjectiveName.OBE_EASY: "OlmoBaseEval Easy",
+}
+LOSS_LABELS: dict[str, str] = {  # a loss axis's label per objective
+    ObjectiveName.UNCHEATABLE: "Uncheatable Eval loss (BPB)",
+    ObjectiveName.OBE_EASY: "OlmoBaseEval Easy loss (BPB)",
+}
+SEPARATOR = {"color": NEUTRAL, "linewidth": 1.0}  # the lines between a heatmap's groups of rows or columns
 SCALE_COLORMAP = "plasma"  # a ladder of model or data scales, smallest first
 SCALE_COLOR_RANGE = (0.0, 0.85)  # plasma's lightest yellow would vanish on white
 
@@ -116,11 +126,44 @@ def figure_legend(figure: Figure, handles: Sequence[Artist], columns: int) -> No
 
 def mosaic(
     layout: Sequence[Sequence[str]], columns: float, rows: int, legend_height: float = 0.0
-) -> tuple[Figure, dict]:
+) -> tuple[Figure, dict[str, Axes]]:
     """A figure of named panels arranged as ``layout`` (matplotlib's subplot mosaic), ``columns`` panels wide and
     ``rows`` panels tall at the shared panel size, plus ``legend_height`` inches for legends outside the panels."""
     figure = Figure(figsize=(columns * PANEL_WIDTH, rows * PANEL_HEIGHT + legend_height), layout="constrained")
     return figure, figure.subplot_mosaic([list(row) for row in layout])
+
+
+def frameless(axis: Axes) -> None:
+    """A heatmap's axis: no grid and no spines around its cells."""
+    axis.grid(False)
+    for spine in axis.spines.values():
+        spine.set_visible(False)
+
+
+def text_color(position: float, dark_cell: float) -> str:
+    """The color of a heatmap cell's text, white when the cell's color lies more than ``dark_cell`` from the center of
+    its scale, at ``position`` in [0, 1] along it, and black otherwise."""
+    return "white" if abs(position - 0.5) > dark_cell else "black"
+
+
+def source_rows(axis: Axes, sources: pd.Series) -> None:
+    """Mark the runs of a heatmap's rows that share a source: a line between runs, and each run's source in the right
+    margin beside its first row. ``sources`` gives each row's source, from the top."""
+    starts = sources.ne(sources.shift()).to_numpy().nonzero()[0]
+    for start in starts[1:]:
+        axis.axhline(start - 0.5, **SEPARATOR)
+    for start, source in zip(starts, sources.iloc[starts], strict=True):
+        axis.annotate(
+            source,
+            xy=(1.0, start - 0.5),
+            xycoords=("axes fraction", "data"),
+            xytext=(4, -2),
+            textcoords="offset points",
+            ha="left",
+            va="top",
+            fontsize=7.5,
+            fontweight="bold",
+        )
 
 
 def panel_legend(axis: Axes, handles: Sequence[Artist] | None = None, **options: Any) -> None:

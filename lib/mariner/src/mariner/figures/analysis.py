@@ -29,16 +29,20 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
 from mariner.data import (
+    MIXTURE_ID,
     OBJECTIVES,
     OLMIX_CAP,
     PARTITION_TABLE,
+    PROPOSAL_OBJECTIVE,
     RELIABILITY_COLLAPSED_SOURCE,
     RELIABILITY_SOURCES,
     RELIABILITY_TABLE,
     SOURCES,
+    TASK_ID,
     TRAINED_MARINER,
     TRAINED_OLMIX,
     VALIDATION_TABLE,
+    ObjectiveName,
     bucket_names,
     bucket_sources,
     mixture_weights,
@@ -53,9 +57,13 @@ from mariner.figures.layout import (
     METHOD_COLORS,
     NEUTRAL,
     OBJECTIVE_TITLES,
+    SEPARATOR,
     FigureData,
     figure_legend,
+    frameless,
     panels,
+    source_rows,
+    text_color,
 )
 from mariner.figures.starcoder import ARM_COLORS, Arm, parameters_label, tokens_label
 from mariner.methods import METHOD_LABELS, Method
@@ -294,10 +302,10 @@ class EpochColumn(NamedTuple):
 # weight of mariner.data.TRAINED_OLMIX), and Olmix's proposal without a cap or KL penalty, which the Olmix cap and KL
 # sweep trained.
 COLUMN_VARIANTS = {
-    "uncheatable": ("lwspu_u_snc_cap06", "olmixq_u_kl0p05_cap04", "olmixq_u_kl0_nocap_cap17"),
-    "obe_easy": ("lwspu_t9_snc_cap08", "olmixq_t9_kl0p005_cap04", "olmixq_t9_kl0_nocap_cap17"),
+    ObjectiveName.UNCHEATABLE: ("lwspu_u_snc_cap06", "olmixq_u_kl0p05_cap04", "olmixq_u_kl0_nocap_cap17"),
+    ObjectiveName.OBE_EASY: ("lwspu_t9_snc_cap08", "olmixq_t9_kl0p005_cap04", "olmixq_t9_kl0_nocap_cap17"),
 }
-UNREGULARIZED_OLMIX = {"uncheatable": "mix_522b7ad988b71710", "obe_easy": "mix_d5cbd56954690512"}
+UNREGULARIZED_OLMIX = {ObjectiveName.UNCHEATABLE: "mix_522b7ad988b71710", ObjectiveName.OBE_EASY: "mix_d5cbd56954690512"}
 EPOCH_COLUMNS = tuple(
     EpochColumn(objective, name, mixture, method, variant)
     for objective in OBJECTIVES
@@ -317,7 +325,7 @@ EPOCH_COLUMNS = tuple(
 LOG2_EPOCH_RANGE = (-3.0, 4.0)
 EPOCH_COLORMAP = "RdBu_r"
 EPOCH_TICKS = {-3.0: "≤1/8", -2.0: "1/4", -1.0: "1/2", 0.0: "1", 1.0: "2", 2.0: "4", 3.0: "8", 4.0: "≥16"}
-DARK_CELL = 0.6  # cells whose color lies this far from the center along the scale take white text
+DARK_CELL = 0.3  # a cell whose color lies this far from the center of the scale takes white text
 SMALLEST_PRINTED_EPOCHS = 0.1
 CELL_HEIGHT = 0.17  # inches per row
 HEATMAP_WIDTH = 7.4  # inches
@@ -346,10 +354,10 @@ def mixture_epochs(
     variant.
     """
     mixture = column.mixture_id
-    runs = validation[validation["mixture_id"] == mixture]
+    runs = validation[validation[MIXTURE_ID] == mixture]
     if runs.empty:
         raise ValueError(f"no {VALIDATION_TABLE} run trains {mixture}")
-    recorded = set(zip(runs["method"], runs["proposal_objective"], runs["variant"], strict=True))
+    recorded = set(zip(runs["method"], runs[PROPOSAL_OBJECTIVE], runs["variant"], strict=True))
     if recorded != {(column.method.value, column.objective, column.variant)}:
         raise ValueError(
             f"the runs of {mixture} record (method, proposal objective, variant) {sorted(recorded)}, not"
@@ -367,7 +375,7 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
     table = read_table(root, PARTITION_TABLE)
     partition = release_partition(root)
     validation = read_table(root, VALIDATION_TABLE)
-    require_columns(validation, ["mixture_id", "method", "proposal_objective", "variant"], VALIDATION_TABLE)
+    require_columns(validation, [MIXTURE_ID, "method", PROPOSAL_OBJECTIVE, "variant"], VALIDATION_TABLE)
     sources = bucket_sources(table)
     names = bucket_names(table)
     order = [bucket for source in SOURCES for bucket in partition.bucket_ids if sources[bucket] == source]
@@ -381,7 +389,7 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
             {
                 "objective": column.objective,
                 "column": column.name,
-                "mixture_id": column.mixture_id,
+                MIXTURE_ID: column.mixture_id,
                 "bucket_id": bucket,
                 "bucket": names[bucket],
                 "source": sources[bucket],
@@ -412,10 +420,8 @@ def draw_mixture_epochs(root: Path) -> FigureData:
     axis = figure.subplots()
     image = axis.imshow(np.ma.masked_where(matrix == 0.0, logged), cmap=EPOCH_COLORMAP, norm=norm, aspect="auto")
     for (row, column), value in np.ndenumerate(matrix):
-        dark = value > 0.0 and abs(float(norm(logged[row, column])) - 0.5) > DARK_CELL / 2
-        axis.text(
-            column, row, epoch_text(value), ha="center", va="center", fontsize=6.5, color="white" if dark else "black"
-        )
+        color = text_color(float(norm(logged[row, column])), DARK_CELL) if value > 0.0 else "black"
+        axis.text(column, row, epoch_text(value), ha="center", va="center", fontsize=6.5, color=color)
     axis.set_xticks(range(len(columns)), [name.replace(", ", "\n") for _, name in columns])
     axis.xaxis.tick_top()
     per_objective = len(columns) // len(OBJECTIVES)
@@ -433,26 +439,10 @@ def draw_mixture_epochs(root: Path) -> FigureData:
         )
     axis.set_yticks(range(len(grid)), rows["bucket"].tolist())
     axis.tick_params(length=0)
-    axis.grid(False)
-    for side in axis.spines.values():
-        side.set_visible(False)
-    starts = rows["source"].ne(rows["source"].shift()).to_numpy().nonzero()[0]
-    for start in starts[1:]:
-        axis.axhline(start - 0.5, color=NEUTRAL, linewidth=1.0)
-    for start, source in zip(starts, rows["source"].iloc[starts], strict=True):
-        axis.annotate(
-            source,
-            xy=(1.0, start - 0.5),
-            xycoords=("axes fraction", "data"),
-            xytext=(4, -2),
-            textcoords="offset points",
-            ha="left",
-            va="top",
-            fontsize=7.5,
-            fontweight="bold",
-        )
+    frameless(axis)
+    source_rows(axis, rows["source"])
     for index in range(1, len(OBJECTIVES)):
-        axis.axvline(index * per_objective - 0.5, color=NEUTRAL, linewidth=1.0)
+        axis.axvline(index * per_objective - 0.5, **SEPARATOR)
     colorbar = figure.colorbar(image, ax=axis, location="bottom", shrink=0.6, aspect=40)
     colorbar.set_ticks(list(EPOCH_TICKS), labels=list(EPOCH_TICKS.values()))
     colorbar.set_label("Materialized epochs in the target run (0, uncolored: the bucket is left out)")
@@ -467,7 +457,7 @@ R2_MODELS = (Method.MARINER, Method.OLMIX, Method.REGMIX)
 # The OlmoBaseEval Easy components below this SNR, both Basic Skills subtasks, are drawn uncollapsed as well.
 UNCOLLAPSED_SNR = 2.0
 OLMIX_R2 = f"{Method.OLMIX.value}_r2"
-OBE_EASY, UNCHEATABLE = "OlmoBaseEval Easy", "Uncheatable"
+OBE_EASY, UNCHEATABLE = OBJECTIVE_TITLES[ObjectiveName.OBE_EASY], OBJECTIVE_TITLES[ObjectiveName.UNCHEATABLE]
 EVALUATION_MARKERS = {OBE_EASY: "o", UNCHEATABLE: "D"}
 SNR_TICKS = (1, 2, 5, 10, 20, 40)
 CEILING_SNR = (1.0, 45.0)
@@ -479,13 +469,13 @@ def r2_points(root: Path) -> pd.DataFrame:
     the tasks with a negative Olmix R^2, the rule of the paper's caption."""
     reliability = read_table(root, RELIABILITY_TABLE)
     errors = [f"{model.value}_mse" for model in R2_MODELS]
-    require_columns(reliability, ["task_id", "group", "task", "subtask", "snr", "panel_sd", *errors], RELIABILITY_TABLE)
+    require_columns(reliability, [TASK_ID, "group", "task", "subtask", "snr", "panel_sd", *errors], RELIABILITY_TABLE)
     tasks = reliability_rows(reliability, RELIABILITY_COLLAPSED_SOURCE)
     tasks = tasks[tasks["group"].notna()]
-    components = reliability_rows(reliability, RELIABILITY_SOURCES["obe_easy"])
-    uncollapsed = components[components["task_id"].notna() & (components["snr"] < UNCOLLAPSED_SNR)]
-    uncheatable = reliability_rows(reliability, RELIABILITY_SOURCES["uncheatable"])
-    uncheatable = uncheatable[uncheatable["task_id"].notna()]
+    components = reliability_rows(reliability, RELIABILITY_SOURCES[ObjectiveName.OBE_EASY])
+    uncollapsed = components[components[TASK_ID].notna() & (components["snr"] < UNCOLLAPSED_SNR)]
+    uncheatable = reliability_rows(reliability, RELIABILITY_SOURCES[ObjectiveName.UNCHEATABLE])
+    uncheatable = uncheatable[uncheatable[TASK_ID].notna()]
     points = pd.concat(
         [
             tasks.assign(evaluation=OBE_EASY, name=tasks["task"]),

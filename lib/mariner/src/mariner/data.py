@@ -31,14 +31,27 @@ from mariner.model import WEIGHT_SUM_TOLERANCE, Anchor, HeldoutBank, Objective, 
 from mariner.olmix import LogLinearLaw
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
-DATASET_REPO = "marin-community/mariner-data"  # the published location; check at publication
+DATASET_REPO = "marin-community/mariner-data"  # the published location
 SWARMS = ("qwen3_360m_1p6b", "llama_160m_1p2b", "llama_200m_6b")
 MAIN_SWARM = "qwen3_360m_1p6b"
-OBJECTIVES = ("uncheatable", "obe_easy")
+
+
+class ObjectiveName(StrEnum):
+    """The paper's two objectives, by their names in the tasks table's ``objective`` column. A member equals and hashes
+    as its name, so it can stand wherever the name does."""
+
+    UNCHEATABLE = "uncheatable"
+    OBE_EASY = "obe_easy"
+
+
+OBJECTIVES = tuple(ObjectiveName)
 PAPER_TARGET_BUDGET = 6_325_183_647_689  # D_tgt in tokens: the release's epochs per unit weight are D_tgt / P_i
 JUNE_RUN_FLOPS = 3e18
-JUNE_RUN_OBJECTIVE = "uncheatable"  # the one objective whose main-swarm anchors include the June run
-TRAINED_MARINER = {"uncheatable": "mix_4c2c8b25f9e6d5ca", "obe_easy": "mix_dcbcb8cd4cfc72df"}
+JUNE_RUN_OBJECTIVE = ObjectiveName.UNCHEATABLE  # the one objective whose main-swarm anchors include the June run
+TRAINED_MARINER: dict[str, str] = {
+    ObjectiveName.UNCHEATABLE: "mix_4c2c8b25f9e6d5ca",
+    ObjectiveName.OBE_EASY: "mix_dcbcb8cd4cfc72df",
+}
 
 
 class TrainedOlmix(NamedTuple):
@@ -48,9 +61,9 @@ class TrainedOlmix(NamedTuple):
     kl: float
 
 
-TRAINED_OLMIX = {
-    "uncheatable": TrainedOlmix("mix_645a3bf43226a443", 0.05),
-    "obe_easy": TrainedOlmix("mix_40fb2116404045a4", 0.005),
+TRAINED_OLMIX: dict[str, TrainedOlmix] = {
+    ObjectiveName.UNCHEATABLE: TrainedOlmix("mix_645a3bf43226a443", 0.05),
+    ObjectiveName.OBE_EASY: TrainedOlmix("mix_40fb2116404045a4", 0.005),
 }
 OLMIX_CAP = 4.0
 
@@ -61,6 +74,11 @@ RUN_LABEL = "run_label"
 DESIGN_KIND = "design_kind"
 FIT_INCLUSION = "fit_inclusion"
 EXPOSURE_ID = "exposure_id"
+# The columns that name a trained mixture's runs in validation_3e18, heldout and ladder.
+MIXTURE_ID = "mixture_id"
+LAUNCH = "launch"
+TRAINER_SEED = "trainer_seed"
+PROPOSAL_OBJECTIVE = "proposal_objective"  # the objective a surrogate proposed the mixture for, "none" for a baseline
 WEIGHT_PREFIX = "w__"
 POOL_FRACTION_PREFIX = "pf__"
 OUTCOME_PREFIX = "bpb__"
@@ -90,6 +108,8 @@ PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
 HELDOUT_TABLE = "heldout"
 VALIDATION_TABLE = "validation_3e18"
+LADDER_TABLE = "ladder"
+LADDER_ACCURACY_TABLE = "ladder_accuracy"
 # The release's buckets by source, in the paper's order: the Common Crawl topics at two quality tiers, Dolma 3's other
 # sources, and Dolmino's; and the partition table's pool names of the last two.
 COMMON_CRAWL, DOLMA3, DOLMINO = "Common Crawl", "Dolma 3, other sources", "Dolmino"
@@ -109,7 +129,10 @@ COEFFICIENT_PREFIX = "coef__"
 # fits_reliability holds rows from three sources, named in its source_table column: each objective's tasks, with the
 # objective's aggregate as the row without a task id, and OlmoBaseEval Easy's tasks with their subtasks collapsed.
 RELIABILITY_TABLE = "fits_reliability"
-RELIABILITY_SOURCES = {"uncheatable": "snr_fit_uncheatable_delphi", "obe_easy": "snr_fit_components_delphi"}
+RELIABILITY_SOURCES: dict[str, str] = {
+    ObjectiveName.UNCHEATABLE: "snr_fit_uncheatable_delphi",
+    ObjectiveName.OBE_EASY: "snr_fit_components_delphi",
+}
 RELIABILITY_COLLAPSED_SOURCE = "snr_fit_tasks_delphi"
 # Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
 # differ from their calibration run by 3.1e-16 at most.
@@ -514,9 +537,9 @@ def release_swarm(root: Path, swarm: str, objective: str) -> Swarm:
 
 def june_run(root: Path, swarm_table: pd.DataFrame) -> pd.DataFrame:
     """The June proportional run: the one ``ladder`` run of the proportional mixture at 3e18 FLOPs outside the swarm."""
-    ladder = read_table(root, "ladder")
+    ladder = read_table(root, LADDER_TABLE)
     june = ladder[
-        (ladder["method"] == "proportional")
+        (ladder["method"] == PROPORTIONAL)
         & (ladder["compute_flops"] == JUNE_RUN_FLOPS)
         & ~ladder[OBSERVATION_ID].isin(swarm_table[OBSERVATION_ID])
     ]
@@ -545,7 +568,7 @@ def trained_counts(root: Path, mixture_id: str) -> np.ndarray:
     """The block counts of a trained mixture: its ``validation_3e18`` weights times 2,048, which must be integers."""
     name = VALIDATION_TABLE
     table = read_table(root, name)
-    rows = table[table["mixture_id"] == mixture_id]
+    rows = table[table[MIXTURE_ID] == mixture_id]
     if rows.empty:
         raise ValueError(f"no {name} run trained {mixture_id}")
     blocks = bucket_values(rows, WEIGHT_PREFIX, release_partition(root).bucket_ids, name) * MIXTURE_BLOCK_SIZE

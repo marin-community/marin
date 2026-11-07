@@ -55,7 +55,7 @@ from mariner.figures.layout import (
     t_interval,
 )
 from mariner.figures.repetition import FULL_POOL, pool_colors, pool_label, repetition_label
-from mariner.figures.starcoder import tokens_label
+from mariner.figures.starcoder import CURRICULA_TABLE, tokens_label
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
 GAIN_SCALE = 1e3  # gains are drawn in 1e-3 BPB
@@ -67,7 +67,6 @@ DODGE = 0.04  # log-spaced offset between panel A's pools at one budget
 # Figure 25: two-phase gains across token budgets, StarCoder repetition and matched compute
 # ---------------------------------------------------------------------------------------------------------------
 
-CURRICULA_TABLE = "starcoder_curricula"
 MATCHED_TABLE = "starcoder_curricula_matched_nd"
 CONFIRMATION_TABLE = "starcoder_curricula_matched_nd_confirmation"
 BLOCK_COLUMNS = {
@@ -516,7 +515,9 @@ def draw_ramp_schedules(root: Path) -> FigureData:
     )
     axis.set_xlim(RAMP_WINDOW[0] * total, RAMP_WINDOW[1] * total)
     axis.set_ylim(0.0, None)
-    top = axis.secondary_xaxis("top", functions=(lambda step: 100 * step / total, lambda percent: percent * total / 100))
+    top = axis.secondary_xaxis(
+        "top", functions=(lambda step: 100 * np.asarray(step) / total, lambda percent: np.asarray(percent) * total / 100)
+    )
     top.set_xlabel("Share of training (%)")
     axis.set_xlabel("Training step")
     axis.set_ylabel("StarCoder share of the block")

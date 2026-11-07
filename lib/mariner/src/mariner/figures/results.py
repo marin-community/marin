@@ -37,13 +37,21 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FixedLocator, FormatStrFormatter, FuncFormatter, MultipleLocator, NullLocator
 
 from mariner.data import (
+    LADDER_TABLE,
+    LAUNCH,
+    MIXTURE_ID,
     OBJECTIVES,
+    OBSERVATION_ID,
     OUTCOME_PREFIX,
+    PROPOSAL_OBJECTIVE,
     RELIABILITY_SOURCES,
     RELIABILITY_TABLE,
+    TASK_ID,
     TRAINED_MARINER,
     TRAINED_OLMIX,
+    TRAINER_SEED,
     VALIDATION_TABLE,
+    ObjectiveName,
     read_table,
     reliability_rows,
     require_columns,
@@ -70,7 +78,7 @@ from mariner.figures.pipeline import (
 )
 from mariner.figures.surrogate import seed_runs
 from mariner.methods import METHOD_LABELS, Method
-from mariner.tables import COMPUTE_SCALES, REPEATED_SCALE, UNPROPOSED, compute_label, ladder_track
+from mariner.tables import COMPUTE_SCALES, LADDER_COLUMNS, REPEATED_SCALE, UNPROPOSED, compute_label, ladder_track
 
 MARKER_SIZE = 7.0
 JOIN_WIDTH = 0.8  # the lines that join a panel's points
@@ -202,8 +210,8 @@ TRACK_STYLES = {True: "-", False: "--"}  # on-objective solid, off-objective das
 
 def on_off_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each method's tracks on each objective, on and off the objective of its proposal, and their fitted laws."""
-    ladder = read_table(root, "ladder")
-    require_columns(ladder, ["method", "proposal_objective", "compute_flops", *OBJECTIVE_OUTCOMES], "ladder")
+    ladder = read_table(root, LADDER_TABLE)
+    require_columns(ladder, [*LADDER_COLUMNS, *OBJECTIVE_OUTCOMES], LADDER_TABLE)
     tracks, laws, curves = [], [], []
     for objective in OBJECTIVES:
         (other,) = (name for name in OBJECTIVES if name != objective)
@@ -213,7 +221,7 @@ def on_off_values(root: Path) -> dict[str, pd.DataFrame]:
                 key = {
                     "objective": objective,
                     "method": method.value,
-                    "proposal_objective": proposal,
+                    PROPOSAL_OBJECTIVE: proposal,
                     "on_objective": on_objective,
                 }
                 track = ladder_track(ladder, method, proposal, f"{OUTCOME_PREFIX}{objective}")
@@ -319,28 +327,34 @@ class TradeoffPanel(NamedTuple):
 
 TRADEOFF_PANELS = (
     TradeoffPanel(
-        "uncheatable",
-        "uncheatable",
-        {Method.MARINER: TRAINED_MARINER["uncheatable"], Method.OLMIX: TRAINED_OLMIX["uncheatable"].mixture_id},
+        ObjectiveName.UNCHEATABLE,
+        ObjectiveName.UNCHEATABLE,
+        {
+            Method.MARINER: TRAINED_MARINER[ObjectiveName.UNCHEATABLE],
+            Method.OLMIX: TRAINED_OLMIX[ObjectiveName.UNCHEATABLE].mixture_id,
+        },
         "Uncheatable\noptimized for all",
         (ALL_TASKS,),
     ),
     TradeoffPanel(
-        "uncheatable",
+        ObjectiveName.UNCHEATABLE,
         "uncheatable_worsened",
         {Method.MARINER: "mix_d35652d26bfb4161", Method.OLMIX: "mix_de06cf1f70fca954"},
         "Uncheatable\noptimized for AO3, Wikipedia and BBC News",
         BROAD_LANGUAGE,
     ),
     TradeoffPanel(
-        "obe_easy",
-        "obe_easy",
-        {Method.MARINER: TRAINED_MARINER["obe_easy"], Method.OLMIX: TRAINED_OLMIX["obe_easy"].mixture_id},
+        ObjectiveName.OBE_EASY,
+        ObjectiveName.OBE_EASY,
+        {
+            Method.MARINER: TRAINED_MARINER[ObjectiveName.OBE_EASY],
+            Method.OLMIX: TRAINED_OLMIX[ObjectiveName.OBE_EASY].mixture_id,
+        },
         "OlmoBaseEval Easy\noptimized for all",
         (ALL_TASKS,),
     ),
     TradeoffPanel(
-        "obe_easy",
+        ObjectiveName.OBE_EASY,
         "obe_easy_qa15",
         {Method.MARINER: "mix_520005cb5b644ee6", Method.OLMIX: "mix_e7254c0b10669665"},
         "OlmoBaseEval Easy\noptimized for QA",
@@ -377,12 +391,12 @@ def tradeoff_rows(reliability: pd.DataFrame, objective: str, proportional: pd.Se
     or puts an OlmoBaseEval Easy task in a group that the figure does not draw.
     """
     rows = reliability_rows(reliability, RELIABILITY_SOURCES[objective])
-    require_columns(rows, ["task_id", "task", "group"], RELIABILITY_TABLE)
-    aggregate = rows[rows["task_id"].isna()]
+    require_columns(rows, [TASK_ID, "task", "group"], RELIABILITY_TABLE)
+    aggregate = rows[rows[TASK_ID].isna()]
     if len(aggregate) != 1:
         raise ValueError(f"{RELIABILITY_TABLE} has {len(aggregate)} aggregate rows for {objective}, not one")
-    tasks = rows[rows["task_id"].notna()].set_index("task_id")
-    if objective == "uncheatable":
+    tasks = rows[rows[TASK_ID].notna()].set_index(TASK_ID)
+    if objective == ObjectiveName.UNCHEATABLE:
         missing = sorted(set(UNCHEATABLE_ROWS) - set(tasks.index))
         if missing:
             raise ValueError(f"{RELIABILITY_TABLE} has no row of {', '.join(missing)}")
@@ -414,8 +428,8 @@ def repeat_means(reliability: pd.DataFrame, objective: str) -> pd.Series:
     """``fits_reliability``'s proportional means of ``objective``'s tasks and of the objective, by task id and by its
     name: the means over the main swarm's ten proportional repeats."""
     rows = reliability_rows(reliability, RELIABILITY_SOURCES[objective])
-    require_columns(rows, ["task_id", "proportional_mean"], RELIABILITY_TABLE)
-    return pd.Series(rows["proportional_mean"].to_numpy(float), index=rows["task_id"].fillna(objective).to_numpy())
+    require_columns(rows, [TASK_ID, "proportional_mean"], RELIABILITY_TABLE)
+    return pd.Series(rows["proportional_mean"].to_numpy(float), index=rows[TASK_ID].fillna(objective).to_numpy())
 
 
 def ladder_proportional_means(ladder: pd.DataFrame, objective: str, task_ids: Sequence[str]) -> pd.Series:
@@ -424,7 +438,7 @@ def ladder_proportional_means(ladder: pd.DataFrame, objective: str, task_ids: Se
     (``mariner.tables.ladder_track``)."""
     outcomes = [*task_ids, objective]
     columns = [f"{OUTCOME_PREFIX}{outcome}" for outcome in outcomes]
-    require_columns(ladder, ["method", "proposal_objective", "compute_flops", *columns], "ladder")
+    require_columns(ladder, [*LADDER_COLUMNS, *columns], LADDER_TABLE)
     means = [
         ladder_track(ladder, Method.PROPORTIONAL, UNPROPOSED, column).set_index("compute_flops")["mean_bpb"]
         for column in columns
@@ -439,15 +453,19 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
     """
     reliability = read_table(root, RELIABILITY_TABLE)
     proportional = {
-        "uncheatable": ladder_proportional_means(read_table(root, "ladder"), "uncheatable", UNCHEATABLE_ROWS),
-        "obe_easy": repeat_means(reliability, "obe_easy"),
+        ObjectiveName.UNCHEATABLE: ladder_proportional_means(
+            read_table(root, LADDER_TABLE), ObjectiveName.UNCHEATABLE, UNCHEATABLE_ROWS
+        ),
+        ObjectiveName.OBE_EASY: repeat_means(reliability, ObjectiveName.OBE_EASY),
     }
-    rows = {objective: tradeoff_rows(reliability, objective, proportional[objective]) for objective in OBJECTIVES}
+    rows: dict[str, list[TradeoffRow]] = {
+        objective: tradeoff_rows(reliability, objective, proportional[objective]) for objective in OBJECTIVES
+    }
     validation = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{task}" for objective in OBJECTIVES for row in rows[objective] for task in row.tasks]
     require_columns(
         validation,
-        ["observation_id", "mixture_id", "launch", "trainer_seed", "proposal_objective", *OBJECTIVE_OUTCOMES, *outcomes],
+        [OBSERVATION_ID, MIXTURE_ID, LAUNCH, TRAINER_SEED, PROPOSAL_OBJECTIVE, *OBJECTIVE_OUTCOMES, *outcomes],
         VALIDATION_TABLE,
     )
     bars, runs_used = [], []
@@ -455,8 +473,8 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
         for method in TRADEOFF_METHODS:
             runs = seed_runs(validation, panel.mixtures[method], panel.proposal_objective)
             runs_used += [
-                {"panel": panel.proposal_objective, "method": method.value, "observation_id": run, "trainer_seed": seed}
-                for run, seed in zip(runs["observation_id"], runs["trainer_seed"], strict=True)
+                {"panel": panel.proposal_objective, "method": method.value, OBSERVATION_ID: run, TRAINER_SEED: seed}
+                for run, seed in zip(runs[OBSERVATION_ID], runs[TRAINER_SEED], strict=True)
             ]
             for row in rows[panel.objective]:
                 if row.item == ALL_TASKS:
@@ -469,9 +487,9 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
                     {
                         "panel": panel.proposal_objective,
                         "objective": panel.objective,
-                        "proposal_objective": panel.proposal_objective,
+                        PROPOSAL_OBJECTIVE: panel.proposal_objective,
                         "method": method.value,
-                        "mixture_id": panel.mixtures[method],
+                        MIXTURE_ID: panel.mixtures[method],
                         "item": row.item,
                         "label": row.label,
                         "tasks": len(row.tasks),
