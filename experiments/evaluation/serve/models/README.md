@@ -127,3 +127,67 @@ Dry runs show per-task hardware and serving geometry. `record.json` retains requ
 and reports resolved settings under `serving` after endpoint startup; `serving.effective` is false
 when startup did not produce an endpoint. Multi-node support and context capacity depend on the
 pinned vLLM version and model architecture and must be checked on the target hardware.
+
+## Session routing for native vLLM DP
+
+`marin-serve local` and `marin-serve iris` accept `--session-router`. Direct serving is the default.
+The router runs released `vllm-router==0.1.16` in an isolated `uvx` environment, outside Marin's
+Python dependencies. It uses consistent hashing, stable `X-Session-ID` headers, a 14,400-second
+request timeout and disabled HTTP retries. Client SDK retries are separate.
+
+```bash
+uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
+  --tensor-parallel-size 1 --data-parallel-size 2 --session-router \
+  --vllm-arg=--enable-prefix-caching
+```
+
+For TP1/PP1/DP16 across four hosts, request four GPUs per task and sixteen total DP ranks:
+
+```bash
+uv run marin-serve iris MODEL_URI --cluster cw-us-east-08a --gpu GB200x4 \
+  --tensor-parallel-size 1 --data-parallel-size 16 --data-parallel-size-local 4 \
+  --session-router --router-request-timeout-secs 14400 --proxy-timeout 14400 \
+  --vllm-source marin-fork --vllm-release promoted-release.json \
+  --vllm-arg=--enable-expert-parallel --vllm-arg=--enable-prefix-caching
+```
+
+`MODEL_URI` stands for an operator-selected export. Follow the
+[qualified Hero recipe](https://github.com/marin-community/marin-logbooks/blob/d6f5660563606d7877e7f40b8a70a59703a35f52/logbooks/19-hero-agentx-throughput/owner-integration/hero-logical-kv-recipe.md)
+for its tokenizer, runtime, compiler guard, cache and scheduling settings. Routing leaves those
+settings to the caller. `--vllm-release` reads a JSON `VllmGpuRelease` object (`release_tag`,
+`source_commit`, `version`, `torch_backend`, `torch_version`, `wheels`). Each wheel has `architecture`,
+`sm_targets`, `url` and `sha256`. This uses the existing promoted-wheel verifier for one deployment;
+it does not change the shared runtime pin or publish a release. Without this option, normal
+serving runtime selection applies. Both processes log their effective versions and launch commands.
+
+Send the same `X-Session-ID` on later turns. The router selects a DP rank through the upstream
+`X-data-parallel-rank` dispatch header; the leader's internal vLLM load balancer must reach all
+ranks. External and hybrid vLLM load balancing are unsupported. Requests without a session header
+retain the [upstream key fallback order](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#hash-key-priority),
+ending with a hash of the body. A changed body alone does not preserve conversation affinity.
+
+Marin waits for vLLM and every configured backend before exposing the routed endpoint. Streaming
+passes through the existing proxy. Router 0.1.16 detects a client disconnect on the next upstream
+chunk; a stalled stream remains subject to the request timeout. The Iris endpoint's `/metrics`
+continues to read direct vLLM worker counters, including engine labels for native DP ranks.
+Router Prometheus metrics have a separate port, recorded in its command. They do not aggregate
+vLLM worker metrics. Existing compilation-cache and monitoring controls remain in effect.
+
+Affinity holds while worker identities and health stay stable. A dead worker loses its in-memory
+KV cache; upstream health fallback may choose another worker. A router exit fails the serving
+lifecycle and unregisters the endpoint. Stop the affected job with
+`iris --cluster CLUSTER job cancel JOB`, confirm its tasks and pods are gone, then submit the same
+configuration. Existing Iris whole-task retries are separate from the router's disabled HTTP
+retries. A benchmark must not treat a restarted service as retaining the old KV cache.
+
+For runner integration, use `VllmEngineConfig(router=VllmRouterConfig(request_timeout_seconds=14400),
+release=promoted_release, ...)` with
+`IrisConfig(serving_geometry=ServingGeometry(1, 16, 1, 4, data_parallel_size_local=4), ...)`, one native
+group and no broker. `VllmBackend.start()` returns a `VllmEnvironment`; call `wait_until_ready()`
+before consuming its routed `server_url`. `worker_server_url` and `command` retain the direct
+worker URL and vLLM launch record. The environment accepts the runner's existing `collect_metrics`,
+`collect_nccl` and `compilation_cache_mode` controls. The lower-level
+`vllm_router(config, worker_urls, data_parallel_size=N)` context supports independently addressable
+workers with equal DP sizes. Each URL must reach all `N` native ranks. Managed serving derives this
+count from the native vLLM arguments; the router does not configure the worker topology.
+The CLI's `--instances` broker path cannot be combined with session routing.

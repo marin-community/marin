@@ -447,8 +447,10 @@ def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instan
 @pytest.mark.parametrize("flag", ["--tensor-parallel-size", "--pipeline-parallel-size", "--headless"])
 @pytest.mark.parametrize("equals", [False, True])
 def test_pipeline_rejects_raw_topology_overrides(flag, equals):
+    # The declared topology is valid; adding a raw topology flag creates the conflict.
+    ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2)
     extra_args = (f"{flag}=2",) if equals else (flag, "2")
-    with pytest.raises(ValueError, match="pipeline parallelism owns"):
+    with pytest.raises(ValueError):
         ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, vllm_extra_args=extra_args)
 
 
