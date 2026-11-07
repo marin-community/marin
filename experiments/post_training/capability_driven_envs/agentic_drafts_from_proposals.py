@@ -82,8 +82,9 @@ LISTING_THREADS = 32
 BATCH_FLUSH = 1.0
 BATCH_POLL = 5.0
 SESSION_TIMEOUT = 3600
-"""Seconds that one draft session can take. A session that hangs gives its slot back and is drafted again on the
-next launch, because a failed session writes no ``result.json``."""
+"""The default seconds that one draft session can take. A session that hangs gives its slot back and is drafted again
+on the next launch, because a failed session writes no ``result.json``. A retry launch of the slots that timed out
+can give them longer with ``--session-timeout``."""
 
 
 class Transport(StrEnum):
@@ -115,6 +116,7 @@ class RunSettings:
     agent_reasoning_effort: str
     batch_size: int
     concurrent_batches: int
+    session_timeout: float
 
 
 def accepted_slots(proposals: StoragePath) -> list[Slot]:
@@ -184,7 +186,7 @@ async def _draft_all(slots: Sequence[Slot], settings: RunSettings) -> list[dict[
         workspace_factory=workspace,
         solver_factories={backend: solver_factory(backend) for backend in (Backend.SHELLSIM, Backend.LOCAL)},
         judge=JudgeConnection(endpoint.base_url, endpoint.token, default_model=DEEPSEEK_MODEL),
-        agent_limits=agent_limits(settings.turns).model_copy(update={"attempt_timeout": SESSION_TIMEOUT}),
+        agent_limits=agent_limits(settings.turns).model_copy(update={"attempt_timeout": settings.session_timeout}),
         solver_limits=SOLVER_LIMITS,
         command_timeout=COMMAND_TIMEOUT,
     )
@@ -300,6 +302,13 @@ def write_draft(
 @click.option("--agent-reasoning-effort", default="low", show_default=True)
 @click.option("--batch-size", type=click.IntRange(min=1), default=64, show_default=True)
 @click.option("--concurrent-batches", type=click.IntRange(min=1), default=4, show_default=True)
+@click.option(
+    "--session-timeout",
+    type=click.FloatRange(min=60),
+    default=SESSION_TIMEOUT,
+    show_default=True,
+    help="Seconds that one draft session can take.",
+)
 @click.option("--worker-cpu", type=float, default=8, show_default=True)
 @click.option("--worker-ram", default="32g", show_default=True)
 def main(
@@ -320,6 +329,7 @@ def main(
     agent_reasoning_effort: str,
     batch_size: int,
     concurrent_batches: int,
+    session_timeout: float,
     worker_cpu: float,
     worker_ram: str,
 ) -> None:
@@ -346,6 +356,7 @@ def main(
         agent_reasoning_effort,
         batch_size,
         concurrent_batches,
+        session_timeout,
     )
     shards = [slots[start : start + shard_size] for start in range(0, len(slots), shard_size)]
     dataset = (
