@@ -177,8 +177,8 @@ Useful flags:
 - `mixture/weight/<dataset_name>`: effective sampling weight per dataset in the active stage.
 - `eval/loss`, `eval/loading_time`, `eval/total_time`: tagged-eval loss and timing for current model.
 - `eval/ema/*`: same eval metrics for EMA weights when EMA is enabled.
-- `eval/macro_loss`: macro average loss across tags when multiple tags exist.
-- `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views.
+- `eval/macro_loss`: macro average loss across tags with scored tokens when multiple tags exist.
+- `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views. A tag with no scored tokens logs none of them.
 - `eval/bpb`, `eval/macro_bpb`, `eval/<tag>/bpb`, `eval/<tag>/macro_bpb`: bits-per-byte metrics when tokenizer/BPB logging is enabled.
 - `grad/*`, `params/*`, `updates/*`, `opt_state/*`: optional watch metrics (norms/histograms) when watch is enabled.
 - `backward_flow/<scope>/*`: sampled activation and backward-gradient scale stats when `trainer.backward_flow.interval > 0`. Grug also logs `*_gradient_rms_scaled`, where gradients are multiplied by `sum(loss_weight)` to undo mean-loss scaling for the visualization.
