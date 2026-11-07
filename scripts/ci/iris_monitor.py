@@ -221,8 +221,8 @@ def wait_for_child_job(
     If no child task reaches RUNNING within ``child_wait_timeout``, the escalate policy
     raises ``TimeoutError`` — this catches a parent stuck in the queue before it ever launches work —
     and the shutdown policy cancels the parent and reports the wait as resource exhaustion.
-    Once a child has started, the child wait timeout is dropped — total runtime is bounded by the
-    caller's wall clock (e.g. GitHub ``timeout-minutes``).
+    Once a child has started, its queue timeout is dropped. A later selected child gets a fresh
+    queue deadline. Total runtime remains bounded by the caller's wall clock.
     """
     prefix = _job_id_prefix(job_id)
     deadline = time.monotonic() + child_wait_timeout
@@ -232,6 +232,7 @@ def wait_for_child_job(
         jitter=0.0,
     )
     child_running = False
+    selected_child_id = None
     with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
             jobs = client.list_jobs(prefix=prefix)
@@ -244,6 +245,11 @@ def wait_for_child_job(
                 return result
 
             child = _pick_child(job_id, jobs)
+            if child is not None:
+                if selected_child_id is not None and child.job_id != selected_child_id:
+                    deadline = time.monotonic() + child_wait_timeout
+                    child_running = False
+                selected_child_id = child.job_id
             if not child_running and child is not None and _child_started(child):
                 child_running = True
                 click.echo(
