@@ -28,7 +28,15 @@ from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from mariner.data import OBJECTIVES, OBSERVATION_ID, TRAINED_MARINER, TRAINED_OLMIX, read_table, require_columns
+from mariner.data import (
+    OBJECTIVES,
+    OBSERVATION_ID,
+    OUTCOME_PREFIX,
+    TRAINED_MARINER,
+    TRAINED_OLMIX,
+    read_table,
+    require_columns,
+)
 from mariner.figures.layout import (
     BAND_ALPHA,
     CONFIDENCE,
@@ -429,7 +437,11 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
     The summary is the mean over the three trainer seeds and the half-width of the figure's 95% interval.
     """
     runs = read_table(root, "validation_3e18")
+    outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in PROPOSAL_MIXTURES]
+    require_columns(runs, [OBSERVATION_ID, "mixture_id", "launch", "trainer_seed", *outcomes], "validation_3e18")
     released = read_table(root, "fits_proposal_predictions")
+    columns = [OBSERVATION_ID, "objective", "predictor", "predicted_bpb"]
+    require_columns(released, columns, "fits_proposal_predictions")
     measured, predictions = [], []
     for objective, proposals in PROPOSAL_MIXTURES.items():
         for proposal, mixture in proposals.items():
@@ -443,7 +455,7 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
                     "bpb": bpb,
                 }
                 for run, seed, bpb in zip(
-                    rows[OBSERVATION_ID], rows["trainer_seed"], rows[f"bpb__{objective}"], strict=True
+                    rows[OBSERVATION_ID], rows["trainer_seed"], rows[f"{OUTCOME_PREFIX}{objective}"], strict=True
                 )
             ]
             own = released[(released[OBSERVATION_ID].isin(rows[OBSERVATION_ID])) & (released["objective"] == objective)]

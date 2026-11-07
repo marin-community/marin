@@ -24,7 +24,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from scipy.optimize import minimize_scalar
 
-from mariner.data import OBSERVATION_ID, read_table
+from mariner.data import OBSERVATION_ID, read_table, require_columns
 from mariner.figures.layout import BAND_ALPHA, NEUTRAL, flops_label, panel_legend, rounded_label
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
@@ -41,6 +41,21 @@ MINIMUM_GRID = 4_001  # shares that bracket a fit's local minima before a bounde
 MINIMUM_XATOL = 1e-12
 CURVE_POINTS = 400  # shares at which a fitted curve is drawn
 EPOCH_SCALE_TOLERANCE = 1e-12  # relative: a diagonal cell's epochs over its shares, one value up to rounding
+CURVES_TABLE = "starcoder_curves"
+MEMBERSHIP_TABLE = "starcoder_curve_membership"
+OBSERVATIONS_TABLE = "starcoder_observations"
+SWEEP_SCALE_COLUMNS = ["total_parameters", "train_tokens", "starcoder_epochs_at_p1", "compute_flops"]
+DIAGONAL_TABLE = "starcoder_diagonal"
+DIAGONAL_COLUMNS = [
+    "cell_id",
+    "rung",
+    "starcoder_weight",
+    "starcoder_epochs",
+    "starcoder_bpb",
+    "total_parameters",
+    "materialized_tokens",
+    "compute_flops",
+]
 SHARE_AXIS_LIMITS = (0.0, 0.95)  # the fitted sweeps run from p = 0.036 to 0.9; the margin keeps their last markers
 
 
@@ -83,9 +98,13 @@ def sorted_sweep(
 
 def atlas_sweeps(root: Path, refs: Sequence[str]) -> dict[str, StarcoderSweep]:
     """The atlas's sweeps ``refs`` (``starcoder_curves``), with their runs' shares and BPB."""
-    curves = read_table(root, "starcoder_curves").set_index("curve_ref")
-    membership = read_table(root, "starcoder_curve_membership")
-    observations = read_table(root, "starcoder_observations").set_index(OBSERVATION_ID)
+    curves = read_table(root, CURVES_TABLE)
+    require_columns(curves, ["curve_ref", "curve_id", *SWEEP_SCALE_COLUMNS], CURVES_TABLE)
+    membership = read_table(root, MEMBERSHIP_TABLE)
+    require_columns(membership, ["curve_id", OBSERVATION_ID], MEMBERSHIP_TABLE)
+    observations = read_table(root, OBSERVATIONS_TABLE)
+    require_columns(observations, [OBSERVATION_ID, "starcoder_weight", "observed_bpb"], OBSERVATIONS_TABLE)
+    curves, observations = curves.set_index("curve_ref"), observations.set_index(OBSERVATION_ID)
     sweeps = {}
     for ref in dict.fromkeys(refs):
         curve = curves.loc[ref]
@@ -104,7 +123,9 @@ def atlas_sweeps(root: Path, refs: Sequence[str]) -> dict[str, StarcoderSweep]:
 
 def diagonal_sweeps(root: Path) -> list[StarcoderSweep]:
     """The fixed-TPP sweeps (``starcoder_diagonal``), one per cell, from the smallest compute to the largest."""
-    diagonal = read_table(root, "starcoder_diagonal").sort_values(["rung", "starcoder_weight"])
+    diagonal = read_table(root, DIAGONAL_TABLE)
+    require_columns(diagonal, DIAGONAL_COLUMNS, DIAGONAL_TABLE)
+    diagonal = diagonal.sort_values(["rung", "starcoder_weight"])
     sweeps = []
     for cell, rows in diagonal.groupby("cell_id", sort=False):
         scales = (rows["starcoder_epochs"] / rows["starcoder_weight"]).to_numpy(float)
@@ -125,20 +146,23 @@ def diagonal_sweeps(root: Path) -> list[StarcoderSweep]:
     return sweeps
 
 
-def fit_shares(shares: np.ndarray, bpb: np.ndarray, starcoder_epochs_at_p1: float) -> ObjectiveFit:
+def fit_shares(
+    shares: np.ndarray, bpb: np.ndarray, starcoder_epochs_at_p1: float, nemotron_epochs_at_p0: float
+) -> ObjectiveFit:
     """MARINER fitted to losses at StarCoder shares, sorted by share, as the paper fitted Figures 1, 3 and 4.
 
-    The runs form a two-bucket swarm, Nemotron-CC at share 1 - p and StarCoder at share p. The smallest-share run is
-    the calibration run: it stays in every training fold, and its BPB anchors the floor without a noise margin, since
-    the runs have no repeats. Leave-one-out cross-validation over the other runs selects the shape, the ridge weight
-    and the floor multiplier.
+    The runs form a two-bucket swarm, Nemotron-CC at share 1 - p and StarCoder at share p, whose materialized epochs
+    per unit of share are ``nemotron_epochs_at_p0`` and ``starcoder_epochs_at_p1``. The smallest-share run is the
+    calibration run: it stays in every training fold, and its BPB anchors the floor without a noise margin, since the
+    runs have no repeats. Leave-one-out cross-validation over the other runs selects the shape, the ridge weight and
+    the floor multiplier.
     """
     rows = np.arange(len(shares))
     swarm = Swarm(
         runs=tuple(str(row) for row in rows),
         buckets=SWEEP_BUCKETS,
         weights=np.column_stack([1.0 - shares, shares]),
-        epochs_per_unit_weight=np.array([NEMOTRON_EPOCHS_PER_UNIT_WEIGHT, starcoder_epochs_at_p1]),
+        epochs_per_unit_weight=np.array([nemotron_epochs_at_p0, starcoder_epochs_at_p1]),
         pool_fractions=np.ones((len(rows), len(SWEEP_BUCKETS))),
         outcomes=pd.DataFrame({SWEEP_TASK: bpb}),
         calibration=rows == 0,
@@ -149,7 +173,7 @@ def fit_shares(shares: np.ndarray, bpb: np.ndarray, starcoder_epochs_at_p1: floa
 
 def fit_sweep(sweep: StarcoderSweep) -> ObjectiveFit:
     """MARINER fitted to one sweep (``fit_shares``); its smallest share is the proportional mixture."""
-    return fit_shares(sweep.shares, sweep.bpb, sweep.starcoder_epochs_at_p1)
+    return fit_shares(sweep.shares, sweep.bpb, sweep.starcoder_epochs_at_p1, NEMOTRON_EPOCHS_PER_UNIT_WEIGHT)
 
 
 def sweep_prediction(fit: ObjectiveFit, shares: np.ndarray) -> np.ndarray:
@@ -220,6 +244,16 @@ def tokens_label(count: float) -> str:
 EPOCH_MATCHING_TABLE = "starcoder_epoch_matching"
 EPOCH_MATCHING_BPB = "programming_languages_bpb"
 RUN_KEYS = ["arm", "subset_seed", "trainer_seed", "starcoder_weight"]  # one run of the sweep each
+EPOCH_MATCHING_COLUMNS = [
+    OBSERVATION_ID,
+    *RUN_KEYS,
+    "starcoder_epochs",
+    EPOCH_MATCHING_BPB,
+    "train_tokens",
+    "starcoder_subset_tokens",
+    "web_pool_tokens",
+    "compute_flops",
+]
 SELECTION_TOLERANCE = 1e-12  # the target's follow-up run trains the matched selection, a mean of grid shares
 
 
@@ -253,6 +287,7 @@ class EpochMatching:
     selections: dict[Arm, float]  # each proxy's selected share
     epochs: pd.DataFrame  # arms x shares: StarCoder's materialized epochs
     epochs_at_p1: dict[Arm, float]  # each arm's tokens over its StarCoder pool: its epochs at share 1
+    web_epochs_at_p0: dict[Arm, float]  # each arm's tokens over its Nemotron-CC pool: its web epochs at share 0
     compute_flops: dict[Arm, float]
 
     @property
@@ -310,6 +345,7 @@ def epoch_matching(root: Path) -> EpochMatching:
     when a proxy curve lacks a share, or when an arm's runs at one share differ in materialized epochs.
     """
     runs = read_table(root, EPOCH_MATCHING_TABLE)
+    require_columns(runs, EPOCH_MATCHING_COLUMNS, EPOCH_MATCHING_TABLE)
     repeated = runs[runs.duplicated(RUN_KEYS, keep=False)]
     if len(repeated):
         raise ValueError(f"{EPOCH_MATCHING_TABLE} repeats runs: {', '.join(repeated['observation_id'])}")
@@ -344,6 +380,9 @@ def epoch_matching(root: Path) -> EpochMatching:
         epochs=epochs.first().unstack(),
         epochs_at_p1={
             Arm(arm): float(row["train_tokens"] / row["starcoder_subset_tokens"]) for arm, row in first.iterrows()
+        },
+        web_epochs_at_p0={
+            Arm(arm): float(row["train_tokens"] / row["web_pool_tokens"]) for arm, row in first.iterrows()
         },
         compute_flops={Arm(arm): float(row["compute_flops"]) for arm, row in first.iterrows()},
     )

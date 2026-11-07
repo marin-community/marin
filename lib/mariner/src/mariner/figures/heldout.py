@@ -22,9 +22,8 @@ Figures 16 and 17 read each objective's frontier bank (``frontier_bank``): the h
 the paper's analysis of the best held-out mixtures leaves out. That leaves 170 Uncheatable and 157 OlmoBaseEval Easy
 exposures. MARINER's predictions are the released per-task predictions, Olmix's the released per-task laws at each
 exposure's mixture, and an objective's prediction weights its tasks by their ``aggregate_weight``. Figure 16's titles
-print ``fits_reliability``'s signal-to-noise ratios, and its bands are the repeat standard deviations there. The paper
-prints arXiv physics's SNR as 14, dividing by the standard deviation of eleven proportional runs with the June run
-among them, where the release's ten repeats give 16.
+print ``fits_reliability``'s signal-to-noise ratios, and its bands are the repeat standard deviations there, both over
+the main swarm's ten proportional repeats.
 
 Figure 14's row of the dataset's index also names ``fits``, which the redraw does not read.
 """
@@ -33,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -42,14 +41,13 @@ from matplotlib.patches import Patch
 from scipy import stats
 
 from mariner.data import (
+    BASELINE_PREFIX,
     CALIBRATION_RUN,
     EXPOSURE_ID,
-    EXPOSURE_MIXTURE_TOLERANCE,
     FIT_INCLUSION,
     HELDOUT_PREDICTIONS_TABLE,
     HELDOUT_TABLE,
     MAIN_SWARM,
-    OBJECTIVE_COLUMN,
     OBSERVATION_ID,
     OUTCOME_PREFIX,
     RELIABILITY_SOURCES,
@@ -59,7 +57,7 @@ from mariner.data import (
     TRAINED_MARINER,
     TRAINED_OLMIX,
     WEIGHT_PREFIX,
-    blank_identifier_mask,
+    heldout_bank,
     mixture_weights,
     objective_from_tasks,
     read_table,
@@ -67,7 +65,9 @@ from mariner.data import (
     release_runs,
     release_tasks,
     released_olmix_laws,
+    released_task_predictions,
     reliability_rows,
+    require_columns,
 )
 from mariner.figures.layout import (
     BAND_ALPHA,
@@ -83,8 +83,8 @@ from mariner.figures.layout import (
     panels,
 )
 from mariner.figures.surrogate import PROPOSAL_MIXTURES
+from mariner.model import HeldoutBank, Objective
 
-PREDICTED = "predicted_bpb"  # fits_heldout_predictions' column of MARINER's predictions
 PROPOSAL_METHOD = "proposal_method"  # heldout's column naming the design or launch a run comes from
 EDGE = "#222222"  # the outline of a marker drawn over others
 
@@ -112,7 +112,8 @@ TRANSFER_PROPOSALS = {
     Method.REGMIX: PROPOSAL_MIXTURES[TRANSFER_OBJECTIVE][Method.REGMIX],
     Method.REGMIX_RELEASED: "mix_0a09804c6e21af02",  # released RegMix's recipe, rgref_u_endpoint_cap64
 }
-TRANSFER_BASELINES = {Method.PROPORTIONAL: CALIBRATION_RUN, Method.UNIMAX: "baseline_unimax"}  # by run label
+# The baselines among the designs, by run label (the swarms name UniMax-8's run without its cap).
+TRANSFER_BASELINES = {Method.PROPORTIONAL: CALIBRATION_RUN, Method.UNIMAX: f"{BASELINE_PREFIX}unimax"}
 TRANSFER_MARKERS = {
     Method.MARINER: ("*", 12.0),
     Method.OLMIX: ("D", 6.0),
@@ -126,8 +127,10 @@ TRANSFER_MARKERS = {
 def setting_designs(root: Path, setting: str) -> pd.Series:
     """The Uncheatable BPB of a swarm's fit runs at one proxy setting, by run label."""
     runs = release_runs(root, setting)
+    outcome = f"{OUTCOME_PREFIX}{TRANSFER_OBJECTIVE}"
+    require_columns(runs, [FIT_INCLUSION, RUN_LABEL, outcome], f"swarm_{setting}")
     fit = runs.loc[runs[FIT_INCLUSION]]
-    return fit.set_index(RUN_LABEL)[f"{OUTCOME_PREFIX}{TRANSFER_OBJECTIVE}"]
+    return fit.set_index(RUN_LABEL)[outcome]
 
 
 def proposal_bpb(heldout: pd.DataFrame, mixture: str, setting: str) -> tuple[float, int]:
@@ -159,6 +162,7 @@ def transfer_values(root: Path) -> dict[str, pd.DataFrame]:
         raise ValueError(f"the swarms {', '.join(missing)} lack the Uncheatable BPB of some of {MAIN_SWARM}'s designs")
     ranks = bpb.rank(method="min")
     heldout = read_table(root, HELDOUT_TABLE)
+    require_columns(heldout, ["mixture_id", "swarm", "cohort", f"{OUTCOME_PREFIX}{TRANSFER_OBJECTIVE}"], HELDOUT_TABLE)
     transferred = set(heldout.loc[heldout["cohort"] == SCALE_TRANSFER, "mixture_id"])
     if transferred != set(TRANSFER_PROPOSALS.values()):
         raise ValueError(f"the {SCALE_TRANSFER} cohort trains {sorted(transferred)}, not Figure 14's proposals")
@@ -187,7 +191,7 @@ def transfer_values(root: Path) -> dict[str, pd.DataFrame]:
     return {"designs": long, "proposals": pd.DataFrame(proposals), "pairs": pd.DataFrame(pairs)}
 
 
-def transfer_marker(method: Method) -> dict:
+def transfer_marker(method: Method) -> dict[str, Any]:
     marker, size = TRANSFER_MARKERS[method]
     return {
         "marker": marker,
@@ -263,7 +267,7 @@ def draw_scale_transfer(root: Path) -> FigureData:
             label=f"the swarm's {count} designs",
         ),
         *(
-            Line2D([], [], label=f"{METHOD_LABELS[method]}'s proposal", **transfer_marker(method))
+            Line2D([], [], label=f"{METHOD_LABELS[method]} proposal", **transfer_marker(method))
             for method in TRANSFER_PROPOSALS
         ),
         *(Line2D([], [], label=METHOD_LABELS[method], **transfer_marker(method)) for method in TRANSFER_BASELINES),
@@ -285,42 +289,29 @@ EXCLUDED_SOURCES = ("designed_conditional_epoch_dose", "archive::delphi_baseline
 
 
 class FrontierBank(NamedTuple):
-    """One objective's held-out exposures, in order of first appearance, with one row per exposure in each frame."""
+    """One objective's held-out exposures, and MARINER's released predictions at them in the bank's order."""
 
-    weights: pd.DataFrame  # the exposure's mixture, by bucket
-    measured: pd.DataFrame  # by task and by the objective: the mean over the exposure's runs that have a value
-    mariner: pd.DataFrame  # by task: MARINER's released prediction
+    bank: HeldoutBank
+    mariner: pd.DataFrame  # by exposure id and task
 
 
-def frontier_bank(root: Path, objective: str, buckets: Sequence[str]) -> FrontierBank:
-    """The exposures of the held-out runs that ``fits_heldout_predictions`` predicts for ``objective``, without
-    ``EXCLUDED_SOURCES``, with their mixtures over ``buckets``.
-
-    Their measured values are averaged over runs as ``mariner.data.heldout_bank`` averages them, which needs the
-    partition that Figure 17's row of the dataset's index does not name. The runs of an exposure must share their
-    weights within 1e-12 and MARINER's predictions.
+def frontier_bank(root: Path, objective: str, buckets: Sequence[str], outcomes: Objective) -> FrontierBank:
+    """The held-out runs that ``fits_heldout_predictions`` predicts for ``objective``, without ``EXCLUDED_SOURCES``,
+    as a bank over ``buckets`` that averages the outcomes of ``outcomes`` (``mariner.data.heldout_bank``), with
+    MARINER's released per-task predictions, which the runs of an exposure must share.
     """
-    predictions = read_table(root, HELDOUT_PREDICTIONS_TABLE)
-    predictions = predictions[predictions[OBJECTIVE_COLUMN] == objective]
+    predictions = released_task_predictions(root, HELDOUT_PREDICTIONS_TABLE, objective)
     heldout = read_table(root, HELDOUT_TABLE)
-    chosen = heldout[OBSERVATION_ID].isin(predictions[OBSERVATION_ID]) & ~heldout[PROPOSAL_METHOD].isin(EXCLUDED_SOURCES)
+    require_columns(heldout, [OBSERVATION_ID, PROPOSAL_METHOD, EXPOSURE_ID], HELDOUT_TABLE)
+    chosen = heldout[OBSERVATION_ID].isin(predictions.index) & ~heldout[PROPOSAL_METHOD].isin(EXCLUDED_SOURCES)
     runs = heldout[chosen]
-    if blank_identifier_mask(runs[EXPOSURE_ID]).any():  # grouping would drop such runs silently
-        raise ValueError(f"runs of the {objective} bank have no {EXPOSURE_ID}")
-    exposure = runs[EXPOSURE_ID].to_numpy()
-    mixtures = pd.DataFrame(mixture_weights(runs, buckets, HELDOUT_TABLE), columns=list(buckets))
-    weights = mixtures.groupby(exposure, sort=False)
-    if float((weights.max() - weights.min()).to_numpy().max()) > EXPOSURE_MIXTURE_TOLERANCE:
-        raise ValueError(f"runs at one exposure of the {objective} bank differ in weights")
-    wide = predictions.pivot(index=OBSERVATION_ID, columns=TASK_ID, values=PREDICTED).loc[runs[OBSERVATION_ID]]
-    mariner = wide.reset_index(drop=True).groupby(exposure, sort=False)
-    if (mariner.nunique() > 1).to_numpy().any():
+    bank = heldout_bank(runs, buckets, outcomes)
+    by_exposure = predictions.loc[runs[OBSERVATION_ID]].groupby(runs[EXPOSURE_ID].to_numpy(), sort=False)
+    if (by_exposure.nunique() > 1).to_numpy().any():
         raise ValueError(
             f"{HELDOUT_PREDICTIONS_TABLE} predicts runs at one exposure of the {objective} bank differently"
         )
-    outcomes = [*wide.columns, objective]
-    measured = runs[[f"{OUTCOME_PREFIX}{name}" for name in outcomes]].set_axis(outcomes, axis=1)
-    return FrontierBank(weights.first(), measured.groupby(exposure, sort=False).mean(), mariner.first())
+    return FrontierBank(bank, by_exposure.first().loc[list(bank.exposure_ids)])
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -350,6 +341,7 @@ FRONTIER_BEST = 30  # the lowest-loss held-out mixtures of each column
 def reliability_row(reliability: pd.DataFrame, column: FrontierColumn) -> pd.Series:
     """``fits_reliability``'s row of the column's objective (its task-less row) or task."""
     rows = reliability_rows(reliability, RELIABILITY_SOURCES[column.objective])
+    require_columns(rows, [TASK_ID, "snr", "repeat_sd"], RELIABILITY_TABLE)
     if column.task_id is None:
         rows = rows[rows[TASK_ID].isna()]
     else:
@@ -365,27 +357,33 @@ def frontier_values(root: Path) -> dict[str, pd.DataFrame]:
     tasks = release_tasks(root)
     buckets = release_partition(root).bucket_ids
     reliability = read_table(root, RELIABILITY_TABLE)
-    banks, objectives, olmix_tasks = {}, {}, {}
+    frontiers, objectives, olmix_tasks = {}, {}, {}
     for name in dict.fromkeys(column.objective for column in FRONTIER_COLUMNS):
-        banks[name] = frontier_bank(root, name, buckets)
         objectives[name] = objective_from_tasks(tasks, name)
+        frontiers[name] = frontier_bank(root, name, buckets, objectives[name])
+        bank = frontiers[name].bank
         olmix_tasks[name] = pd.DataFrame(
-            np.column_stack([law.predict(banks[name].weights.to_numpy()) for law in released_olmix_laws(root, name)]),
-            index=banks[name].weights.index,
+            np.column_stack([law.predict(bank.weights) for law in released_olmix_laws(root, name)]),
+            index=list(bank.exposure_ids),
             columns=list(objectives[name].tasks),
         )
     points, columns, correlations = [], [], []
     for column in FRONTIER_COLUMNS:
-        bank, objective, olmix = banks[column.objective], objectives[column.objective], olmix_tasks[column.objective]
+        frontier, objective, olmix = (
+            frontiers[column.objective],
+            objectives[column.objective],
+            olmix_tasks[column.objective],
+        )
+        exposures = list(frontier.bank.exposure_ids)
         if column.task_id is None:
-            measured = bank.measured[column.objective]
+            measured = pd.Series(frontier.bank.measured_objective, index=exposures)
             predicted = {
-                Method.MARINER: bank.mariner[list(objective.tasks)] @ objective.weights,
+                Method.MARINER: frontier.mariner[list(objective.tasks)] @ objective.weights,
                 Method.OLMIX: olmix @ objective.weights,
             }
         else:
-            measured = bank.measured[column.task_id]
-            predicted = {Method.MARINER: bank.mariner[column.task_id], Method.OLMIX: olmix[column.task_id]}
+            measured = frontier.bank.measured[column.task_id].set_axis(exposures)
+            predicted = {Method.MARINER: frontier.mariner[column.task_id], Method.OLMIX: olmix[column.task_id]}
         measured = measured.dropna()
         best = measured.iloc[np.argsort(measured.to_numpy(), kind="stable")[:FRONTIER_BEST]]
         row = reliability_row(reliability, column)
@@ -510,28 +508,33 @@ def weight_buckets(runs: pd.DataFrame) -> list[str]:
 def residual_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each component's held-out exposures with a measured value: MARINER's residual, measured minus predicted, the
     total variation to the nearest of the main swarm's fit runs, and the rank of the measured loss (1 the lowest)."""
-    swarm = release_runs(root, MAIN_SWARM)
+    swarm, name = release_runs(root, MAIN_SWARM), f"swarm_{MAIN_SWARM}"
+    require_columns(swarm, [FIT_INCLUSION], name)
     buckets = weight_buckets(swarm)
-    swarm_weights = mixture_weights(swarm.loc[swarm[FIT_INCLUSION]], buckets, f"swarm_{MAIN_SWARM}")
+    swarm_weights = mixture_weights(swarm.loc[swarm[FIT_INCLUSION]], buckets, name)
     rows = []
     for component in EXTRAPOLATION_COMPONENTS:
-        bank = frontier_bank(root, component.objective, buckets)
-        measured = bank.measured[component.task_id].dropna()
-        weights = bank.weights.loc[measured.index].to_numpy()
+        # The bank averages the component alone, an objective of one task whose recorded value is the task's own.
+        outcomes = Objective(component.task_id, (component.task_id,), np.ones(1))
+        frontier = frontier_bank(root, component.objective, buckets, outcomes)
+        measured = frontier.bank.measured[component.task_id].to_numpy(float)
+        kept = ~np.isnan(measured)
+        weights, measured = frontier.bank.weights[kept], measured[kept]
+        exposures = np.asarray(frontier.bank.exposure_ids)[kept]
         distance = 0.5 * np.abs(weights[:, None, :] - swarm_weights[None, :, :]).sum(axis=2).min(axis=1)
-        predicted = bank.mariner.loc[measured.index, component.task_id]
+        predicted = frontier.mariner.loc[exposures, component.task_id].to_numpy(float)
         rank = np.empty(len(measured), dtype=int)
-        rank[np.argsort(measured.to_numpy(), kind="stable")] = np.arange(1, len(measured) + 1)
+        rank[np.argsort(measured, kind="stable")] = np.arange(1, len(measured) + 1)
         rows.append(
             pd.DataFrame(
                 {
                     "component": component.label,
                     TASK_ID: component.task_id,
-                    EXPOSURE_ID: measured.index,
+                    EXPOSURE_ID: exposures,
                     "distance": distance,
-                    "measured": measured.to_numpy(),
-                    "predicted": predicted.to_numpy(),
-                    "residual": (measured - predicted).to_numpy(),
+                    "measured": measured,
+                    "predicted": predicted,
+                    "residual": measured - predicted,
                     "rank": rank,
                 }
             )
@@ -599,6 +602,7 @@ def draw_extrapolation_residuals(root: Path) -> FigureData:
     axis.text(0.02, 0.02, "MARINER pessimistic", transform=axis.transAxes, ha="left", va="bottom", color=NEUTRAL)
     axis.set_xlabel("Total variation to the nearest swarm run")
     axis.set_ylabel("Measured \N{MINUS SIGN} predicted loss (BPB)")
+    floor = f"{RESIDUAL_FLOOR:g}".replace("-", "\N{MINUS SIGN}")  # as the axis prints it
     handles = [
         *(
             Line2D([], [], linestyle="none", marker="o", color=component.color, markeredgewidth=0, label=component.label)
@@ -629,7 +633,7 @@ def draw_extrapolation_residuals(root: Path) -> FigureData:
             linestyle="none",
             marker="v",
             color=NEUTRAL,
-            label=f"residual below {RESIDUAL_FLOOR:g} BPB, drawn at {RESIDUAL_FLOOR:g}",
+            label=f"residual below {floor} BPB, drawn at {floor}",
         ),
     ]
     figure_legend(figure, handles, columns=2)

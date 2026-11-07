@@ -41,6 +41,7 @@ from mariner.data import (
     read_table,
     release_partition,
     reliability_rows,
+    require_columns,
 )
 from mariner.figures.layout import (
     METHOD_COLORS,
@@ -162,6 +163,8 @@ def domain_repetition_values(root: Path) -> dict[str, pd.DataFrame]:
     Under a cap of K epochs the feasible shares run from 0 to K over the target's epochs per unit of share.
     """
     sweeps = read_table(root, "domain_sweeps")
+    columns = ["domain", "evaluation", "scale", "domain_weight", "domain_epochs", "bpb", "subset_seed"]
+    require_columns(sweeps, [*columns, "epochs_per_unit_weight", *SCALE_COLUMNS.values()], "domain_sweeps")
     series: dict[str, list[pd.DataFrame]] = {name: [] for name in (PROXY, TARGET, "fit_curves")}
     fits, minima, selections, scales = [], [], [], []
     for sweep in DOMAIN_SWEEPS:
@@ -336,6 +339,7 @@ def epoch_text(epochs: float) -> str:
 
 def bucket_sources(partition: pd.DataFrame) -> pd.Series:
     """Each bucket's source, by bucket id: Common Crawl for the topics at a quality tier, else its pool's."""
+    require_columns(partition, ["bucket_id", "pool", "quality_tier"], "partition")
     source = np.where(
         partition["quality_tier"].notna(),
         COMMON_CRAWL,
@@ -349,6 +353,7 @@ def bucket_sources(partition: pd.DataFrame) -> pd.Series:
 
 def bucket_names(partition: pd.DataFrame) -> pd.Series:
     """Each bucket's name in the paper, by bucket id, with the table's LaTeX ampersands as plain text."""
+    require_columns(partition, ["bucket_id", "paper_name"], "partition")
     return partition.set_index("bucket_id")["paper_name"].str.replace("\\&", "&", regex=False)
 
 
@@ -382,6 +387,7 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
     table = read_table(root, "partition")
     partition = release_partition(root)
     validation = read_table(root, "validation_3e18")
+    require_columns(validation, ["mixture_id", "method", "proposal_objective", "variant"], "validation_3e18")
     sources = bucket_sources(table)
     names = bucket_names(table)
     order = [bucket for source in SOURCES for bucket in partition.bucket_ids if sources[bucket] == source]
@@ -493,6 +499,8 @@ def r2_points(root: Path) -> pd.DataFrame:
     """Each plotted task's SNR and each surrogate's out-of-fold R^2, 1 - MSE / Var over the swarm; ``labeled`` marks
     the tasks with a negative Olmix R^2, the rule of the paper's caption."""
     reliability = read_table(root, RELIABILITY_TABLE)
+    errors = [f"{model.value}_mse" for model in R2_MODELS]
+    require_columns(reliability, ["task_id", "group", "task", "subtask", "snr", "panel_sd", *errors], RELIABILITY_TABLE)
     tasks = reliability_rows(reliability, RELIABILITY_COLLAPSED_SOURCE)
     tasks = tasks[tasks["group"].notna()]
     components = reliability_rows(reliability, RELIABILITY_SOURCES["obe_easy"])

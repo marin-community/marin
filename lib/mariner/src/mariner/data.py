@@ -98,6 +98,7 @@ FIGURES_INDEX = "figures_tables.csv"  # the paper's figures and tables with the 
 # The released fits' per-task predictions at the swarm's runs and at the held-out runs.
 SWARM_PREDICTIONS_TABLE = "fits_swarm_predictions"
 HELDOUT_PREDICTIONS_TABLE = "fits_heldout_predictions"
+PREDICTED_BPB = "predicted_bpb"  # the prediction tables' column of MARINER's predicted BPB
 COEFFICIENT_PREFIX = "coef__"
 # fits_reliability holds rows from three sources, named in its source_table column: each objective's tasks, with the
 # objective's aggregate as the row without a task id, and OlmoBaseEval Easy's tasks with their subtasks collapsed.
@@ -379,8 +380,8 @@ def anchors_from_runs(swarm: Swarm, runs: pd.DataFrame, task_ids: Sequence[str])
     return {task: Anchor(outcomes[task].mean(), outcomes[task].std(ddof=1)) for task in task_ids}
 
 
-def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective) -> HeldoutBank:
-    """Held-out runs as a bank of exposures, in order of first appearance.
+def heldout_bank(runs: pd.DataFrame, bucket_ids: Sequence[str], objective: Objective) -> HeldoutBank:
+    """Held-out runs as a bank of exposures over ``bucket_ids``, in order of first appearance.
 
     The runs that share an ``exposure_id`` (each run alone, by its ``observation_id``, when the table has no such
     column) form one exposure, and must share their weights and pool fractions within 1e-12. No run may leave that key
@@ -393,8 +394,8 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     if len(runs) == 0:
         raise ValueError(f"the {HELDOUT_TABLE} table has no runs")
     runs = runs.reset_index(drop=True)
-    weights = mixture_weights(runs, partition.bucket_ids, HELDOUT_TABLE)
-    fractions = pool_fractions(runs, partition.bucket_ids, HELDOUT_TABLE)
+    weights = mixture_weights(runs, bucket_ids, HELDOUT_TABLE)
+    fractions = pool_fractions(runs, bucket_ids, HELDOUT_TABLE)
     columns = [f"{OUTCOME_PREFIX}{task}" for task in objective.tasks]
     require_columns(runs, columns, HELDOUT_TABLE)
     aggregate = f"{OUTCOME_PREFIX}{objective.name}"
@@ -432,7 +433,7 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
         measured_objective = measured.to_numpy() @ objective.weights
     return HeldoutBank(
         exposure_ids=tuple(map(str, keys.iloc[first])),
-        buckets=partition.bucket_ids,
+        buckets=tuple(bucket_ids),
         weights=weights[first],
         pool_fractions=fractions[first],
         measured=measured,
@@ -525,8 +526,9 @@ def released_task_predictions(root: Path, table: str, objective: str) -> pd.Data
     Predicted BPB by observation id (rows) and task id (columns), both in the table's order.
     """
     frame = read_table(root, table)
+    require_columns(frame, [OBJECTIVE_COLUMN, OBSERVATION_ID, TASK_ID, PREDICTED_BPB], table)
     frame = frame[frame[OBJECTIVE_COLUMN] == objective]
-    wide = frame.pivot(index=OBSERVATION_ID, columns=TASK_ID, values="predicted_bpb")
+    wide = frame.pivot(index=OBSERVATION_ID, columns=TASK_ID, values=PREDICTED_BPB)
     return wide.loc[frame[OBSERVATION_ID].unique(), frame[TASK_ID].unique()]
 
 
@@ -553,6 +555,7 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
     """
     name = "fits_olmix_task_laws"
     frame = read_table(root, name)
+    require_columns(frame, [SWARM_COLUMN, OBJECTIVE_COLUMN, TASK_ID, "log_c", "huber_loss"], name)
     rows = frame[(frame[SWARM_COLUMN] == MAIN_SWARM) & (frame[OBJECTIVE_COLUMN] == objective)].set_index(TASK_ID)
     rows = rows.loc[list(objective_from_tasks(release_tasks(root), objective).tasks)]
     coefficients = bucket_values(rows, COEFFICIENT_PREFIX, release_partition(root).bucket_ids, name)
@@ -565,11 +568,13 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
 def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
     """The paper's held-out bank: the ``heldout`` runs that ``fits_heldout_predictions`` predicts for ``objective``."""
     predictions = read_table(root, HELDOUT_PREDICTIONS_TABLE)
+    require_columns(predictions, [OBJECTIVE_COLUMN, OBSERVATION_ID], HELDOUT_PREDICTIONS_TABLE)
     population = predictions.loc[predictions[OBJECTIVE_COLUMN] == objective, OBSERVATION_ID]
     heldout = read_table(root, HELDOUT_TABLE)
+    require_columns(heldout, [OBSERVATION_ID], HELDOUT_TABLE)
     return heldout_bank(
         heldout[heldout[OBSERVATION_ID].isin(population)],
-        release_partition(root),
+        release_partition(root).bucket_ids,
         objective_from_tasks(release_tasks(root), objective),
     )
 

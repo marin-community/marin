@@ -18,13 +18,14 @@ June proportional run (``proportional_3e18-ebc4aa``, ``mariner.data.june_run``) 
 the other mixtures, so that the figures' 3e18 proportional point averages eleven runs; the dataset's index names the
 swarm and the validation launches beside the ladder as those runs' sources.
 
-Figure 11 measures each change from ``fits_reliability``'s proportional means, the means of the main swarm's ten
-proportional repeats alone. The paper's Uncheatable panels averaged eleven proportional runs, those ten and the June
-run: its bars differ from the redraw's by at most 2.4e-4 BPB, and none changes sign.
+Figure 11 measures each change from proportional mixing's mean at 3e18 FLOPs, as the paper's figure does: on
+Uncheatable over the ladder's eleven proportional runs there, the ten repeats and the June run, which Table 2 averages
+(``mariner.tables``); on OlmoBaseEval Easy over the ten repeats alone, ``fits_reliability``'s proportional means.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -44,6 +45,7 @@ from mariner.data import (
     TRAINED_OLMIX,
     read_table,
     reliability_rows,
+    require_columns,
 )
 from mariner.figures.layout import (
     LOSS_LABELS,
@@ -68,10 +70,11 @@ from mariner.figures.pipeline import (
     scaling_values,
 )
 from mariner.figures.surrogate import TRAINER_SEEDS
-from mariner.tables import COMPUTE_SCALES, UNPROPOSED, compute_label
+from mariner.tables import COMPUTE_SCALES, REPEATED_SCALE, UNPROPOSED, compute_label
 
 MARKER_SIZE = 7.0
 JOIN_WIDTH = 0.8  # the lines that join a panel's points
+OBJECTIVE_OUTCOMES = tuple(f"{OUTCOME_PREFIX}{objective}" for objective in OBJECTIVES)  # the objectives' columns
 
 # ---------------------------------------------------------------------------------------------------------------
 # Figure 8: accuracy against BPB at 1e21 FLOPs by task group
@@ -219,6 +222,7 @@ def ladder_track(ladder: pd.DataFrame, method: Method, proposal: str, objective:
 def on_off_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each method's tracks on each objective, on and off the objective of its proposal, and their fitted laws."""
     ladder = read_table(root, "ladder")
+    require_columns(ladder, ["method", "proposal_objective", "compute_flops", *OBJECTIVE_OUTCOMES], "ladder")
     tracks, laws, curves = [], [], []
     for objective in OBJECTIVES:
         (other,) = (name for name in OBJECTIVES if name != objective)
@@ -368,7 +372,11 @@ TRADEOFF_PANELS = (
 
 
 class TradeoffRow(NamedTuple):
-    """A row of an objective's panels: an Uncheatable task, an OlmoBaseEval Easy group or ``All``, the aggregate."""
+    """A row of an objective's panels: an Uncheatable task, an OlmoBaseEval Easy group or ``All``, the aggregate.
+
+    ``proportional_bpb`` is the mean over the row's tasks of proportional mixing's mean BPB at 3e18 FLOPs, or the
+    objective's own for ``All``.
+    """
 
     item: str
     label: str
@@ -383,13 +391,15 @@ def obe_easy_group(task_id: str, group: str) -> str:
     return group
 
 
-def tradeoff_rows(reliability: pd.DataFrame, objective: str) -> list[TradeoffRow]:
-    """``objective``'s rows with their proportional means from ``fits_reliability``, the aggregate's last.
+def tradeoff_rows(reliability: pd.DataFrame, objective: str, proportional: pd.Series) -> list[TradeoffRow]:
+    """``objective``'s rows from ``fits_reliability``, the aggregate's last, with their means of ``proportional``,
+    proportional mixing's mean BPB by task id and by the objective's name.
 
     Raises ``ValueError`` when the table lacks the objective's rows, its aggregate's row or one of Uncheatable's tasks,
     or puts an OlmoBaseEval Easy task in a group that the figure does not draw.
     """
     rows = reliability_rows(reliability, RELIABILITY_SOURCES[objective])
+    require_columns(rows, ["task_id", "task", "group"], RELIABILITY_TABLE)
     aggregate = rows[rows["task_id"].isna()]
     if len(aggregate) != 1:
         raise ValueError(f"{RELIABILITY_TABLE} has {len(aggregate)} aggregate rows for {objective}, not one")
@@ -414,13 +424,37 @@ def tradeoff_rows(reliability: pd.DataFrame, objective: str) -> list[TradeoffRow
                 raise ValueError(f"{RELIABILITY_TABLE} has no OlmoBaseEval Easy task in the group {group}")
             items.append((group, f"{group} ({len(members)})", members))
     table = [
-        TradeoffRow(item, label, members, float(tasks.loc[list(members), "proportional_mean"].mean()))
+        TradeoffRow(item, label, members, float(proportional.loc[list(members)].mean()))
         for item, label, members in items
     ]
     every = tuple(tasks.index)
-    proportional = float(aggregate["proportional_mean"].iloc[0])
-    table.append(TradeoffRow(ALL_TASKS, f"{ALL_TASKS} ({len(every)})", every, proportional))
+    table.append(TradeoffRow(ALL_TASKS, f"{ALL_TASKS} ({len(every)})", every, float(proportional.loc[objective])))
     return table
+
+
+def repeat_means(reliability: pd.DataFrame, objective: str) -> pd.Series:
+    """``fits_reliability``'s proportional means of ``objective``'s tasks and of the objective, by task id and by its
+    name: the means over the main swarm's ten proportional repeats."""
+    rows = reliability_rows(reliability, RELIABILITY_SOURCES[objective])
+    require_columns(rows, ["task_id", "proportional_mean"], RELIABILITY_TABLE)
+    return pd.Series(rows["proportional_mean"].to_numpy(float), index=rows["task_id"].fillna(objective).to_numpy())
+
+
+def ladder_proportional_means(ladder: pd.DataFrame, objective: str, task_ids: Sequence[str]) -> pd.Series:
+    """The mean BPB of ``task_ids`` and of ``objective`` over the ladder's proportional runs at 3e18 FLOPs, by task id
+    and by the objective's name: the main swarm's ten repeats and the June run, as Table 2 averages them."""
+    outcomes = [*task_ids, objective]
+    columns = [f"{OUTCOME_PREFIX}{outcome}" for outcome in outcomes]
+    require_columns(ladder, ["method", "proposal_objective", "compute_flops", *columns], "ladder")
+    runs = ladder[
+        (ladder["method"] == Method.PROPORTIONAL)
+        & (ladder["proposal_objective"] == UNPROPOSED)
+        & (ladder["compute_flops"] == REPEATED_SCALE)
+    ]
+    values = runs[columns]
+    if values.empty or values.isna().to_numpy().any():
+        raise ValueError(f"the ladder's proportional runs at {REPEATED_SCALE:g} FLOPs lack values of {objective}")
+    return pd.Series(values.mean().to_numpy(float), index=outcomes)
 
 
 def seed_runs(validation: pd.DataFrame, mixture: str, proposal_objective: str) -> pd.DataFrame:
@@ -441,9 +475,19 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
 
     A task's row averages its tasks' BPB; ``All`` is the objective's recorded aggregate, ``bpb__<objective>``.
     """
-    validation = read_table(root, "validation_3e18")
     reliability = read_table(root, RELIABILITY_TABLE)
-    rows = {objective: tradeoff_rows(reliability, objective) for objective in OBJECTIVES}
+    proportional = {
+        "uncheatable": ladder_proportional_means(read_table(root, "ladder"), "uncheatable", UNCHEATABLE_ROWS),
+        "obe_easy": repeat_means(reliability, "obe_easy"),
+    }
+    rows = {objective: tradeoff_rows(reliability, objective, proportional[objective]) for objective in OBJECTIVES}
+    validation = read_table(root, "validation_3e18")
+    outcomes = [f"{OUTCOME_PREFIX}{task}" for objective in OBJECTIVES for row in rows[objective] for task in row.tasks]
+    require_columns(
+        validation,
+        ["observation_id", "mixture_id", "launch", "trainer_seed", "proposal_objective", *OBJECTIVE_OUTCOMES, *outcomes],
+        "validation_3e18",
+    )
     bars, runs_used = [], []
     for panel in TRADEOFF_PANELS:
         for method in TRADEOFF_METHODS:

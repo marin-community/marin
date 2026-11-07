@@ -11,11 +11,6 @@ fitted power law and MARINER's compute multiples (``scaling_values``), and downs
 (``accuracy_values``). Figure 9 (``mariner.figures.results``) draws the loss panel for both objectives, and Figure
 8 draws the accuracy values against each task group's OlmoBaseEval Easy BPB.
 
-The paper's surrogate panel fitted MARINER with Nemotron-CC at the proxy's web epochs, 165,937,152 tokens over a pool
-of 3,639,928,832, which the dataset does not record; this module fits it as Figures 3 and 4 do, at one Nemotron-CC
-epoch per unit weight (``mariner.figures.starcoder``). Both select the same shape family, and the two curves differ
-by at most 2.4e-4 BPB, with the optimum at the same share.
-
 LightGBM brings its own OpenMP runtime, and on macOS two OpenMP runtimes in one process can crash once both have
 started thread pools: scikit-learn's k-means starts one. The trees run on one thread (``num_threads``), ``mariner
 figures`` sets ``OMP_NUM_THREADS=1`` and ``OMP_THREAD_LIMIT=1`` before it imports this module, and it runs every fit
@@ -36,7 +31,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import FormatStrFormatter
 from scipy.optimize import curve_fit
 
-from mariner.data import read_table
+from mariner.data import OUTCOME_PREFIX, read_table, require_columns
 from mariner.figures.layout import (
     LOSS_LABELS,
     METHOD_COLORS,
@@ -109,12 +104,14 @@ def ladder_means(root: Path, objective: str) -> pd.DataFrame:
     The mixtures are proportional, UniMax-8, and Olmix's and MARINER's proposals for ``objective``.
     """
     ladder = read_table(root, "ladder")
+    outcome = f"{OUTCOME_PREFIX}{objective}"
+    require_columns(ladder, ["method", "proposal_objective", "compute_flops", outcome], "ladder")
     method = ladder["method"]
     rows = ladder[
         method.isin([m.value for m in LADDER_METHODS])
         & (~method.isin([m.value for m in PROPOSED_METHODS]) | (ladder["proposal_objective"] == objective))
     ]
-    grouped = rows.groupby(["method", "compute_flops"])[f"bpb__{objective}"]
+    grouped = rows.groupby(["method", "compute_flops"])[outcome]
     means = grouped.agg(mean_bpb="mean", sd_bpb="std", runs="size").reset_index()
     return means.sort_values(["method", "compute_flops"], ignore_index=True)
 
@@ -217,6 +214,7 @@ def accuracy_values(root: Path) -> dict[str, pd.DataFrame]:
     Easy; ``All`` is the mean of the 51 tasks.
     """
     accuracy = read_table(root, "ladder_accuracy")
+    require_columns(accuracy, ["group", "method", "accuracy", "bpb"], "ladder_accuracy")
     groups = [*ACCURACY_GROUPS, (ALL_TASKS, tuple(accuracy["group"].unique()))]
     rows = []
     for name, members in groups:
@@ -321,9 +319,10 @@ def curve_point(curves: pd.DataFrame, position: int, model: str) -> dict[str, st
 def surrogate_values(matching: EpochMatching) -> dict[str, pd.DataFrame]:
     """The surrogate panel: the matched track's means from 10%, and MARINER's, Olmix's and the trees' fits to six.
 
-    MARINER is fitted as Figures 3 and 4 fit it (``fit_shares``) and its optimum is the least of its curve on the
-    panel's grid. Olmix's law is monotone in the share, so it picks the end of the grid that its slope falls toward.
-    The trees' optimum is every plateau at their least prediction.
+    MARINER is fitted as Figures 3 and 4 fit it (``fit_shares``), with Nemotron-CC at the proxy's epochs of its finite
+    pool, and its optimum is the least of its curve on the panel's grid. Olmix's law is monotone in the share, so it
+    picks the end of the grid that its slope falls toward. The trees' optimum is every plateau at their least
+    prediction.
     """
     realized = matching.realized_shares(Arm.MATCHED)
     track = matching.matched.mean()
@@ -334,7 +333,7 @@ def surrogate_values(matching: EpochMatching) -> dict[str, pd.DataFrame]:
     means["fitted"] = means["share"].isin(SURROGATE_SHARES)
     fitted = means[means["fitted"]]
     shares, bpb = fitted["realized_share"].to_numpy(float), fitted["bpb"].to_numpy(float)
-    mariner = fit_shares(shares, bpb, matching.epochs_at_p1[Arm.MATCHED])
+    mariner = fit_shares(shares, bpb, matching.epochs_at_p1[Arm.MATCHED], matching.web_epochs_at_p0[Arm.MATCHED])
     olmix = fit_log_linear(np.column_stack([1.0 - shares, shares]), bpb)
     trees = fit_trees(shares, bpb)
     grid = np.linspace(SURROGATE_SHARES[0], 1.0, SURROGATE_POINTS)

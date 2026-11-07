@@ -13,7 +13,10 @@ from mariner.cli import INPUT_ERROR_STATUS, PREDICTION_TOLERANCE, main
 from mariner.data import (
     FIGURES_INDEX,
     MAIN_SWARM,
+    MANIFEST,
     OBJECTIVES,
+    OUTCOME_PREFIX,
+    RUN_LABEL,
     objective_from_tasks,
     read_table,
     release_anchors,
@@ -39,11 +42,12 @@ from mariner.figures.epochs import Track
 from mariner.figures.layout import OBJECTIVE_TITLES, Method
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
 from mariner.figures.schedules import ComputePath
-from mariner.figures.starcoder import EPOCH_MATCHING_TABLE, epoch_matching
+from mariner.figures.starcoder import EPOCH_MATCHING_BPB, EPOCH_MATCHING_TABLE, epoch_matching
 from mariner.figures.surrogate import TRAINER_SEEDS
 from mariner.figures.swarm import holm
 from mariner.fit import fit_objective
 from mariner.optimize import MIXTURE_BLOCK_SIZE
+from mariner.tables import REPEATED_SCALE, Statistic, scaling_main_table
 
 # figures_tables.csv marks configuration constants and the two-phase data the release omits among a figure's configs.
 INDEX_MARKERS = {"constant", "deferred"}
@@ -133,8 +137,7 @@ PRINTED_TRANSFER_CORRELATIONS = {
 # sections/analysis.tex:48: "the best swarm mixture at Qwen3 360M/1.6B still ranks second of 280 at Llama 200M/6B".
 PRINTED_BEST_TRANSFER_RANK = 2
 # Figure 16's Spearman correlations over each column's 30 best held-out mixtures, MARINER's and then Olmix's, as the
-# paper's figure prints them since its rebuild from the released fits on 2026-11-07
-# (revision_notes/20261107_fig16_released_fits/CHANGES.md in the paper's folder).
+# figure prints them.
 FRONTIER_MIXTURES = 30  # its caption (sections/analysis.tex:75): "the 30 lowest-loss held-out mixtures"
 PRINTED_FRONTIER_SPEARMAN = {
     "Uncheatable": ("0.84", "0.71"),
@@ -143,13 +146,18 @@ PRINTED_FRONTIER_SPEARMAN = {
     "arXiv physics": ("0.73", "0.59"),
     "SciQ": ("-0.33", "0.40"),
 }
-# Its titles' signal-to-noise ratios. The paper prints arXiv physics's as 14, dividing by the standard deviation of
-# eleven proportional runs, the June run among them; fits_reliability's ten repeats give 16, which the redraw prints.
-PRINTED_FRONTIER_SNR = {"Uncheatable": 28, "OlmoBaseEval Easy": 13, "Arithmetic": 6, "SciQ": 16}
-# Figure 17 draws every held-out mixture of the two banks that has the component: 169 of the 170 Uncheatable ones (one
-# has no Uncheatable components) and the 157 OlmoBaseEval Easy ones, as the paper's figure does since its rebuild
-# (revision_notes/20261107_fig16_released_fits/CHANGES.md).
+# Its titles' signal-to-noise ratios.
+PRINTED_FRONTIER_SNR = {"Uncheatable": 28, "OlmoBaseEval Easy": 13, "Arithmetic": 6, "arXiv physics": 16, "SciQ": 16}
+# sections/appendix_analysis.tex:20: "SciQ varies across the swarm by 16 times its repeat standard deviation, while the
+# measured losses of its 30 best held-out mixtures have a standard deviation of 2.0 times its repeat standard
+# deviation", the standard deviation of Figure 16's band (ddof 1 throughout).
+PRINTED_SCIQ_SPREAD = "2.0"
+# Figure 17 draws every held-out mixture of the two banks that has the component: 169 of the 170 Uncheatable ones, one
+# having no Uncheatable components, and the 157 OlmoBaseEval Easy ones.
 EXTRAPOLATION_POINTS = {"arXiv physics": 169, "SciQ": 157}
+# arXiv physics's least-squares slope of the residual against distance, against SciQ's, in magnitude (measured 0.04):
+# its residuals show "no comparable" trend.
+SLOPE_RATIO = 0.1
 # sections/analysis.tex:8: "the matched proxies place both minima where the target runs do, and FineMath's optimal
 # epoch count is about seven times FLAN's".
 PRINTED_EPOCH_RATIO = 7
@@ -342,6 +350,7 @@ def small_epoch_matching() -> pd.DataFrame:
         programming_languages_bpb=1.0 + runs.index / 100,
         train_tokens=100,
         starcoder_subset_tokens=100,
+        web_pool_tokens=1000,
         compute_flops=1e16,
     )
 
@@ -367,6 +376,15 @@ def test_epoch_matching_refuses_repeated_or_missing_runs(tmp_path, edit, message
     write_starcoder_table(tmp_path, EPOCH_MATCHING_TABLE, edit(small_epoch_matching()))
     with pytest.raises(ValueError, match=message):
         epoch_matching(tmp_path)
+
+
+def test_cli_figures_names_the_table_and_column_a_snapshot_lacks(tmp_path, capsys):
+    """A snapshot whose starcoder_epoch_matching lacks the loss column cannot draw Figure 2: the command stops with the
+    input-error status and names the table and the column, where pandas would raise a bare KeyError."""
+    write_starcoder_table(tmp_path, EPOCH_MATCHING_TABLE, small_epoch_matching().drop(columns=EPOCH_MATCHING_BPB))
+    argv = ["figures", "--data", str(tmp_path), "--out", str(tmp_path / "out"), "--only", "fig:epoch-matching"]
+    assert main(argv) == INPUT_ERROR_STATUS
+    assert f"the {EPOCH_MATCHING_TABLE} table has no column {EPOCH_MATCHING_BPB}" in capsys.readouterr().err
 
 
 def test_cli_figures_names_the_column_a_snapshot_lacks(tmp_path, capsys):
@@ -459,6 +477,14 @@ def check_matched_compute_scaling(values: dict[str, pd.DataFrame]) -> None:
     flops = np.stack([rows["compute_flops"].to_numpy(float) for _, rows in minima.groupby("track")])
     assert np.isfinite(flops).all()
     assert (flops.max(axis=0) / flops.min(axis=0) - 1 <= COMPUTE_MATCH).all()
+    # Its insets' printed optima and compute, and each path's printed optimum-share law.
+    for track, rows in minima.groupby("track"):
+        assert [round(epochs, 1) for epochs in rows["epochs"]] == PRINTED_OPTIMUM_EPOCHS[Track(track)]
+        assert [f"{flops:.2g}" for flops in rows["compute_flops"]] == PRINTED_FLOPS
+    for law in values["path_laws"].itertuples():
+        rounded = float(f"{law.reference:.3g}")
+        coefficient = law.share_coefficient * (rounded / law.reference) ** law.share_exponent
+        assert (round(coefficient, 3), round(law.share_exponent, 3)) == PRINTED_SHARE_LAWS[Track(law.track)]
 
 
 def check_olmix_capacity_failure(values: dict[str, pd.DataFrame]) -> None:
@@ -573,6 +599,27 @@ def check_component_tradeoffs(values: dict[str, pd.DataFrame]) -> None:
             assert change[(objective, proposal, method, ALL_TASKS)] > 0
 
 
+def check_component_tradeoffs_against_the_tables(values: dict[str, pd.DataFrame], snapshot: Path) -> None:
+    """Figure 11's caption: "All is the aggregate". Each Uncheatable All bar, the change of the runs' recorded
+    aggregate, equals its component bars weighted by the tasks table's byte shares, as the dataset records the
+    aggregate: the shares as printed, which sum to 1 + 2.1e-8. And its Uncheatable bars measure from Table 2's
+    proportional mean at 3e18 FLOPs (sections/results.tex:9: "mean ± std over eleven proportional runs"), printed as
+    1.038."""
+    bars = values["bars"]
+    objective = objective_from_tasks(release_tasks(snapshot), "uncheatable")
+    weights = pd.Series(objective.weights, index=list(objective.tasks))
+    uncheatable = bars[bars["objective"] == "uncheatable"]
+    for _, rows in uncheatable.groupby(["panel", "method"]):
+        change = rows.set_index("item")["delta_bpb"]
+        weighted = float(change.loc[weights.index] @ weights)
+        assert change.loc[ALL_TASKS] == pytest.approx(weighted, rel=0, abs=AGGREGATE_TOLERANCE)
+    table = scaling_main_table(snapshot).loc["Proportional"]
+    proportional = table[("uncheatable", REPEATED_SCALE, Statistic.MEAN)]
+    assert f"{proportional:.3f}" == PRINTED_ON_OBJECTIVE[("uncheatable", "proportional")][0]
+    baselines = uncheatable.loc[uncheatable["item"] == ALL_TASKS, "proportional_bpb"]
+    np.testing.assert_allclose(baselines, proportional, rtol=0, atol=AGGREGATE_TOLERANCE)
+
+
 def check_domain_repetition(values: dict[str, pd.DataFrame]) -> None:
     """Figure 12's caption (sections/analysis.tex:13): "Olmix selects zero FLAN under every cap and saturates each
     FineMath cap, missing both interior minima." And sections/analysis.tex:8: "the matched proxies place both minima
@@ -607,8 +654,8 @@ def check_scale_transfer(values: dict[str, pd.DataFrame]) -> None:
     pairs = values["pairs"].set_index(["source", "target"])
     printed = {pair: (f"{row['pearson']:.2f}", f"{row['spearman']:.2f}") for pair, row in pairs.iterrows()}
     assert printed == PRINTED_TRANSFER_CORRELATIONS
-    designs = values["designs"].pivot(index="run_label", columns="setting", values="bpb")
-    ranks = values["designs"].pivot(index="run_label", columns="setting", values="rank")
+    designs = values["designs"].pivot(index=RUN_LABEL, columns="setting", values="bpb")
+    ranks = values["designs"].pivot(index=RUN_LABEL, columns="setting", values="rank")
     proposals = values["proposals"].pivot(index="method", columns="setting", values="bpb")
     assert len(designs) == TRANSFER_DESIGNS
     others = proposals.drop(index=Method.MARINER.value)
@@ -628,9 +675,10 @@ def check_r2_vs_snr(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_frontier(values: dict[str, pd.DataFrame]) -> None:
-    """Figure 16's printed Spearman correlations and signal-to-noise ratios; its caption's 30 mixtures per column; and
+    """Figure 16's printed Spearman correlations and signal-to-noise ratios; its caption's 30 mixtures per column;
     sections/analysis.tex:90: "MARINER's predictions of the best held-out mixtures are instead mostly pessimistic", which
-    holds in every column. ``test_frontier_mixtures_beat_every_swarm_run`` checks the rest of its caption."""
+    holds in every column; and sections/appendix_analysis.tex:20's spread of SciQ's 30, in units of its band.
+    ``check_frontier_beats_the_swarm`` checks the rest of its caption."""
     correlation = values["spearman"].pivot(index="column", columns="model", values="spearman")
     printed = {
         column: (f"{row[Method.MARINER.value]:.2f}", f"{row[Method.OLMIX.value]:.2f}")
@@ -644,23 +692,40 @@ def check_frontier(values: dict[str, pd.DataFrame]) -> None:
     mariner = points[points["model"] == Method.MARINER.value]
     pessimistic = (mariner["predicted"] > mariner["measured"]).groupby(mariner["column"]).sum()
     assert (pessimistic > FRONTIER_MIXTURES / 2).all()
+    sciq = mariner.loc[mariner["column"] == "SciQ", "measured"]
+    repeat_sd = values["columns"].set_index("column").loc["SciQ", "repeat_sd"]
+    assert f"{sciq.std(ddof=1) / repeat_sd:.1f}" == PRINTED_SCIQ_SPREAD
+
+
+def check_frontier_beats_the_swarm(values: dict[str, pd.DataFrame], snapshot: Path) -> None:
+    """Figure 16's caption (sections/analysis.tex:75): its 30 lowest-loss held-out mixtures "beat every swarm run on
+    both objectives". The 30 of each objective's column measure below every run of the main swarm on that objective.
+    (Across objectives the claim would fail: 26 of the Uncheatable column's 30 beat the swarm on OlmoBaseEval Easy.)"""
+    points = values["points"]
+    swarm = release_runs(snapshot, MAIN_SWARM)
+    for objective in OBJECTIVES:
+        column = points[(points["column"] == OBJECTIVE_TITLES[objective]) & (points["model"] == Method.MARINER.value)]
+        assert len(column) == FRONTIER_MIXTURES
+        assert column["measured"].max() < swarm[f"{OUTCOME_PREFIX}{objective}"].min()
 
 
 def check_extrapolation_residuals(values: dict[str, pd.DataFrame]) -> None:
     """Figure 17's caption (sections/analysis.tex:84): "MARINER overestimates SciQ loss more for held-out mixtures
     farther from the swarm, whereas arXiv physics shows no comparable overestimate". SciQ's residual, measured minus
     predicted, falls with the distance by least squares, and its median over the farther half of the mixtures lies
-    below its median over the nearer half; arXiv physics's slope is not negative, and none of its residuals reaches
-    SciQ's median over the farther half."""
+    below its median over the nearer half; arXiv physics's slope is under a tenth of SciQ's in magnitude, and none of
+    its residuals reaches SciQ's median over the farther half. A distance is a total variation, in [0, 1]."""
     residuals = values["residuals"]
     assert residuals.groupby("component").size().to_dict() == EXTRAPOLATION_POINTS
+    assert residuals["distance"].between(0.0, 1.0).all()
     slope, near, far = {}, {}, {}
     for component, rows in residuals.groupby("component"):
         slope[component] = np.polyfit(rows["distance"], rows["residual"], 1)[0]
         farther = rows["distance"] > rows["distance"].median()
         near[component] = rows.loc[~farther, "residual"].median()
         far[component] = rows.loc[farther, "residual"].median()
-    assert slope["SciQ"] < 0 <= slope["arXiv physics"]
+    assert slope["SciQ"] < 0
+    assert abs(slope["arXiv physics"]) < SLOPE_RATIO * abs(slope["SciQ"])
     assert far["SciQ"] < near["SciQ"]
     assert residuals.loc[residuals["component"] == "arXiv physics", "residual"].min() > far["SciQ"]
 
@@ -890,6 +955,32 @@ def check_swarm_support(values: dict[str, pd.DataFrame]) -> None:
     assert outside == OUTSIDE_SUPPORT
 
 
+def check_comparator_paths_against_the_package(values: dict[str, pd.DataFrame], snapshot: Path) -> None:
+    """Figure 20 draws the released path predictions. MARINER's equal the package's refit of the main swarm, and
+    Olmix's its released per-task laws, at every blend w(s) = (1 - s) w_MARINER + s w_baseline of the trained
+    proposals."""
+    curves = values["curves"]
+    for objective in OBJECTIVES:
+        tasks = objective_from_tasks(release_tasks(snapshot), objective)
+        swarm = release_swarm(snapshot, MAIN_SWARM, objective)
+        fit = fit_objective(swarm, tasks, release_anchors(snapshot, MAIN_SWARM, objective))
+        laws = released_olmix_laws(snapshot, objective)
+        for path in values["paths"][values["paths"]["objective"] == objective].itertuples():
+            start, end = (
+                trained_counts(snapshot, mixture) / MIXTURE_BLOCK_SIZE
+                for mixture in (path.start_mixture_id, path.end_mixture_id)
+            )
+            rows = curves[(curves["objective"] == objective) & (curves["path"] == path.path)]
+            positions = np.sort(rows["position"].unique())
+            blends = (1.0 - positions)[:, None] * start[None, :] + positions[:, None] * end[None, :]
+            mariner = rows[rows["predictor"] == Method.MARINER.value].sort_values("position")["predicted_bpb"]
+            np.testing.assert_allclose(fit.predict(blends), mariner, rtol=0, atol=PREDICTION_TOLERANCE)
+            if path.path == Method.OLMIX.value:
+                olmix = rows[rows["predictor"] == Method.OLMIX.value].sort_values("position")["predicted_bpb"]
+                per_task = np.column_stack([law.predict(blends) for law in laws])
+                np.testing.assert_allclose(per_task @ tasks.weights, olmix, rtol=0, atol=OLMIX_CURVE_TOLERANCE)
+
+
 PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:pipeline": check_pipeline,
     "fig:epoch-matching": check_epoch_matching,
@@ -920,33 +1011,38 @@ PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
 }
 
 
+# The checks that compare a figure's values with other tables of the snapshot or the package's own fits.
+SNAPSHOT_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame], Path], None]] = {
+    "fig:component-tradeoffs": check_component_tradeoffs_against_the_tables,
+    "fig:analysis-floor": check_frontier_beats_the_swarm,
+    "fig:a-comparator-paths": check_comparator_paths_against_the_package,
+}
+
+
+def snapshot_view(snapshot: Path, label: str, root: Path) -> Path:
+    """A snapshot at ``root`` that holds only the configs its ``figures_tables.csv`` names for the figure ``label``:
+    the manifest and links to those configs' directories, so that reading any other table fails."""
+    index = pd.read_csv(snapshot / FIGURES_INDEX).set_index("label")
+    configs = [config for config in index.loc[label, "configs"].split(";") if config not in INDEX_MARKERS]
+    source = snapshot.resolve()
+    (root / "data").mkdir(parents=True)
+    (root / MANIFEST).symlink_to(source / MANIFEST)
+    for config in configs:
+        (root / "data" / config).symlink_to(source / "data" / config, target_is_directory=True)
+    return root
+
+
 @pytest.mark.data_integration
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("label", [label for label, spec in FIGURES.items() if spec.tables])
-def test_redraw_reproduces_the_paper(snapshot, label):
-    PAPER_CHECKS[label](FIGURES[label].draw(snapshot).values)
-
-
-@pytest.mark.data_integration
-@pytest.mark.timeout(60)
-def test_registry_matches_the_dataset_index(snapshot):
-    index = pd.read_csv(snapshot / FIGURES_INDEX).set_index("label")
-    for label, spec in FIGURES.items():
-        configs = [config for config in index.loc[label, "configs"].split(";") if config not in INDEX_MARKERS]
-        assert (spec.stem, sorted(spec.tables)) == (index.loc[label, "file"], sorted(configs))
-
-
-@pytest.mark.data_integration
-@pytest.mark.timeout(300)
-def test_starcoder_fits_reproduce_the_papers_printed_optima_and_compute(snapshot):
-    values = FIGURES["fig:b5"].draw(snapshot).values
-    for track, rows in values["minima"].groupby("track"):
-        assert [round(epochs, 1) for epochs in rows["epochs"]] == PRINTED_OPTIMUM_EPOCHS[Track(track)]
-        assert [f"{flops:.2g}" for flops in rows["compute_flops"]] == PRINTED_FLOPS
-    for law in values["path_laws"].itertuples():
-        rounded = float(f"{law.reference:.3g}")
-        coefficient = law.share_coefficient * (rounded / law.reference) ** law.share_exponent
-        assert (round(coefficient, 3), round(law.share_exponent, 3)) == PRINTED_SHARE_LAWS[Track(law.track)]
+@pytest.mark.parametrize("label", [label for label in FIGURES if label != TERMS])
+def test_redraw_reproduces_the_paper(snapshot, label, tmp_path):
+    """Each figure, drawn from a view of the snapshot that holds only the configs its row of figures_tables.csv names,
+    reproduces what the paper prints from its data. Figure 5's row names no config, and
+    ``test_mariner_terms_mark_each_harm_activation_at_the_papers_epochs`` draws it from an empty directory."""
+    values = FIGURES[label].draw(snapshot_view(snapshot, label, tmp_path)).values
+    PAPER_CHECKS[label](values)
+    if label in SNAPSHOT_CHECKS:
+        SNAPSHOT_CHECKS[label](values, snapshot)
 
 
 @pytest.mark.data_integration
@@ -965,22 +1061,6 @@ def test_scaling_laws_match_the_released_compute_equivalence(snapshot, objective
 
 @pytest.mark.data_integration
 @pytest.mark.timeout(120)
-def test_component_tradeoffs_all_bars_are_the_aggregate_changes(snapshot):
-    """Figure 11's caption: "All is the aggregate". Each Uncheatable All bar, the change of the runs' recorded
-    aggregate, equals its component bars weighted by the tasks table's byte shares, as the dataset records the
-    aggregate: the shares as printed, which sum to 1 + 2.1e-8."""
-    bars = FIGURES["fig:component-tradeoffs"].draw(snapshot).values["bars"]
-    objective = objective_from_tasks(release_tasks(snapshot), "uncheatable")
-    weights = pd.Series(objective.weights, index=list(objective.tasks))
-    uncheatable = bars[bars["objective"] == "uncheatable"]
-    for _, rows in uncheatable.groupby(["panel", "method"]):
-        change = rows.set_index("item")["delta_bpb"]
-        weighted = float(change.loc[weights.index] @ weights)
-        assert change.loc[ALL_TASKS] == pytest.approx(weighted, rel=0, abs=AGGREGATE_TOLERANCE)
-
-
-@pytest.mark.data_integration
-@pytest.mark.timeout(120)
 def test_domain_repetition_fits_reproduce_the_released_olmix_fits(snapshot):
     """Figure 12's Olmix fits to the matched proxies are the dataset's domain_sweeps_olmix_fits."""
     sweeps = read_table(snapshot, "domain_sweeps")
@@ -995,46 +1075,3 @@ def test_domain_repetition_fits_reproduce_the_released_olmix_fits(snapshot):
             weights @ fit[["coefficient_domain", "coefficient_web"]].to_numpy(float)
         )
         np.testing.assert_allclose(law.predict(weights), expected, rtol=0, atol=DOMAIN_FIT_TOLERANCE)
-
-
-@pytest.mark.data_integration
-@pytest.mark.timeout(120)
-def test_frontier_mixtures_beat_every_swarm_run(snapshot):
-    """Figure 16's caption (sections/analysis.tex:75): its 30 lowest-loss held-out mixtures "beat every swarm run on
-    both objectives". The 30 of each objective's column measure below every run of the main swarm on that objective.
-    (Across objectives the claim would fail: 26 of the Uncheatable column's 30 beat the swarm on OlmoBaseEval Easy.)"""
-    points = FIGURES["fig:analysis-floor"].draw(snapshot).values["points"]
-    swarm = release_runs(snapshot, MAIN_SWARM)
-    for objective in OBJECTIVES:
-        column = points[(points["column"] == OBJECTIVE_TITLES[objective]) & (points["model"] == Method.MARINER.value)]
-        assert len(column) == FRONTIER_MIXTURES
-        assert column["measured"].max() < swarm[f"bpb__{objective}"].min()
-
-
-@pytest.mark.data_integration
-@pytest.mark.timeout(600)
-@pytest.mark.parametrize("objective", OBJECTIVES)
-def test_comparator_paths_are_the_package_fits_along_each_blend(snapshot, objective):
-    """Figure 20 draws the released path predictions. MARINER's equal the package's refit of the main swarm, and
-    Olmix's its released per-task laws, at every blend w(s) = (1 - s) w_MARINER + s w_baseline of the trained
-    proposals."""
-    values = FIGURES["fig:a-comparator-paths"].draw(snapshot).values
-    tasks = objective_from_tasks(release_tasks(snapshot), objective)
-    swarm = release_swarm(snapshot, MAIN_SWARM, objective)
-    fit = fit_objective(swarm, tasks, release_anchors(snapshot, MAIN_SWARM, objective))
-    laws = released_olmix_laws(snapshot, objective)
-    curves = values["curves"]
-    for path in values["paths"][values["paths"]["objective"] == objective].itertuples():
-        start, end = (
-            trained_counts(snapshot, mixture) / MIXTURE_BLOCK_SIZE
-            for mixture in (path.start_mixture_id, path.end_mixture_id)
-        )
-        rows = curves[(curves["objective"] == objective) & (curves["path"] == path.path)]
-        positions = np.sort(rows["position"].unique())
-        blends = (1.0 - positions)[:, None] * start[None, :] + positions[:, None] * end[None, :]
-        mariner = rows[rows["predictor"] == Method.MARINER.value].sort_values("position")["predicted_bpb"]
-        np.testing.assert_allclose(fit.predict(blends), mariner, rtol=0, atol=PREDICTION_TOLERANCE)
-        if path.path == Method.OLMIX.value:
-            olmix = rows[rows["predictor"] == Method.OLMIX.value].sort_values("position")["predicted_bpb"]
-            per_task = np.column_stack([law.predict(blends) for law in laws])
-            np.testing.assert_allclose(per_task @ tasks.weights, olmix, rtol=0, atol=OLMIX_CURVE_TOLERANCE)
