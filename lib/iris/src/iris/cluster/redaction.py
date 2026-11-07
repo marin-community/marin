@@ -5,12 +5,31 @@
 
 The actual secret-pattern matching lives in ``rigging``; this module only
 adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
-for ``iris job run``) into a form the shared redactor can consume.
+for ``iris job run``) into a form the shared redactor can consume, and finds
+Iris proxy capability tokens in free text.
 """
+
+import base64
+import json
+import re
 
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
+from iris.cluster.controller.auth import PROXY_PLANE_AUDIENCE
 from iris.rpc import controller_pb2
+
+# A line break inside a token: whitespace, or an escaped n/r/t behind any number of
+# backslashes (JSON inside JSON doubles them, e.g. a log line in a tool output in a trace).
+_BREAK = r"(?:\s|\\+[nrt])"
+_BREAKS_RE = re.compile(rf"{_BREAK}+")
+_CHAR = r"[A-Za-z0-9_\-]"
+# Header and payload end at their dot. The signature has no terminator, so it is matched by length:
+# capability tokens are EdDSA (Ed25519) signed, and a 64-byte signature is 86 base64url characters.
+# An unbounded signature would run through a break into the text that follows the token.
+_SIGNATURE_CHARS = 86
+_SEGMENT = rf"{_CHAR}(?:{_CHAR}|{_BREAK})*"
+_SIGNATURE = rf"(?:{_CHAR}{_BREAK}*){{{_SIGNATURE_CHARS - 1}}}{_CHAR}"
+_BROKEN_JWT_RE = re.compile(rf"e{_BREAK}*y{_BREAK}*J{_SEGMENT}\.{_BREAK}*{_SEGMENT}\.{_BREAK}*{_SIGNATURE}")
 
 # CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
 # type=(str, str). Keep in sync with the Click option definition in
@@ -92,3 +111,40 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
         i = val_idx + 1
     return out
+
+
+def _is_capability_token(token: str) -> bool:
+    parts = _BREAKS_RE.sub("", token).split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:  # not base64 or not JSON: some other dotted string
+        return False
+    audience = payload.get("aud") if isinstance(payload, dict) else None
+    return audience == PROXY_PLANE_AUDIENCE or (isinstance(audience, list) and PROXY_PLANE_AUDIENCE in audience)
+
+
+def count_capability_tokens(text: str) -> int:
+    """Count Iris proxy capability tokens in *text*, line breaks inside a token included."""
+    return sum(_is_capability_token(match.group(0)) for match in _BROKEN_JWT_RE.finditer(text))
+
+
+def scrub_capability_tokens(text: str) -> tuple[str, int]:
+    """Replace each Iris proxy capability token in *text* and return the text and the count replaced.
+
+    A capability token is a JWT with ``aud`` ``iris-proxy``; other JWTs and the text around a token are
+    kept. Agents can print a capability URL (e.g. an ``env`` listing), and terminals and JSON logs wrap
+    it, so tokens split by whitespace or escaped line breaks are matched too. Callers should confirm
+    that ``count_capability_tokens`` of the result is 0.
+    """
+    found = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal found
+        if not _is_capability_token(match.group(0)):
+            return match.group(0)
+        found += 1
+        return REDACTED_VALUE
+
+    return _BROKEN_JWT_RE.sub(replace, text), found
