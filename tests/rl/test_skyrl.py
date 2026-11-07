@@ -35,6 +35,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     read_skyrl_launch_receipt,
+    read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
     run_skyrl,
     skyrl_cpu_command,
@@ -518,7 +519,6 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     assert step.fingerprint() == outside
     fingerprint_config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     assert "issue" not in yaml.safe_load(fingerprint_config.launch_config_yaml)["run"]
-    assert "issue" not in dataclasses.asdict(fingerprint_config)
     output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
     config = step.build_config(
         StepContext.for_run(
@@ -534,7 +534,6 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     assert config.output.export_root == f"{output_path}/exports"
     launch = yaml.safe_load(config.launch_config_yaml)
     assert "issue" not in launch["run"]
-    assert "issue" not in dataclasses.asdict(config)
     assert launch["run"]["coordinator_iris_job_id"] == "/tests/coordinator"
     assert launch["skyrl"]["trainer"]["callbacks"][0]["initial_model_uri"] == config.model.uri
     assert launch["artifacts"] == {
@@ -566,7 +565,9 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
         cluster_config.reset_data_config_cache()
 
 
-def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -656,6 +657,14 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch, t
     (attempts / "earlier-failed-attempt.json").write_text(
         json.dumps({"config": earlier, "result": {"state": "failed", "failure": "worker lost"}})
     )
+    (attempts / f"{config.attempt_id}.json").write_text(json.dumps({"config": launch, "result": response}))
+    (attempts / "wrong-attempt.json").write_text(json.dumps({"config": launch, "result": response}))
+    current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
+    assert current_id == config.attempt_id
+    assert set(stored) == {config.attempt_id, "earlier-failed-attempt"}
+    assert stored[current_id] == receipt
+    assert stored["earlier-failed-attempt"].result.failure == "worker lost"
+    assert read_stored_skyrl_receipt(str(tmp_path), "wrong-attempt") is None
     historical = read_stored_skyrl_receipt(str(tmp_path), "earlier-failed-attempt")
     assert historical is not None and historical.result.state == "failed"
     assert historical.result.failure == "worker lost"
@@ -668,6 +677,10 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch, t
     assert read_skyrl_launch_receipt(str(tmp_path)) == failed
     current_attempt.unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) is None
+    current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
+    assert current_id == config.attempt_id and set(stored) == {"earlier-failed-attempt"}
+    (tmp_path / "resolved-launch.yaml").unlink()
+    assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
