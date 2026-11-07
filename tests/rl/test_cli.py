@@ -184,3 +184,20 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         timeout=50,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_rl_cli_import_keeps_training_dependencies_unloaded() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import marin.rl.cli; "
+            "heavy = {'levanter', 'transformers', 'torch', 'wandb'}; "
+            "loaded = heavy.intersection(name.split('.')[0] for name in sys.modules); "
+            "assert not loaded, sorted(loaded)",
+        ],
+        timeout=30,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
