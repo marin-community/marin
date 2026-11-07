@@ -108,9 +108,13 @@ TASKS = (
     ChoiceTask("arc_easy", *ARC, "ARC-Easy", "test", _arc),
     ChoiceTask("arc_challenge", *ARC, "ARC-Challenge", "test", _arc),
     ChoiceTask("sciq", "allenai/sciq", "2c94ad3e1aafab77146f384e23536f97a4849815", None, "test", _sciq),
-    ChoiceTask("openbookqa", "allenai/openbookqa", "388097ea7776314e93a529163e0fea805b8a6454", "main", "test", _openbookqa),
+    ChoiceTask(
+        "openbookqa", "allenai/openbookqa", "388097ea7776314e93a529163e0fea805b8a6454", "main", "test", _openbookqa
+    ),
     ChoiceTask("piqa", "baber/piqa", "142f6d7367fd9877f0fb3b5734ea6a545f54cdd1", None, "validation", _piqa),
-    ChoiceTask("hellaswag", "Rowan/hellaswag", "218ec52e09a7e7462a5400043bb9a69a41d06b76", None, "validation", _hellaswag),
+    ChoiceTask(
+        "hellaswag", "Rowan/hellaswag", "218ec52e09a7e7462a5400043bb9a69a41d06b76", None, "validation", _hellaswag
+    ),
     ChoiceTask("mmlu", "cais/mmlu", "c30699e8356da336a370243923dbaf21066bb9fe", "all", "test", _mmlu),
 )
 
