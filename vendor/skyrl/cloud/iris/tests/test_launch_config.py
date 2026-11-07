@@ -365,7 +365,7 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     destination = tmp_path / "launch.yaml"
     document = _raw_config()
     document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
-    document["skyrl"]["trainer"]["export_path"] = str(tmp_path / "exports")
+    document["artifacts"]["export_root"] = str(tmp_path / "exports")
     contents = yaml.safe_dump(document).encode()
 
     path = materialize_launch_config(
