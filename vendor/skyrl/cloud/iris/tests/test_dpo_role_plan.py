@@ -61,7 +61,7 @@ def test_preference_pair_launch_provisions_no_rollout_role():
 
 def test_generation_launch_keeps_its_rollout_role():
     plan = derive_role_plan(
-        skyrl_config(**{"environment.env_class": "gsm8k", "trainer.algorithm.policy_loss_type": "regular"}),
+        skyrl_config(**{"environment.env_class": "gsm8k", "trainer.algorithm.policy_loss_type": "regular"})
     )
     rollout = plan.claim(ModelRoleKind.ROLLOUT)
     assert rollout.execution is RoleExecution.LOCAL
