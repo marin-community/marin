@@ -300,7 +300,7 @@ def publication_step(
     issue: int | None = None,
     service_url: str | None = None,
 ) -> ArtifactStep[Artifact]:
-    """Publish one native pair using its first retained publication payload and executor lock."""
+    """Return the unrun step that publishes one native pair from its first retained payload under the executor lock."""
     record = dict(record, issue=issue)
     gate_record = (
         presets.artifact_record(gate_path)

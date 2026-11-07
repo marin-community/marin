@@ -783,7 +783,7 @@ export default function (pi) {
         # A malformed or truncated stream yields whatever trajectory the parsed
         # prefix supports (possibly none). Conversion must never fail the trial.
         try:
-            trajectory = self._trajectory_from_events(events)
+            trajectory = self._trajectory_from_events(events, context)
         except Exception:
             self.logger.warning(
                 "Failed to convert Pi output %s to an ATIF trajectory",
@@ -860,7 +860,7 @@ export default function (pi) {
                 parts.append(block.get("text") or "")
         return "\n".join(part for part in parts if part)
 
-    def _trajectory_from_events(self, events: list[dict]) -> Trajectory | None:
+    def _trajectory_from_events(self, events: list[dict], context: AgentContext) -> Trajectory | None:
         """Build the ATIF trajectory from pi.txt's session event stream, or None.
 
         ``message_end`` events carry the final form of every message, so streaming
@@ -870,9 +870,6 @@ export default function (pi) {
         session_id: str | None = None
         model_name: str | None = None
         steps: list[Step] = []
-        total_input_tokens = 0
-        total_output_tokens = 0
-
         for event in events:
             if not isinstance(event, dict):
                 continue
@@ -889,12 +886,7 @@ export default function (pi) {
             )
             role = message.get("role")
             if role == "assistant":
-                step, usage = self._assistant_step(message, timestamp, len(steps) + 1)
-                if usage is not None:
-                    total_input_tokens += self._token_count(usage.get("input", 0)) + self._token_count(
-                        usage.get("cacheRead", 0)
-                    )
-                    total_output_tokens += self._token_count(usage.get("output", 0))
+                step = self._assistant_step(message, timestamp, len(steps) + 1)
                 if step.model_name and not model_name:
                     model_name = step.model_name
                 steps.append(step)
@@ -918,8 +910,10 @@ export default function (pi) {
             ),
             steps=steps,
             final_metrics=FinalMetrics(
-                total_prompt_tokens=total_input_tokens or None,
-                total_completion_tokens=total_output_tokens or None,
+                total_prompt_tokens=context.n_input_tokens,
+                total_completion_tokens=context.n_output_tokens,
+                total_cached_tokens=context.n_cache_tokens,
+                total_cost_usd=context.cost_usd,
                 total_steps=len(steps),
             ),
         )
@@ -965,10 +959,17 @@ export default function (pi) {
 
     def _assistant_step(
         self, message: dict, timestamp: str | None, step_id: int
-    ) -> tuple[Step, dict | None]:
-        """An agent step with its tool calls and usage metrics, plus the usage dict."""
+    ) -> Step:
+        """An agent step with its reasoning, tool calls, and usage metrics."""
         blocks = [block for block in (message.get("content") or []) if isinstance(block, dict)]
         text = self._message_text(blocks)
+        reasoning = "\n\n".join(
+            block["thinking"]
+            for block in blocks
+            if block.get("type") == "thinking"
+            and isinstance(block.get("thinking"), str)
+            and block["thinking"]
+        )
         tool_call_blocks = [block for block in blocks if block.get("type") == "toolCall"]
         tool_calls = [
             self._tool_call(block, position)
@@ -1002,10 +1003,11 @@ export default function (pi) {
             source="agent",
             model_name=step_model if step_model else None,
             message=text or "(empty assistant message)",
+            reasoning_content=reasoning or None,
             tool_calls=tool_calls or None,
             metrics=metrics,
         )
-        return step, usage
+        return step
 
     @staticmethod
     def _tool_call(block: dict, position: int) -> ToolCall:
@@ -1033,6 +1035,7 @@ export default function (pi) {
         result = ObservationResult(
             source_call_id=str(call_id) if call_id else None,
             content=self._message_text(message.get("content")) or None,
+            extra={"is_error": message["isError"]} if isinstance(message.get("isError"), bool) else None,
         )
         if steps and steps[-1].source == "agent":
             step = steps[-1]
