@@ -218,7 +218,7 @@ def test_recovery_refuses_a_live_coordinator(saved_batch, tmp_path):
 
 
 @pytest.mark.parametrize("profile", ["h100", "gb200"])
-def test_default_cancel_reaches_the_existing_single_profile(saved_batch, tmp_path, monkeypatch, profile):
+def test_default_cancel_reaches_the_existing_single_profile(saved_batch, monkeypatch, profile):
     plan, _ = saved_batch
     plan = plan | {"profile": profile, "job_id": f"/fixture/agentx-{profile}"}
     write_record(control.submission_uri(plan["root"], 123, 2, profile), plan)

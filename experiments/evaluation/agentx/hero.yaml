@@ -31,7 +31,7 @@ tensor_parallel: 1
 precision: "bf16"
 cache: "native"
 enable_prefix_caching: true
-# Final cache-owner settings: vLLM #110 at 6a64b548c67ab11e8355c372d3b252108cf8f5c1.
+# Native BF16 logical-KV storage; runtime qualification is recorded in README.md.
 # Explicit enable rejects fallback when the qualified native capabilities are absent.
 kv_cache_dtype: auto
 attention_backend: FLASHINFER

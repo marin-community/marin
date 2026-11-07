@@ -172,9 +172,10 @@ def create_server(manifest: PointManifest, output: Path, launch: IrisVllmLaunch 
                 json.dumps(series["additional_config"]),
                 "--prefix-cache-retention-interval",
                 str(series["prefix_cache_retention_interval"]),
-                "--numa-bind",
             ]
         )
+        if series["numa_bind"]:
+            server_args.append("--numa-bind")
     return VllmEnvironment(
         InferenceModelConfig(
             name=series["model"],
