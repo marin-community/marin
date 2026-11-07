@@ -47,6 +47,7 @@ export interface Run {
   dataset: string;
   dataset_revision: string;
   dataset_sessions: number;
+  workload_key?: string;
   request_count: number;
   profiling_requests: number;
   origin_ns: string;

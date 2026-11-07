@@ -6,7 +6,28 @@
 import math
 import statistics
 from collections import Counter
-from typing import Any
+from typing import Any, TypedDict
+
+
+class HistogramBin(TypedDict):
+    x0: float
+    x1: float
+    count: int
+
+
+class DistributionStats(TypedDict):
+    count: int
+    min: float
+    max: float
+    mean: float
+    median: float
+    p90: float
+    p95: float
+
+
+class Distribution(TypedDict):
+    bins: list[HistogramBin]
+    stats: DistributionStats | None
 
 
 def conversation_summary(structure: dict[str, Any]) -> dict[str, Any]:
@@ -20,7 +41,7 @@ def conversation_summary(structure: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def distribution(values: list[float]) -> dict[str, Any]:
+def distribution(values: list[float]) -> Distribution:
     if not values:
         return {"bins": [], "stats": None}
     ordered = sorted(values)

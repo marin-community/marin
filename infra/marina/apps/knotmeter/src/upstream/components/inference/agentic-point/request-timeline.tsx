@@ -491,6 +491,9 @@ export function RequestTimelineView({
             options={phaseOptions(locale)}
             onValueChange={(phase) => {
               setPhaseFilter(phase);
+              resetZoom();
+              setScrollTop(0);
+              if (scrollRef.current) scrollRef.current.scrollTop = 0;
             }}
             ariaLabel={t.phaseFilter}
             testId="timeline-phase-filter"

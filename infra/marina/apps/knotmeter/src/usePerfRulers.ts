@@ -88,7 +88,7 @@ export function usePerfRulers(
     const next = nextPerfRulerState(previous, { curve, isoX }, clampToOverlap);
     setMessage(
       next === previous
-        ? "Choose curves for the same model revision, corpus revision and precision with an overlapping measured range."
+        ? "Choose curves for the same model revision, prepared workload and precision with an overlapping measured range."
         : next.draft
           ? "Select a second comparable curve or point."
           : "Drag the ruler to compare another operating point.",

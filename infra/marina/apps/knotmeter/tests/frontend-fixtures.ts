@@ -36,6 +36,7 @@ export function fixtureRun(
     dataset: "example/ui-test-corpus",
     dataset_revision: "ui-fixture-corpus-revision",
     dataset_sessions: 2,
+    workload_key: "ui-fixture-workload",
     request_count: 6,
     profiling_requests: 6,
     origin_ns: "1793157479513724276",

@@ -5,16 +5,12 @@ import json
 from dataclasses import replace
 
 import pytest
-from marina.db import UrlDatabase
-from marina.testing import SourceServices
-from marina.testing import test_database as disposable_database
-from sqlalchemy import text
 from starlette.testclient import TestClient
 
 from infra.marina.apps.knotmeter.ingest.adapter import prepare_bundle
 from infra.marina.apps.knotmeter.ingest.load import load_corpus, load_run
 from infra.marina.apps.knotmeter.ingest.replay import prepare_requests
-from infra.marina.apps.knotmeter.server.app import create_api, migrate
+from infra.marina.apps.knotmeter.server.app import create_api
 
 
 @pytest.mark.parametrize("hosts,expected_gpus", [(1, 8), (4, 16)])
@@ -44,51 +40,37 @@ def test_multihost_import_rejects_per_host_gpu_normalization(bundle):
         prepare_bundle(path, actual)
 
 
-def test_import_replay_and_concurrent_selection_preserve_complete_serving_run(bundle):
+def test_import_replay_and_concurrent_selection_preserve_complete_serving_run(bundle, knotmeter_database):
     path, actual = bundle()
     (original,) = prepare_bundle(path, actual)
     original = replace(original, series={"kvCacheUsage": [{"t": i, "value": 0.25} for i in range(10000)]})
-    with disposable_database() as url:
-        services = SourceServices(name="knotmeter", data_url="", database=UrlDatabase(url))
-        engine = services.engine()
-        with engine.begin() as connection:
-            migrate(connection)
+    services, query = knotmeter_database
+    assert load_run(original, query)["changed"]
+    with TestClient(create_api(services).app) as client:
+        before = client.get(f"/runs/{original.key}/requests").json()
+        assert client.get(f"/runs/{original.key}/series").json() == original.series
+        assert [r["start_ns"] for r in before["requests"]] == [0, 51, 12800]
+        assert not load_run(original, query)["changed"]
+        assert client.get(f"/runs/{original.key}/requests").json() == before
+        assert client.get(f"/runs/{original.key}/series").json() == original.series
+        assert query("SELECT count(*) AS count FROM knotmeter_requests", {})["rows"][0]["count"] == 3
+        winner = replace(original, digest="winner", run=original.run | {"runtime": "winning-runtime"})
+        loser = replace(original, digest="loser", run=original.run | {"runtime": "stale-runtime"})
 
-        def query(sql, parameters):
-            with engine.begin() as connection:
-                result = connection.execute(text(sql), parameters)
-                return {
-                    "rows": [dict(r) for r in result.mappings()] if result.returns_rows else [],
-                    "row_count": result.rowcount,
-                }
+        def racing_query(sql, parameters):
+            if sql.startswith("INSERT INTO knotmeter_current"):
+                load_run(winner, query)
+            return query(sql, parameters)
 
-        assert load_run(original, query)["changed"]
-        with TestClient(create_api(services).app) as client:
-            before = client.get(f"/runs/{original.key}/requests").json()
-            assert client.get(f"/runs/{original.key}/series").json() == original.series
-            assert [r["start_ns"] for r in before["requests"]] == [0, 51, 12800]
-            assert not load_run(original, query)["changed"]
-            assert client.get(f"/runs/{original.key}/requests").json() == before
-            assert client.get(f"/runs/{original.key}/series").json() == original.series
-            assert query("SELECT count(*) AS count FROM knotmeter_requests", {})["rows"][0]["count"] == 3
-            winner = replace(original, digest="winner", run=original.run | {"runtime": "winning-runtime"})
-            loser = replace(original, digest="loser", run=original.run | {"runtime": "stale-runtime"})
-
-            def racing_query(sql, parameters):
-                if sql.startswith("INSERT INTO knotmeter_current"):
-                    load_run(winner, query)
-                return query(sql, parameters)
-
-            with pytest.raises(RuntimeError, match="another loader"):
-                load_run(loser, racing_query)
-            assert client.get(f"/runs/{original.key}").json()["runtime"] == "winning-runtime"
-            assert client.get(f"/runs/{original.key}/requests").json() == before
-            snapshot = client.get(f"/runs/{original.key}/data").json()
-            assert snapshot["run"]["runtime"] == "winning-runtime"
-            assert snapshot["requests"] == before["requests"]
-            assert snapshot["series"] == original.series
-            assert not load_run(winner, query)["changed"]
-        engine.dispose()
+        with pytest.raises(RuntimeError, match="another loader"):
+            load_run(loser, racing_query)
+        assert client.get(f"/runs/{original.key}").json()["runtime"] == "winning-runtime"
+        assert client.get(f"/runs/{original.key}/requests").json() == before
+        snapshot = client.get(f"/runs/{original.key}/data").json()
+        assert snapshot["run"]["runtime"] == "winning-runtime"
+        assert snapshot["requests"] == before["requests"]
+        assert snapshot["series"] == original.series
+        assert not load_run(winner, query)["changed"]
 
 
 def test_replay_ancestry_distinguishes_repeated_sources_and_preserves_queue_time(bundle):
@@ -115,7 +97,7 @@ def test_replay_ancestry_distinguishes_repeated_sources_and_preserves_queue_time
     assert child["cancelled"]
 
 
-def test_corpus_summary_counts_nested_requests_and_keeps_revision_immutable(tmp_path):
+def test_corpus_summary_counts_nested_requests_and_keeps_revision_immutable(tmp_path, knotmeter_database):
     turn = {"kind": "turn", "turnIndex": 0, "in": 100, "out": 10, "cached": 50, "uncached": 50, "model": "a"}
     child = turn | {"in": 40, "out": 4, "cached": 20, "uncached": 20, "model": "b"}
     structure = {
@@ -128,37 +110,23 @@ def test_corpus_summary_counts_nested_requests_and_keeps_revision_immutable(tmp_
         for cid in ["one", "two"]
     ]
     path.write_text("\n".join(json.dumps(row) for row in rows))
-    with disposable_database() as url:
-        services = SourceServices(name="knotmeter", data_url="", database=UrlDatabase(url))
-        engine = services.engine()
-        with engine.begin() as connection:
-            migrate(connection)
-
-        def query(sql, parameters):
-            with engine.begin() as connection:
-                result = connection.execute(text(sql), parameters)
-                return {
-                    "rows": [dict(r) for r in result.mappings()] if result.returns_rows else [],
-                    "row_count": result.rowcount,
-                }
-
+    services, query = knotmeter_database
+    load_corpus(path, query)
+    with TestClient(create_api(services).app) as client:
+        before = client.get("/datasets").json()
+        summary = before[0]["summary"]
+        assert summary["requests"] == 6
+        assert summary["models"] == {"a": 2, "b": 4}
+        assert summary["in"] == 360
+        inputs = before[0]["distributions"]["Input tokens per request"]
+        assert inputs["stats"]["mean"] == 60
+        assert inputs["stats"]["median"] == 40
+        assert sum(bucket["count"] for bucket in inputs["bins"]) == 6
         load_corpus(path, query)
-        with TestClient(create_api(services).app) as client:
-            before = client.get("/datasets").json()
-            summary = before[0]["summary"]
-            assert summary["requests"] == 6
-            assert summary["models"] == {"a": 2, "b": 4}
-            assert summary["in"] == 360
-            inputs = before[0]["distributions"]["Input tokens per request"]
-            assert inputs["stats"]["mean"] == 60
-            assert inputs["stats"]["median"] == 40
-            assert sum(bucket["count"] for bucket in inputs["bins"]) == 6
+        assert client.get("/datasets").json() == before
+        assert len(client.get("/corpus?dataset=example/corpus&revision=r1").json()) == 2
+        rows[0]["structure"] = structure | {"totals": structure["totals"] | {"in": 999}}
+        path.write_text("\n".join(json.dumps(row) for row in rows))
+        with pytest.raises(ValueError, match="immutable"):
             load_corpus(path, query)
-            assert client.get("/datasets").json() == before
-            assert len(client.get("/corpus?dataset=example/corpus&revision=r1").json()) == 2
-            rows[0]["structure"] = structure | {"totals": structure["totals"] | {"in": 999}}
-            path.write_text("\n".join(json.dumps(row) for row in rows))
-            with pytest.raises(ValueError, match="immutable"):
-                load_corpus(path, query)
-            assert client.get("/datasets").json() == before
-        engine.dispose()
+        assert client.get("/datasets").json() == before

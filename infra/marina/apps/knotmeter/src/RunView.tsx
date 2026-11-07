@@ -302,6 +302,13 @@ export function RunView({ run: listedRun, runs }: { run: Run; runs: Run[] }) {
           Recipe <code>{run.recipe}</code>
         </p>
         <p>
+          Workload{" "}
+          <code>
+            {run.workload_key ||
+              "Unknown: reimport the saved bundle for matched comparisons"}
+          </code>
+        </p>
+        <p>
           Model revision <code>{run.model_revision}</code>
         </p>
         <p>

@@ -24,15 +24,13 @@ import {
 describe("benchmark data boundaries", () => {
   it("preserves the first profiling request after a large wall-clock origin", () => {
     const timeline = hierarchicalTimeline();
-    timeline.requests = timeline.requests
-      .slice(0, 2)
-      .map((r, i) => ({
-        ...r,
-        phase: i ? "profiling" : "warmup",
-        start: i ? 51 : 0,
-        credit: i ? 50 : 0,
-        end: i ? 1000 : 40,
-      }));
+    timeline.requests = timeline.requests.slice(0, 2).map((r, i) => ({
+      ...r,
+      phase: i ? "profiling" : "warmup",
+      start: i ? 51 : 0,
+      credit: i ? 50 : 0,
+      end: i ? 1000 : 40,
+    }));
     const profiling = sliceTimelineByPhase(timeline, "profiling");
     expect(profiling.requests).toHaveLength(1);
     expect(profiling.requests[0].start).toBe(0);
@@ -102,6 +100,25 @@ describe("benchmark data boundaries", () => {
     expect(globalParetoFrontier(points, true, true)).toEqual(
       points.slice(0, 3),
     );
+  });
+  it("keeps workload changes out of matched history while allowing runtime improvements", () => {
+    const runs = comparisonRuns()
+      .filter((r) => r.hardware === "H100")
+      .slice(0, 6);
+    const changed = runs.map((r) =>
+      r.date === "2026-10-12" ? { ...r, workload_key: "different-subset" } : r,
+    );
+    const split = matchedHistory(changed, 20, "output", "total");
+    expect(split).toHaveLength(2);
+    expect(split.map((s) => s.points.length)).toEqual([1, 1]);
+    const improvedRuntime = runs.map((r) =>
+      r.date === "2026-10-12" ? { ...r, runtime: "new-runtime" } : r,
+    );
+    expect(
+      matchedHistory(improvedRuntime, 20, "output", "total")[0].points.map(
+        (p) => p.value,
+      ),
+    ).toEqual([30, 45]);
   });
   it("preserves uncached token accounting and ruler ratios across shared URLs", () => {
     const run = fixtureRun(1, "2026-10-05", "H100", 8, 20, 100);

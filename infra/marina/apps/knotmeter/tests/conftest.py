@@ -6,6 +6,34 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from marina.db import UrlDatabase
+from marina.testing import SourceServices
+from marina.testing import test_database as disposable_database
+from sqlalchemy import text
+
+from infra.marina.apps.knotmeter.server.app import migrate
+
+
+@pytest.fixture
+def knotmeter_database():
+    with disposable_database() as url:
+        services = SourceServices(name="knotmeter", data_url="", database=UrlDatabase(url))
+        engine = services.engine()
+        with engine.begin() as connection:
+            migrate(connection)
+
+        def query(sql, parameters):
+            with engine.begin() as connection:
+                result = connection.execute(text(sql), parameters)
+                return {
+                    "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
+                    "row_count": result.rowcount,
+                }
+
+        try:
+            yield services, query
+        finally:
+            engine.dispose()
 
 
 @pytest.fixture
@@ -32,7 +60,8 @@ def bundle(tmp_path: Path):
             "concurrency": 8,
             "recipe_fingerprint": "recipe",
             "workload": {
-                "lineage": {"dataset": "example/corpus", "dataset_revision": "dataset-commit", "sessions": 393}
+                "key": "fixture-workload",
+                "lineage": {"dataset": "example/corpus", "dataset_revision": "dataset-commit", "sessions": 393},
             },
         }
         receipt = {

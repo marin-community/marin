@@ -11,7 +11,7 @@ application's Postgres role and schema.
 | --- | --- |
 | Performance | Model, hardware and UTC date; input/output/total throughput per physical GPU; TTFT, interactivity, E2E and normalized axes; percentiles; Horace He accounting; measured Pareto curves and Perf Ruler; numeric table; labels, legend, zoom, linear/log scales; PNG, CSV and shared selections. |
 | Runs and submissions | Search, sort, pagination, expandable configuration, physical topology and source/runtime/recipe pins; selected-run overlays; weekly and cumulative imported submissions. |
-| History | Throughput at matched P90 interactivity, dated source observations and record-improvement waterfall. Model and corpus revisions remain separate. |
+| History | Throughput at matched P90 interactivity, dated source observations and record-improvement waterfall. Model, corpus and prepared workload identities remain separate. |
 | Run diagnostics | Token distributions and in-flight estimates; rolling/cumulative latency and interactivity; per-engine KV, queues, completed requests, prefix hits, input/decode throughput and prompt-token sources. |
 | Request timeline | Warmup/profiling, conversation/worker grouping, replay and subagent hierarchy, queue waits, idle/cursor counts, zoom/pan and virtual scrolling. A source link opens the exact nested corpus request; return restores the timeline view. |
 | Cache and aggregates | Measured HBM/host/not-reused shares, corpus theoretical ceiling, profiling totals and token/cache distributions across configurations. |
@@ -24,7 +24,9 @@ links freeze the selected run identities and effective date. Labels, high contra
 and Perf Ruler are visible controls.
 
 A single configuration is shown as a point. Curves require measured loads from the
-same submission and configuration identity. History uses the latest submission per
+same submission and configuration identity. Matched history and rulers also require
+the same saved workload key, covering subset, context and tokenizer inputs. Reimport
+older bundles without that identity to enable matched comparisons. History uses the latest submission per
 UTC date and the pinned upstream Pareto/Hermite interpolation. It does not extrapolate.
 A submission is an original GitHub run/attempt; it can contain several loads
 (concurrency settings). Curves group loads within that attempt by hardware, framework,

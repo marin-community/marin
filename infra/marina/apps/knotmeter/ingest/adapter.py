@@ -139,6 +139,7 @@ def prepare_bundle(bundle: Path, source_attempt: dict[str, Any]) -> list[ImportR
             "dataset": dataset["dataset"],
             "dataset_revision": dataset["dataset_revision"],
             "dataset_sessions": dataset["sessions"],
+            "workload_key": manifest["workload"]["key"],
             "request_count": len(requests),
             "profiling_requests": profiling,
             "origin_ns": str(origin),

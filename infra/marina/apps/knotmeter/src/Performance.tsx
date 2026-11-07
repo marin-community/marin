@@ -33,6 +33,7 @@ import {
   metricValue,
   axisValue,
   seriesKey,
+  workloadIdentity,
 } from "./metrics";
 
 const COLORS = [
@@ -143,6 +144,7 @@ export function Performance({ runs }: { runs: Run[] }) {
           s.run.dataset,
           s.run.dataset_revision,
           s.run.precision,
+          workloadIdentity(s.run),
         ]),
       ]),
     ),
@@ -255,8 +257,22 @@ export function Performance({ runs }: { runs: Run[] }) {
     labelsLayer,
   ];
   const update = (values: Record<string, string>) => {
+    if ("model" in values) {
+      setLegendSearch("");
+      values = { hardware: "", date: "", runs: "", hidden: "", ...values };
+    } else if ("hardware" in values) {
+      setLegendSearch("");
+      values = { date: "", runs: "", hidden: "", ...values };
+    } else if (values.runs) {
+      values = { date: "all", ...values };
+    }
     setParameters({
-      ...("axis" in values || "metric" in values || "model" in values
+      ...("axis" in values ||
+      "metric" in values ||
+      "model" in values ||
+      "hardware" in values ||
+      "date" in values ||
+      "runs" in values
         ? { rulers: "" }
         : {}),
       ...values,

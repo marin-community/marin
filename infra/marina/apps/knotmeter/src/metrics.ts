@@ -47,6 +47,11 @@ export function axisValue(
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+export function workloadIdentity(run: Run): string {
+  // Legacy imports cannot establish a matched workload; reimport their saved bundle.
+  return run.workload_key || `unknown:${run.key}`;
+}
+
 export function seriesKey(run: Run): string {
   const a = run.aggregate;
   return [
@@ -65,6 +70,7 @@ export function seriesKey(run: Run): string {
     a.kv_offloading,
     run.model_revision,
     run.dataset_revision,
+    workloadIdentity(run),
   ]
     .join("_")
     .replace(/[^\w-]/g, "_");

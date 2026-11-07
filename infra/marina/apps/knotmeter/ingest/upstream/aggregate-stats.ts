@@ -95,14 +95,6 @@ function aggregateSeriesByStart(
   return out;
 }
 
-/**
- * Parse the server_metrics_json → time-series arrays for KV cache util and
- * prefix cache hit rate (per-interval, computed from the prometheus
- * counters the same way trace-server-metrics does it).
- *
- * Aggregates across all engine series so multi-engine DP/PP deployments are
- * counted correctly (previously we only read engine 0).
- */
 /** First metric whose series array is non-empty; supports vllm/sglang fallback. */
 function pickFirstNonEmpty(
   metrics: Record<string, MetricMeta>,
@@ -115,6 +107,14 @@ function pickFirstNonEmpty(
   return undefined;
 }
 
+/**
+ * Parse the server_metrics_json → time-series arrays for KV cache util and
+ * prefix cache hit rate (per-interval, computed from the prometheus
+ * counters the same way trace-server-metrics does it).
+ *
+ * Aggregates across all engine series so multi-engine DP/PP deployments are
+ * counted correctly (previously we only read engine 0).
+ */
 export function extractServerMetricSamples(json: string): {
   kvCacheUtil: number[];
   prefixCacheHitRate: number[];

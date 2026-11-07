@@ -8,6 +8,7 @@ import {
 import {
   axisValue,
   metricValue,
+  workloadIdentity,
   type Metric,
   type TokenBasis,
 } from "./metrics";
@@ -80,6 +81,7 @@ export function matchedHistory(
       run.model_revision,
       run.dataset,
       run.dataset_revision,
+      workloadIdentity(run),
     ]);
     const group = groups.get(key) || [];
     group.push(run);
@@ -118,7 +120,7 @@ export function matchedHistory(
     const example = group[0];
     return {
       key,
-      label: `${example.hardware} · ${example.framework} · ${example.precision} · model ${example.model_revision.slice(0, 8)} · corpus ${example.dataset_revision.slice(0, 8)}`,
+      label: `${example.hardware} · ${example.framework} · ${example.precision} · model ${example.model_revision.slice(0, 8)} · corpus ${example.dataset_revision.slice(0, 8)} · workload ${example.workload_key?.slice(0, 8) || "unknown (reimport)"}`,
       points: points.sort((a, b) => a.date.localeCompare(b.date)),
     };
   });

@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import requests
 from marina.client import AppletQuery, applet_query
@@ -21,6 +21,12 @@ from .corpus import conversation_summary, dataset_summary
 
 BATCH_BYTES = 750_000
 SERIES_CHUNK_CHARS = 200_000
+
+
+class ImportReport(TypedDict):
+    key: str
+    changed: bool
+    requests: int
 
 
 def attach_series(prepared: ImportRun, bundle: Path, cache: Path) -> ImportRun:
@@ -129,7 +135,7 @@ def load_corpus(path: Path, query: AppletQuery) -> int:
     return count
 
 
-def load_run(prepared: ImportRun, query: AppletQuery) -> dict[str, Any]:
+def load_run(prepared: ImportRun, query: AppletQuery) -> ImportReport:
     """Stage request batches, then atomically expose one complete run without losing concurrent imports."""
     current = query(
         "SELECT c.import_id, i.content_sha256 FROM knotmeter_current c "
