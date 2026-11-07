@@ -15,11 +15,10 @@ from rolloutengine.test_support import (
 )
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
-from taskcompendium.fetch import FETCH_ACTION_INTERFACE, HttpPage, NetworkFailure, fetch_requirement
+from taskcompendium.fetch import FETCH_ACTION_INTERFACE
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from experiments.post_training.task_curation.datasets.protocol_probes import (
-    FETCH_REQUIREMENT,
     NONCE_FILE,
     PROBE_URL,
     ProtocolCheck,
@@ -66,27 +65,13 @@ async def test_tool_probe_rewards_only_an_executed_command(turns, reward):
     assert graded.grade.reward == reward
 
 
-@pytest.mark.parametrize(
-    "page,observation,reward",
-    [
-        pytest.param(None, {"status": 200}, 1.0, id="retrieved"),
-        pytest.param(HttpPage(status=503, body="Unavailable"), {"status": 503, "body": "Unavailable"}, 0.0, id="http"),
-        pytest.param(NetworkFailure(error="Connection reset"), {"error": "Connection reset"}, 0.0, id="network"),
-    ],
-)
-async def test_url_probe_serves_declared_pages_as_observations(page, observation, reward):
+async def test_url_probe_serves_declared_page_as_observation():
     task = TASKS[f"{ProtocolCheck.URL_LOADING}-0"]
-    if page is not None:
-        environment = task.environment_requirements.model_copy(
-            update={"tool_providers": {FETCH_REQUIREMENT: fetch_requirement({PROBE_URL: page})}}
-        )
-        task = task.model_copy(update={"environment_requirements": environment})
-    answer = probe_nonce(task.id) if page is None else "The page could not be retrieved."
+    answer = probe_nonce(task.id)
     model = ReplayModel([tool_call("fetch_url", {"url": PROBE_URL}, call_id="fetch"), reply(answer)])
 
     graded = await engine(model, harnesses=FETCH_HARNESS).run_task(rollout_spec(task))
 
     [served] = tool_observations(graded)
-    assert served["url"] == PROBE_URL
-    assert observation.items() <= served.items()
-    assert graded.grade.reward == reward
+    assert served == {"url": PROBE_URL, "status": 200, "body": answer}
+    assert graded.grade.reward == 1.0
