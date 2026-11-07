@@ -87,6 +87,7 @@ def test_analyze_report_is_independent_of_how_rows_split_across_segments(tmp_pat
 def test_iter_log_rows_streams_in_window_hub_task_rows_that_mention_gs_across_sources(tmp_path: Path) -> None:
     in_window = (f"{TASK_ID}:0", WINDOW.start_ms + 1, f"Reading {EUROPE_BUCKET_PATH}")
     pushed_with_empty_cluster = (f"{TASK_ID}:1", WINDOW.start_ms + 5, f"Reading {EUROPE_BUCKET_PATH}")
+    stamped_by_the_hub = (f"{TASK_ID}:2", WINDOW.start_ms + 6, f"Reading {EUROPE_BUCKET_PATH}")
     sources = []
     for name, rows in {
         "seg-a": [
@@ -98,6 +99,7 @@ def test_iter_log_rows_streams_in_window_hub_task_rows_that_mention_gs_across_so
             (f"{TASK_ID}:0", WINDOW.start_ms + 2, "no paths here", None),
             ("worker-log", WINDOW.start_ms + 3, "gs://x", None),
             (*pushed_with_empty_cluster, ""),
+            (*stamped_by_the_hub, "marin"),
         ],
     }.items():
         path = tmp_path / f"{name}.parquet"
@@ -109,4 +111,4 @@ def test_iter_log_rows_streams_in_window_hub_task_rows_that_mention_gs_across_so
     with duckdb.connect() as con:
         streamed = list(iter_log_rows(con, sources, WINDOW))
 
-    assert sorted(streamed) == [in_window, pushed_with_empty_cluster]
+    assert sorted(streamed) == [in_window, pushed_with_empty_cluster, stamped_by_the_hub]
