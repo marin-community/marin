@@ -17,7 +17,7 @@ from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep
-from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
+from marin.rl.skyrl import ResolvedModelLocator, SkyRLOutputPaths, SkyRLRun, SkyRLRunConfig, skyrl_cpu_command
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.grading_result import Outcome
@@ -201,8 +201,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         initial_unscored=0,
         first_answer_task="task-0",
         panel_identity="",
+        attempt_id="recorded-attempt",
     ):
-        attempt_id = "recorded-attempt"
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
         result_run = SkyRLRun(
@@ -437,6 +437,9 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             },
         )
         write_json(root / "terminal.json", {"config": launch, "result": result})
+        write_json(
+            Path(launch["artifacts"]["attempts_root"]) / f"{attempt_id}.json", {"config": launch, "result": result}
+        )
         write_json(root / "resolved-launch.yaml", {"config": launch})
         for mutation in mutations:
             mutation(root)
@@ -453,3 +456,21 @@ def write_json(path, value):
 def answer(task, score, *, low=0, high=1, status="verified", tokens=1, error=None):
     verification = {"status": status, "score": score, "score_min": low, "score_max": high}
     return {"task_id": task, "response_token_ids": [1] * tokens, "exception_type": error, "verification": verification}
+
+
+def native_config(root, launch):
+    return SkyRLRunConfig(
+        launch_config_yaml=yaml.safe_dump(launch),
+        run_id=launch["run"]["id"],
+        attempt_id=launch["run"]["attempt_id"],
+        model=ResolvedModelLocator("model", "initializer@1", "model", "tokenizer", "revision"),
+        output=SkyRLOutputPaths(
+            str(root / "checkpoints"),
+            str(root / "exports"),
+            str(root / "attempts"),
+            str(root / "resolved-launch.yaml"),
+            str(root / "terminal.json"),
+        ),
+        export_hf=False,
+        draft_checkpoint_root=None,
+    )

@@ -184,6 +184,9 @@ The run's own update-0 dump supplies its baseline; the pass-rate artifact suppli
 statistics by slice. `--baseline` compares separate completed runs in the gate report.
 Every preset uses FLASH_ATTN, prefix caching on and batch invariance off.
 
+For dashboard publication, retries and pinned controls, follow the
+[publication rules](../../../docs/recipes/snowball-rl.md#dashboard-publication).
+
 ## Record the experiment
 
 One experiment is one change under test, with every run and preset used to judge it. It has one
@@ -208,7 +211,8 @@ update-0 and final scores and native elapsed time saved in the receipt. Long pre
 Read the constraints next, then the verdict and label. The status block and `gate_report.md` use
 this order. The report also has the full Guards, Reported, Invariants and Breakdown tables, plus
 Vs baseline when requested. The status includes native attempt IDs, job and W&B links, completed
-update, output path and the optional experiment issue. See
+update, output path, the optional experiment issue and `rl_progress_url` after publication. The dashboard
+keeps the native run/attempt key; its attempt dropdown marks failed attempts. See
 [Compare with controls](../../../docs/recipes/snowball-rl.md#compare-with-controls) for tolerances.
 
 - `fail`: a guard fell below its tolerance, or a candidate invariant failed (planned updates, finite

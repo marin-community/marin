@@ -61,6 +61,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
+from urllib.parse import urlencode
 
 import click
 import yaml
@@ -94,6 +95,7 @@ from marin.rl.skyrl import (
     artifact_identity,
     read_skyrl_attempt_tracking,
     read_skyrl_launch_receipt,
+    read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
     skyrl_step,
 )
@@ -101,7 +103,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
-from experiments.post_training import snowball_rl_gate
+from experiments.post_training import snowball_rl_gate, snowball_rl_publication
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.task_curation.inventory import (
@@ -618,6 +620,15 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
                 else "not built"
             )
         )
+        progress_url = None
+        if receipt is not None and attempt:
+            publication_path = (
+                snowball_rl_publication.publication_path(path, attempt) / snowball_rl_publication.PUBLICATION_FILENAME
+            )
+            if presets.exists(publication_path):
+                published = json.loads(presets.read_text(publication_path))
+                native = receipt.config["run"]
+                progress_url = published["url"] + "#" + urlencode({"run": native["id"], "attempt": attempt})
         rows.append(
             {
                 "name": step.name,
@@ -643,6 +654,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
                     "disk": execution.disk,
                 },
                 "output": path,
+                **({"rl_progress_url": progress_url} if progress_url else {}),
             }
         )
     verdict = {}
@@ -717,29 +729,86 @@ def _from_handles(handles: list[ArtifactStep]) -> SnowballRun:
     )
 
 
+def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | None = None) -> dict:
+    if not snowball_rl_publication.publishes(preset):
+        return {}
+    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
+    completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
+    gate_path = completed_gate.path(prefix) if completed_gate is not None else None
+    outputs = [
+        snowball_rl_publication.RunOutput(training.path(prefix), training.name, training.version)
+        for training in run.runs
+    ]
+    return snowball_rl_publication.publish_runs(
+        outputs, preset, gate_path=gate_path, gate_required=completed_gate is not None, issue=issue
+    )
+
+
+def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
+    if not snowball_rl_publication.publishes(preset):
+        return False
+    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
+    missing_publication = False
+    for training in run.runs:
+        path = training.path(prefix)
+        try:
+            current_id, attempts = read_stored_skyrl_attempts(path)
+            receipt = attempts.get(current_id) if current_id is not None else None
+            if receipt is None or receipt.result.state != "succeeded":
+                return False
+            for attempt_id in attempts:
+                missing_publication |= not presets.exists(
+                    snowball_rl_publication.publication_path(path, attempt_id)
+                    / snowball_rl_publication.PUBLICATION_FILENAME
+                )
+        except (OSError, ValueError, KeyError):
+            return False
+    completed = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
+    return missing_publication and (completed is None or snowball_rl_publication.gate_complete(completed.path(prefix)))
+
+
+def _finish_run(
+    handles: list[ArtifactStep],
+    preset: presets.Preset,
+    coordinator_error: str | None = None,
+    *,
+    issue: int | None = None,
+) -> None:
+    run = _from_handles(handles)
+    publication = _publish_records(run, preset, issue=issue)
+    snapshot = _status(run, preset, issue=issue, stored_only=True)
+    if publication:
+        snapshot["publication"] = publication
+    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+        snapshot["reason"] = coordinator_error or "required verdict unavailable"
+    click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
+    if "report" in snapshot:
+        click.echo(presets.read_text(snapshot["report"].removesuffix(".json") + ".md"))
+    verdict = snapshot.get("verdict")
+    if verdict is None and run.gate is None and coordinator_error is None:
+        verdict = "pass"
+    raise click.exceptions.Exit(presets.EXIT_CODES[verdict])
+
+
 def _wait_for_run(
     job: JobName, handles: list[ArtifactStep], preset: presets.Preset, *, issue: int | None = None
 ) -> None:
     with rl_cli.iris_client() as client:
         parent = client.job(job).wait(RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
-    run = _from_handles(handles)
-    snapshot = _status(run, preset, issue=issue)
-    if "verdict" not in snapshot and (parent.state != JobState.SUCCEEDED or run.gate is not None):
-        snapshot["reason"] = f"coordinator {job} is {parent.state}; required verdict unavailable"
-    click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
-    if "report" in snapshot:
-        click.echo(presets.read_text(snapshot["report"].removesuffix(".json") + ".md"))
-    verdict = snapshot.get("verdict")
-    if verdict is None and run.gate is None and parent.state == JobState.SUCCEEDED:
-        verdict = "pass"
-    raise click.exceptions.Exit(presets.EXIT_CODES[verdict])
+    error = (
+        f"coordinator {job} is {parent.state}; required verdict unavailable"
+        if parent.state != JobState.SUCCEEDED
+        else None
+    )
+    _finish_run(handles, preset, error, issue=issue)
 
 
 def _run_command(function: Callable) -> click.Command:
     command = click.option(
         "--wait",
         is_flag=True,
-        help="Wait after --run; exit 0 for PASS or a finished ungated run, "
+        help="Wait after --run and publish retained trained-panel attempts using the caller Marina login; "
+        "exit 0 for PASS or a finished ungated run, "
         "1 for FAIL, 2 for INVALID, 3 without a required verdict.",
     )(presets.run_command(help_text=__doc__)(function))
 
@@ -751,6 +820,9 @@ def _run_command(function: Callable) -> click.Command:
         def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
             try:
                 if get_job_info() is None:
+                    preset = presets.PRESETS[kwargs["preset_name"]]
+                    if wait and _publication_retry(_from_handles(handles), preset):
+                        _finish_run(handles, preset, issue=kwargs.get("issue"))
                     job = submit_or_run(
                         "experiments.post_training.snowball_rl",
                         handles,
