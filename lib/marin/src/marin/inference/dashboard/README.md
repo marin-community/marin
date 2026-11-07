@@ -250,4 +250,8 @@ that calls `build_dashboard_app` directly must submit the same secret and pass
 `web_search=parallel_web_search_from_secret()` from
 `marin.inference.web_search`.
 
+In brokered mode, the dashboard runs in the broker job, and the model worker
+jobs it submits do not receive the key. In direct mode, the model server runs in
+the same task as the dashboard and can read the key file.
+
 Each search is billed to the Parallel account that owns the key.
