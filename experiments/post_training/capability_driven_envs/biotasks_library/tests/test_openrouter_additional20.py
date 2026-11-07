@@ -11,6 +11,9 @@ from experiments.post_training.capability_driven_envs.biotasks_library.run_openr
     load_panel,
     select_pilot,
 )
+from experiments.post_training.capability_driven_envs.biotasks_library.run_openrouter_v3_topup16 import (
+    load_panel as load_topup_panel,
+)
 
 
 def test_panel_is_disjoint_and_has_pinned_routes() -> None:
@@ -19,6 +22,9 @@ def test_panel_is_disjoint_and_has_pinned_routes() -> None:
     assert len(models) == 20
     assert not {m.model for m in models} & {m.model for m in first}
     assert all(m.provider_tag and m.provider_name and m.context_window >= 65536 for m in models)
+    topup, _ = load_topup_panel()
+    assert len(topup) == 16
+    assert not {m.model for m in topup} & {m.model for m in [*models, *first]}
 
 
 def test_pilot_spans_prior_difficulties_without_repeated_item() -> None:

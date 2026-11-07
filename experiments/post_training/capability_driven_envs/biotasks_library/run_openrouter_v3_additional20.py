@@ -111,7 +111,7 @@ def load_pilot_ids(task_ids: set[str]) -> list[str]:
 
 
 def _run_shard(
-    rows: Iterable[dict[str, object]], shard_info: object, *, model: PinnedModel, panel_sha: str
+    rows: Iterable[dict[str, object]], shard_info: object, *, model: PinnedModel, panel_sha: str, campaign_id: str
 ) -> Iterator[dict[str, object]]:
     del shard_info
     config = CalibrationConfig(
@@ -121,7 +121,7 @@ def _run_shard(
         provider_tag=model.provider_tag,
         provider_name=model.provider_name,
         context_window=model.context_window,
-        campaign_id=CAMPAIGN_ID,
+        campaign_id=campaign_id,
         max_retries=0,
     )
     for row in rows:
@@ -132,7 +132,7 @@ def _run_shard(
                 yield {**result, "panel_manifest_sha256": panel_sha}
             except Exception as error:
                 yield {
-                    "campaign_id": CAMPAIGN_ID,
+                    "campaign_id": campaign_id,
                     "task_id": task.id,
                     "frozen_task_digest": digest(task),
                     "model": model.model,
@@ -146,11 +146,20 @@ def _run_shard(
                 }
 
 
-def _run(tasks: list[TaskSpec], model: PinnedModel, panel_sha: str, uri: str, workers: int) -> None:
+def _run(
+    tasks: list[TaskSpec],
+    model: PinnedModel,
+    panel_sha: str,
+    uri: str,
+    workers: int,
+    *,
+    campaign_id: str,
+    name_prefix: str,
+) -> None:
     pipeline = (
         Dataset.from_list([{"task_json": task.model_dump_json()} for task in tasks])
         .reshard(len(tasks))
-        .map_shard(partial(_run_shard, model=model, panel_sha=panel_sha))
+        .map_shard(partial(_run_shard, model=model, panel_sha=panel_sha, campaign_id=campaign_id))
         .reshard(1)
         .write_jsonl(uri)
     )
@@ -158,7 +167,7 @@ def _run(tasks: list[TaskSpec], model: PinnedModel, panel_sha: str, uri: str, wo
         max_workers=min(workers, len(tasks)),
         resources=ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=True),
         coordinator_resources=ResourceConfig(cpu=0.1, ram="2g", disk="8g", preemptible=False),
-        name=f"biotasks-additional20-{_model_path(model)}",
+        name=f"{name_prefix}-{_model_path(model)}",
         heartbeat_timeout=1800,
     ) as context:
         print(context.execute(pipeline), flush=True)
@@ -205,7 +214,15 @@ def main() -> None:
         completed = _read_completed(pilot_uri, pilot, model, panel_sha)
         if completed is None:
             budget_gate(model, len(pilot), panel_sha)
-            _run(pilot, model, panel_sha, pilot_uri, min(2, args.max_workers))
+            _run(
+                pilot,
+                model,
+                panel_sha,
+                pilot_uri,
+                min(2, args.max_workers),
+                campaign_id=CAMPAIGN_ID,
+                name_prefix="biotasks-additional20",
+            )
             completed = _read_completed(pilot_uri, pilot, model, panel_sha)
             if completed is None:
                 raise RuntimeError(f"Missing pilot: {model.model}")
@@ -227,7 +244,15 @@ def main() -> None:
         existing = _read_completed(uri, rest, model, panel_sha)
         if existing is None:
             budget_gate(model, len(rest), panel_sha)
-            _run(rest, model, panel_sha, uri, args.max_workers)
+            _run(
+                rest,
+                model,
+                panel_sha,
+                uri,
+                args.max_workers,
+                campaign_id=CAMPAIGN_ID,
+                name_prefix="biotasks-additional20",
+            )
             existing = _read_completed(uri, rest, model, panel_sha)
             if existing is None:
                 raise RuntimeError(f"Missing full batch: {model.model}")

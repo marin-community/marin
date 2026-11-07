@@ -1,0 +1,25 @@
+{
+  "schema_version": "1",
+  "panel_id": "biotasks-v3-openrouter-topup16-pilot-v1",
+  "task_snapshot_sha256": "b893bd40fb1c6676619b32cd11a180969605b2b69a7a3b5b6df1974ae4bbb8d6",
+  "prior_response_sha256": "acf9b5aff6a47230e2e0d0c751554e03969d4af9fbbb22099154db1aed039cda",
+  "shared_spend_ceiling_usd": "40",
+  "models": [
+    {"model":"mistralai/mistral-large-4-0","provider_tag":"mistral/zdr","provider_name":"Mistral","context_window":1048576},
+    {"model":"qwen/qwen3.7-plus","provider_tag":"alibaba","provider_name":"Alibaba","context_window":1000000},
+    {"model":"qwen/qwen3.8-max-0902","provider_tag":"alibaba","provider_name":"Alibaba","context_window":1000000},
+    {"model":"deepseek/deepseek-v4.1-flash","provider_tag":"alibaba","provider_name":"Alibaba","context_window":1000000},
+    {"model":"deepseek/deepseek-v4-pro","provider_tag":"siliconflow/fp8","provider_name":"SiliconFlow","context_window":1048576},
+    {"model":"z-ai/glm-5.3-flashx","provider_tag":"z-ai/fp8","provider_name":"Z.AI","context_window":1048576},
+    {"model":"moonshotai/kimi-k2.6","provider_tag":"digitalocean","provider_name":"DigitalOcean","context_window":262144},
+    {"model":"minimax/minimax-m3","provider_tag":"coreweave/fp4","provider_name":"CoreWeave","context_window":262144},
+    {"model":"google/gemini-3.7-flash","provider_tag":"google-ai-studio","provider_name":"Google AI Studio","context_window":1048576},
+    {"model":"x-ai/grok-4.5","provider_tag":"xai","provider_name":"xAI","context_window":500000},
+    {"model":"google/gemma-4-31b-it","provider_tag":"venice/fp4","provider_name":"Venice","context_window":256000},
+    {"model":"bytedance-seed/seed-2-1-turbo","provider_tag":"seed/fp8","provider_name":"Seed","context_window":262144},
+    {"model":"nvidia/nemotron-3.5-lightning","provider_tag":"deepinfra/bf16","provider_name":"DeepInfra","context_window":262144},
+    {"model":"qwen/qwen3.8-27b","provider_tag":"primeintellect/fp8","provider_name":"PrimeIntellect","context_window":131072},
+    {"model":"z-ai/glm-5.2","provider_tag":"wafer/us","provider_name":"Wafer","context_window":1048576},
+    {"model":"qwen/qwen3.7-max","provider_tag":"alibaba","provider_name":"Alibaba","context_window":1000000}
+  ]
+}

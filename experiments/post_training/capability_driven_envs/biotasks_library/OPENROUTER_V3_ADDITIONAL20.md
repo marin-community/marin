@@ -57,6 +57,22 @@ Private attempts and prospective snapshot root:
 s3://marin-us-east-02a/marin4sc/taskforge/task-library/campaigns/biotasks/combined/v3/calibration/openrouter-additional20-v1/
 ```
 
+**Pilot outcome / revision gate (2026-11-07).** All 20 original candidates
+finished 12-item pilots, but only **45/170 scored responses (26.5%)** were
+correct; 61 were ungraded and 9 infrastructure-missing. This is far below
+the requested ~50% scored rate even accounting for the deliberately
+prior-stratified pilot. Scout's route was unavailable, while one MiniMax
+response's OpenRouter metadata endpoint persistently returned HTTP 500;
+unverified generations stay quarantined. Only **$0.64** of the shared $40
+ceiling was spent. **Do not full-dispatch the original 20-model panel.**
+Preserve all attempts and choose a versioned effective 20 with fewer
+weak/format-failing models. `openrouter_v3_topup16.json` freezes 16
+non-overlapping additional candidate routes for another 12-item pilot using
+*the same* frozen tasks, policy, and $40 budget baseline. Their pilot is
+separate and no original model/task is called twice. Choose exactly 13 new
+models only after pilot review, alongside seven retained, previously piloted
+models; new full jobs must reuse those 12 pilot generations per model.
+
 This remains a *provisional* research bank. After all 20 batches, freeze a
 separate scored snapshot with raw-source hashes and provider evidence; refit
 the exploratory Bayesian 2PL and report new slope posterior intervals plus
