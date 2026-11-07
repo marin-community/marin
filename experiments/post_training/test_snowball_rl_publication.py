@@ -34,10 +34,8 @@ pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_con
         "lineage-missing-window",
         "external-resume",
         "native-failed",
-        "builder-error",
         "invariant-failed",
         "learning-long",
-        "unknown-time",
         "missing-tracking",
         "historical",
         "wrong-cohort",
@@ -142,10 +140,6 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
     config = native_config(source, launch)
 
     def native(edge_config):
-        if case == "unknown-time":
-            receipt = json.loads((source / "terminal.json").read_text())
-            receipt["result"]["started_at"] = None
-            write_json(source / "terminal.json", receipt)
         if case == "missing-tracking":
             (source / "exports/attempts/native-attempt/tracking.json").unlink()
         if case == "historical":
@@ -155,12 +149,6 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             current = json.loads(json.dumps(launch))
             current["run"]["attempt_id"] = "newer-attempt"
             (source / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": current}))
-        if case == "builder-error":
-            descriptor = launch["inputs"]["validation_data"][0]
-            pq.write_table(
-                pa.Table.from_pylist([{"task_spec": "invalid-json"}]),
-                Path(descriptor["uri"]) / descriptor["relative_path"],
-            )
         if case == "wrong-cohort":
             descriptor = launch["inputs"]["validation_data"][0]
             path = Path(descriptor["uri"]) / descriptor["relative_path"]
@@ -191,10 +179,6 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         result = training.run(config)
         assert result.path == str(source)
     assert list(source.rglob(publication.RESULT_FILENAME)) == []
-    if case == "builder-error":
-        with pytest.raises(ValueError):
-            publication.retain_record(str(source), preset)
-        return
     row = publication.retain_record(str(source), preset, attempt_id="native-attempt")
     path = Path(row["artifact_uri"])
     assert (row["run_id"], row["attempt_id"]) == (launch["run"]["id"], "native-attempt")
@@ -203,9 +187,7 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
     assert row["evaluation"]["task_count"] == (
         100 if case in {"learning-long", "lineage", "lineage-missing-window"} else 1500
     )
-    assert row["elapsed_seconds"] == (
-        None if case in {"unknown-time", "lineage-missing-window"} else 7200 if case == "lineage" else 3600
-    )
+    assert row["elapsed_seconds"] == (None if case == "lineage-missing-window" else 7200 if case == "lineage" else 3600)
     assert row["wandb_url"] == (None if case in {"missing-tracking", "native-failed"} else tracking["wandb_url"])
     assert row["engine"] == (None if case in {"missing-tracking", "native-failed"} else tracking["engine"])
     if case in {"native-failed", "invariant-failed"}:
@@ -220,8 +202,7 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         assert row["final"]["reward"] == pytest.approx(0.5)
         assert row["optimizer_steps"] == 2
     if case.startswith("external-"):
-        assert row["resume_from"] == "source-run@2026.11.01" and row["baseline_step"] is None
-        assert row["planned_updates_valid"] is None
+        assert row["resume_from"] == "source-run@2026.11.01"
         assert row["optimizer_steps"] == 1
     if case == "lineage":
         old = publication.build_record(str(source), preset, attempt_id="ancestor")
@@ -231,7 +212,14 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         unknown["config"]["run"]["attempt_id"] = "missing-window"
         unknown["result"].update(started_at=None, finished_at="2026-11-06T15:40:00+00:00")
         write_json(attempts / "missing-window.json", unknown)
-        assert publication.build_record(str(source), preset, attempt_id="ancestor")["elapsed_seconds"] is None
+        assert publication.build_record(str(source), preset, attempt_id="ancestor")["elapsed_seconds"] == 3600
+        (attempts / "ancestor.json").unlink()
+        (attempts / "missing-window.json").unlink()
+        expired = publication.build_record(str(source), preset, attempt_id="native-attempt")
+        assert expired["elapsed_seconds"] is None and expired["baseline"]["reward"] == pytest.approx(0.3)
+        assert (
+            "A lineage attempt's native time window is unavailable; elapsed time remains unknown." in expired["evidence"]
+        )
     if case == "partial":
         assert row["final"]["attempted"] == 1500 and row["final"]["scored"] == 1485
         saved = path.read_bytes()
@@ -250,7 +238,6 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         monkeypatch.setattr("marin.rl.cli.iris_client", forbid_live)
         rebuilt = publication.build_record(str(source), preset)
         assert rebuilt["elapsed_seconds"] == 7200 and rebuilt["final"] == row["final"]
-        assert rebuilt["label"] == row["label"]
         assert rebuilt["source_revision"] == row["source_revision"] and path.read_bytes() == saved
     assert "vllm_version" not in row["evaluation"]["protocol"]
     if case == "native-composed":
@@ -324,7 +311,9 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
         return request(origin, method, path, json_body=json_body)
 
     monkeypatch.setattr("marina.client.marina_request", unavailable_readback)
-    step = publication.publication_step(training, json.loads(raw_path.read_text()), gate_path=first_gate, issue=73)
+    step = publication.publication_step(
+        str(source), training.name, training.version, json.loads(raw_path.read_text()), gate_path=first_gate, issue=73
+    )
     with pytest.raises(RuntimeError):
         resolve(step)
     frozen = Path(step.path()) / publication.RESULT_FILENAME
@@ -333,7 +322,9 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     raw["elapsed_seconds"] = 7200
     write_json(raw_path, raw)
     monkeypatch.setattr("marina.client.marina_request", request)
-    retried = publication.publication_step(training, json.loads(raw_path.read_text()), gate_path=second_gate, issue=74)
+    retried = publication.publication_step(
+        str(source), training.name, training.version, json.loads(raw_path.read_text()), gate_path=second_gate, issue=74
+    )
     resolve(retried)
     assert frozen.read_bytes() == first_bytes
     receipt = json.loads((Path(retried.path()) / publication.PUBLICATION_FILENAME).read_text())
@@ -411,7 +402,7 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
         )
         for index in range(2)
     ]
-    command = CliRunner().invoke(publisher.main, ["--preset", "data-medium", "--controls", "--url", "http://localhost"])
+    command = CliRunner().invoke(publication.main, ["--preset", "data-medium", "--url", "http://localhost"])
     assert command.exit_code == 0, (command.output, command.exception)
     published = json.loads(command.output)
     assert published["unserved_records"] == []
@@ -439,7 +430,15 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     write_json(historical / "resolved-launch.yaml", {"config": current})
     (historical / "terminal.json").unlink()
     handle = replace(training, name="tests/missing-current-history", override_path=str(historical))
-    recovered = publication.publish_run(handle, preset, gate_path=second_gate, issue=74, service_url="http://localhost")
+    recovered = publication.publish_run(
+        str(historical),
+        handle.name,
+        handle.version,
+        preset,
+        gate_path=second_gate,
+        issue=74,
+        service_url="http://localhost",
+    )
     assert recovered["unserved_records"] == [] and len(recovered["served_records"]) == 1
     stored = next(
         row

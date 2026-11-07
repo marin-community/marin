@@ -9,7 +9,7 @@ GLOBAL_STEP_PREFIX = "global_step_"
 LATEST_CHECKPOINT_FILE = "latest_ckpt_global_step.txt"
 HF_EXPORT_REQUEST_FILENAME = "hf_export_request.json"
 BEST_CHECKPOINT_FILENAME = "best_checkpoint.json"
-# Shared with marin.rl.skyrl._TRACKING_FILENAME.
+# Shared with marin.rl.skyrl.TRACKING_FILENAME.
 TRACKING_FILENAME = "tracking.json"
 POLICY_CHECKPOINT_SUBDIRECTORY = "policy"
 

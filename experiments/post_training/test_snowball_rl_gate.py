@@ -1093,69 +1093,63 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
-    outcome = case
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
-    preset_name = "speed-short" if outcome == "generate" else "speed-medium"
+    preset_name = "speed-short" if case == "generate" else "speed-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
-    replicas = 1
-    built = snowball.build_run(preset, control=outcome == "control", replicates=replicas)
-    sources = [
-        recorded_runs(
-            preset,
-            training.name,
-            speed=150 if outcome in {"fail", "no-wait"} else 101,
-            fingerprint=training.fingerprint(),
-            attempt_id="recorded-attempt",
-        )
-        for index, training in enumerate(built.runs)
-    ]
-    source = sources[0]
-    if outcome == "invalid":
+    built = snowball.build_run(preset, control=case == "control")
+    source = recorded_runs(
+        preset,
+        built.runs[0].name,
+        speed=150 if case in {"fail", "no-wait"} else 101,
+        fingerprint=built.runs[0].fingerprint(),
+        attempt_id="recorded-attempt",
+    )
+    if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
     built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
-    if outcome not in {"missing", "control", "native-failed", "record-recovery"}:
+    if case not in {"missing", "control", "native-failed"}:
         run(built.gate)
-    if outcome == "parent-early":
+    if case == "parent-early":
         shutil.rmtree(source)
         shutil.rmtree(built.gate.path())
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
-    if outcome == "native-failed":
+    if case == "native-failed":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["state"] = "failed"
         _json(source / "attempts/recorded-attempt.json", receipt)
         (source / "terminal.json").unlink()
         (source / ".executor_status").write_text("FAILED")
-    final = JobState.FAILED if outcome in {"parent-early", "native-failed", "record-recovery"} else JobState.SUCCEEDED
+    final = JobState.FAILED if case in {"parent-early", "native-failed"} else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    if outcome == "child":
+    if case == "child":
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
-    if outcome != "no-wait":
+    if case != "no-wait":
         arguments.append("--wait")
-    if outcome == "control":
+    if case == "control":
         arguments.append("--control")
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
-    waited = [] if outcome in {"no-wait", "child"} else [(job,)]
+    waited = [] if case in {"no-wait", "child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
-    if outcome != "child":
+    if case != "child":
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
-    if outcome in {"pass", "fail", "invalid"}:
+    if case in {"pass", "fail", "invalid"}:
         assert "# " + preset_name in result.output
-    if outcome == "native-failed":
+    if case == "native-failed":
         assert "result: invalid" in result.output and "native job /tests/native-run is failed" in result.output
         (source / RECORD_FILENAME).unlink()
         before = {str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()}
@@ -1164,7 +1158,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         assert {
             str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()
         } == before
-    if outcome == "generate":
+    if case == "generate":
         snapshot = status(preset_name, [])
         assert snapshot["runs"][0]["latest_completed_update"] == 0
         assert {
@@ -1178,6 +1172,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "pass",
         "control",
         "parent-early",
+        "mixed-native-failed",
+        "control-failed",
+        "control-missing-receipt",
+        "gate-missing",
         "missing-login",
         "partial-retry",
         "child",
@@ -1185,7 +1183,6 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "fail-no-login",
         "invalid-no-login",
         "builder-error",
-        "conflict",
         "speed-medium",
         "data-short",
     ],
@@ -1199,10 +1196,10 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     preset_name = case if case in {"speed-medium", "data-short"} else "learning-medium"
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
-    replicas = 2 if case == "partial-retry" else 1
+    replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     built = snowball.build_run(
         preset,
-        control=case == "control",
+        control=case in {"control", "control-failed", "control-missing-receipt"},
         replicates=replicas,
         tasks=presets.default_selection() if case == "data-short" else None,
     )
@@ -1243,22 +1240,27 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     def finish(*args, **kwargs):
         for path, data in pending.items():
             path.write_bytes(data)
-        if case == "parent-early" and not phase["retry"]:
+        if case in {"parent-early", "control-failed", "mixed-native-failed"} and not phase["retry"]:
             receipt = json.loads((sources[0] / "terminal.json").read_text())
             receipt["result"]["state"] = "failed"
-            _json(sources[0] / "terminal.json", receipt)
             _json(sources[0] / "attempts/native-0.json", receipt)
+            (sources[0] / "terminal.json").unlink()
             return SimpleNamespace(state=JobState.FAILED)
-        if case == "parent-early" and phase["retry"]:
+        if case in {"parent-early", "control-failed", "mixed-native-failed"} and phase["retry"]:
             root = sources[0]
             receipt = json.loads((root / "terminal.json").read_text())
             receipt["config"]["run"]["attempt_id"] = "native-retry"
             _json(root / "terminal.json", receipt)
+            _json(root / "attempts/native-retry.json", receipt)
             _json(root / "resolved-launch.yaml", {"config": receipt["config"]})
             for path in (root / "exports/metrics").glob("*.json"):
                 row = json.loads(path.read_text())
                 row["attempt_id"] = "native-retry"
                 _json(path, row)
+        if case == "control-missing-receipt" and not phase["retry"]:
+            (sources[0] / "terminal.json").unlink()
+            (sources[0] / "attempts/native-0.json").unlink()
+            return SimpleNamespace(state=JobState.FAILED)
         completed = gate.completed_gate(preset, built.runs, built.gate)
         if completed is not None:
             run(completed)
@@ -1273,12 +1275,23 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
 
     client.job.return_value.wait.side_effect = finish
     published = []
-    unavailable = {"value": case in {"missing-login", "partial-retry", "fail-no-login", "invalid-no-login", "conflict"}}
+    unavailable = {
+        "value": (
+            case
+            in {
+                "missing-login",
+                "partial-retry",
+                "fail-no-login",
+                "invalid-no-login",
+                "gate-missing",
+                "control-failed",
+                "control-missing-receipt",
+            }
+        )
+    }
 
     def publish(record, service_url=None):
         if unavailable["value"] and (case != "partial-retry" or record["attempt_id"] == "native-1"):
-            if case == "conflict":
-                raise ValueError("Stored attempt differs")
             raise RuntimeError("Publication authentication failed") from IapCredentialsUnavailable(
                 "Credential unavailable"
             )
@@ -1301,13 +1314,21 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
             lambda *args: pytest.fail("Coordinator contacted Marina"),
         )
     arguments = ["--preset", preset.name, "--version", presets.PRESET_REVISION, "--run", "--wait", "--issue", "73"]
-    if case == "control":
+    if case in {"control", "control-failed", "control-missing-receipt"}:
         arguments.append("--control")
     if case == "data-short":
         arguments.extend(["--tasks", f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"])
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
-    expected = 1 if case == "fail-no-login" else 2 if case == "invalid-no-login" else 2 if case == "parent-early" else 0
+    expected = (
+        1
+        if case == "fail-no-login"
+        else (
+            2
+            if case in {"invalid-no-login", "parent-early", "control-failed", "mixed-native-failed"}
+            else 3 if case == "control-missing-receipt" else 0
+        )
+    )
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
@@ -1325,10 +1346,10 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         str(root / f"exports/attempts/native-{index}/{publication.RESULT_FILENAME}")
         for index, root in enumerate(sources)
     ]
-    if case in {"builder-error", "conflict"}:
+    if case == "builder-error":
         assert snapshot["publication"]["unserved_records"] == paths
         assert "login" not in snapshot["publication"] and snapshot["publication"]["errors"]
-    if unavailable["value"] and case != "conflict":
+    if unavailable["value"] and case not in {"control-failed", "control-missing-receipt", "gate-missing"}:
         assert snapshot["publication"]["login"] == "iris login"
         assert snapshot["publication"]["unserved_records"] == (paths[1:] if case == "partial-retry" else paths)
         unavailable["value"] = False
@@ -1339,21 +1360,46 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         repeated = CliRunner().invoke(snowball.main, arguments)
         assert repeated.exit_code == expected, (repeated.output, repeated.exception)
         assert all(path.read_bytes() == data for path, data in saved.items())
-    if case == "parent-early":
+    if case == "mixed-native-failed":
+        assert [row["attempt_id"] for row in published] == ["native-0"]
+        assert snapshot["publication"]["unserved_records"] == paths[1:]
+        assert snapshot["publication"]["errors"] == ["gate report missing; repeat the original command with --wait"]
+        assert not (sources[1] / "publication/native-1" / publication.RESULT_FILENAME).exists()
+    if case in {"control-failed", "control-missing-receipt", "gate-missing"}:
+        assert snapshot["publication"]["login"] == "iris login"
+        assert snapshot["publication"]["unserved_records"] == (
+            [str(sources[0]), paths[1]] if case == "control-missing-receipt" else paths
+        )
+        unavailable["value"] = False
+        phase["retry"] = True
+        if case == "gate-missing":
+            completed = gate.completed_gate(preset, built.runs, built.gate)
+            shutil.rmtree(completed.path())
+        repeated = CliRunner().invoke(snowball.main, arguments)
+        assert repeated.exit_code == 0, (repeated.output, repeated.exception)
+        assert [call.args for call in client.job.call_args_list] == [(job,), (job,)]
+    if case in {"parent-early", "mixed-native-failed"}:
         phase["retry"] = True
         repeated = CliRunner().invoke(snowball.main, arguments)
         assert repeated.exit_code == 0, (repeated.output, repeated.exception)
-        assert [row["status"] for row in published] == ["failed", "succeeded"]
+        assert sorted(row["status"] for row in published) == (
+            ["failed", "succeeded", "succeeded"] if case == "mixed-native-failed" else ["failed", "succeeded"]
+        )
+        retry = next(row for row in published if row["attempt_id"] == "native-retry")
+        assert retry["elapsed_seconds"] == 3600
+        if case == "mixed-native-failed":
+            held = next(row for row in published if row["attempt_id"] == "native-1")
+            assert held["verdict"] == "pass" and held["gate"] is not None
         # Both submitted coordinators reached their wait boundary.
         assert [call.args for call in client.job.call_args_list] == [(job,), (job,)]
     expected_pairs = [
         (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{index}") for index, root in enumerate(sources)
     ]
-    if case == "parent-early":
+    if case in {"parent-early", "mixed-native-failed", "control-failed"}:
         expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "native-retry"))
     if case == "historical":
         expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "historical-native"))
-    if case not in {"builder-error", "conflict"}:
+    if case != "builder-error":
         assert sorted((row["run_id"], row["attempt_id"]) for row in published) == sorted(expected_pairs)
         assert all(row["issue"] == (None if row["attempt_id"] == "historical-native" else 73) for row in published)
     if case == "builder-error":

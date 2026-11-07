@@ -436,6 +436,9 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             },
         )
         write_json(root / "terminal.json", {"config": launch, "result": result})
+        write_json(
+            Path(launch["artifacts"]["attempts_root"]) / f"{attempt_id}.json", {"config": launch, "result": result}
+        )
         write_json(root / "resolved-launch.yaml", {"config": launch})
         for mutation in mutations:
             mutation(root)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish a persisted Snowball loop summary without replacing historical attempts."""
+"""Publish an immutable RL progress record and verify its served identity."""
 
 import json
 import tomllib
@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import click
 from marin.rl.rl_progress import RunSummary
 
 APPLET_ID = tomllib.loads(
@@ -28,8 +27,8 @@ def publish_result(record: dict[str, Any], service_url: str | None = None) -> di
     service_url = service_url or client.DEFAULT_MARINA_URL
     summary = RunSummary.model_validate(record)
     encoded = json.dumps(record, allow_nan=False)
-    query = client.applet_query(service_url, APPLET_ID)
     details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
+    query = client.applet_query(service_url, APPLET_ID, authenticated_url=details["authenticated_url"])
     location = urlparse(details["authenticated_url"])
     origin = f"{location.scheme}://{location.netloc}" if location.netloc else service_url.rstrip("/")
     identity = {"run_id": summary.run_id, "attempt_id": summary.attempt_id}
@@ -50,26 +49,3 @@ def publish_result(record: dict[str, Any], service_url: str | None = None) -> di
         "verified": True,
         "url": details["authenticated_url"],
     }
-
-
-@click.command()
-@click.option("--preset", "preset_name", required=True, help="Preset whose pinned controls to publish.")
-@click.option("--controls", is_flag=True, help="Publish every pinned control from its stored native outputs.")
-@click.option("--url", help="Marina origin (defaults to the Marina service).")
-def main(preset_name: str, controls: bool, url: str | None) -> None:
-    """Publish a preset's pinned controls from their stored native outputs."""
-    if not controls:
-        raise click.UsageError("Use --preset NAME --controls")
-    from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415
-
-    from experiments.post_training import snowball_rl_publication  # noqa: PLC0415
-
-    configure_coreweave_s3()
-    result = snowball_rl_publication.publish_controls(preset_name, service_url=url)
-    click.echo(json.dumps(result))
-    if result["unserved_records"]:
-        raise click.exceptions.Exit(1)
-
-
-if __name__ == "__main__":
-    main()

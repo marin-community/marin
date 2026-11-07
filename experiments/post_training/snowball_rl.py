@@ -741,17 +741,13 @@ def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | N
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     gate_path = completed_gate.path(prefix) if completed_gate is not None else None
-    result = {"served_records": [], "unserved_records": [], "errors": []}
-    for training in run.runs:
-        published = snowball_rl_publication.publish_run(
-            replace(training, override_path=training.path(prefix)), preset, gate_path=gate_path, issue=issue
-        )
-        for key, value in published.items():
-            if isinstance(value, list):
-                result[key].extend(value)
-            else:
-                result[key] = value
-    return result
+    outputs = [
+        snowball_rl_publication.RunOutput(training.path(prefix), training.name, training.version)
+        for training in run.runs
+    ]
+    return snowball_rl_publication.publish_runs(
+        outputs, preset, gate_path=gate_path, gate_required=completed_gate is not None, issue=issue
+    )
 
 
 def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
