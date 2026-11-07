@@ -9,7 +9,7 @@ defects, one place where its task text allows two verdicts (an ambiguity), and
 one behavior that looks wrong but follows the task text (a trap), with 36 to 48
 stored responses or trials that stand in for a model panel. The cases, their
 answer keys and the runs are in
-[`XiaoyuanWang111/audit-grader-suite` at `31a74cd`](https://github.com/XiaoyuanWang111/audit-grader-suite/tree/31a74cddc07bea473b0b1e472dc20a81cff44001).
+[`XiaoyuanWang111/audit-grader-suite` at `65da6ba`](https://github.com/XiaoyuanWang111/audit-grader-suite/tree/65da6bac7dfcb57eb57f38d26148258826bee2cd).
 
 Each run was a fresh agent session. Its working directory held SKILL.md,
 `references/ifbench.md`, `references/reviewer-prompt.md` and one case
