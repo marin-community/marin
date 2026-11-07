@@ -38,7 +38,7 @@ def test_grader_diagnostics_measure_only_actual_command(monkeypatch, kind):
         result = asyncio.run(grading._script_reward(machine, grader, 600, None))
     else:
         result = asyncio.run(grading._verifyit_reward(machine, ExactSpec(expected=("yes",)), "/workspace", 600))
-    assert result.failure is GradingFailure.TIMEOUT
+    assert result.failure is GradingFailure.GRADER_TIMEOUT
     assert result.diagnostics["grader_elapsed_seconds"] == 63.0
     assert result.diagnostics["grader_timeout_seconds"] == 600
     assert result.diagnostics["exit_code"] == 124

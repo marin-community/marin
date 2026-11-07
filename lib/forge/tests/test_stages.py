@@ -19,6 +19,7 @@ from taskcompendium.runtime.resources import inline_resource
 from forge.arms import decided, validated
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
+from forge.effects.events import Resolved
 from forge.effects.issues import Hold, Restart
 from forge.effects.log import EventLog
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
@@ -65,6 +66,7 @@ from forge.resources.inference import FakeInference
 from forge.resources.rollouts import RolloutResource
 from forge.resources.web import FakeWeb
 from forge.stages.author import author
+from forge.stages.classify import grade_cause, replayable_grade
 from forge.stages.exits import Decided, Triaged, TriageRejected, Validated
 from forge.stages.review import review
 from forge.stages.rules import default_review
@@ -478,7 +480,7 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
     "status,failure,cause",
     [
         (Outcome.INFRA_ERROR, GradingFailure.MISSING_REWARD, Cause.GRADER_MISSING_REWARD),
-        (Outcome.INFRA_ERROR, GradingFailure.TIMEOUT, Cause.GRADER_TIMEOUT),
+        (Outcome.INFRA_ERROR, GradingFailure.GRADER_TIMEOUT, Cause.GRADER_TIMEOUT),
         (Outcome.UNAVAILABLE, None, Cause.NO_GRADE),
         (Outcome.INFRA_ERROR, None, Cause.GRADER_INFRA),
     ],
@@ -616,3 +618,31 @@ async def test_custom_review_owns_hardening_policy(workpiece: Workpiece) -> None
     ctx = Context(log=EventLog())
     assert (await review(ctx, current, setup, resources(ctx))).decision is expected
     await ctx.drain()
+
+
+@pytest.mark.parametrize(
+    "failure,diagnostics,cause",
+    [
+        (GradingFailure.GRADER_EXIT, {"exit_code": 1}, Cause.GRADER_EXECUTION),
+        (GradingFailure.EXECUTION, {"exit_code": 1, "grader_elapsed_seconds": 1.6779}, Cause.GRADER_INFRA),
+        (GradingFailure.EXECUTION, {"exit_code": 1}, Cause.GRADER_INFRA),
+        (GradingFailure.EXECUTION, {"exit_code": None, "grader_elapsed_seconds": 1}, Cause.GRADER_INFRA),
+        (GradingFailure.EXECUTION, {"exit_code": 137, "grader_elapsed_seconds": 1}, Cause.GRADER_INFRA),
+        (
+            GradingFailure.EXECUTION,
+            {"exit_code": 1, "grader_elapsed_seconds": 1, "exit_reason": "exited"},
+            Cause.GRADER_INFRA,
+        ),
+        (GradingFailure.TIMEOUT, {"exit_code": 1, "grader_elapsed_seconds": 1}, Cause.GRADER_INFRA),
+        (GradingFailure.GRADER_TIMEOUT, {"exit_code": None}, Cause.GRADER_TIMEOUT),
+    ],
+)
+def test_grader_process_failure_is_distinct_from_infrastructure(
+    failure: GradingFailure, diagnostics: dict[str, object], cause: Cause
+) -> None:
+    grade = GradeResult(Outcome.INFRA_ERROR, None, "OverflowError", diagnostics=diagnostics, failure=failure)
+    assert grade_cause(grade) is cause
+    event = GradeCandidate(rollout_spec(arithmetic_task()), Candidate("12"))
+    assert replayable_grade(Resolved(event, (), grade, False)) is (
+        cause in (Cause.GRADER_EXECUTION, Cause.GRADER_TIMEOUT)
+    )

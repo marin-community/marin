@@ -456,8 +456,11 @@ DETAIL = {"cases": [{"passed": True}]}
     "reward,phase,exit_code,expected",
     [
         (ExitCodeReward(), "candidate", None, (Outcome.GRADED, 0.0, None)),
-        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
-        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "candidate", 1, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "candidate", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
+        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
         (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
         (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
     ],

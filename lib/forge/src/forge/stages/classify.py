@@ -52,11 +52,13 @@ def grade_cause(grade: GradeResult, task: TaskSpec | None = None) -> Cause | Non
     if grade.status is Outcome.UNAVAILABLE:
         return Cause.VERIFIER_SKIPPED if task is not None and isinstance(task.grader, NoGrader) else Cause.NO_GRADE
     return {
-        GradingFailure.TIMEOUT: Cause.GRADER_TIMEOUT,
+        GradingFailure.GRADER_TIMEOUT: Cause.GRADER_TIMEOUT,
+        GradingFailure.TIMEOUT: Cause.GRADER_INFRA,
         GradingFailure.MISSING_REWARD: Cause.GRADER_MISSING_REWARD,
         GradingFailure.EMPTY_REWARD: Cause.GRADER_EMPTY_REWARD,
         GradingFailure.INVALID_REWARD: Cause.GRADER_INVALID_REWARD,
-        GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
+        GradingFailure.GRADER_EXIT: Cause.GRADER_EXECUTION,
+        GradingFailure.EXECUTION: Cause.GRADER_INFRA,
         None: Cause.GRADER_INFRA,
     }[grade.failure]
 

@@ -264,6 +264,13 @@ def _diagnostics(result: Result) -> dict[str, Any]:
     }
 
 
+def _grader_failure(result: Result) -> GradingFailure:
+    """Only an ordinary nonzero grader exit establishes an authored process failure."""
+    if result.reason is ExitReason.EXITED and result.exit_code is not None and 0 < result.exit_code < 128:
+        return GradingFailure.GRADER_EXIT
+    return GradingFailure.EXECUTION
+
+
 def _infra_error(message: str, failure: GradingFailure, diagnostics: dict[str, Any]) -> GradeResult:
     return GradeResult(Outcome.INFRA_ERROR, None, message, diagnostics=diagnostics, failure=failure)
 
@@ -346,16 +353,16 @@ async def _script_reward(
         passed = result.reason == ExitReason.EXITED and result.exit_code == 0
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Grader command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Grader command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if isinstance(grader.reward, FileReward):
         if result.exit_code != 0 and any(file.format is RewardFileFormat.VERDICT_JSON for file in grader.reward.files):
             return _infra_error(
-                f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+                f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
             )
         return await _file_reward(machine, grader.reward, timeout, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
-            f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+            f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
         )
     lines = [line.strip() for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
     try:
@@ -393,11 +400,11 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
         "grader_timeout_seconds": timeout,
     }
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Verifier command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Verifier command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
             f"Verifier command failed (exit_code={result.exit_code}): {diagnostics['stderr']}",
-            GradingFailure.EXECUTION,
+            _grader_failure(result),
             diagnostics,
         )
     with TemporaryDirectory(prefix="taskcompendium-verdict-") as directory:

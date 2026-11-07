@@ -109,7 +109,7 @@ class GradingResource:
                 result = await engine.run_task(spec, model, run_id=f"{event_digest(event)}:grade:{attempt}")
             except RolloutInterrupted as error:
                 raise interruption(error) from error
-            if result.grade.failure != GradingFailure.TIMEOUT or attempt == 1:
+            if result.grade.failure not in (GradingFailure.TIMEOUT, GradingFailure.GRADER_TIMEOUT) or attempt == 1:
                 if event.fresh_verifier:
                     return replace(result.grade, diagnostics={**result.grade.diagnostics, "verifier_fresh": True})
                 return result.grade
