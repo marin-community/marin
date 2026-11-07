@@ -226,7 +226,7 @@ def _status_failure(response: httpx.Response) -> _AttemptFailed:
 def request_kwargs(
     model: str,
     messages: Sequence[Message],
-    max_tokens: int,
+    max_tokens: int | None,
     policy: LLMPolicy,
     request_fields: Mapping[str, object],
 ) -> dict[str, Any]:
@@ -235,12 +235,16 @@ def request_kwargs(
     Fields listed in ``SDK_REQUEST_FIELDS`` go in as keyword arguments. The rest, vLLM extras such as
     ``continue_final_message`` among them, go in ``extra_body`` for the SDK to merge into the body.
     """
+    if max_tokens is None:
+        request_fields = {
+            key: value for key, value in request_fields.items() if key not in ("max_tokens", "max_completion_tokens")
+        }
     sdk_fields = {key: value for key, value in request_fields.items() if key in SDK_REQUEST_FIELDS}
     extra_fields = {key: value for key, value in request_fields.items() if key not in SDK_REQUEST_FIELDS}
     return {
         "model": model,
         "messages": list(messages),
-        "max_tokens": max_tokens,
+        **({"max_tokens": max_tokens} if max_tokens is not None else {}),
         **policy.sampling_params(),
         "stream": True,
         "stream_options": {"include_usage": True},
@@ -262,6 +266,9 @@ class _LoopPool:
 class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
 
+    ``limit_output=False`` leaves output capacity to the endpoint, omits both token-limit
+    request fields, and disables the client-side tool-call truncation heuristic.
+
     The client opens one connection pool in each event loop that uses it, and a pickled client holds only
     ``source`` and ``provider``.
 
@@ -272,8 +279,9 @@ class GlmClient:
             pool size and the structured-call repair budget.
     """
 
-    def __init__(self, source: EndpointSource, provider: LLMProviderConfig):
+    def __init__(self, source: EndpointSource, provider: LLMProviderConfig, limit_output: bool = True):
         self._source = source
+        self._limit_output = limit_output
         self._provider = provider
         self._backoff = ExponentialBackoff(
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
@@ -283,8 +291,8 @@ class GlmClient:
         self._retired: dict[asyncio.AbstractEventLoop, list[_LoopPool]] = {}
         self._pool_reset_at = -POOL_RESET_INTERVAL
 
-    def __reduce__(self) -> tuple[type[Self], tuple[EndpointSource, LLMProviderConfig]]:
-        return type(self), (self._source, self._provider)
+    def __reduce__(self) -> tuple[type[Self], tuple[EndpointSource, LLMProviderConfig, bool]]:
+        return type(self), (self._source, self._provider, self._limit_output)
 
     @property
     def model(self) -> str:
@@ -488,13 +496,18 @@ class GlmClient:
         attempts: list[Attempt],
     ) -> _Segment:
         """Stream a chat-completions request through ``_retrying``, appending each attempt to ``attempts``."""
-        kwargs = request_kwargs(self._provider.model, messages, policy.max_tokens, policy, request_fields)
+        limit = policy.max_tokens if self._limit_output else None
+        kwargs = request_kwargs(self._provider.model, messages, limit, policy, request_fields)
 
         async def send(events: list[str]) -> _Segment:
             return await self._stream(kwargs, events)
 
-        result = await self._retrying(send, segment, policy.max_tokens, attempts)
-        if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= policy.max_tokens:
+        result = await self._retrying(send, segment, limit or 0, attempts)
+        if (
+            limit is not None
+            and result.finish_reason is FinishReason.TOOL_CALLS
+            and result.usage.completion_tokens >= limit
+        ):
             return replace(result, finish_reason=FinishReason.LENGTH)
         return result
 

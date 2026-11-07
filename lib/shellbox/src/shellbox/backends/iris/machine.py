@@ -36,8 +36,10 @@ from shellbox.machine import (
     Backend,
     Command,
     CommandSemantics,
+    ExecSetupFailed,
     ExecutionRequirements,
     ExitReason,
+    MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
@@ -87,6 +89,46 @@ class ExecOutput:
     stderr: str
 
 
+RESET = """
+import json, os, shutil, signal, sys
+from pathlib import Path
+processes = {}
+for path in Path('/proc').glob('[0-9]*/stat'):
+    try:
+        fields = path.read_text().rsplit(')', 1)[1].split()
+        processes[path.parent.name] = (fields[1], fields[19])
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+baseline = json.loads(sys.argv[1]) if sys.argv[1] else [processes, os.listdir('/')]
+keep, pid = set(), str(os.getpid())
+while pid in processes and pid not in keep:
+    keep.add(pid)
+    pid = processes[pid][0]
+for pid, (_, started) in processes.items():
+    if pid not in keep and baseline[0].get(pid, [None, None])[1] != started:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+task_roots = {'/app', '/workspace', '/tests', '/tmp', sys.argv[2]}
+roots = set(task_roots)
+roots.update('/' + name for name in set(os.listdir('/')) - set(baseline[1]))
+for root in roots:
+    path = Path(root)
+    entries = list(path.iterdir()) if path.is_dir() and not path.is_symlink() else [path]
+    for entry in entries:
+        if root == '/tmp' and entry.name.startswith('.shellbox'):
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink(missing_ok=True)
+    if root in task_roots:
+        path.mkdir(parents=True, exist_ok=True)
+print(json.dumps(baseline))
+"""
+
+
 class IrisMachine:
     """One Iris task container; file transfer uses bounded base64 exec calls."""
 
@@ -105,7 +147,9 @@ class IrisMachine:
         self.job = job
         self.task = task
         self.spec = spec
+        self._reset_baseline = ""
         self._closed = False
+        self._timeout_available = False
         self._container_user: tuple[str, str] | None = None
         # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
         # check-then-send; it can only wait for attempts that already passed the check.
@@ -113,17 +157,17 @@ class IrisMachine:
         self._in_flight: dict[str, list[str]] = {}
 
     def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
-        seconds = math.ceil(timeout) if timeout is not None else -1
+        seconds = math.ceil(timeout) if timeout is not None else DEFAULT_JOB_TTL
         request = controller_pb2.Controller.ExecInContainerRequest(
             task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
         )
-        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
+        timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000
 
         def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
             # A timed-out ``run`` closes the machine while this thread may still be retrying.
             with self._admission:
                 if self._closed:
-                    raise RuntimeError("Machine is closed")
+                    raise MachineTerminated("Machine is closed")
                 attempt_id = uuid.uuid4().hex
                 self._in_flight[attempt_id] = argv
             try:
@@ -148,6 +192,23 @@ class IrisMachine:
         if response.error:
             error = RuntimeError(f"Iris exec failed: {response.error}")
             self._raise_if_terminated(error)
+            if any(
+                marker in response.error
+                for marker in (
+                    "Non-integer exec status:",
+                    "error executing command in container",
+                    "cannot exec in a",
+                    "not running",
+                    "container not found",
+                )
+            ):
+                raise MachineTerminated(str(error)) from error
+            # Older controllers flatten Kubernetes transport exceptions into this wire string.
+            if (
+                response.error.startswith("Websocket setup failed (status 0):")
+                or response.error == "'NoneType' object has no attribute 'decode'"
+            ):
+                raise ExecSetupFailed(str(error)) from error
             raise error
         return ExecOutput(exit_code=response.exit_code, stdout=response.stdout, stderr=response.stderr)
 
@@ -155,9 +216,12 @@ class IrisMachine:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
         status = self.task.status()
         if status.state != TaskState.RUNNING:
-            raise MachineTerminated(
-                f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
-            ) from cause
+            detail = str(status.error_message or cause)
+            kind = MachineTerminated
+            if "oomkilled" in detail.lower():
+                kind = MachineResourceExhausted
+                detail += f" (memory request: {self.spec.memory_mb or DEFAULT_MEMORY_MB} MiB)"
+            raise kind(f"Iris sandbox task {self.task.task_id} is {status.state}: {detail}") from cause
 
     async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
         return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
@@ -175,16 +239,41 @@ class IrisMachine:
             encoded = base64.b64encode(data[offset : offset + TRANSFER_CHUNK_BYTES]).decode("ascii")
             await self._checked(f"printf '%s' {encoded} | base64 -d >> {quoted}")
 
-    async def _download_bytes(self, source: str, limit: int | None = None) -> tuple[bytes, bool]:
+    async def _download_bytes(
+        self, source: str, limit: int | None = None, *, offset: int = 0, known_file: bool = False
+    ) -> tuple[bytes, bool]:
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("File offset and limit must be nonnegative")
         quoted = shlex.quote(source)
-        size = int((await self._checked(f"wc -c < {quoted}")).strip())
-        count = size if limit is None else min(size, limit)
+        inspect = f"wc -c < {quoted}"
+        if not known_file:
+            inspect = f"if test -d {quoted}; then exit 2; elif test -f {quoted}; then {inspect}; else exit 1; fi"
+        probe = await self._script(inspect)
+        if probe.exit_code == 2:
+            raise IsADirectoryError(source)
+        if probe.exit_code == 1:
+            raise FileNotFoundError(source)
+        if probe.exit_code:
+            raise OSError(f"Cannot inspect {source}: {probe.stderr or probe.stdout}")
+        size = int(probe.stdout.strip())
+        remaining = max(0, size - offset)
+        count = remaining if limit is None else min(remaining, limit)
         chunks = []
-        for offset in range(0, count, TRANSFER_CHUNK_BYTES):
-            length = min(TRANSFER_CHUNK_BYTES, count - offset)
-            encoded = await self._checked(f"tail -c +{offset + 1} {quoted} | head -c {length} | base64")
+        for position in range(offset, offset + count, TRANSFER_CHUNK_BYTES):
+            length = min(TRANSFER_CHUNK_BYTES, offset + count - position)
+            encoded = await self._checked(f"tail -c +{position + 1} {quoted} | head -c {length} | base64")
             chunks.append(base64.b64decode(encoded))
-        return b"".join(chunks), size > count
+        return b"".join(chunks), remaining > count
+
+    async def read_file(self, path: str, *, offset: int = 0, limit: int | None = None) -> bytes:
+        """Read only the requested byte range, rejecting directories before transfer."""
+        try:
+            data, _ = await self._download_bytes(path, limit, offset=offset)
+        except RuntimeError as error:
+            if str(error).startswith("Iris command failed ("):
+                raise OSError(str(error)) from error
+            raise
+        return data
 
     async def _user_identity(self) -> tuple[str, str]:
         """The ``(uid, name)`` the container runs commands as; Iris exec cannot switch users."""
@@ -195,7 +284,7 @@ class IrisMachine:
 
     async def run(self, command: Command) -> Result:
         if self._closed:
-            raise RuntimeError("Machine is closed")
+            raise MachineTerminated("Machine is closed")
         if command.user is not None and command.user not in await self._user_identity():
             uid, name = await self._user_identity()
             raise UnsupportedMachineSpec(
@@ -214,16 +303,38 @@ class IrisMachine:
         )
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in {**self.spec.env, **command.env}):
             raise ValueError("Environment variable names must be shell identifiers")
+        timed_command = command.timeout is not None and command.timeout > 0 and self._timeout_available
+        argv = shlex.join(command.argv)
+        if timed_command:
+            argv = f"timeout -k 5 {command.timeout}s sh -c {shlex.quote(argv)}"
         script = (
             f"{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\n"
-            f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+            f"{argv} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
-            response = await asyncio.wait_for(self._script(script), timeout=command.timeout)
-            stdout, stdout_truncated = await self._download_bytes(stdout_path, command.output_limit_bytes)
-            stderr, stderr_truncated = await self._download_bytes(stderr_path, command.output_limit_bytes)
-            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            started = time.monotonic()
+            backstop = command.timeout if command.timeout is not None else DEFAULT_JOB_TTL
+            if timed_command:
+                assert command.timeout is not None
+                backstop = command.timeout + RPC_PADDING_SECONDS
+            rpc_timeout = (command.timeout if command.timeout is not None else DEFAULT_JOB_TTL) + RPC_PADDING_SECONDS
+            response = await asyncio.wait_for(self._script(script, timeout=rpc_timeout), timeout=backstop)
+            elapsed = time.monotonic() - started
+            stdout, stdout_truncated = await self._download_bytes(
+                stdout_path, command.output_limit_bytes, known_file=True
+            )
+            stderr, stderr_truncated = await self._download_bytes(
+                stderr_path, command.output_limit_bytes, known_file=True
+            )
+            # GNU timeout returns 137 if its kill-after escalation was needed.
+            expired = timed_command and command.timeout is not None and elapsed >= command.timeout
+            if timed_command and response.exit_code in (124, 137) and not expired:
+                raise MachineTerminated(
+                    f"Iris command cut after {elapsed}s before {command.timeout}s budget: exit={response.exit_code}"
+                )
+            reason = ExitReason.TIMED_OUT if expired and response.exit_code in (124, 137) else ExitReason.EXITED
+            return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
         except TimeoutError:
             await self.close()
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
@@ -235,6 +346,21 @@ class IrisMachine:
                 await self._script(
                     f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
                 )
+
+    async def reset(self) -> None:
+        """Exclusively clear task roots and non-runtime processes; preserve mount points."""
+        if self.spec.workdir == "/":
+            raise MachineTerminated("Cannot reset the filesystem root as a task workdir")
+        try:
+            result = await self.run(
+                Command(("python3", "-c", RESET, self._reset_baseline, self.spec.workdir), cwd="/", timeout=30)
+            )
+            if result.exit_code != 0 or result.reason != ExitReason.EXITED:
+                raise MachineTerminated(f"Iris reset failed: {result.stderr.decode(errors='replace')}")
+            self._reset_baseline = result.stdout.decode().strip()
+        except BaseException:
+            await self.close()
+            raise
 
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():
@@ -253,12 +379,13 @@ class IrisMachine:
         await self._upload_bytes(source.read_bytes(), target)
 
     async def download(self, source: str, target: Path) -> None:
-        probe = await self._script(f"test -d {shlex.quote(source)}")
-        if probe.exit_code == 0:
+        try:
+            data, _ = await self._download_bytes(source)
+        except IsADirectoryError:
             remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
             await self._checked(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} .")
             try:
-                data, _ = await self._download_bytes(remote_archive)
+                data, _ = await self._download_bytes(remote_archive, known_file=True)
                 target.mkdir(parents=True, exist_ok=True)
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
                     Path(archive.name).write_bytes(data)
@@ -267,7 +394,6 @@ class IrisMachine:
             finally:
                 await self._script(f"rm -f {shlex.quote(remote_archive)}")
             return
-        data, _ = await self._download_bytes(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
@@ -358,6 +484,8 @@ class IrisMachineFactory:
                         created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                        probe = await machine._script("command -v timeout", timeout=RPC_PADDING_SECONDS)
+                        machine._timeout_available = probe.exit_code == 0
                         return machine
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")

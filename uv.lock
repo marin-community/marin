@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu' and extra == 'group-10-marin-fray-fray-tpu-test' and extra == 'group-10-marin-iris-dev' and extra == 'group-10-marin-iris-test'",
@@ -708,6 +708,7 @@ members = [
     "marin-dupekit",
     "marin-finelog",
     "marin-finestore",
+    "marin-forge",
     "marin-fray",
     "marin-haliax",
     "marin-iac",
@@ -6775,6 +6776,53 @@ dev = [
 ]
 test = [
     { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[[package]]
+name = "marin-forge"
+version = "0.1.0"
+source = { editable = "lib/forge" }
+dependencies = [
+    { name = "httpx" },
+    { name = "marin-rigging" },
+    { name = "marin-rolloutengine" },
+    { name = "marin-shellbox", extra = ["shellsim"] },
+    { name = "marin-taskcompendium" },
+    { name = "marin-taskforge" },
+    { name = "marin-verifyit" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pyrefly" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
+    { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "marin-taskforge", editable = "lib/taskforge" },
+    { name = "marin-verifyit", editable = "lib/verifyit" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "typing-extensions", specifier = ">=4.10" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pyrefly", specifier = ">=1.0.0,<1.1.0" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]

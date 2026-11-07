@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tarfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -332,10 +333,15 @@ async def _script_reward(
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
         for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
             await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+    started = time.monotonic()
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
-    diagnostics = _diagnostics(result)
+    diagnostics = {
+        **_diagnostics(result),
+        "grader_elapsed_seconds": time.monotonic() - started,
+        "grader_timeout_seconds": timeout,
+    }
     if isinstance(grader.reward, ExitCodeReward):
         passed = result.reason == ExitReason.EXITED and result.exit_code == 0
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
@@ -364,6 +370,7 @@ async def _script_reward(
 
 
 async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float) -> GradeResult:
+    started = time.monotonic()
     result = await machine.run(
         Command(
             (
@@ -380,7 +387,11 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
             output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES,
         )
     )
-    diagnostics = _diagnostics(result)
+    diagnostics = {
+        **_diagnostics(result),
+        "grader_elapsed_seconds": time.monotonic() - started,
+        "grader_timeout_seconds": timeout,
+    }
     if result.reason == ExitReason.TIMED_OUT:
         return _infra_error("Verifier command timed out", GradingFailure.TIMEOUT, diagnostics)
     if result.exit_code != 0:

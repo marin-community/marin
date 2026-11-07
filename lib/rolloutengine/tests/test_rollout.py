@@ -3812,3 +3812,44 @@ async def test_context_rejection_allows_a_shorter_request_without_ending_the_att
     assert len(replay.requests) == 2
     assert len(result.rollout.conversations) == (2 if compact else 1)
     assert all("Oversized tool output" not in str(record.messages) for record in result.rollout.conversations)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_supplied_verifier_remains_caller_owned(fails):
+    task = file_task()
+    model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}])
+    factory = RecordingShellSimFactory()
+    borrowed = []
+
+    async def acquire(prepared):
+        assert prepared.workdir == "/workspace"
+        assert prepared.env["TASKCOMPENDIUM_STOP_REASON"] == "stop"
+        machine = await FixtureImageFactory().create(prepared)
+        borrowed.append(machine)
+        if fails:
+
+            async def fail(command):
+                raise RuntimeError("borrowed verifier interrupted")
+
+            machine.run = fail
+        return machine
+
+    runner = engine(model, {"local": factory}).engine
+    spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    try:
+        if fails:
+            with pytest.raises(GradedRolloutInterrupted):
+                await runner.run_task(spec, model.complete, verifier=acquire)
+        else:
+            assert (await runner.run_task(spec, model.complete, verifier=acquire)).grade.reward == 1
+        assert len(factory.machines) == len(borrowed) == 1
+        with pytest.raises(RuntimeError):
+            await factory.machines[0].run(Command(("true",)))
+        # Unlike the task machine, the supplied verifier still accepts file operations.
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "proof"
+            source.write_text("caller owns cleanup")
+            await borrowed[0].upload(source, "/tmp/proof")
+    finally:
+        for machine in borrowed:
+            await machine.close()
