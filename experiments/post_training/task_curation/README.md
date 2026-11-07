@@ -10,13 +10,22 @@ reviewed SAMPLE/FULL campaigns and artifact outputs.
 Pass `--selection RECIPE.json` to a FULL campaign to append a
 `rl-data/task-selection/<name>/<version>` artifact after source admission.
 The recipe names the source IDs, assigns them to selection families, sets
-family quotas and pins the complete heldout source in retained storage.
+family quotas and pins the complete heldout inputs in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
 See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
 selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
+
+## Test panels
+
+Use `--corpus <converted-corpus.json> --test-panel
+experiments/post_training/task_curation/recipes/snowball-test-panel.json` to
+build the full panel, fast subset and manifest. Named parts select catalog
+sources; training files and the development panel are exclusions. The
+[panel reference](../../../docs/references/task-curation.md#independent-test-panels)
+explains measured task digests, recipe edits and qualification.
 
 ## Local conversion loop
 
