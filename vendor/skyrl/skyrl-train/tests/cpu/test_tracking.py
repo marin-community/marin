@@ -17,11 +17,12 @@ def test_tracker_keeps_failed_attempt_identity_and_wandb_link_on_retry(tmp_path,
 
     def init(**kwargs):
         launches.append(kwargs)
-        if kwargs["id"] == "failed-attempt":
+        if len(launches) == 1:
             raise ConnectionError("W&B initialization failed")
+        identifier = kwargs.get("id", "issued-id")
         return SimpleNamespace(
-            id=kwargs["id"],
-            url=f"https://wandb.example/team/project/runs/{kwargs['id']}",
+            id=identifier,
+            url=f"https://wandb.example/team/project/runs/{identifier}",
             define_metric=lambda *args, **kwargs: None,
             log=lambda **kwargs: None,
             finish=lambda **kwargs: None,
@@ -68,7 +69,7 @@ def test_tracker_keeps_failed_attempt_identity_and_wandb_link_on_retry(tmp_path,
         )
         assert before <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
     assert failed.read_bytes() == retained
-    assert [(row["id"], row["group"], row["resume"]) for row in launches] == [
+    assert [(row.get("id"), row["group"], row["resume"]) for row in launches] == [
         ("failed-attempt", "native-run", "allow"),
         ("current-attempt", "native-run", "allow"),
     ]
