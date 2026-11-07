@@ -164,6 +164,45 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
         assert not (tmp_path / "weights.blob").exists()
 
 
+@pytest.mark.parametrize("save_tokenizer", [True, False])
+@pytest.mark.parametrize("reference_kind", ["local", "memory", "hub", "missing"])
+@pytest.mark.parametrize("override", [None, {"eos_token_id": [3, 5]}])
+def test_export_preserves_reference_generation_config(
+    tmp_path, local_gpt2_tokenizer_path, monkeypatch, reference_kind, override, save_tokenizer
+):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    original = {"eos_token_id": [1, 2], "temperature": 0.7, "do_sample": True}
+    reference = StoragePath(str(tmp_path / "reference"))
+    if reference_kind == "memory":
+        reference = StoragePath("memory://generation-reference") / uuid.uuid4().hex
+    if reference_kind != "missing":
+        (reference / "generation_config.json").write_bytes(json.dumps(original).encode())
+    else:
+        Path(str(reference)).mkdir()
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
+    if reference_kind == "hub":
+
+        def download(*, repo_id, filename, revision):
+            assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+            return str(reference / filename)
+
+        monkeypatch.setattr(hf_checkpoints, "hf_hub_download", download)
+        converter = replace(converter, reference_checkpoint=RepoRef("test/reference", "pinned-revision"))
+    output = tmp_path / "output"
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        converter.save_pretrained(
+            model, str(output), save_reference_code=False, generation_config=override, save_tokenizer=save_tokenizer
+        )
+    saved = output / "generation_config.json"
+    if reference_kind == "missing" and override is None:
+        assert not saved.exists()
+    else:
+        assert json.loads(saved.read_text()) == (original if override is None else override)
+
+
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     config = Gpt2Config(
