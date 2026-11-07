@@ -101,6 +101,7 @@ KEYING = {
     "starcoder_fit_parameters": NO_IDS,
     "starcoder_dense_grid": NO_IDS,
     "starcoder_diagonal": "Each run's W&B run id, its training run name.",
+    "starcoder_epoch_matching": "Each run's W&B run id, its training run name.",
     "starcoder_curricula": NO_IDS,
     "starcoder_curricula_matched_nd": NO_IDS,
     "starcoder_curricula_matched_nd_confirmation": "The W&B run ids of each pair's two runs.",
@@ -180,9 +181,20 @@ NOTES = {
         "and proportional runs are ladder rows. The runs take their seven Uncheatable components from their W&B run "
         "summaries; the data seed in each run's W&B config equals the one its launch recorded.",
     ],
+    "starcoder_epoch_matching": [
+        "The unmatched proxy's two runs at StarCoder weight 0 are also the weight-0 point of each matched subset's "
+        "curve, since a run without StarCoder does not depend on the subset; they appear once, with a null "
+        "subset_seed.",
+        "The two weight-0 runs of trainer seed 20260910 are also FineMath's weight-0 rows of domain_sweeps under the "
+        "same observation ids. Its paloma_bpb, from a later evaluation of the same final checkpoints, differs from "
+        "programming_languages_bpb by at most 1.3e-6.",
+    ],
     "domain_sweeps": [
         "These models use the TinyLlama tokenizer named in `tokenizer`, not the tokenizer of the tasks table, which "
         "describes the paper's swarms.",
+        "FineMath's two weight-0 runs are also rows of starcoder_epoch_matching under the same observation ids. Their "
+        "paloma_bpb here, from a later evaluation of the same final checkpoints, differs from that table's "
+        "programming_languages_bpb by at most 1.3e-6.",
     ],
     "fits_task_parameters": [
         "The qwen3_360m_1p6b rows are the paper's reference fit; the llama_160m_1p2b and llama_200m_6b rows refit "

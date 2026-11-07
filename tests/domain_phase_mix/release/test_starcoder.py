@@ -7,21 +7,25 @@ import re
 import numpy as np
 import pandas as pd
 import pytest
+from levanter.utils.flop_utils import lm_flops_per_token
 from scipy import stats
 
 from experiments.domain_phase_mix.release import paths, pull_switch_traces
-from experiments.domain_phase_mix.release.configs import starcoder
+from experiments.domain_phase_mix.release.configs import domain_sweeps, starcoder
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
 pytestmark = pytest.mark.skipif(not ATLAS.exists(), reason="StarCoder atlas absent")
 # Per-run launch results of three atlas families, which the export does not read.
 RUN_RECORDS = {
-    "dense_horizon_replay": paths.RO
-    / "starcoder_wsd80_dense_support_calibration_results_20260813/coverage_with_calibration_weights.csv",
+    "dense_horizon_replay": (
+        paths.RO / "starcoder_wsd80_dense_support_calibration_results_20260813/coverage_with_calibration_weights.csv"
+    ),
     "coupled_lr_onset": paths.RO / "starcoder_wsd80_coupled_onset_dense_surface_results_20260901/observations.csv",
-    "matched_nd": paths.RO
-    / "starcoder_wsd80_matched_nd_stage1_20260731/stage3_dense_surface_results_20260802"
-    / "combined_discovery_observations.csv",
+    "matched_nd": (
+        paths.RO
+        / "starcoder_wsd80_matched_nd_stage1_20260731/stage3_dense_surface_results_20260802"
+        / "combined_discovery_observations.csv"
+    ),
 }
 # The W&B run id of a family's run is its run name after a prefix: the coupled learning-rate-onset launch put `c2v4c_`
 # before every run name (its deployment in launch_starcoder_wsd80_coupled_onset_dense_surfaces.py).
@@ -201,6 +205,94 @@ def test_diagonal_cells_and_curricula(out):
     assert (best.observed_optimum_weight == best.starcoder_weight).all()
     curricula = out["starcoder_curricula"]
     assert len(curricula) == 28 and not curricula.duplicated(["cell_id", "support_id"]).any()
+
+
+def test_epoch_matching_reproduces_figure2(out):
+    # Figure 2's selections and printed numbers from the table alone. Each proxy curve averages its trainer seeds; the
+    # unmatched runs at weight 0 are also every matched curve's point at 0.
+    sweep = out["starcoder_epoch_matching"].assign(percent=lambda t: (100 * t.starcoder_weight).round(6))
+    assert len(sweep) == 103 and sweep.observation_id.is_unique
+    zero = sweep[(sweep.arm != "target") & (sweep.percent == 0)]
+    assert len(zero) == 2 and (zero.arm == "unmatched").all() and zero.subset_seed.isna().all()
+    unmatched = sweep[sweep.arm == "unmatched"].groupby("percent").programming_languages_bpb.mean()
+    assert unmatched.idxmin() == 100
+    tracks = []
+    for _, runs in sweep[sweep.arm == "matched"].groupby("subset_seed"):
+        curve = pd.concat([runs, zero])
+        assert curve.groupby("percent").programming_languages_bpb.mean().idxmin() == 50
+        tracks += [
+            seed.set_index("percent").programming_languages_bpb.idxmin() for _, seed in curve.groupby("trainer_seed")
+        ]
+    # The six track minima of the follow-up's plan, whose mean, 8/15, the follow-up target run trains.
+    assert tracks == [50, 50, 65, 50, 50, 55] and np.mean(tracks) == pytest.approx(100 * 8 / 15, abs=1e-9)
+    target = sweep[sweep.arm == "target"].set_index("percent").programming_languages_bpb
+    grid = target[target.index.isin(unmatched.index)]
+    low, matched, naive = grid.min(), target[round(100 * 8 / 15, 6)], grid[100]
+    assert grid.idxmin() == 70
+    assert [f"{v:.3f}" for v in (matched, naive, low)] == ["0.774", "0.801", "0.766"]
+    assert f"{100 * (1 - (matched - low) / (naive - low)):.1f}" == "74.7"  # "74.7% less excess loss"
+    # The epochs printed beside the selections and above p = 0.6, 0.8 and 1 on the top axes, and the panels' FLOPs.
+    epochs = sweep.groupby(["arm", "percent"]).starcoder_epochs
+    assert epochs.nunique().eq(1).all()
+    epochs = epochs.first()
+    assert (f"{epochs['target', round(100 * 8 / 15, 6)]:.1f}", f"{epochs['unmatched', 100]:.2f}") == ("8.5", "0.87")
+    rows = {"matched": (1, "9.5 12.7 15.8"), "unmatched": (2, "0.52 0.70 0.87"), "target": (1, "9.5 12.7 15.8")}
+    for arm, (digits, printed) in rows.items():
+        assert " ".join(f"{epochs[arm, p]:.{digits}f}" for p in (60, 80, 100)) == printed
+    flops = sweep.groupby(sweep.arm == "target").compute_flops  # proxies, then the target
+    assert flops.nunique().eq(1).all() and [f"{f:.2e}" for f in flops.first()] == ["2.49e+16", "6.66e+18"]
+
+
+@pytest.mark.skipif(
+    not all(path.exists() for path in domain_sweeps.required_sources()), reason="domain sweep sources absent"
+)
+def test_epoch_matching_web_only_runs_are_finemath_weight0_rows(out):
+    # One run, one id: FineMath's weight-0 rows are two of the sweep's runs, evaluated again on the same set later.
+    sweeps = domain_sweeps.export()["domain_sweeps"]
+    shared = sweeps[sweeps.observation_id.isin(out["starcoder_epoch_matching"].observation_id)]
+    finemath = shared[shared.evaluation == "paloma_bpb"].set_index("observation_id")
+    assert set(shared.domain) == {"finemath"} and len(finemath) == 2 and (finemath.domain_weight == 0).all()
+    runs = out["starcoder_epoch_matching"].set_index("observation_id").loc[finemath.index]
+    assert (runs.trainer_seed == finemath.trainer_seed).all() and (runs.train_tokens == finemath.train_tokens).all()
+    assert (runs.total_parameters == finemath.model_total_parameters).all()
+    assert np.allclose(runs.programming_languages_bpb, finemath.bpb, rtol=0, atol=1.3e-6)
+
+
+def test_curve_compute_prints_as_figure3_and_follows_levanter(out):
+    # Figure 3's insets print each row's FLOPs as f"{flops / 1e18:.2g}e18": panels A (fixed D) and B (fixed N) read
+    # atlas curves, panel C the diagonal's cells.
+    curves = out["starcoder_curves"].set_index("curve_ref")
+    assert curves.compute_flops.notna().all()
+    panels = (
+        curves.compute_flops[["C05", "C06", "C07", "C08"]],
+        curves.compute_flops[["C05", "C10", "C13", "C14"]],
+        out["starcoder_diagonal"].drop_duplicates("cell_id").sort_values("rung").compute_flops,
+    )
+    for panel in panels:
+        assert [f"{flops / 1e18:.2g}" for flops in panel] == ["0.88", "1.7", "3.4", "6.5"]
+    # The fixed-model ladder's FLOPs, logged to W&B, are Levanter's count for the Llama model its design describes
+    # (10 layers of width 768, MLP width 1,536, 8 heads) with the Llama 3 vocabulary at sequence length 2,048.
+    per_token = lm_flops_per_token(
+        hidden_dim=768,
+        intermediate_dim=1536,
+        num_layers=10,
+        num_kv_heads=8,
+        num_heads=8,
+        seq_len=2048,
+        vocab_size=128256,
+        glu=True,
+    )
+    ladder = curves[curves.family == "fixed_model_token_ladder"]
+    assert len(ladder) == 4 and np.allclose(
+        ladder.compute_flops, 3 * per_token * ladder.train_tokens, rtol=1e-12, atol=0
+    )
+    # Curves that train the same model on the same tokens cost the same.
+    assert (
+        curves.groupby(["total_parameters", "non_embedding_parameters", "train_tokens"])
+        .compute_flops.nunique()
+        .eq(1)
+        .all()
+    )
 
 
 def test_figure25_reads_both_double_difference_tables(out):

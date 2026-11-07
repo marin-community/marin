@@ -44,7 +44,10 @@ tokenizer, pooling the scored bits and bytes of each set (Levanter's BPB schema 
 
 Every run has trainer seed 20260910 and the launcher's data seed 20260910. `subset_seed` is 20260912 for the matched
 proxies and null for runs that draw the domain from the whole pool. Observation ids are the runs' W&B run ids, their
-training run names, to which these launches append no hash; the runs appear in no other config.
+training run names, to which these launches append no hash. FineMath's two weight-0 runs are also rows of the StarCoder
+epoch-matching sweep (`starcoder_epoch_matching`), whose BPB on the programming-languages set comes from the runs'
+training-time final evaluation and differs from their `paloma_bpb` here by at most 1.3e-6; no other run appears in
+another config.
 
 `domain_sweeps_olmix_fits` holds Olmix's log-linear fit to each matched-proxy curve that the figure draws:
 BPB(p) = exp(log_c) + exp(coefficient_domain * p + coefficient_web * (1 - p)) at domain weight p, fitted to the
