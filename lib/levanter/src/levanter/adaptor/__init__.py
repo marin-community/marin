@@ -28,7 +28,7 @@ from haliax.partitioning import named_jit
 
 from levanter.compat.hf_checkpoints import (
     GenerationConfigDict,
-    HFCheckpointConverter,
+    HfLmCheckpointConverter,
     RepoRef,
     save_hf_checkpoint_callback,
 )
@@ -86,7 +86,7 @@ class AdaptorConfig(abc.ABC, draccus.ChoiceRegistry):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:
@@ -129,7 +129,7 @@ class NoAdaptorConfig(AdaptorConfig):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:
@@ -182,7 +182,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
         self,
         *,
         trainer,
-        converter: HFCheckpointConverter | None,
+        converter: HfLmCheckpointConverter | None,
         tokenizer,
         export: AdaptorExportConfig,
     ) -> None:

@@ -27,7 +27,7 @@ from haliax import Axis
 from haliax.partitioning import ResourceMapping
 
 from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, RepoRef
 from levanter.model_cache import resolve_cached_model_path
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.jax_utils import use_cpu_device
@@ -100,7 +100,7 @@ def load_hf_checkpoint(
 
     resolved = resolve_cached_model_path(checkpoint, cache_ttl_days=cache_ttl_days, cache_prefix=_HF_CACHE_PREFIX)
     ref = RepoRef.from_string(resolved)
-    converter: HFCheckpointConverter = model_config.hf_checkpoint_converter().replaced(
+    converter: HfLmCheckpointConverter = model_config.hf_checkpoint_converter().replaced(
         reference_checkpoint=ref, tokenizer=tokenizer
     )
     model = converter.load_pretrained(model_config.model_type, ref=ref, axis_mapping=axis_mapping, dtype=compute_dtype)

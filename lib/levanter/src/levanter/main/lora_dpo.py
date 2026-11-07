@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from levanter.adaptor import LoraAdaptorConfig
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 from levanter.data.text.preference import PreferenceLmDataConfig
 from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.adaptor.lora import LoraConfig
@@ -49,7 +49,7 @@ def _translate_legacy_lora_dpo_config(config: LoraDpoConfig) -> TrainDpoConfig:
     if not config.initialize_from_hf:
         raise ValueError("initialize_from_hf must be provided for LoRA-DPO training.")
 
-    converter = HFCheckpointConverter.from_hf(config.initialize_from_hf, trust_remote_code=config.trust_remote_code)
+    converter = HfLmCheckpointConverter.from_hf(config.initialize_from_hf, trust_remote_code=config.trust_remote_code)
     model_config = converter.default_config
     if config.use_hf_model_config:
         model_config = converter.config_from_hf_config(converter.default_hf_config)

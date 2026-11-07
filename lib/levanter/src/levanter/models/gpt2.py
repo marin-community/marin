@@ -18,7 +18,7 @@ from haliax.jax_utils import named_call, shaped_rng_split
 from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig, LmWithHfSerializationMixin
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig, LmWithHfSerializationMixin
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.models.lm_model import LmConfig
 from levanter.utils.activation import ActivationFunctionEnum
@@ -81,12 +81,12 @@ class Gpt2Config(HFCompatConfig):
     def model_type(self) -> Type["Gpt2LMHeadModel"]:
         return Gpt2LMHeadModel
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["Gpt2Config"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HfLmCheckpointConverter["Gpt2Config"]:  # type: ignore
         # Pass HfConfigClass explicitly: GPT2 maps to a built-in transformers config, so there is no
         # need to infer it by fetching the reference checkpoint from HF Hub. Honor a configured
         # tokenizer (e.g. a local directory) like the other configs so from-scratch training/export
         # never requires Hub access.
-        return HFCheckpointConverter(
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref_checkpoint or "gpt2",
             HfConfigClass=HfGpt2Config,
