@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from itertools import pairwise
 
@@ -29,13 +29,6 @@ from experiments.post_training import snowball_rl_scoring as scoring
 
 RESULT_FILENAME = "loop-result.json"
 PUBLICATION_FILENAME = "publication.json"
-
-
-@dataclass(frozen=True)
-class RecordedRun:
-    skyrl: SkyRLRunConfig
-    preset: presets.Preset
-    label: str
 
 
 def publishes(preset: presets.Preset) -> bool:
@@ -256,32 +249,32 @@ def build_record(
     return record
 
 
-def _persist_attempt(config: RecordedRun) -> dict:
-    record = build_record(
-        str(StoragePath(config.skyrl.output.export_root).parent),
-        config.preset,
-        attempt_id=config.skyrl.attempt_id,
-        label=config.label,
-    )
+def retain_record(
+    run_output: str, preset: presets.Preset, *, attempt_id: str | None = None, label: str | None = None
+) -> dict:
+    """Build and retain one terminal record from its stored native outputs."""
+    record = build_record(run_output, preset, attempt_id=attempt_id, label=label)
     destination = StoragePath(record["artifact_uri"])
     destination.parent.mkdirs()
     destination.write_text(json.dumps(record, allow_nan=False, indent=2))
     return record
 
 
-def run_loop(config: RecordedRun) -> SkyRLRun:
+def run_loop(config: SkyRLRunConfig, preset: presets.Preset, label: str) -> SkyRLRun:
     """Run native training and retain the terminal attempt before returning or raising."""
     try:
-        native = run_skyrl(config.skyrl)
+        native = run_skyrl(config)
     except Exception as training_error:
         try:
-            _persist_attempt(config)
+            retain_record(
+                str(StoragePath(config.output.export_root).parent), preset, attempt_id=config.attempt_id, label=label
+            )
         except Exception as recording_error:
             raise ExceptionGroup(
                 "Native execution and record persistence failed", [training_error, recording_error]
             ) from None
         raise
-    _persist_attempt(config)
+    retain_record(str(StoragePath(config.output.export_root).parent), preset, attempt_id=config.attempt_id, label=label)
     return native
 
 

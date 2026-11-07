@@ -62,6 +62,7 @@ native `(run_id, attempt_id)`, including failed attempts. The coordinator writes
 Repeat the original command with `--wait` to retry publication from the same source and inputs.
 Retained terminal attempts and successful publication steps are reused. A publication error prints the
 unserved record paths and `iris login` hint; the command keeps its experiment exit code.
+When native receipts are terminal, a missing attempt record is rebuilt from stored outputs.
 Each publication step retains its first payload at `publication/<attempt_id>/loop-result.json` under the
 run output and writes `publication.json` after exact database readback and serving verification.
 The record keeps its first published gate and verdict; the current `gate_report.json` gives the current verdict.

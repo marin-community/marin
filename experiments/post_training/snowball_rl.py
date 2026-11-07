@@ -402,7 +402,7 @@ def _recorded_step(
     label = " ".join((preset.name, *overrides))
 
     def launch(config):
-        return snowball_rl_publication.run_loop(snowball_rl_publication.RecordedRun(config, preset, label))
+        return snowball_rl_publication.run_loop(config, preset, label)
 
     return replace(step, run=launch)
 
@@ -745,7 +745,22 @@ def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | N
         training = replace(training, override_path=training.path(prefix))
         receipt = read_skyrl_launch_receipt(training.path())
         native = receipt.config["run"] if receipt is not None else {}
-        for record_path in snowball_rl_publication.retained_records(training.path()):
+        records = snowball_rl_publication.retained_records(training.path())
+        if receipt is not None and receipt.result.state in {"succeeded", *_FAILED_RUN_STATES}:
+            current_record = str(
+                StoragePath(training.path())
+                / "exports/attempts"
+                / native["attempt_id"]
+                / snowball_rl_publication.RESULT_FILENAME
+            )
+            if current_record not in records:
+                try:
+                    snowball_rl_publication.retain_record(training.path(), preset, attempt_id=native["attempt_id"])
+                    records.append(current_record)
+                except Exception as error:
+                    unserved.append(current_record)
+                    errors.append(str(error))
+        for record_path in records:
             try:
                 record = json.loads(presets.read_text(record_path))
                 current = (record["run_id"], record["attempt_id"]) == (native.get("id"), native.get("attempt_id"))
@@ -767,6 +782,7 @@ def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
     if not snowball_rl_publication.publishes(preset):
         return False
     failed = False
+    recovery = False
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     for training in run.runs:
         path = training.path(prefix)
@@ -776,11 +792,14 @@ def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
         failed |= receipt.result.state in _FAILED_RUN_STATES
         attempt = receipt.config["run"]["attempt_id"]
         record_path = StoragePath(path) / "exports/attempts" / attempt / snowball_rl_publication.RESULT_FILENAME
-        if not presets.exists(record_path):
-            return False
+        status_path = get_status_path(path)
+        recovery |= not presets.exists(record_path) or (
+            presets.exists(status_path) and presets.read_text(status_path).strip() == "FAILED"
+        )
     completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     return (
         failed
+        or recovery
         or completed_gate is None
         or presets.exists(StoragePath(completed_gate.path(prefix)) / snowball_rl_gate.GATE_REPORT_FILENAME)
     )

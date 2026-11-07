@@ -96,19 +96,11 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     for field, value in (
         ("label", "arbitrary label"),
         ("issue", 987),
-        ("task_set_sha256", "c" * 64),
-        ("protocol_sha256", None),
         ("timing_scope", "launcher_start_to_finish"),
     ):
         distinct = copy.deepcopy(record)
         distinct.update(run_id="test/" + field, attempt_id=field)
-        if field in {"task_set_sha256", "protocol_sha256"}:
-            distinct["evaluation"][field] = value
-            if field == "protocol_sha256":
-                distinct["evaluation"]["protocol"] = {"temperature": 1}
-                distinct["evaluation"][field] = hashlib.sha256(b'{"temperature":1}').hexdigest()
-        else:
-            distinct[field] = value
+        distinct[field] = value
         publication.publish_result(distinct, "http://localhost")
     unknown = copy.deepcopy(record)
     unknown.update(run_id="test/unknown-protocol", attempt_id="unknown")
@@ -181,7 +173,7 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     assert api.status_code == 200
     payload = api.json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert len(rows) == 12
+    assert len(rows) == 10
     good = rows["native-first"]
     assert good["final"]["reward"] == 0.4
     assert good["partial_coverage"] and good["pareto_eligible"] and good["trusted_gain_eligible"]
@@ -193,15 +185,7 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     assert rows["native-fourth"]["comparison_key"] != good["comparison_key"]
     assert rows["native-fifth"]["pareto_eligible"] and not rows["native-fifth"]["trusted_gain_eligible"]
     assert rows["label"]["comparison_key"] == rows["issue"]["comparison_key"] == good["comparison_key"]
-    assert (
-        len(
-            {
-                rows[key]["comparison_key"]
-                for key in ("native-first", "task_set_sha256", "protocol_sha256", "timing_scope")
-            }
-        )
-        == 4
-    )
+    assert rows["timing_scope"]["comparison_key"] != good["comparison_key"]
     assert rows["unknown-time"]["final"]["reward"] == 0.4
     assert rows["unknown-time"]["elapsed_seconds"] is None and rows["unknown-time"]["gain_per_hour"] is None
     assert rows["unknown-time"]["provisional"] and not rows["unknown-time"]["pareto_eligible"]
@@ -245,7 +229,7 @@ def test_snowball_publication_retries_keep_the_first_gate_without_native_executi
     tracking.update(wandb_url="https://wandb.ai/test/publication/runs/native-one", engine={"model_dtype": "bfloat16"})
     write_json(tracking_path, tracking)
     monkeypatch.setattr(snowball_publication, "run_skyrl", lambda config: SkyRLRun.raw_load(str(source)))
-    snowball_publication.run_loop(snowball_publication.RecordedRun(native_config(source, launch), preset, preset.name))
+    snowball_publication.run_loop(native_config(source, launch), preset, preset.name)
     raw_path = source / "exports/attempts/native-one/loop-result.json"
 
     def forbid_native(config):

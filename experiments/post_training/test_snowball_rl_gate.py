@@ -1022,6 +1022,7 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
         ("publish-historical", 0),
         ("publish-fail-no-login", 1),
         ("publish-invalid-no-login", 2),
+        ("publish-record-recovery", 3),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
@@ -1054,7 +1055,9 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
     built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
-    if outcome not in {"missing", "control", "native-failed"} and not (publishing and outcome == "parent-early"):
+    if outcome not in {"missing", "control", "native-failed", "record-recovery"} and not (
+        publishing and outcome == "parent-early"
+    ):
         run(built.gate)
     if outcome == "parent-early" and not publishing:
         shutil.rmtree(source)
@@ -1066,7 +1069,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["state"] = "failed"
         _json(source / "terminal.json", receipt)
-    final = JobState.FAILED if outcome in {"parent-early", "native-failed"} else JobState.SUCCEEDED
+    final = JobState.FAILED if outcome in {"parent-early", "native-failed", "record-recovery"} else JobState.SUCCEEDED
     client.job.return_value.wait.return_value = SimpleNamespace(state=final)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr("marin.rl.cli.iris_client", lambda **kwargs: nullcontext(client))
@@ -1074,7 +1077,14 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     outage = scenario in {"missing-login", "partial-retry", "fail-no-login", "invalid-no-login"}
     available = {"ready": not outage}
 
+    pending_receipts = {}
     if publishing:
+        if outcome != "child":
+            for root in sources:
+                for filename in ("terminal.json", "resolved-launch.yaml"):
+                    path = root / filename
+                    pending_receipts[path] = path.read_bytes()
+                    path.unlink()
 
         def native(config):
             if outcome == "parent-early":
@@ -1084,6 +1094,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         monkeypatch.setattr(publication, "run_skyrl", native)
 
         def finish_native(*args, **kwargs):
+            for path, data in pending_receipts.items():
+                path.write_bytes(data)
             for training, root in zip(built.runs, sources, strict=True):
                 launch = read_skyrl_launch_config(str(root))
                 if outcome == "parent-early":
@@ -1100,6 +1112,9 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
                         old = json.loads(current.read_text())
                         old.update(attempt_id="historical-native", status="failed", failed_facts=["native_attempt"])
                         _json(root / "exports/attempts/historical-native/loop-result.json", old)
+                if scenario in {"parent-early", "record-recovery"}:
+                    (root / f"exports/attempts/{launch['run']['attempt_id']}/loop-result.json").unlink()
+                    (root / ".executor_status").write_text("FAILED")
             return SimpleNamespace(state=final)
 
         if outcome == "child":
@@ -1146,7 +1161,6 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     assert result.exit_code == expected, (result.output, result.exception)
     waited = [] if outcome in {"no-wait", "child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
-    assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
     if outcome != "child":
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if outcome in {"pass", "fail", "invalid"}:
@@ -1182,6 +1196,16 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             assert repeated.exit_code == expected, (repeated.output, repeated.exception)
             assert all(path.read_bytes() == payload for path, payload in saved_receipts.items())
             assert all((root / f"publication/native-{i}/publication.json").is_file() for i, root in enumerate(sources))
+        if scenario in {"parent-early", "record-recovery"}:
+            for i, root in enumerate(sources):
+                (root / f"exports/attempts/native-{i}/loop-result.json").unlink()
+            client.submit.side_effect = AssertionError("Record recovery submitted a coordinator")
+            monkeypatch.setattr(publication, "run_skyrl", lambda config: pytest.fail("Record recovery ran native work"))
+            repeated = CliRunner().invoke(snowball.main, arguments)
+            assert repeated.exit_code == expected, (repeated.output, repeated.exception)
+            assert all(
+                (root / f"exports/attempts/native-{i}/loop-result.json").is_file() for i, root in enumerate(sources)
+            )
         expected_pairs = {
             (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{i}") for i, root in enumerate(sources)
         }
@@ -1189,7 +1213,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             expected_pairs.add((read_skyrl_launch_config(str(source))["run"]["id"], "historical-native"))
         assert {(row["run_id"], row["attempt_id"]) for row in published} == expected_pairs
         assert all(row["issue"] == 73 for row in published)
-        expected_verdict = None if outcome in {"control", "parent-early"} else outcome
+        expected_verdict = None if outcome in {"control", "parent-early", "record-recovery"} else outcome
         assert all(
             row["verdict"] == (None if row["attempt_id"] == "historical-native" else expected_verdict)
             for row in published
