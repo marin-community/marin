@@ -33,6 +33,8 @@ WANDB_PREFIX = {"dense_horizon_replay": "", "coupled_lr_onset": "c2v4c_", "match
 TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
 # The heteroskedasticity analysis's per-mixture summary of the repeat-noise panel, which the paper's table reports.
 NOISE_SUMMARY = paths.RO / "starcoder_heteroskedasticity_mechanisms_20260617/anchor_metric_noise_features.csv"
+# The paper builder's record of Figure 1's surrogate panel, with the share at which it places each design-grid weight.
+FIGURE1_RECORD = paths.DRIVE / "figure1_real_data_drafts/v40/sources/response_subset.json"
 
 
 @pytest.fixture(scope="module")
@@ -252,6 +254,21 @@ def test_epoch_matching_web_pool_gives_figure1s_web_epochs(out):
     proxies = sweep[sweep.arm != "target"]
     assert np.allclose(proxies.train_tokens / proxies.web_pool_tokens, 0.04558802099128514, rtol=0, atol=1e-15)
     assert ((1 - sweep.starcoder_weight) * sweep.train_tokens).lt(sweep.web_pool_tokens).all()
+
+
+@pytest.mark.skipif(not FIGURE1_RECORD.exists(), reason="paper folder absent")
+def test_epoch_matching_grid_gives_figure1s_realized_shares(out):
+    # Figure 1's surrogate panel maps every weight of the design's grid to the share that the proxies' sampler realized.
+    # At the 12 trained weights, the grid's counts are the ones behind the runs' materialized epochs.
+    grid = out["starcoder_epoch_matching_grid"]
+    mapping = json.loads(FIGURE1_RECORD.read_text())["track_metadata"]["fraction_mapping"]
+    matched = grid[grid.arm == "matched"]
+    assert matched.starcoder_weight.tolist() == mapping["requested"]
+    assert np.allclose(matched.realized_starcoder_fraction, mapping["actual"], rtol=0, atol=1e-15)
+    trained = out["starcoder_epoch_matching"].merge(grid, on=["arm", "starcoder_weight"], validate="many_to_one")
+    assert len(trained) == 102  # every run but the follow-up at 8/15, which is off the grid
+    realized = trained.starcoder_epochs * trained.starcoder_subset_tokens / trained.train_tokens
+    assert np.allclose(realized, trained.realized_starcoder_fraction, rtol=0, atol=1e-15)
 
 
 @pytest.mark.skipif(

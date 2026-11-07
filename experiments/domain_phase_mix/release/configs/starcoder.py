@@ -49,7 +49,8 @@ family (COUPLED_RELEASE) puts before its runs' W&B run ids. These runs appear in
 - `starcoder_diagonal`: the fixed-total-TPP-5 diagonal, 60 runs (4 matched-compute cells x 15 weights) with each
   cell's measured optimum.
 - `starcoder_epoch_matching`: the epoch-matching sweep at ten tokens per total parameter that Figure 2 and Figure 1's
-  top-left panel plot, one row per training run (103), described below.
+  top-left panel plot, one row per training run (103), described below; `starcoder_epoch_matching_grid`: the sampler's
+  allocation at each StarCoder weight of the sweep's design grid, for each arm (63 rows).
 - `starcoder_curricula`: the confirmed two-phase gains by training horizon and StarCoder subset (28 cells).
 - `starcoder_curricula_matched_nd`: the best tied and two-phase schedules and their fitted gap in each of the 10
   matched model-size and token-budget cells; `starcoder_curricula_matched_nd_confirmation`: the eight fresh-seed pairs
@@ -119,6 +120,16 @@ reconstruction within 2e-7. The two weight-0 runs of trainer seed 20260910 are a
 `domain_sweeps`, which holds the sources' only other evaluations of these runs; its `paloma_bpb`, from a later
 evaluation of the same checkpoints, differs from `programming_languages_bpb` by at most 1.3e-6. Observation ids are the
 runs' W&B run ids, their run names.
+
+`starcoder_epoch_matching_grid` has one row per arm and StarCoder weight of the design's grid (`dense_grid`, 0 to 1 in
+steps of 0.05; the sweep trained 12 of the 21 weights). `starcoder_sequences` and `web_sequences` are the sequences that
+the sampler draws from StarCoder and from the six Nemotron-CC components, as the design's allocation audit
+(TPP10_ALLOCATIONS) counts them with the runs' block allocator, final partial block included; the launch code's
+allocator (`starcoder_tpp10.sequence_allocation`) reproduced every count on 2026-11-07. The two proxies, which train the
+same model for the same steps at the same weights, share the proxy scale's counts. `realized_starcoder_fraction` is
+StarCoder's share of those sequences, the share at which Figure 1's surrogate panel places each nominal weight; at a
+trained weight it equals `starcoder_epochs` x `starcoder_subset_tokens` / `train_tokens` of `starcoder_epoch_matching`'s
+runs within 1.2e-16.
 """
 
 import gzip
@@ -546,13 +557,48 @@ def _epoch_matching_web_pool(design: dict) -> int:
     return sum(web.values())
 
 
-def _epoch_matching() -> pd.DataFrame:
-    """Figure 2's sweep, one row per run: the 102 grid runs, whose BPB must be the values that the figure's analysis
-    plots, and the follow-up target run."""
+def _tpp10_design() -> tuple[dict, dict]:
+    """The epoch-matching sweep's design and its allocation audit, which must be a passed audit of that design."""
     design = json.loads(paths.require(TPP10_DESIGN).read_text())
     audit = json.loads(paths.require(TPP10_ALLOCATIONS).read_text())
     if (audit["design_sha256"], audit["status"]) != (design["design_sha256"], "passed"):
         raise ValueError(f"{TPP10_ALLOCATIONS.name} is not a passed audit of {TPP10_DESIGN.name}")
+    return design, audit
+
+
+def _epoch_matching_grid(design: dict, audit: dict) -> pd.DataFrame:
+    """The sampler's allocation at every StarCoder weight of the sweep's design grid, for each arm.
+
+    `audit` counts each component's sequences with the runs' block allocator (Levanter's MixtureDataset, the final
+    partial block included) at the proxy and the target scale; the two proxies share the proxy scale's counts. Raises
+    unless the audit covers the design's grid and each point's counts fill the run's sequences.
+    """
+    if [point["percent"] for point in audit["coordinates"]] != design["dense_grid"]:
+        raise ValueError(f"{TPP10_ALLOCATIONS.name} does not cover the design's grid of StarCoder weights")
+    components = {*design["web_sequences"], "starcoder"}
+    rows = []
+    for arm, (model, allocation) in TPP10_ARMS.items():
+        sequences = design["models"][model]["steps"] * design["models"][model]["batch_size"]
+        for point in audit["coordinates"]:
+            counts = point[allocation]
+            web = sum(counts[name] for name in design["web_sequences"])
+            if set(counts) != components or counts["starcoder"] + web != sequences:
+                raise ValueError(f"the {arm} allocation at {point['percent']}% does not fill the run's sequences")
+            rows.append(
+                {
+                    "arm": arm,
+                    "starcoder_weight": point["percent"] / 100,
+                    "starcoder_sequences": counts["starcoder"],
+                    "web_sequences": web,
+                    "realized_starcoder_fraction": counts["starcoder"] / (counts["starcoder"] + web),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _epoch_matching(design: dict, audit: dict) -> pd.DataFrame:
+    """Figure 2's sweep, one row per run: the 102 grid runs, whose BPB must be the values that the figure's analysis
+    plots, and the follow-up target run. `design` and `audit` are the sweep's design and allocation audit."""
     metrics = json.loads(paths.require(TPP10_METRICS).read_text())
     definition = metrics["metric_definition"]
     if (definition["id"], definition["schema_version"], len(metrics["rows"])) != (TPP10_METRIC, 2, TPP10_GRID_RUNS):
@@ -775,6 +821,7 @@ def export() -> dict[str, pd.DataFrame]:
     grid = tables.read_csv(paths.require(ATLAS / "dense_curves.csv"))
     if not grid.groupby("curve_id").size().eq(GRID_POINTS).all() or set(grid.curve_id) != set(curves.curve_id):
         raise ValueError(f"the dense grid must hold {GRID_POINTS} weights for each atlas curve")
+    tpp10_design, tpp10_audit = _tpp10_design()
     out = {
         "starcoder_observations": obs,
         "starcoder_curve_membership": membership,
@@ -782,7 +829,8 @@ def export() -> dict[str, pd.DataFrame]:
         "starcoder_fit_parameters": params,
         "starcoder_dense_grid": grid,
         "starcoder_diagonal": _diagonal(),
-        "starcoder_epoch_matching": _epoch_matching(),
+        "starcoder_epoch_matching": _epoch_matching(tpp10_design, tpp10_audit),
+        "starcoder_epoch_matching_grid": _epoch_matching_grid(tpp10_design, tpp10_audit),
         "starcoder_curricula": tables.read_csv(paths.require(CURRICULA)),
         "starcoder_curricula_matched_nd": tables.read_csv(paths.require(MATCHED_OPTIMA)),
         "starcoder_curricula_matched_nd_confirmation": _matched_confirmation(),

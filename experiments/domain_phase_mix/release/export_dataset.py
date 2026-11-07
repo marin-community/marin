@@ -102,6 +102,10 @@ KEYING = {
     "starcoder_dense_grid": NO_IDS,
     "starcoder_diagonal": "Each run's W&B run id, its training run name.",
     "starcoder_epoch_matching": "Each run's W&B run id, its training run name.",
+    "starcoder_epoch_matching_grid": (
+        "The table has no observation ids; arm and starcoder_weight name the starcoder_epoch_matching runs at each "
+        "trained weight."
+    ),
     "starcoder_curricula": NO_IDS,
     "starcoder_curricula_matched_nd": NO_IDS,
     "starcoder_curricula_matched_nd_confirmation": "The W&B run ids of each pair's two runs.",
@@ -202,6 +206,11 @@ NOTES = {
         "programming_languages_bpb by at most 1.3e-6.",
         "Every run, of each arm, drew its Nemotron-CC text from the same pool of 1,777,309 sequences of 2,048 tokens "
         "(web_pool_tokens), so a run's web epochs are (1 - starcoder_weight) x train_tokens / web_pool_tokens.",
+    ],
+    "starcoder_epoch_matching_grid": [
+        "The sweep trained 12 of the design's 21 StarCoder weights; the other nine (0.05, 0.15, 0.2, 0.25, 0.35, 0.45, "
+        "0.75, 0.85 and 0.95) have an allocation but no run. The two proxies share one allocation, since they train the "
+        "same model for the same steps at the same weights and differ only in the StarCoder pool.",
     ],
     "domain_sweeps": [
         "These models use the TinyLlama tokenizer named in `tokenizer`, not the tokenizer of the tasks table, which "
