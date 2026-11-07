@@ -13,7 +13,9 @@ for script in Path("/opt/marin-venv/bin").iterdir():
     if script.is_symlink() or not script.is_file():
         continue
     content = script.read_bytes()
-    if content.startswith(b"#!/app/.venv/"):
+    if script.name.startswith("activate"):
+        script.write_bytes(content.replace(b"/app/.venv", b"/opt/marin-venv"))
+    elif content.startswith(b"#!/app/.venv/"):
         script.write_bytes(content.replace(b"#!/app/.venv/", b"#!/opt/marin-venv/", 1))
 PY
 
@@ -35,6 +37,7 @@ RUN test -n "$IRIS_REVISION_DATE" \
 ENV PATH="/opt/marin-venv/bin:$PATH" \
     PYTHONPATH="/opt/marin-source:/opt/marin-grafana" \
     IRIS_REVISION_DATE="$IRIS_REVISION_DATE" \
+    IRIS_VENV="/opt/marin-venv" \
     UV_PROJECT_ENVIRONMENT="/opt/marin-venv" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

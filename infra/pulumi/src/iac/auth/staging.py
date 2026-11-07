@@ -54,7 +54,7 @@ def staging_permissions(
                 "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
             },
             {"api_groups": [""], "resources": ["secrets"], "verbs": ["get", "create", "patch", "delete"]},
-            {"api_groups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
+            {"api_groups": [""], "resources": ["pods/exec"], "verbs": ["create", "get"]},
             {
                 "api_groups": ["policy"],
                 "resources": ["poddisruptionbudgets"],

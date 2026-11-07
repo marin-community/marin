@@ -106,6 +106,10 @@ is `gvisor`. Select a class whose handler and node scheduling selector match
 the deployment; the synthetic CoreWeave CPU proof uses `iris-ci-gvisor-cpu`.
 Without a working RuntimeClass, a `SANDBOX` job fails at container creation.
 
+An embedding can pass `PodDnsConfig` through `PodConfig.dns_config` to select
+explicit nameservers, search domains and resolver options with `dnsPolicy: None`.
+Omit it to preserve the cluster's default DNS behavior.
+
 To instead run an *inner* gVisor sandbox around an untrusted child image while
 keeping the outer container normal, use `CONTAINER_PROFILE_PRIVILEGED` and run
 `runsc` (or `docker run --runtime=runsc ...`) yourself inside the container; the

@@ -13,6 +13,7 @@ from iris.cluster.backends.k8s.output_contract import output_policy_from_environ
 from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
+    PodDnsConfig,
 )
 from iris.cluster.config import EgressAllowlistConfig, TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -1325,6 +1326,33 @@ def test_host_network_omitted_when_disabled():
     manifest = _build_pod_manifest(req, pod_config(host_network=False))
     assert "hostNetwork" not in manifest["spec"]
     assert "dnsPolicy" not in manifest["spec"]
+
+
+@pytest.mark.parametrize("explicit_dns", [False, True])
+def test_sandbox_dns_override_selects_exact_resolver_and_preserves_default(explicit_dns):
+    request = make_run_req("/proof/dns/0")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    dns_config = (
+        PodDnsConfig(
+            nameservers=("10.16.0.30",),
+            searches=("iris.svc.cluster.local", "svc.cluster.local", "cluster.local"),
+            options={"ndots": "5"},
+        )
+        if explicit_dns
+        else None
+    )
+    manifest = _build_pod_manifest(request, pod_config(dns_config=dns_config))
+    spec = manifest["spec"]
+    if explicit_dns:
+        assert spec["dnsPolicy"] == "None"
+        assert spec["dnsConfig"] == {
+            "nameservers": ["10.16.0.30"],
+            "searches": ["iris.svc.cluster.local", "svc.cluster.local", "cluster.local"],
+            "options": [{"name": "ndots", "value": "5"}],
+        }
+    else:
+        assert "dnsPolicy" not in spec
+        assert "dnsConfig" not in spec
 
 
 # ---------------------------------------------------------------------------

@@ -10,26 +10,31 @@ Kubernetes Secrets. This command never passes credentials to Pulumi.
 import argparse
 import base64
 import datetime
+import hashlib
 import json
 import os
 import secrets
 import stat
 import subprocess
+import tempfile
 import urllib.error
 from pathlib import Path
 from urllib.parse import quote
 
+import jwt
 import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from rigging.openbao import OpenBaoClient, OpenBaoTransitSigner
 from rigging.timing import Duration, ExponentialBackoff
 
 from infra.auth.bootstrap import OperatorClient, configure
 from infra.auth.fga_operator import OpenFGAOperator
 from infra.auth.openfga import scope_object
 from infra.auth.proof_fga import configure_proof
+from infra.auth.seed_secret import seed_canary
 
 CONTEXT = "marin_US-WEST-04A"
 NAMESPACE = "marin-auth-staging"
@@ -345,6 +350,75 @@ def unsealed_peer(client: OperatorClient, key: str) -> bool:
         raise
 
 
+def issue_proof(directory: Path, address: str, ttl: int) -> dict:
+    """Refresh synthetic proof credentials only while the execution proof is idle."""
+    proof = private_directory(Path(tempfile.mkdtemp(prefix="proof-", dir=directory)))
+    material = json.loads(credential(directory, "initialization.json"))
+    ca_file = str(directory / "ca.crt")
+    operator = OperatorClient(address, material["root_token"], ca_file)
+    canary = seed_canary(operator, token_file=proof / "task-canary.token", ttl=ttl)
+    native = operator.request("POST", "auth/token/lookup", {"token": credential(proof, "task-canary.token")})["data"]
+    install_secret(NAMESPACE, "task-canary-token", {"token": credential(proof, "task-canary.token")})
+    expected_fingerprint = hashlib.sha256((proof / "task-canary.token").read_bytes()).hexdigest()
+    pods = json.loads(kubectl(["-n", NAMESPACE, "get", "pods", "-l", "app.kubernetes.io/name=marin-auth", "-o", "json"]))
+    fingerprint_command = (
+        "import hashlib; from pathlib import Path; "
+        "print(hashlib.sha256(Path('/var/run/marin-auth/task-canary-token/token').read_bytes()).hexdigest())"
+    )
+    for pod in pods["items"]:
+        name = pod["metadata"]["name"]
+        ExponentialBackoff(initial=0.5, maximum=2).wait_until_or_raise(
+            lambda name=name: kubectl(["-n", NAMESPACE, "exec", name, "--", "python", "-P", "-c", fingerprint_command])
+            .decode()
+            .strip()
+            == expected_fingerprint,
+            Duration.from_seconds(120),
+            "The staging broker did not project the refreshed canary credential",
+        )
+    expiries = {}
+    for username, filename, metadata_file in (
+        ("launcher", "launcher.jwt", "identity.json"),
+        ("iris-controller", "controller.jwt", "iris-controller.json"),
+    ):
+        login = operator.request(
+            "POST",
+            f"auth/synthetic/login/{username}",
+            {
+                "password": credential(directory, f"{username}.password"),
+            },
+        )["auth"]
+        client = OperatorClient(address, login["client_token"], ca_file)
+        token = client.request("GET", "identity/oidc/token/marin-auth")["data"]["token"]
+        claims = jwt.decode(token, options={"verify_signature": False})
+        expected = json.loads(credential(directory, metadata_file))
+        if claims["iss"] != ISSUER or claims["sub"] != expected["subject"]:
+            raise ValueError("The proof identity does not match this synthetic deployment")
+        private_file(proof / filename, token.encode())
+        expiries[username] = claims["exp"]
+    signer = OpenBaoTransitSigner(
+        OpenBaoClient(address, directory / "broker.token", ca_bundle=ca_file),
+        issuer=f"https://marin-auth.{NAMESPACE}.svc:8090",
+        key_version=1,
+    )
+    (public_key,) = signer.public_keys()
+    private_file(proof / "grants.pem", public_key.encode())
+    install_secret(
+        NAMESPACE,
+        "auth-proof-identities",
+        {name: credential(proof, name) for name in ("launcher.jwt", "controller.jwt", "grants.pem")},
+    )
+    metadata = {
+        "directory": str(proof),
+        "expected_canary_sha256": canary.expected_sha256,
+        "canary_expires_at": native["expire_time"],
+        "identity_expires_at": expiries,
+        "identity_secret": "auth-proof-identities",
+        "canary_token_secret": "task-canary-token",
+    }
+    private_file(proof / "metadata.json", json.dumps(metadata, indent=2).encode())
+    return metadata
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
@@ -357,10 +431,12 @@ def main() -> None:
             "install-database-ca",
             "initialize",
             "publish-policy",
+            "issue-proof",
         ],
     )
     parser.add_argument("--bao-address", action="append")
     parser.add_argument("--openfga-address", default="http://localhost:18080")
+    parser.add_argument("--ttl", type=int)
     args = parser.parse_args()
     directory = private_directory(args.directory)
     if args.command == "prepare":
@@ -373,6 +449,10 @@ def main() -> None:
         install_database_ca(directory)
     elif args.command == "initialize":
         print(json.dumps(initialize(directory, args.bao_address or ["https://localhost:18200"])))
+    elif args.command == "issue-proof":
+        if args.ttl is None:
+            parser.error("issue-proof requires --ttl (at most 900 seconds)")
+        print(json.dumps(issue_proof(directory, (args.bao_address or ["https://localhost:18200"])[0], args.ttl)))
     else:
         path = directory / "openfga.json"
         operator = OpenFGAOperator(args.openfga_address, directory / "openfga.token")

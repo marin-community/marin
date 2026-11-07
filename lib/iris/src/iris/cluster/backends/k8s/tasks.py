@@ -536,6 +536,15 @@ def _build_volumes_and_mounts(
 
 
 @dataclass(frozen=True)
+class PodDnsConfig:
+    """Explicit resolver settings for a Pod using dnsPolicy=None."""
+
+    nameservers: tuple[str, ...]
+    searches: tuple[str, ...]
+    options: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PodConfig:
     """Non-request parameters for pod manifest construction.
 
@@ -554,6 +563,7 @@ class PodConfig:
     service_account: str = ""
     host_network: bool = False
     sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
+    dns_config: PodDnsConfig | None = None
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
@@ -1213,6 +1223,13 @@ def _build_pod_manifest(
     if host_network:
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
+    if config.dns_config is not None:
+        spec["dnsPolicy"] = "None"
+        spec["dnsConfig"] = {
+            "nameservers": list(config.dns_config.nameservers),
+            "searches": list(config.dns_config.searches),
+            "options": [{"name": name, "value": value} for name, value in config.dns_config.options.items()],
+        }
 
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs

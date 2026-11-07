@@ -23,7 +23,7 @@ from typing import Literal
 import httpx
 import jwt
 import yaml
-from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig, PodDnsConfig
 from iris.cluster.config import AuthConfig, SharedAttemptConfig
 from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.backend import BackendDescriptor, BackendKind
@@ -48,6 +48,7 @@ from infra.auth.service import LoomConfig, ServiceConfig, create_service
 
 TASK_NAMESPACE = "marin-auth-task-staging"
 PROOF_MARKER = "AUTH_ATTEMPT_BOUNDED"
+PROOF_PYTHON = "/opt/marin-venv/bin/python"
 RELEASE_FILE = "/app/auth-proof.release"
 
 
@@ -92,6 +93,11 @@ def execution_controller(directory: Path, config: ExecutionConfig) -> Iterator[E
             default_image=config.task_image,
             local_queue=config.local_queue,
             sandbox_runtime_class="iris-ci-gvisor-cpu",
+            dns_config=PodDnsConfig(
+                nameservers=("10.16.0.30",),
+                searches=(f"{TASK_NAMESPACE}.svc.cluster.local", "svc.cluster.local", "cluster.local"),
+                options={"ndots": "5"},
+            ),
         ),
         cluster_scan_interval=0.1,
     )
@@ -177,7 +183,7 @@ def execution_agent_command(
         "containerProfile": "CONTAINER_PROFILE_SANDBOX",
         "taskImage": config.task_image,
         "resources": {"cpuMillicores": 1000, "memoryBytes": "536870912"},
-        "entrypoint": {"runCommand": {"argv": ["python", "-c", task_script]}},
+        "entrypoint": {"runCommand": {"argv": [PROOF_PYTHON, "-c", task_script]}},
         "environment": {"secrets": {"AUTH_PROOF_CA": config.authority_ca_file.read_text()}},
         "replicas": 1,
         "maxRetriesFailure": 0,
@@ -284,7 +290,9 @@ def run_execution_proof(
             raise RuntimeError("The observed running attempt lost its bounded authority")
         grant_id = active.json()["grant_id"]
         attempt_expiry = active.json()["expires_at"]
-        issued_at = jwt.decode(captured["token"], options={"verify_signature": False})["iat"]
+        claims = jwt.decode(captured["token"], options={"verify_signature": False})
+        issued_at = claims["iat"]
+        token_expiry = claims["exp"]
         if not time.time() < attempt_expiry <= issued_at + 61:
             raise RuntimeError("The actual attempt grant exceeds its fixed one-minute lifetime")
         with runtime.database.read_snapshot() as snapshot:
@@ -317,6 +325,9 @@ def run_execution_proof(
             timeout=Duration.from_seconds(10),
             error_message="The terminated attempt retained authority",
         )
+        revocation_observed_at = time.time()
+        if revocation_observed_at >= min(token_expiry, attempt_expiry):
+            raise RuntimeError("The terminal denial was observed after credential expiry")
         return {
             "job_id": job_name,
             "session_id": run["session_id"],
@@ -325,6 +336,8 @@ def run_execution_proof(
             "job_grant_id": job_grant_id,
             "loom_grant_id": run["grant_id"],
             "attempt_expires_at": attempt_expiry,
+            "token_expires_at": token_expiry,
+            "revocation_observed_at": revocation_observed_at,
             "namespace": TASK_NAMESPACE,
             "runtime_class": captured["runtime_class"],
             "outcome": outcome,
