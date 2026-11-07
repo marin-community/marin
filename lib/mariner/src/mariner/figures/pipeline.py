@@ -35,10 +35,8 @@ from mariner.data import OUTCOME_PREFIX, read_table, require_columns
 from mariner.figures.layout import (
     LOSS_LABELS,
     METHOD_COLORS,
-    METHOD_LABELS,
     NEUTRAL,
     FigureData,
-    Method,
     figure_legend,
     mosaic,
     panel_legend,
@@ -52,7 +50,9 @@ from mariner.figures.starcoder import (
     fit_shares,
     realized_share_grid,
 )
+from mariner.methods import METHOD_LABELS, Method
 from mariner.olmix import fit_log_linear
+from mariner.tables import UNPROPOSED, ladder_track
 
 SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
 LADDER_METHODS = (Method.PROPORTIONAL, Method.UNIMAX, Method.OLMIX, Method.MARINER)
@@ -107,20 +107,21 @@ def fit_scaling_law(compute: np.ndarray, loss: np.ndarray) -> ScalingLaw:
 
 
 def ladder_means(root: Path, objective: str) -> pd.DataFrame:
-    """Each ladder mixture's mean and SD (ddof 1) of ``objective`` at each compute scale.
+    """Each ladder mixture's mean and SD (ddof 1) of ``objective`` at each compute scale, from
+    ``mariner.tables.ladder_track``.
 
     The mixtures are proportional, UniMax-8, and Olmix's and MARINER's proposals for ``objective``.
     """
     ladder = read_table(root, "ladder")
     outcome = f"{OUTCOME_PREFIX}{objective}"
     require_columns(ladder, ["method", "proposal_objective", "compute_flops", outcome], "ladder")
-    method = ladder["method"]
-    rows = ladder[
-        method.isin([m.value for m in LADDER_METHODS])
-        & (~method.isin([m.value for m in PROPOSED_METHODS]) | (ladder["proposal_objective"] == objective))
+    tracks = [
+        ladder_track(ladder, method, objective if method in PROPOSED_METHODS else UNPROPOSED, outcome).assign(
+            method=method.value
+        )
+        for method in LADDER_METHODS
     ]
-    grouped = rows.groupby(["method", "compute_flops"])[outcome]
-    means = grouped.agg(mean_bpb="mean", sd_bpb="std", runs="size").reset_index()
+    means = pd.concat(tracks, ignore_index=True)[["method", "compute_flops", "mean_bpb", "sd_bpb", "runs"]]
     return means.sort_values(["method", "compute_flops"], ignore_index=True)
 
 
@@ -284,6 +285,7 @@ TREE_PARAMETERS = {
 TREE_ROUNDS = 64
 TREE_TIE_TOLERANCE = 1e-12  # BPB: the plateaus within this of the least form the trees' optimum
 TREE_COLOR = "#B77B2B"
+TREE_OPTIMUM_STYLE = {"color": TREE_COLOR, "alpha": 0.3, "linewidth": 5}  # the band over the trees' optimum
 UNFITTED_COLOR = "#A5AEB6"
 
 
@@ -384,7 +386,7 @@ def draw_surrogates(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
     steps = plateaus[["share_left", "share_right"]].to_numpy().ravel()
     axis.plot(steps, np.repeat(plateaus["bpb"].to_numpy(), 2), color=TREE_COLOR, linewidth=1.0)
     for plateau in plateaus[plateaus["optimum"]].itertuples():
-        axis.plot([plateau.share_left, plateau.share_right], [plateau.bpb] * 2, color=TREE_COLOR, alpha=0.3, linewidth=5)
+        axis.plot([plateau.share_left, plateau.share_right], [plateau.bpb] * 2, **TREE_OPTIMUM_STYLE)
     unfitted = means[~means["fitted"]]
     axis.scatter(unfitted["share"], unfitted["bpb"], s=18, color=UNFITTED_COLOR, edgecolor="white", zorder=4)
     fitted = means[means["fitted"]]
@@ -412,9 +414,7 @@ def draw_surrogates(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
             Line2D(
                 [],
                 [],
-                color=TREE_COLOR,
-                alpha=0.3,
-                linewidth=5,
+                **TREE_OPTIMUM_STYLE,
                 label=(f"trees' optimum: p = {lowest['share_left'].min():.2f} to {lowest['share_right'].max():.2f}"),
             ),
             Line2D([], [], color=NEUTRAL, marker="o", markerfacecolor="white", linestyle="none", label="fitted means"),

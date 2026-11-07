@@ -33,10 +33,10 @@ from scipy import stats
 from mariner.data import (
     BUCKET_ID,
     CALIBRATION_RUN,
+    COMMON_CRAWL,
     DELETION,
     DESIGN_KIND,
     MAIN_SWARM,
-    PAPER_TARGET_BUDGET,
     PARTITION_TABLE,
     POOL_TOKENS,
     RELIABILITY_COLLAPSED_SOURCE,
@@ -45,11 +45,15 @@ from mariner.data import (
     REPEAT,
     RUN_LABEL,
     RUN_TABLE,
+    SOURCES,
     VALIDATION_TABLE,
+    bucket_names,
+    bucket_sources,
     measured_outcomes,
     mixture_weights,
     objective_from_tasks,
     partition_from_table,
+    proportional_epochs,
     read_table,
     release_runs,
     release_tasks,
@@ -57,15 +61,9 @@ from mariner.data import (
     require_columns,
     swarm_from_runs,
 )
-from mariner.figures.analysis import (
-    COMMON_CRAWL,
-    EPOCH_COLUMNS,
-    SOURCES,
-    bucket_names,
-    bucket_sources,
-    mixture_epochs,
-)
-from mariner.figures.layout import METHOD_COLORS, NEUTRAL, OBJECTIVE_TITLES, FigureData, Method, figure_legend
+from mariner.figures.analysis import EPOCH_COLUMNS, mixture_epochs
+from mariner.figures.layout import METHOD_COLORS, NEUTRAL, OBJECTIVE_TITLES, FigureData, figure_legend
+from mariner.methods import Method
 
 BUCKET_COLUMNS = [BUCKET_ID, "paper_name", "pool", "quality_tier", POOL_TOKENS]
 SEPARATOR = {"color": NEUTRAL, "linewidth": 1.0}
@@ -395,7 +393,7 @@ def support_values(root: Path) -> dict[str, pd.DataFrame]:
         "swarm": dots,
         "ranges": ranges,
         "proposals": pd.DataFrame(proposals),
-        "proportional": pd.DataFrame({"epochs": [PAPER_TARGET_BUDGET / partition.pool_tokens.sum()]}),
+        "proportional": pd.DataFrame({"epochs": [proportional_epochs(partition)]}),
     }
 
 

@@ -73,17 +73,16 @@ from mariner.design import UNIMAX
 from mariner.figures.layout import (
     BAND_ALPHA,
     METHOD_COLORS,
-    METHOD_LABELS,
     NEUTRAL,
     OBJECTIVE_TITLES,
     FigureData,
-    Method,
     data_limits,
     figure_legend,
     mosaic,
     panels,
 )
 from mariner.figures.surrogate import PROPOSAL_MIXTURES
+from mariner.methods import METHOD_LABELS, Method
 from mariner.model import HeldoutBank, Objective
 
 PROPOSAL_METHOD = "proposal_method"  # heldout's column naming the design or launch a run comes from

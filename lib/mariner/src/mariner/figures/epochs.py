@@ -163,13 +163,12 @@ def path_law(scales: np.ndarray, shares: np.ndarray, losses: np.ndarray) -> Path
     )
 
 
-def sweep_label(sweep: StarcoderSweep, epochs: float) -> str:
-    """A sweep's model size, tokens, tokens per parameter, training FLOPs and fitted optimum's epochs."""
-    label = (
-        f"N {parameters_label(sweep.total_parameters)}, D {tokens_label(sweep.train_tokens)},"
-        f" D/N {rounded_label(sweep.train_tokens / sweep.total_parameters)}"
-    )
-    return f"{label}, {flops_label(sweep.compute_flops)} FLOPs: E* {epochs:.1f}"
+def sweep_label(minimum: pd.Series) -> str:
+    """A sweep's model size, tokens, tokens per parameter, training FLOPs and fitted optimum's epochs, from its row of
+    ``matched_compute_values``' minima."""
+    parameters, tokens = minimum["total_parameters"], minimum["train_tokens"]
+    label = f"N {parameters_label(parameters)}, D {tokens_label(tokens)}, D/N {rounded_label(tokens / parameters)}"
+    return f"{label}, {flops_label(minimum['compute_flops'])} FLOPs: E* {minimum['epochs']:.1f}"
 
 
 def law_label(law: PathLaw, symbol: str) -> str:
@@ -197,27 +196,18 @@ def matched_compute_paths(root: Path) -> dict[Track, list[StarcoderSweep]]:
     }
 
 
-def draw_matched_compute_scaling(root: Path) -> FigureData:
-    """Figure 3: the StarCoder sweeps of the three matched-compute paths, MARINER's fits and the optimum's path."""
+def matched_compute_values(root: Path) -> dict[str, pd.DataFrame]:
+    """The sweeps of the three matched-compute paths, MARINER's fit to each and its minimum, and each path's optimum
+    laws (``path_law``), measured and extrapolated, with the StarCoder epochs at share 1 that its epoch axis scales by.
+    """
     paths = matched_compute_paths(root)
     sweeps = {sweep.name: sweep for path in paths.values() for sweep in path}  # C05 lies on two paths
     fitted = {name: fitted_sweep(sweep) for name, sweep in sweeps.items()}
-    figure, axes = panels(3, legend_height=1.0, sharey=True)
     observations, curves, minima, path_rows, laws = [], [], [], [], []
-    for axis, (track, path) in zip(axes, paths.items(), strict=True):
-        attribute, symbol = TRACK_SCALES[track]
-        scales, optima = [], []
-        handles = []
-        for sweep, color in zip(path, scale_colors(len(path)), strict=True):
+    for track, path in paths.items():
+        attribute = TRACK_SCALES[track][0]
+        for sweep in path:
             curve = fitted[sweep.name]
-            optimum = curve.optimum
-            axis.plot(curve.shares, curve.predicted_bpb, color=color)
-            axis.scatter(sweep.shares, sweep.bpb, s=12, color=color, edgecolor=NEUTRAL, linewidth=0.3, zorder=3)
-            axis.scatter([optimum.share], [optimum.bpb], s=70, marker="*", color=color, edgecolor=NEUTRAL, zorder=5)
-            label = sweep_label(sweep, curve.optimum_epochs)
-            handles.append(Line2D([], [], color=color, marker="o", markersize=3, label=label))
-            scales.append(getattr(sweep, attribute))
-            optima.append(optimum)
             observations += [
                 {"track": track, "curve": sweep.name, "share": share, "bpb": bpb}
                 for share, bpb in zip(sweep.shares, sweep.bpb, strict=True)
@@ -234,26 +224,77 @@ def draw_matched_compute_scaling(root: Path) -> FigureData:
                     "train_tokens": sweep.train_tokens,
                     "tokens_per_parameter": sweep.train_tokens / sweep.total_parameters,
                     "compute_flops": sweep.compute_flops,
-                    "share": optimum.share,
+                    "share": curve.optimum.share,
                     "epochs": curve.optimum_epochs,
-                    "bpb": optimum.bpb,
+                    "bpb": curve.optimum.bpb,
                 }
             )
-        scale = np.asarray(scales)
+        scale = np.asarray([getattr(sweep, attribute) for sweep in path])
+        optima = [fitted[sweep.name].optimum for sweep in path]
         law = path_law(scale, np.array([o.share for o in optima]), np.array([o.bpb for o in optima]))
         measured = np.geomspace(scale[0], scale[-1], CURVE_POINTS)
         beyond = np.geomspace(scale[-1], EXTRAPOLATION_FACTOR * scale[-1], CURVE_POINTS)
-        # The limits set below, from the sweeps' data, clip the extrapolated paths.
-        axis.plot(law.share(measured), law.loss(measured), color=NEUTRAL, linestyle="--")
-        axis.plot(law.share(beyond), law.loss(beyond), color=NEUTRAL, linestyle=":")
-        handles.append(Line2D([], [], color=NEUTRAL, linestyle="--", label=law_label(law, symbol)))
         for values, extrapolated in ((measured, False), (beyond[1:], True)):
             path_rows += [
                 {"track": track, "scale": q, "share": p, "bpb": loss, "extrapolated": extrapolated}
                 for q, p, loss in zip(values, law.share(values), law.loss(values), strict=True)
             ]
-        laws.append({"track": track, "coordinate": attribute, **dataclasses.asdict(law)})
-        epochs_at_p1 = shared_epochs_at_p1(path)
+        laws.append(
+            {
+                "track": track,
+                "coordinate": attribute,
+                **dataclasses.asdict(law),
+                "epochs_at_p1": shared_epochs_at_p1(path),
+            }
+        )
+    return {
+        "observations": pd.DataFrame(observations),
+        "fits": pd.DataFrame(curves),
+        "minima": pd.DataFrame(minima),
+        "optimum_paths": pd.DataFrame(path_rows),
+        "path_laws": pd.DataFrame(laws),
+    }
+
+
+def draw_matched_compute_scaling(root: Path) -> FigureData:
+    """Figure 3: the StarCoder sweeps of the three matched-compute paths, MARINER's fits and the optimum's path."""
+    values = matched_compute_values(root)
+    observations = values["observations"].groupby(["track", "curve"], sort=False)
+    fits = values["fits"].groupby(["track", "curve"], sort=False)
+    optimum_paths = values["optimum_paths"].groupby("track", sort=False)
+    laws = values["path_laws"].set_index("track")
+    figure, axes = panels(3, legend_height=1.0, sharey=True)
+    minima_by_track = values["minima"].groupby("track", sort=False)
+    for axis, track in zip(axes, Track, strict=True):
+        minima = minima_by_track.get_group(track)
+        handles = []
+        for (_, minimum), color in zip(minima.iterrows(), scale_colors(len(minima)), strict=True):
+            curve = fits.get_group((track, minimum["curve"]))
+            measured = observations.get_group((track, minimum["curve"]))
+            axis.plot(curve["share"].to_numpy(), curve["predicted_bpb"].to_numpy(), color=color)
+            axis.scatter(
+                measured["share"].to_numpy(),
+                measured["bpb"].to_numpy(),
+                s=12,
+                color=color,
+                edgecolor=NEUTRAL,
+                linewidth=0.3,
+                zorder=3,
+            )
+            axis.scatter(
+                [minimum["share"]], [minimum["bpb"]], s=70, marker="*", color=color, edgecolor=NEUTRAL, zorder=5
+            )
+            handles.append(Line2D([], [], color=color, marker="o", markersize=3, label=sweep_label(minimum)))
+        # The extrapolated path continues from the measured path's last point. The limits set below, from the sweeps'
+        # data, clip it.
+        path = optimum_paths.get_group(track)
+        within = path[~path["extrapolated"]]
+        beyond = pd.concat([within.iloc[-1:], path[path["extrapolated"]]])
+        axis.plot(within["share"].to_numpy(), within["bpb"].to_numpy(), color=NEUTRAL, linestyle="--")
+        axis.plot(beyond["share"].to_numpy(), beyond["bpb"].to_numpy(), color=NEUTRAL, linestyle=":")
+        law = PathLaw(**{field.name: float(laws.at[track, field.name]) for field in dataclasses.fields(PathLaw)})
+        handles.append(Line2D([], [], color=NEUTRAL, linestyle="--", label=law_label(law, TRACK_SCALES[track][1])))
+        epochs_at_p1 = float(laws.at[track, "epochs_at_p1"])
         top = axis.secondary_xaxis("top", functions=(lambda p, s=epochs_at_p1: p * s, lambda e, s=epochs_at_p1: e / s))
         top.set_xlabel("Materialized StarCoder epochs")
         axis.set_title(TRACK_TITLES[track])
@@ -261,7 +302,7 @@ def draw_matched_compute_scaling(root: Path) -> FigureData:
         axis.set_xlabel("StarCoder share of the mixture, p")
         panel_legend(axis, handles, fontsize=6.5)
     axes[0].set_ylabel("Programming-languages loss (BPB)")
-    axes[0].set_ylim(*data_limits([row["bpb"] for row in observations] + [row["predicted_bpb"] for row in curves]))
+    axes[0].set_ylim(*data_limits([*values["observations"]["bpb"], *values["fits"]["predicted_bpb"]]))
     figure_legend(
         figure,
         [
@@ -273,11 +314,4 @@ def draw_matched_compute_scaling(root: Path) -> FigureData:
         ],
         columns=5,
     )
-    values = {
-        "observations": pd.DataFrame(observations),
-        "fits": pd.DataFrame(curves),
-        "minima": pd.DataFrame(minima),
-        "optimum_paths": pd.DataFrame(path_rows),
-        "path_laws": pd.DataFrame(laws),
-    }
     return FigureData(figure, values)

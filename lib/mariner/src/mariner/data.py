@@ -90,6 +90,11 @@ PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
 HELDOUT_TABLE = "heldout"
 VALIDATION_TABLE = "validation_3e18"
+# The release's buckets by source, in the paper's order: the Common Crawl topics at two quality tiers, Dolma 3's other
+# sources, and Dolmino's; and the partition table's pool names of the last two.
+COMMON_CRAWL, DOLMA3, DOLMINO = "Common Crawl", "Dolma 3, other sources", "Dolmino"
+SOURCES = (COMMON_CRAWL, DOLMA3, DOLMINO)
+DOLMA3_POOL, DOLMINO_POOL = "dolma3", "dolmino"
 # Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
 IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
@@ -240,6 +245,34 @@ def partition_from_table(table: pd.DataFrame, target_budget: float | None = None
 def read_partition(path: Path, target_budget: float | None = None) -> Partition:
     """The partition table (CSV) at ``path``; see ``partition_from_table``."""
     return partition_from_table(read_csv(path), target_budget)
+
+
+def proportional_epochs(partition: Partition) -> float:
+    """The epochs that proportional mixing gives every bucket at the paper's target budget: weighting the buckets by
+    their pools, it covers the whole partition D_tgt / sum(P_i) times."""
+    return float(PAPER_TARGET_BUDGET / partition.pool_tokens.sum())
+
+
+def bucket_sources(partition: pd.DataFrame) -> pd.Series:
+    """Each bucket of the release's partition table by its source, by bucket id: Common Crawl for the topics at a
+    quality tier, else its pool's (``SOURCES``)."""
+    require_columns(partition, [BUCKET_ID, "pool", "quality_tier"], PARTITION_TABLE)
+    source = np.where(
+        partition["quality_tier"].notna(),
+        COMMON_CRAWL,
+        np.where(partition["pool"] == DOLMINO_POOL, DOLMINO, DOLMA3),
+    )
+    unknown = sorted(set(partition.loc[~partition["pool"].isin([DOLMA3_POOL, DOLMINO_POOL]), "pool"]))
+    if unknown:
+        raise ValueError(f"the partition has buckets of the unknown pools {', '.join(map(str, unknown))}")
+    return pd.Series(source, index=partition[BUCKET_ID])
+
+
+def bucket_names(partition: pd.DataFrame) -> pd.Series:
+    """Each bucket's name in the paper, by bucket id, with the release's partition table's LaTeX ampersands as plain
+    text."""
+    require_columns(partition, [BUCKET_ID, "paper_name"], PARTITION_TABLE)
+    return partition.set_index(BUCKET_ID)["paper_name"].str.replace("\\&", "&", regex=False)
 
 
 def objective_from_tasks(tasks: pd.DataFrame, name: str) -> Objective:

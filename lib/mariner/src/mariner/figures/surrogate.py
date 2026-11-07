@@ -42,11 +42,9 @@ from mariner.figures.layout import (
     BAND_ALPHA,
     CONFIDENCE,
     METHOD_COLORS,
-    METHOD_LABELS,
     NEUTRAL,
     OBJECTIVE_TITLES,
     FigureData,
-    Method,
     figure_legend,
     panel_legend,
     panels,
@@ -60,6 +58,7 @@ from mariner.figures.starcoder import (
     fitted_sweep,
     tokens_label,
 )
+from mariner.methods import METHOD_LABELS, Method
 from mariner.model import Head, Shape, benefit, design_matrix, harm
 from mariner.olmix import fit_log_linear
 
@@ -68,38 +67,17 @@ from mariner.olmix import fit_log_linear
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def draw_olmix_capacity_failure(root: Path) -> FigureData:
-    """Figure 4: MARINER's and Olmix's fits to the 1.0 to 7.4B-token sweeps of a 210M model, and their picks."""
-    sweeps = atlas_sweeps(root, FIXED_PARAMETERS_CURVES)
-    figure, axes = panels(1, legend_width=1.6, legend_height=1.0)
-    axis = axes[0]
+def olmix_capacity_values(root: Path) -> dict[str, pd.DataFrame]:
+    """MARINER's and Olmix's fits to the 1.0 to 7.4B-token sweeps of a 210M model, MARINER's fitted minima, and Olmix's
+    picks among each sweep's measured shares."""
     observations, mariner_rows, olmix_rows, minima, picks = [], [], [], [], []
-    handles = []
-    for sweep, color in zip(sweeps.values(), scale_colors(len(sweeps)), strict=True):
+    for sweep in atlas_sweeps(root, FIXED_PARAMETERS_CURVES).values():
         weights = np.column_stack([1.0 - sweep.shares, sweep.shares])
         curve = fitted_sweep(sweep)
         optimum, dense = curve.optimum, curve.shares
         law = fit_log_linear(weights, sweep.bpb)
         pick = int(np.argmin(law.predict(weights)))
         olmix_curve = law.predict(np.column_stack([1.0 - dense, dense]))
-        axis.plot(dense, curve.predicted_bpb, color=color)
-        axis.plot(dense, olmix_curve, color=METHOD_COLORS[Method.OLMIX], linestyle="--", linewidth=1.0)
-        axis.scatter(sweep.shares, sweep.bpb, s=12, facecolor="white", edgecolor=color, linewidth=0.8, zorder=4)
-        axis.scatter([optimum.share], [optimum.bpb], s=70, marker="*", color=color, edgecolor=NEUTRAL, zorder=5)
-        axis.scatter(
-            [sweep.shares[pick]],
-            [sweep.bpb[pick]],
-            s=28,
-            marker="D",
-            color=METHOD_COLORS[Method.OLMIX],
-            edgecolor=NEUTRAL,
-            linewidth=0.5,
-            zorder=6,
-            clip_on=False,
-        )
-        epochs = curve.optimum_epochs
-        label = f"{tokens_label(sweep.train_tokens)} tokens: MARINER's minimum at {epochs:.1f} epochs"
-        handles.append(Line2D([], [], color=color, marker="o", markerfacecolor="white", label=label))
         observations += [
             {"curve": sweep.name, "train_tokens": sweep.train_tokens, "share": share, "bpb": bpb}
             for share, bpb in zip(sweep.shares, sweep.bpb, strict=True)
@@ -112,8 +90,69 @@ def draw_olmix_capacity_failure(root: Path) -> FigureData:
             {"curve": sweep.name, "share": share, "predicted_bpb": value}
             for share, value in zip(dense, olmix_curve, strict=True)
         ]
-        minima.append({"curve": sweep.name, "share": optimum.share, "epochs": epochs, "bpb": optimum.bpb})
+        minima.append(
+            {
+                "curve": sweep.name,
+                "train_tokens": sweep.train_tokens,
+                "share": optimum.share,
+                "epochs": curve.optimum_epochs,
+                "bpb": optimum.bpb,
+            }
+        )
         picks.append({"curve": sweep.name, "share": sweep.shares[pick], "measured_bpb": sweep.bpb[pick]})
+    return {
+        "observations": pd.DataFrame(observations),
+        "mariner_fits": pd.DataFrame(mariner_rows),
+        "olmix_fits": pd.DataFrame(olmix_rows),
+        "mariner_minima": pd.DataFrame(minima),
+        "olmix_picks": pd.DataFrame(picks),
+    }
+
+
+def draw_olmix_capacity_failure(root: Path) -> FigureData:
+    """Figure 4: MARINER's and Olmix's fits to the 1.0 to 7.4B-token sweeps of a 210M model, and their picks."""
+    values = olmix_capacity_values(root)
+    by_curve = {name: frame.groupby("curve", sort=False) for name, frame in values.items()}
+    figure, axes = panels(1, legend_width=1.6, legend_height=1.0)
+    axis = axes[0]
+    handles = []
+    minima = values["mariner_minima"]
+    for minimum, color in zip(minima.itertuples(), scale_colors(len(minima)), strict=True):
+        measured = by_curve["observations"].get_group(minimum.curve)
+        mariner = by_curve["mariner_fits"].get_group(minimum.curve)
+        olmix = by_curve["olmix_fits"].get_group(minimum.curve)
+        pick = by_curve["olmix_picks"].get_group(minimum.curve).iloc[0]
+        axis.plot(mariner["share"].to_numpy(), mariner["predicted_bpb"].to_numpy(), color=color)
+        axis.plot(
+            olmix["share"].to_numpy(),
+            olmix["predicted_bpb"].to_numpy(),
+            color=METHOD_COLORS[Method.OLMIX],
+            linestyle="--",
+            linewidth=1.0,
+        )
+        axis.scatter(
+            measured["share"].to_numpy(),
+            measured["bpb"].to_numpy(),
+            s=12,
+            facecolor="white",
+            edgecolor=color,
+            linewidth=0.8,
+            zorder=4,
+        )
+        axis.scatter([minimum.share], [minimum.bpb], s=70, marker="*", color=color, edgecolor=NEUTRAL, zorder=5)
+        axis.scatter(
+            [pick["share"]],
+            [pick["measured_bpb"]],
+            s=28,
+            marker="D",
+            color=METHOD_COLORS[Method.OLMIX],
+            edgecolor=NEUTRAL,
+            linewidth=0.5,
+            zorder=6,
+            clip_on=False,
+        )
+        label = f"{tokens_label(minimum.train_tokens)} tokens: MARINER's minimum at {minimum.epochs:.1f} epochs"
+        handles.append(Line2D([], [], color=color, marker="o", markerfacecolor="white", label=label))
     axis.set_xlim(*SHARE_AXIS_LIMITS)
     axis.set_xlabel("StarCoder share of the mixture, p")
     axis.set_ylabel("Programming-languages loss (BPB)")
@@ -136,13 +175,6 @@ def draw_olmix_capacity_failure(root: Path) -> FigureData:
         ],
         columns=2,
     )
-    values = {
-        "observations": pd.DataFrame(observations),
-        "mariner_fits": pd.DataFrame(mariner_rows),
-        "olmix_fits": pd.DataFrame(olmix_rows),
-        "mariner_minima": pd.DataFrame(minima),
-        "olmix_picks": pd.DataFrame(picks),
-    }
     return FigureData(figure, values)
 
 
@@ -160,41 +192,71 @@ LOSS_HEAD = Head(intercept=math.log(0.5), coefficients=np.array([1.0, 0.445]), p
 LOG_EPOCHS = np.geomspace(0.045, 72.0, 1_500)
 LINEAR_EPOCHS = np.linspace(1.0, 16.0, 1_500)
 BENEFIT_COLOR, HARM_COLOR = "#4C78A8", "#B06056"
+HARM_ALPHA = 0.22  # the band between the benefit-only and the predicted loss
 SHADES = (1.0, 0.68, 0.4)  # the three curves of a panel, darkest first
 BENEFIT_STYLES = ("-", "-", "--")
+
+
+def mariner_terms_values() -> dict[str, pd.DataFrame]:
+    """The benefit curves of ``BENEFIT_SHAPES`` and the harm curves of ``HARM_THRESHOLDS`` against a bucket's epochs,
+    where each harm activates, and the predicted loss of one bucket (``LOSS_SHAPE``, ``LOSS_HEAD``) with and without its
+    harm, and its minimum."""
+    benefit_rows, harm_rows, activations = [], [], []
+    for rho, kappa in BENEFIT_SHAPES:
+        curve = benefit(LOG_EPOCHS, rho, kappa)
+        benefit_rows += [
+            {"rho": rho, "kappa": kappa, "epochs": e, "benefit": b} for e, b in zip(LOG_EPOCHS, curve, strict=True)
+        ]
+    for tau in HARM_THRESHOLDS:
+        curve = harm(LOG_EPOCHS, tau)
+        onset = math.exp(tau) - 1.0
+        harm_rows += [{"tau": tau, "epochs": e, "harm": h} for e, h in zip(LOG_EPOCHS, curve, strict=True)]
+        activations.append({"tau": tau, "epochs": onset, "harm": float(harm(np.array([onset]), tau)[0])})
+    alpha = LOSS_HEAD.coefficients[0]
+    matrix = design_matrix(LINEAR_EPOCHS[:, None], LOSS_SHAPE)
+    loss = LOSS_HEAD.predict(matrix)
+    benefit_only = dataclasses.replace(LOSS_HEAD, coefficients=np.array([alpha, 0.0])).predict(matrix)
+    lowest = int(np.argmin(loss))
+    return {
+        "benefit": pd.DataFrame(benefit_rows),
+        "harm": pd.DataFrame(harm_rows),
+        "activations": pd.DataFrame(activations),
+        "predicted_loss": pd.DataFrame({"epochs": LINEAR_EPOCHS, "bpb": loss, "benefit_only_bpb": benefit_only}),
+        "minimum": pd.DataFrame({"epochs": [LINEAR_EPOCHS[lowest]], "bpb": [loss[lowest]]}),
+    }
 
 
 def draw_mariner_terms(root: Path) -> FigureData:
     """Figure 5: the benefit and harm terms against a bucket's epochs, and one bucket's predicted loss.
 
-    It reads no table: every curve is ``mariner.model``'s at the paper's parameter values.
+    It reads no table: every curve is ``mariner.model``'s at the paper's parameter values (``mariner_terms_values``).
     """
     del root
+    values = mariner_terms_values()
     figure, axes = panels(3, legend_height=1.0)
-    benefit_rows, harm_rows, activations = [], [], []
+    benefits = values["benefit"].groupby(["rho", "kappa"], sort=False)
     for (rho, kappa), shade, linestyle in zip(BENEFIT_SHAPES, SHADES, BENEFIT_STYLES, strict=True):
-        curve = benefit(LOG_EPOCHS, rho, kappa)
+        curve = benefits.get_group((rho, kappa))
         axes[0].plot(
-            LOG_EPOCHS,
-            curve,
+            curve["epochs"].to_numpy(),
+            curve["benefit"].to_numpy(),
             color=BENEFIT_COLOR,
             alpha=shade,
             linestyle=linestyle,
             label=rf"$\rho$ = {rho:g}, $\kappa$ = {kappa:g}",
         )
-        benefit_rows += [
-            {"rho": rho, "kappa": kappa, "epochs": e, "benefit": b} for e, b in zip(LOG_EPOCHS, curve, strict=True)
-        ]
-    for tau, shade in zip(HARM_THRESHOLDS, SHADES, strict=True):
-        curve = harm(LOG_EPOCHS, tau)
-        onset = math.exp(tau) - 1.0
-        at_onset = float(harm(np.array([onset]), tau)[0])
+    harms = values["harm"].groupby("tau", sort=False)
+    for activation, shade in zip(values["activations"].itertuples(), SHADES, strict=True):
+        tau, onset = activation.tau, activation.epochs
+        curve = harms.get_group(tau)
         axes[1].plot(
-            LOG_EPOCHS, curve, color=HARM_COLOR, alpha=shade, label=rf"$\tau$ = {tau:g}, activates at {onset:.2g} epochs"
+            curve["epochs"].to_numpy(),
+            curve["harm"].to_numpy(),
+            color=HARM_COLOR,
+            alpha=shade,
+            label=rf"$\tau$ = {tau:g}, activates at {onset:.2g} epochs",
         )
-        axes[1].plot([onset], [at_onset], "o", color=HARM_COLOR, alpha=shade, markeredgecolor="white", zorder=5)
-        harm_rows += [{"tau": tau, "epochs": e, "harm": h} for e, h in zip(LOG_EPOCHS, curve, strict=True)]
-        activations.append({"tau": tau, "epochs": onset, "harm": at_onset})
+        axes[1].plot([onset], [activation.harm], "o", color=HARM_COLOR, alpha=shade, markeredgecolor="white", zorder=5)
     for axis, title, label in ((axes[0], "Benefit: Weibull CDF", "b(E)"), (axes[1], "Harm: squared softplus", "h(E)")):
         axis.set_xscale("log")
         axis.set_xlabel("Epochs E (log scale)")
@@ -203,21 +265,19 @@ def draw_mariner_terms(root: Path) -> FigureData:
         panel_legend(axis)
     axes[1].set_ylim(0.0, 6.0)
     alpha, beta = LOSS_HEAD.coefficients
-    matrix = design_matrix(LINEAR_EPOCHS[:, None], LOSS_SHAPE)
-    loss = LOSS_HEAD.predict(matrix)
-    benefit_only = dataclasses.replace(LOSS_HEAD, coefficients=np.array([alpha, 0.0])).predict(matrix)
-    lowest = int(np.argmin(loss))
-    axes[2].fill_between(LINEAR_EPOCHS, benefit_only, loss, color=HARM_COLOR, alpha=0.22, linewidth=0, label="harm")
-    axes[2].plot(LINEAR_EPOCHS, benefit_only, color=BENEFIT_COLOR, linestyle="--", label="benefit only")
-    axes[2].plot(LINEAR_EPOCHS, loss, color=METHOD_COLORS[Method.MARINER], linewidth=1.6, label="predicted loss")
+    predicted, minimum = values["predicted_loss"], values["minimum"].iloc[0]
+    epochs, loss, benefit_only = (predicted[column].to_numpy() for column in ("epochs", "bpb", "benefit_only_bpb"))
+    axes[2].fill_between(epochs, benefit_only, loss, color=HARM_COLOR, alpha=HARM_ALPHA, linewidth=0, label="harm")
+    axes[2].plot(epochs, benefit_only, color=BENEFIT_COLOR, linestyle="--", label="benefit only")
+    axes[2].plot(epochs, loss, color=METHOD_COLORS[Method.MARINER], linewidth=1.6, label="predicted loss")
     axes[2].plot(
-        LINEAR_EPOCHS[lowest],
-        loss[lowest],
+        minimum["epochs"],
+        minimum["bpb"],
         "*",
         color=METHOD_COLORS[Method.MARINER],
         markersize=9,
         markeredgecolor="white",
-        label=f"minimum at {LINEAR_EPOCHS[lowest]:.1f} epochs",
+        label=f"minimum at {minimum['epochs']:.1f} epochs",
     )
     panel_legend(
         axes[2],
@@ -230,13 +290,6 @@ def draw_mariner_terms(root: Path) -> FigureData:
     axes[2].set_xlabel("Epochs E")
     axes[2].set_ylabel("Predicted loss (BPB)")
     axes[2].set_title("One bucket's predicted loss")
-    values = {
-        "benefit": pd.DataFrame(benefit_rows),
-        "harm": pd.DataFrame(harm_rows),
-        "activations": pd.DataFrame(activations),
-        "predicted_loss": pd.DataFrame({"epochs": LINEAR_EPOCHS, "bpb": loss, "benefit_only_bpb": benefit_only}),
-        "minimum": pd.DataFrame({"epochs": [LINEAR_EPOCHS[lowest]], "bpb": [loss[lowest]]}),
-    }
     return FigureData(figure, values)
 
 
@@ -412,24 +465,30 @@ PROPOSAL_MIXTURES = {
         Method.REGMIX: "mix_40e3c45f36f0c460",
     },
 }
-# The validation launches that trained the proposals' three trainer seeds. The Olmix cap and KL sweep retrained
-# Olmix's matched proposal once more; the figure leaves that run out.
-PROPOSAL_LAUNCHES = ("frozen_procedure", "fairness_repeats", "matched_olmix", "comparator_proposals", "table5_repeats")
+# The Olmix cap and KL sweep trained Olmix's deployed proposals once more, at trainer seed 0; the figures leave that run
+# out, so that each proposal has one run at each trainer seed.
+RERUN_LAUNCH = "olmix_cap_kl_sweep"
 TRAINER_SEEDS = (0, 1, 2)
 NORMAL_QUANTILE_95 = 1.96  # the figure's interval: the mean plus or minus 1.96 standard errors
 BAR_HALF_WIDTH = 0.32
+INTERVAL_ALPHA = 0.2  # the band of a proposal's measured 95% interval
 MARKERS = {Method.MARINER: "o", Method.OLMIX: "D", Method.SPLINE: "s", Method.REGMIX: "^"}
 
 
-def proposal_runs(runs: pd.DataFrame, mixture: str) -> pd.DataFrame:
-    """The ``validation_3e18`` runs that trained the proposal ``mixture`` at its three trainer seeds.
+def seed_runs(validation: pd.DataFrame, mixture: str, proposal_objective: str) -> pd.DataFrame:
+    """The ``validation_3e18`` runs of the proposal ``mixture`` at the three trainer seeds, without the Olmix cap and
+    KL sweep's rerun (``RERUN_LAUNCH``).
 
-    Raises ``ValueError`` unless the proposal launches hold one run at each seed.
+    Raises ``ValueError`` unless they are one run at each seed, proposed for ``proposal_objective``.
     """
-    rows = runs[(runs["mixture_id"] == mixture) & runs["launch"].isin(PROPOSAL_LAUNCHES)]
-    if sorted(rows["trainer_seed"]) != list(TRAINER_SEEDS):
-        raise ValueError(f"{mixture} has trainer seeds {sorted(rows['trainer_seed'])}, not {TRAINER_SEEDS}")
-    return rows
+    runs = validation[(validation["mixture_id"] == mixture) & (validation["launch"] != RERUN_LAUNCH)]
+    if sorted(runs["trainer_seed"]) != list(TRAINER_SEEDS):
+        raise ValueError(f"{mixture} has trainer seeds {sorted(runs['trainer_seed'])}, not {TRAINER_SEEDS}")
+    if set(runs["proposal_objective"]) != {proposal_objective}:
+        raise ValueError(
+            f"{mixture} was proposed for {sorted(set(runs['proposal_objective']))}, not {proposal_objective}"
+        )
+    return runs
 
 
 def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
@@ -439,14 +498,15 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
     """
     runs = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in PROPOSAL_MIXTURES]
-    require_columns(runs, [OBSERVATION_ID, "mixture_id", "launch", "trainer_seed", *outcomes], VALIDATION_TABLE)
+    columns = [OBSERVATION_ID, "mixture_id", "launch", "trainer_seed", "proposal_objective", *outcomes]
+    require_columns(runs, columns, VALIDATION_TABLE)
     released = read_table(root, "fits_proposal_predictions")
     columns = [OBSERVATION_ID, "objective", "predictor", "predicted_bpb"]
     require_columns(released, columns, "fits_proposal_predictions")
     measured, predictions = [], []
     for objective, proposals in PROPOSAL_MIXTURES.items():
         for proposal, mixture in proposals.items():
-            rows = proposal_runs(runs, mixture)
+            rows = seed_runs(runs, mixture, objective)
             measured += [
                 {
                     "objective": objective,
@@ -507,7 +567,7 @@ def draw_proposal_predictions(root: Path) -> FigureData:
             color = METHOD_COLORS[proposal]
             span = [column - BAR_HALF_WIDTH, column + BAR_HALF_WIDTH]
             low, high = row["mean_bpb"] - row["half_width"], row["mean_bpb"] + row["half_width"]
-            axis.fill_between(span, low, high, color=color, alpha=0.2, linewidth=0)
+            axis.fill_between(span, low, high, color=color, alpha=INTERVAL_ALPHA, linewidth=0)
             axis.plot(span, [row["mean_bpb"]] * 2, color=color, linewidth=1.8)
             for predictor in PROPOSAL_MODELS:
                 predicted = predictions[

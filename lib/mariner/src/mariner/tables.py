@@ -22,6 +22,7 @@ from typing import NamedTuple
 import pandas as pd
 
 from mariner.data import OBJECTIVES, OUTCOME_PREFIX, read_table, require_columns
+from mariner.methods import METHOD_LABELS, Method
 
 COMPUTE_SCALES = (3e18, 2e19, 3e20, 1e21)  # training FLOPs: the ladder's rungs, the table's loss columns
 REPEATED_SCALE = 3e18  # the rung whose runs repeat, printed as mean and standard deviation
@@ -45,41 +46,71 @@ class Statistic(StrEnum):
 
 
 class Mixture(NamedTuple):
-    """A row of the table: its printed name, its ``method`` in the dataset, and whether a surrogate proposed it, so
-    that each objective's columns read the proposal for that objective."""
+    """A row of the table, printed under its method's name: the method, and whether a surrogate proposed the mixture,
+    so that each objective's columns read the proposal for that objective."""
 
-    name: str
-    method: str
+    method: Method
     proposed: bool
 
 
 MIXTURES = (
-    Mixture("Proportional", "proportional", proposed=False),
-    Mixture("UniMax-8", "unimax8", proposed=False),
-    Mixture("Olmix", "olmix", proposed=True),
-    Mixture("MARINER", "mariner", proposed=True),
+    Mixture(Method.PROPORTIONAL, proposed=False),
+    Mixture(Method.UNIMAX, proposed=False),
+    Mixture(Method.OLMIX, proposed=True),
+    Mixture(Method.MARINER, proposed=True),
 )
 
 
-def aggregate(values: pd.Series, statistic: Statistic, query: str) -> float:
-    """``values`` aggregated by ``statistic``.
+def ladder_track(ladder: pd.DataFrame, method: Method, proposal: str, outcome: str) -> pd.DataFrame:
+    """The mean and standard deviation (ddof 1) of the column ``outcome`` over one mixture's ``ladder`` runs at each
+    compute scale, from the smallest, with the number of runs.
 
-    Raises ``ValueError`` naming ``query`` when the selection is empty or holds a missing value, when it holds other
-    than one value for ``VALUE``, or fewer than two for ``STD``.
+    The mixture is ``method``'s proposal for the objective ``proposal``, or ``UNPROPOSED`` for a mixture that no
+    surrogate proposed. Raises ``ValueError`` unless the mixture has runs at each of ``COMPUTE_SCALES`` and at no other
+    scale, and every run has a value of ``outcome``.
     """
-    if values.empty:
+    runs = ladder[(ladder["method"] == method) & (ladder["proposal_objective"] == proposal)]
+    missing = runs[outcome].isna()
+    if missing.any():
+        raise ValueError(f"the ladder lacks {outcome} for {int(missing.sum())} runs of {method}'s {proposal} mixture")
+    track = runs.groupby("compute_flops")[outcome].agg(mean_bpb="mean", sd_bpb="std", runs="size").reset_index()
+    if track["compute_flops"].tolist() != list(COMPUTE_SCALES):
+        raise ValueError(
+            f"the ladder trains {method}'s {proposal} mixture at {track['compute_flops'].tolist()} FLOPs, not at"
+            f" {list(COMPUTE_SCALES)}"
+        )
+    return track
+
+
+def loss_entries(track: pd.DataFrame, query: str) -> dict[tuple[float, Statistic], float]:
+    """A row's loss entries from one mixture's ``ladder_track``, by compute scale and statistic: the mean and standard
+    deviation at ``REPEATED_SCALE`` and the one run's value at each larger scale.
+
+    Raises ``ValueError`` naming ``query`` when the repeated scale has fewer than two runs or a larger one other than
+    one run.
+    """
+    entries = {}
+    for row in track.itertuples(index=False):
+        compute, runs = float(row.compute_flops), int(row.runs)
+        if compute == REPEATED_SCALE:
+            if runs < 2:
+                raise ValueError(f"{query} at {compute:g} FLOPs selects {runs} run, too few for a standard deviation")
+            entries[(compute, Statistic.MEAN)] = float(row.mean_bpb)
+            entries[(compute, Statistic.STD)] = float(row.sd_bpb)
+        elif runs != 1:
+            raise ValueError(f"{query} at {compute:g} FLOPs selects {runs} runs where it takes one run's value")
+        else:
+            entries[(compute, Statistic.VALUE)] = float(row.mean_bpb)
+    return entries
+
+
+def mean_accuracy(scores: pd.Series, query: str) -> float:
+    """The mean of ``scores``; raises ``ValueError`` naming ``query`` when they are empty or one is missing."""
+    if scores.empty:
         raise ValueError(f"{query} selects no run")
-    if values.isna().any():
-        raise ValueError(f"{query} selects {int(values.isna().sum())} missing values")
-    if statistic is Statistic.VALUE:
-        if len(values) != 1:
-            raise ValueError(f"{query} selects {len(values)} runs where it takes one run's value")
-        return float(values.iloc[0])
-    if statistic is Statistic.STD:
-        if len(values) < 2:
-            raise ValueError(f"{query} selects {len(values)} run, too few for a standard deviation")
-        return float(values.std(ddof=1))
-    return float(values.mean())
+    if scores.isna().any():
+        raise ValueError(f"{query} selects {int(scores.isna().sum())} missing values")
+    return float(scores.mean())
 
 
 def scaling_main_table(root: Path) -> pd.DataFrame:
@@ -87,7 +118,8 @@ def scaling_main_table(root: Path) -> pd.DataFrame:
 
     The columns are the paper's nine, keyed (quantity, compute FLOPs, statistic): each objective's loss at the four
     compute scales, its 3e18 entry a mean with its standard deviation, and the mean accuracy (%) at 1e21 FLOPs. Raises
-    ``ValueError`` naming the table and column when ``ladder`` or ``ladder_accuracy`` lacks a column the queries read.
+    ``ValueError`` naming the table and column when ``ladder`` or ``ladder_accuracy`` lacks a column the queries read,
+    and naming the entry when a mixture lacks its runs or their values (``ladder_track``, ``loss_entries``).
     """
     ladder = read_table(root, "ladder")
     accuracy = read_table(root, "ladder_accuracy")
@@ -96,21 +128,16 @@ def scaling_main_table(root: Path) -> pd.DataFrame:
     require_columns(accuracy, ["method", ACCURACY], "ladder_accuracy")
     rows = {}
     for mixture in MIXTURES:
+        name = METHOD_LABELS[mixture.method]
         cells: dict[tuple[str, float, Statistic], float] = {}
         for objective in OBJECTIVES:
             proposal = objective if mixture.proposed else UNPROPOSED
-            runs = ladder[(ladder["method"] == mixture.method) & (ladder["proposal_objective"] == proposal)]
-            for compute in COMPUTE_SCALES:
-                values = runs.loc[runs["compute_flops"] == compute, f"{OUTCOME_PREFIX}{objective}"]
-                statistics = (Statistic.MEAN, Statistic.STD) if compute == REPEATED_SCALE else (Statistic.VALUE,)
-                for statistic in statistics:
-                    query = f"{mixture.name}'s {objective} at {compute:g} FLOPs"
-                    cells[(objective, compute, statistic)] = aggregate(values, statistic, query)
+            track = ladder_track(ladder, mixture.method, proposal, f"{OUTCOME_PREFIX}{objective}")
+            for (compute, statistic), value in loss_entries(track, f"{name}'s {objective}").items():
+                cells[(objective, compute, statistic)] = value
         scores = accuracy.loc[accuracy["method"] == mixture.method, ACCURACY]
-        cells[(ACCURACY, ACCURACY_SCALE, Statistic.MEAN)] = aggregate(
-            scores, Statistic.MEAN, f"{mixture.name}'s accuracy"
-        )
-        rows[mixture.name] = cells
+        cells[(ACCURACY, ACCURACY_SCALE, Statistic.MEAN)] = mean_accuracy(scores, f"{name}'s accuracy")
+        rows[name] = cells
     table = pd.DataFrame.from_dict(rows, orient="index")
     table.columns = pd.MultiIndex.from_tuples(table.columns, names=["quantity", "compute_flops", "statistic"])
     return table

@@ -37,10 +37,9 @@ from mariner.figures.layout import (
     panels,
     scale_colors,
 )
-from mariner.figures.starcoder import Optimum, StarcoderSweep, atlas_sweeps, tokens_label
+from mariner.figures.starcoder import CURVES_TABLE, Optimum, StarcoderSweep, atlas_sweeps, tokens_label
 
 REPLAY_FAMILY = "dense_horizon_replay"  # starcoder_curves' family of the 28 sweeps
-CURVES_TABLE = "starcoder_curves"
 SUPPORTS_TABLE = "starcoder_curricula"
 FULL_POOL = "full"  # starcoder_curricula's support_id of the whole StarCoder pool, whose multiplier is NaN
 # A sweep's pool is the support whose budget and pool size (SUPPORT_KEYS) equal the sweep's (CURVE_KEYS).

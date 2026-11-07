@@ -51,11 +51,9 @@ from mariner.data import (
 from mariner.figures.layout import (
     LOSS_LABELS,
     METHOD_COLORS,
-    METHOD_LABELS,
     NEUTRAL,
     OBJECTIVE_TITLES,
     FigureData,
-    Method,
     figure_legend,
     mosaic,
     panels,
@@ -70,8 +68,9 @@ from mariner.figures.pipeline import (
     fit_scaling_law,
     scaling_values,
 )
-from mariner.figures.surrogate import TRAINER_SEEDS
-from mariner.tables import COMPUTE_SCALES, REPEATED_SCALE, UNPROPOSED, compute_label
+from mariner.figures.surrogate import seed_runs
+from mariner.methods import METHOD_LABELS, Method
+from mariner.tables import COMPUTE_SCALES, REPEATED_SCALE, UNPROPOSED, compute_label, ladder_track
 
 MARKER_SIZE = 7.0
 JOIN_WIDTH = 0.8  # the lines that join a panel's points
@@ -201,25 +200,6 @@ ON_OFF_METHODS = (Method.PROPORTIONAL, Method.OLMIX, Method.MARINER)
 TRACK_STYLES = {True: "-", False: "--"}  # on-objective solid, off-objective dashed
 
 
-def ladder_track(ladder: pd.DataFrame, method: Method, proposal: str, objective: str) -> pd.DataFrame:
-    """The mean and SD (ddof 1) of ``objective`` over a ladder mixture's runs at each compute scale, and their count.
-
-    The mixture is ``method``'s proposal for the objective ``proposal``, or ``none`` for a mixture no surrogate
-    proposed. Raises ``ValueError`` unless it has a value at each of the ladder's four scales and nowhere else.
-    """
-    rows = ladder[(ladder["method"] == method.value) & (ladder["proposal_objective"] == proposal)]
-    column = f"{OUTCOME_PREFIX}{objective}"
-    if rows[column].isna().any():
-        raise ValueError(f"the ladder lacks {objective} for {int(rows[column].isna().sum())} runs of {method}'s mixture")
-    track = rows.groupby("compute_flops")[column].agg(mean_bpb="mean", sd_bpb="std", runs="size").reset_index()
-    if track["compute_flops"].tolist() != list(COMPUTE_SCALES):
-        raise ValueError(
-            f"the ladder trains {method}'s {proposal} mixture at {track['compute_flops'].tolist()} FLOPs, not at"
-            f" {list(COMPUTE_SCALES)}"
-        )
-    return track
-
-
 def on_off_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each method's tracks on each objective, on and off the objective of its proposal, and their fitted laws."""
     ladder = read_table(root, "ladder")
@@ -236,7 +216,7 @@ def on_off_values(root: Path) -> dict[str, pd.DataFrame]:
                     "proposal_objective": proposal,
                     "on_objective": on_objective,
                 }
-                track = ladder_track(ladder, method, proposal, objective)
+                track = ladder_track(ladder, method, proposal, f"{OUTCOME_PREFIX}{objective}")
                 law = fit_scaling_law(track["compute_flops"].to_numpy(float), track["mean_bpb"].to_numpy(float))
                 compute = np.geomspace(COMPUTE_SCALES[0], COMPUTE_SCALES[-1], LAW_POINTS)
                 tracks.append(track.assign(**key))
@@ -317,9 +297,6 @@ BROAD_LANGUAGE = ("uncheatable/ao3_english", "uncheatable/wikipedia_english", "u
 OBE_EASY_GROUPS = ("Code", "Math", "Basic Skills", "MMLU", "QA")
 QA_SUBGROUPS = (("mmlu_", "MMLU"), ("basic_skills_", "Basic Skills"))
 QA = "QA"
-# The Olmix cap and KL sweep trained Olmix's deployed proposals once more, at trainer seed 0; the bars leave that run
-# out, so that each averages one run at each trainer seed, as MARINER's do.
-RERUN_LAUNCH = "olmix_cap_kl_sweep"
 TRADEOFF_METHODS = (Method.MARINER, Method.OLMIX)
 SYMLOG_THRESHOLD = 0.005  # BPB: the change axis is linear within this of zero and logarithmic beyond, as the paper's
 SYMLOG_LINSCALE = 0.35
@@ -443,32 +420,16 @@ def repeat_means(reliability: pd.DataFrame, objective: str) -> pd.Series:
 
 def ladder_proportional_means(ladder: pd.DataFrame, objective: str, task_ids: Sequence[str]) -> pd.Series:
     """The mean BPB of ``task_ids`` and of ``objective`` over the ladder's proportional runs at 3e18 FLOPs, by task id
-    and by the objective's name: the main swarm's ten repeats and the June run, as Table 2 averages them."""
+    and by the objective's name: the main swarm's ten repeats and the June run, as Table 2 averages them
+    (``mariner.tables.ladder_track``)."""
     outcomes = [*task_ids, objective]
     columns = [f"{OUTCOME_PREFIX}{outcome}" for outcome in outcomes]
     require_columns(ladder, ["method", "proposal_objective", "compute_flops", *columns], "ladder")
-    runs = ladder[
-        (ladder["method"] == Method.PROPORTIONAL)
-        & (ladder["proposal_objective"] == UNPROPOSED)
-        & (ladder["compute_flops"] == REPEATED_SCALE)
+    means = [
+        ladder_track(ladder, Method.PROPORTIONAL, UNPROPOSED, column).set_index("compute_flops")["mean_bpb"]
+        for column in columns
     ]
-    values = runs[columns]
-    if values.empty or values.isna().to_numpy().any():
-        raise ValueError(f"the ladder's proportional runs at {REPEATED_SCALE:g} FLOPs lack values of {objective}")
-    return pd.Series(values.mean().to_numpy(float), index=outcomes)
-
-
-def seed_runs(validation: pd.DataFrame, mixture: str, proposal_objective: str) -> pd.DataFrame:
-    """The runs of ``mixture`` at the three trainer seeds; raises ``ValueError`` unless they are those three and
-    were proposed for ``proposal_objective``."""
-    runs = validation[(validation["mixture_id"] == mixture) & (validation["launch"] != RERUN_LAUNCH)]
-    if sorted(runs["trainer_seed"]) != list(TRAINER_SEEDS):
-        raise ValueError(f"{mixture} has trainer seeds {sorted(runs['trainer_seed'])}, not {TRAINER_SEEDS}")
-    if set(runs["proposal_objective"]) != {proposal_objective}:
-        raise ValueError(
-            f"{mixture} was proposed for {sorted(set(runs['proposal_objective']))}, not {proposal_objective}"
-        )
-    return runs
+    return pd.Series([float(mean[REPEATED_SCALE]) for mean in means], index=outcomes)
 
 
 def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:

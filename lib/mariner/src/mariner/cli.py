@@ -525,7 +525,7 @@ def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mariner", description="Fit MARINER to a swarm of proxy runs and propose a pretraining data mixture."
     )
-    parser.set_defaults(out=None)  # evaluate and self-test write no file
+    parser.set_defaults(out=None)  # evaluate, self-test and tables write no file
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     command = commands.add_parser("download", help="download the mariner-data tables this package reads")

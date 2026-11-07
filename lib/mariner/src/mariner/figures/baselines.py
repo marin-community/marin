@@ -29,11 +29,9 @@ from mariner.figures.layout import (
     BAND_ALPHA,
     LOSS_LABELS,
     METHOD_COLORS,
-    METHOD_LABELS,
     NEUTRAL,
     OBJECTIVE_TITLES,
     FigureData,
-    Method,
     data_limits,
     figure_legend,
     mosaic,
@@ -45,9 +43,10 @@ from mariner.figures.surrogate import (
     draw_regret_panel,
     learning_curve_handles,
     learning_curve_summary,
-    proposal_runs,
+    seed_runs,
     swarm_size_ticks,
 )
+from mariner.methods import METHOD_LABELS, Method
 
 # ---------------------------------------------------------------------------------------------------------------
 # Figures 18 and 19: learning curves of the ablations and the baselines
@@ -135,7 +134,9 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
             raise ValueError(f"{PATHS_TABLE}'s {objective} paths lead to {held}, not to {baselines}")
     validation = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in OBJECTIVES]
-    require_columns(validation, ["mixture_id", "launch", "trainer_seed", *outcomes], VALIDATION_TABLE)
+    require_columns(
+        validation, ["mixture_id", "launch", "trainer_seed", "proposal_objective", *outcomes], VALIDATION_TABLE
+    )
     paths, endpoints, midpoints = [], [], []
     for (objective, path), rows in predictions.groupby(["objective", "path"], sort=False):
         mixtures = rows[MIXTURE_COLUMNS].drop_duplicates()
@@ -149,7 +150,7 @@ def path_values(root: Path) -> dict[str, pd.DataFrame]:
         paths.append({"objective": objective, "path": path, **mixtures.iloc[0].to_dict()})
         measured = f"{OUTCOME_PREFIX}{objective}"
         for position, mixture in ((0.0, start), (1.0, end)):
-            runs = proposal_runs(validation, mixture)
+            runs = seed_runs(validation, mixture, objective)
             endpoints += [
                 {
                     "objective": objective,

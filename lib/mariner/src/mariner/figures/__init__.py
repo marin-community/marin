@@ -7,6 +7,10 @@ Each redraw reads only the snapshot's tables, and fits this package's models and
 LightGBM's boosted trees. It shows the paper figure's data, fitted curves and comparisons in the shared layout of
 ``mariner.figures.layout``, and returns every series it plots. ``write_figures`` writes them as PDFs, as ``mariner
 figures`` does. The package needs matplotlib and LightGBM, which marin-mariner's figures extra installs.
+
+A spec's ``draw`` leaves the fonts, sizes and PDF settings to its caller: ``write_figure`` and ``write_figures`` draw
+inside ``layout.style()``. To draw and save one figure in the shared style, call ``write_figure(FIGURES[label], root,
+out)``; to draw it without saving, call its ``draw`` inside ``with layout.style():``.
 """
 
 from __future__ import annotations
@@ -45,6 +49,10 @@ class FigureSpec:
     stem: str
     draw: Callable[[Path], FigureData]
 
+    def path(self, out: Path) -> Path:
+        """The PDF's path in the directory ``out``."""
+        return out / f"{self.stem}.pdf"
+
 
 FIGURES: dict[str, FigureSpec] = {
     spec.label: spec
@@ -80,6 +88,15 @@ FIGURES: dict[str, FigureSpec] = {
 }
 
 
+def write_figure(spec: FigureSpec, root: Path, out: Path) -> FigureData:
+    """Draw ``spec`` from the snapshot at ``root`` in the shared style and save it as ``spec.path(out)``; returns the
+    drawn figure and every series it plots."""
+    with style():
+        drawn = spec.draw(root)
+        save(drawn.figure, spec.path(out))
+    return drawn
+
+
 def write_figures(root: Path, out: Path, labels: Sequence[str] | None = None) -> list[Path]:
     """Draw the figures ``labels`` (every figure when None) from the snapshot at ``root`` as ``<stem>.pdf`` in ``out``.
 
@@ -93,9 +110,7 @@ def write_figures(root: Path, out: Path, labels: Sequence[str] | None = None) ->
     paths = []
     for label in selected:
         spec = FIGURES[label]
-        path = out / f"{spec.stem}.pdf"
-        with style():
-            save(spec.draw(root).figure, path)
-        logger.info("wrote %s (%s)", path, label)
-        paths.append(path)
+        write_figure(spec, root, out)
+        logger.info("wrote %s (%s)", spec.path(out), label)
+        paths.append(spec.path(out))
     return paths

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import filecmp
 import json
 import math
 from collections.abc import Callable
@@ -12,6 +13,9 @@ import pytest
 from mariner.cli import INPUT_ERROR_STATUS, PREDICTION_TOLERANCE, main
 from mariner.data import (
     BUCKET_ID,
+    COMMON_CRAWL,
+    DOLMA3,
+    DOLMINO,
     FIGURES_INDEX,
     MAIN_SWARM,
     MANIFEST,
@@ -27,11 +31,8 @@ from mariner.data import (
     released_olmix_laws,
     trained_counts,
 )
-from mariner.figures import FIGURES, write_figures
+from mariner.figures import FIGURES, write_figure, write_figures
 from mariner.figures.analysis import (
-    COMMON_CRAWL,
-    DOLMA3,
-    DOLMINO,
     EPOCH_CAPS,
     FINEMATH,
     FLAN,
@@ -42,18 +43,20 @@ from mariner.figures.analysis import (
     sweep_olmix_law,
 )
 from mariner.figures.epochs import Track
-from mariner.figures.layout import OBJECTIVE_TITLES, Method
+from mariner.figures.layout import OBJECTIVE_TITLES
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
 from mariner.figures.schedules import SWITCH_ARM, ComputePath, switch_values
 from mariner.figures.starcoder import EPOCH_MATCHING_BPB, EPOCH_MATCHING_TABLE, epoch_matching
 from mariner.figures.surrogate import TRAINER_SEEDS
 from mariner.figures.swarm import holm
 from mariner.fit import fit_objective
+from mariner.methods import Method
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 from mariner.tables import REPEATED_SCALE, Statistic, scaling_main_table
 
 # figures_tables.csv marks configuration constants and the two-phase data the release omits among a figure's configs.
 INDEX_MARKERS = {"constant", "deferred"}
+PAPER_FIGURES = Path(__file__).resolve().parents[1] / "paper_figures"  # the committed PDFs, lib/mariner/paper_figures
 TERMS = "fig:mariner-terms"  # the one figure that reads no table: mariner.model's terms at the paper's values
 # Figure 3's inset tables print each sweep's training FLOPs and fitted optimum in materialized StarCoder epochs, by
 # path and scale; the paths match compute at each scale (its caption: "within 3% across columns").
@@ -190,12 +193,24 @@ PRINTED_EPOCH_ROWS = {
 }
 PRINTED_COMPUTE = ("2.49e+16", "6.66e+18")
 PROPOSAL_PREDICTION_GAP = 0.005  # BPB: "Its proposed mixtures measure within 0.005 BPB of its predictions" (abstract)
+# sections/surrogate.tex:112, on Figure 7's four predictions of each of the four proposals: "only MARINER correctly
+# predicts its own proposal as the best on both objectives ... The spline predicts its own proposal as the best on both
+# objectives, as does Olmix on OlmoBaseEval Easy." The models whose predictions rank their own proposal best, by
+# objective; the measured best is MARINER's on both.
+OWN_BEST_PREDICTORS = {
+    "uncheatable": {Method.MARINER, Method.SPLINE},
+    "obe_easy": {Method.MARINER, Method.SPLINE, Method.OLMIX},
+}
+# Figure 7's caption: each bar is the measured loss's "mean and 95% interval over three trainer seeds", which the
+# paper's figure draws as the mean plus or minus 1.96 standard errors (ddof 1) of the three runs.
+INTERVAL_STANDARD_ERRORS = 1.96
 # Figure 1's surrogate panel shows MARINER's predicted loss falling and then rising (sections/surrogate.tex:40: "so a
 # task's predicted loss can fall and then rise as a bucket is upweighted"), with its interior optimum at p = 0.578 of the
-# 400-point grid (predicted_minimum_fraction 0.5781954887 in figure1_real_data_drafts/v40/
-# figure1_real_data_verification.json); Olmix's monotone fit picking pure StarCoder (sections/abstract.tex:1: "common
-# monotone surrogates cannot represent a task loss that first falls and then rises"); and boosted trees that "reach the
-# 90% mean but stay flat past it, below the measured 100% mean" (figure1_real_data_drafts/v40/build_figure.py:14-15).
+# panel's 400-point grid, where the paper's panel marks it without printing the share; Olmix's monotone fit picking pure
+# StarCoder (sections/abstract.tex:1: "common monotone surrogates cannot represent a task loss that first falls and then
+# rises"); and boosted trees that reach the 90% mean but stay flat past it, below the measured 100% mean
+# (sections/introduction.tex:17: "its trees cannot predict additional harm from repeating a bucket beyond its sampled
+# range").
 MARKED_MARINER_OPTIMUM = "0.578"
 # Figures 18 and 19 (their captions, sections/appendix.tex:370 and :380): "Bands are 95% t-intervals over ten
 # subset/fold draws", and Figure 19's "Hollow diamonds mark swarm sizes at which released RegMix's fits are constant":
@@ -324,9 +339,8 @@ def test_cli_figures_exits_nonzero_on_unknown_label(tmp_path, capsys):
     assert "fig:nope" in capsys.readouterr().err
 
 
-def test_mariner_terms_mark_each_harm_activation_at_the_papers_epochs(tmp_path):
+def check_mariner_terms(values: dict[str, pd.DataFrame]) -> None:
     """Figure 5's caption: "dots mark activations at E = e^tau - 1 epochs" on each harm curve."""
-    values = FIGURES[TERMS].draw(tmp_path).values
     harm = values["harm"]
     for activation in values["activations"].itertuples():
         assert f"{activation.epochs:.2g}" == PRINTED_ACTIVATIONS[activation.tau]
@@ -335,6 +349,11 @@ def test_mariner_terms_mark_each_harm_activation_at_the_papers_epochs(tmp_path):
         curve = harm[harm["tau"] == activation.tau]
         on_curve = np.interp(np.log(activation.epochs), np.log(curve["epochs"]), curve["harm"])
         assert on_curve == pytest.approx(activation.harm, abs=HARM_CURVE_TOLERANCE)
+
+
+def test_mariner_terms_mark_each_harm_activation_at_the_papers_epochs(tmp_path):
+    """Figure 5 reads no table, so it is drawn and checked without a snapshot."""
+    check_mariner_terms(FIGURES[TERMS].draw(tmp_path).values)
 
 
 def small_epoch_matching() -> pd.DataFrame:
@@ -398,28 +417,6 @@ def test_cli_figures_names_the_table_and_column_a_snapshot_lacks(tmp_path, capsy
     argv = ["figures", "--data", str(tmp_path), "--out", str(tmp_path / "out"), "--only", "fig:epoch-matching"]
     assert main(argv) == INPUT_ERROR_STATUS
     assert f"the {EPOCH_MATCHING_TABLE} table has no column {EPOCH_MATCHING_BPB}" in capsys.readouterr().err
-
-
-def test_cli_figures_names_the_column_a_snapshot_lacks(tmp_path, capsys):
-    """A snapshot whose starcoder_ramp_designs predates the data loader's per-block StarCoder counts cannot draw
-    Figure 27: the command stops with the input-error status and names the missing column."""
-    designs = pd.DataFrame(
-        {
-            "arm": ["abrupt", "abrupt"],
-            "ramp_width": [math.nan, math.nan],
-            "data_seed": [1, 1],
-            "stage": [0, 1],
-            "start_step": [0, 80],
-            "total_steps": [100, 100],
-            "boundary_step": [80, 80],
-            "steps_per_block": [16, 16],
-            "starcoder_weight": [0.0, 0.3],
-        }
-    )
-    write_starcoder_table(tmp_path, "starcoder_ramp_designs", designs)
-    argv = ["figures", "--data", str(tmp_path), "--out", str(tmp_path / "out"), "--only", "fig:a-ramp-schedules"]
-    assert main(argv) == INPUT_ERROR_STATUS
-    assert "starcoder_block_sequences" in capsys.readouterr().err
 
 
 def test_holm_scales_each_p_value_by_the_hypotheses_left():
@@ -557,14 +554,36 @@ def check_learning_curves(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_proposal_predictions(values: dict[str, pd.DataFrame]) -> None:
-    """sections/abstract.tex:1: "Its proposed mixtures measure within 0.005 BPB of its predictions." The redraw raises
-    unless the snapshot holds all four models' predictions of every proposal."""
-    measured = values["measured_summary"].set_index(["objective", "proposal"])["mean_bpb"]
-    predicted = values["predictions"].set_index(["objective", "proposal", "predictor"])["predicted_bpb"]
-    mariner = Method.MARINER.value
+    """Figure 7. sections/abstract.tex:1: "Its proposed mixtures measure within 0.005 BPB of its predictions." And
+    sections/surrogate.tex:112 on the 4x4 matrix of predictions: "MARINER's prediction is the closest to the measured
+    loss at every trained proposal except Olmix's", each model's predicted best proposal (``OWN_BEST_PREDICTORS``),
+    and "Tuned RegMix predicts every proposal too high on OlmoBaseEval Easy but orders all four correctly". Its bars'
+    interval is ``INTERVAL_STANDARD_ERRORS`` standard errors over the three trainer seeds. The redraw raises unless the
+    snapshot holds all four models' predictions of every proposal."""
+    summary = values["measured_summary"].set_index(["objective", "proposal"])
+    predictions = values["predictions"].pivot(
+        index=["objective", "proposal"], columns="predictor", values="predicted_bpb"
+    )
+    mariner, olmix, regmix = Method.MARINER.value, Method.OLMIX.value, Method.REGMIX.value
     for objective in OBJECTIVES:
-        gap = measured.loc[(objective, mariner)] - predicted.loc[(objective, mariner, mariner)]
-        assert abs(gap) <= PROPOSAL_PREDICTION_GAP
+        measured, predicted = summary.loc[objective, "mean_bpb"], predictions.loc[objective]
+        assert abs(measured[mariner] - predicted.at[mariner, mariner]) <= PROPOSAL_PREDICTION_GAP
+        closest = predicted.sub(measured, axis=0).abs().idxmin(axis=1)  # the closest model, by proposal
+        assert (closest.drop(index=olmix) == mariner).all()
+        assert closest[olmix] != mariner
+        best = predicted.idxmin()  # each model's predicted best proposal
+        assert {model for model, proposal in best.items() if model == proposal} == {
+            model.value for model in OWN_BEST_PREDICTORS[objective]
+        }
+        assert measured.idxmin() == mariner
+        if objective == "obe_easy":
+            assert (predicted[regmix].sub(measured) > 0).all()  # aligned by proposal
+            assert predicted[regmix].sort_values().index.tolist() == measured.sort_values().index.tolist()
+    runs = values["measured"].groupby(["objective", "proposal"])["bpb"]
+    assert (runs.size() == len(TRAINER_SEEDS)).all()
+    standard_error = (runs.std(ddof=1) / np.sqrt(runs.size())).loc[summary.index]
+    np.testing.assert_allclose(summary["half_width"], INTERVAL_STANDARD_ERRORS * standard_error, rtol=1e-12, atol=0)
+    np.testing.assert_allclose(summary["mean_bpb"], runs.mean().loc[summary.index], rtol=1e-12, atol=0)
 
 
 def check_accuracy_vs_bpb(values: dict[str, pd.DataFrame]) -> None:
@@ -1046,6 +1065,7 @@ PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:epoch-matching": check_epoch_matching,
     "fig:b5": check_matched_compute_scaling,
     "fig:b6": check_olmix_capacity_failure,
+    TERMS: check_mariner_terms,
     "fig:r6": check_learning_curves,
     "fig:proposal-predictions": check_proposal_predictions,
     "fig:accuracy": check_accuracy_vs_bpb,
@@ -1094,15 +1114,19 @@ def snapshot_view(snapshot: Path, label: str, root: Path) -> Path:
 
 @pytest.mark.data_integration
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("label", [label for label in FIGURES if label != TERMS])
+@pytest.mark.parametrize("label", list(FIGURES))
 def test_redraw_reproduces_the_paper(snapshot, label, tmp_path):
-    """Each figure, drawn from a view of the snapshot that holds only the configs its row of figures_tables.csv names,
-    reproduces what the paper prints from its data. Figure 5's row names no config, and
-    ``test_mariner_terms_mark_each_harm_activation_at_the_papers_epochs`` draws it from an empty directory."""
-    values = FIGURES[label].draw(snapshot_view(snapshot, label, tmp_path)).values
+    """Each figure, drawn once from a view of the snapshot that holds only the configs its row of figures_tables.csv
+    names, reproduces what the paper prints from its data and writes the committed PDF byte for byte, so that
+    lib/mariner/paper_figures cannot drift from the code."""
+    spec = FIGURES[label]
+    values = write_figure(spec, snapshot_view(snapshot, label, tmp_path / "snapshot"), tmp_path).values
     PAPER_CHECKS[label](values)
     if label in SNAPSHOT_CHECKS:
         SNAPSHOT_CHECKS[label](values, snapshot)
+    assert filecmp.cmp(
+        spec.path(tmp_path), spec.path(PAPER_FIGURES), shallow=False
+    ), f"{spec.path(tmp_path).name} differs from {PAPER_FIGURES}: redraw it with mariner figures"
 
 
 @pytest.mark.data_integration

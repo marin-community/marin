@@ -35,11 +35,15 @@ from mariner.data import (
     RELIABILITY_COLLAPSED_SOURCE,
     RELIABILITY_SOURCES,
     RELIABILITY_TABLE,
+    SOURCES,
     TRAINED_MARINER,
     TRAINED_OLMIX,
     VALIDATION_TABLE,
+    bucket_names,
+    bucket_sources,
     mixture_weights,
     pool_fractions,
+    proportional_epochs,
     read_table,
     release_partition,
     reliability_rows,
@@ -47,15 +51,14 @@ from mariner.data import (
 )
 from mariner.figures.layout import (
     METHOD_COLORS,
-    METHOD_LABELS,
     NEUTRAL,
     OBJECTIVE_TITLES,
     FigureData,
-    Method,
     figure_legend,
     panels,
 )
 from mariner.figures.starcoder import ARM_COLORS, Arm, parameters_label, tokens_label
+from mariner.methods import METHOD_LABELS, Method
 from mariner.olmix import LogLinearLaw, fit_log_linear
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -310,11 +313,6 @@ EPOCH_COLUMNS = tuple(
         strict=True,
     )
 )
-# The buckets' sources, in the order of the figure's rows: the Common Crawl topics at two quality tiers, Dolma 3's
-# other sources, and Dolmino's.
-COMMON_CRAWL, DOLMA3, DOLMINO = "Common Crawl", "Dolma 3, other sources", "Dolmino"
-SOURCES = (COMMON_CRAWL, DOLMA3, DOLMINO)
-DOLMA3_POOL, DOLMINO_POOL = "dolma3", "dolmino"
 # Colors and labels show log2 epochs, from 1/8 to 16, around one epoch.
 LOG2_EPOCH_RANGE = (-3.0, 4.0)
 EPOCH_COLORMAP = "RdBu_r"
@@ -337,26 +335,6 @@ def epoch_text(epochs: float) -> str:
     if epochs >= 10.0:
         return f"{epochs:.0f}"
     return f"{epochs:.1f}"
-
-
-def bucket_sources(partition: pd.DataFrame) -> pd.Series:
-    """Each bucket's source, by bucket id: Common Crawl for the topics at a quality tier, else its pool's."""
-    require_columns(partition, ["bucket_id", "pool", "quality_tier"], PARTITION_TABLE)
-    source = np.where(
-        partition["quality_tier"].notna(),
-        COMMON_CRAWL,
-        np.where(partition["pool"] == DOLMINO_POOL, DOLMINO, DOLMA3),
-    )
-    unknown = sorted(set(partition.loc[~partition["pool"].isin([DOLMA3_POOL, DOLMINO_POOL]), "pool"]))
-    if unknown:
-        raise ValueError(f"the partition has buckets of the unknown pools {', '.join(map(str, unknown))}")
-    return pd.Series(source, index=partition["bucket_id"])
-
-
-def bucket_names(partition: pd.DataFrame) -> pd.Series:
-    """Each bucket's name in the paper, by bucket id, with the table's LaTeX ampersands as plain text."""
-    require_columns(partition, ["bucket_id", "paper_name"], PARTITION_TABLE)
-    return partition.set_index("bucket_id")["paper_name"].str.replace("\\&", "&", regex=False)
 
 
 def mixture_epochs(
@@ -411,10 +389,9 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
             }
             for bucket in order
         ]
-    proportional = partition.pool_tokens / partition.pool_tokens.sum() * partition.epochs_per_unit_weight
     return {
         "epochs": pd.DataFrame(rows),
-        "proportional": pd.DataFrame({"bucket_id": partition.bucket_ids, "epochs": proportional}),
+        "proportional": pd.DataFrame({"bucket_id": partition.bucket_ids, "epochs": proportional_epochs(partition)}),
     }
 
 

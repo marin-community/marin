@@ -3,10 +3,11 @@
 
 """The plain layout that every figure redraw shares.
 
-A redraw sets its panels side by side at one panel size, names each quantity and its unit on the axes, and names
-every series in a legend, which sits below the panels so that it covers no data. A method has the same color in every
-figure. The PDFs carry no creation date and ignore local matplotlib settings, so redrawing them from one snapshot
-gives the same bytes.
+A redraw builds its figure from panels of one shared size, in a row (``panels``) or in a grid whose panels may span
+several cells (``mosaic``); the heatmaps of Figures 13 and 23 and the bucket rows of Figure 24 instead size the figure
+to their rows. It names each quantity and its unit on the axes, and names every series in a legend that sits outside
+the data. A method has the same color in every figure. The PDFs carry no creation date and ignore local matplotlib
+settings, so redrawing them from one snapshot gives the same bytes.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ import dataclasses
 import math
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,8 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.style import context as style_context
 from scipy import stats
+
+from mariner.methods import Method
 
 PANEL_WIDTH = 3.4  # inches
 PANEL_HEIGHT = 2.7
@@ -57,37 +59,6 @@ BAND_ALPHA = 0.16  # opacity of a shaded band: a range or an interval around a c
 CONFIDENCE = 0.95  # of every interval the figures draw
 
 
-class Method(StrEnum):
-    """The methods the figures compare, by their names in the dataset's method, model and predictor columns."""
-
-    PROPORTIONAL = "proportional"
-    UNIMAX = "unimax8"
-    OLMIX = "olmix"
-    MARINER = "mariner"
-    REGMIX = "regmix"  # tuned RegMix
-    REGMIX_RELEASED = "regmix_official"
-    SPLINE = "spline"
-    QUADRATIC = "quadratic"
-    KERNEL_RIDGE = "krr"
-    MARINER_CONVEX = "mariner_cvx"
-    MARINER_ADDITIVE = "mariner_add"
-    MARINER_BUCKET_THRESHOLDS = "mariner_pbt"
-
-
-METHOD_LABELS = {
-    Method.PROPORTIONAL: "Proportional",
-    Method.UNIMAX: "UniMax-8",
-    Method.OLMIX: "Olmix",
-    Method.MARINER: "MARINER",
-    Method.REGMIX: "RegMix (tuned)",
-    Method.REGMIX_RELEASED: "RegMix (released)",
-    Method.SPLINE: "Cubic spline",
-    Method.QUADRATIC: "Quadratic",
-    Method.KERNEL_RIDGE: "Hellinger kernel ridge",
-    Method.MARINER_CONVEX: "MARINER, fully convex objective",
-    Method.MARINER_ADDITIVE: "MARINER, additive form",
-    Method.MARINER_BUCKET_THRESHOLDS: "MARINER, per-bucket thresholds",
-}
 METHOD_COLORS = {
     Method.PROPORTIONAL: "#6C6F7D",
     Method.UNIMAX: "#4C78A8",
