@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 import yaml
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.rl.skyrl import SkyRLRolePlan
+from marin.rl.skyrl import InferenceEngineBackend, SkyRLRolePlan
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,7 @@ def draft_sft_plan(
         policy_num_nodes=policy.policy_num_nodes,
         policy_num_gpus_per_node=policy.gpus_per_node,
         num_inference_engines=1,
+        inference_engine_backend=InferenceEngineBackend.RAY,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=policy.gpus_per_node,
