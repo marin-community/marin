@@ -72,6 +72,7 @@ from marin.inference.types import (
     OpenAIEndpoint,
     RunningModel,
 )
+from marin.inference.web_search import parallel_web_search_from_secret
 from marin.inference.worker import InferenceWorker, run_inference_worker
 
 logger = logging.getLogger(__name__)
@@ -463,6 +464,7 @@ def _register_dashboard(
         model_id=model.endpoint.model,
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
+        web_search=parallel_web_search_from_secret(),
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
