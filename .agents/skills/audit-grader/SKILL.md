@@ -1,23 +1,92 @@
 ---
 name: audit-grader
-description: Audit a programmatic checker, LLM judge, or RL reward function against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader, including one whose scores look implausible; do not activate for routine grader changes.
+description: Audit a programmatic checker, LLM judge, RL reward function, or agent-task verifier against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader, including one whose scores look implausible; do not activate for routine grader changes.
 ---
 
 # Audit a grader
 
 A grader turns a response into a verdict: pass or fail, or a class such as
 correct, incorrect, or not attempted. It can be a programmatic checker, an LLM
-judge, or an RL reward function. This audit measures how often a grader
-contradicts the task text and how much that changes scores.
-[references/ifbench.md](references/ifbench.md) is a worked example, the audit
-of the 58 IFBench instruction checkers. That audit read the checker code before
-it wrote its contracts, counted as findings nine checker behaviors that step 3
-treats as decisions, and kept its frozen samples in its own repository; where
-it differs from the steps below, follow the steps.
+judge, an RL reward function, or the verifier of an agent task. This audit
+measures how often a grader contradicts the task text and how much that changes
+scores. It ends with one recommendation: admit the grader, fix it, or replace
+the benchmark.
 
-Treat an LLM judge as a pipeline, and audit every stage: graded-text
-extraction, judge-prompt rendering, the judge call, reply parsing, label
-mapping, and aggregation.
+## Overview
+
+The audit has seven steps:
+
+1. **Pin the inputs.** Record every file, setting, and dependency that can
+   change a verdict.
+2. **Write a contract for each check.** State its pass and fail conditions from
+   the task text, before reading the grader code.
+3. **Build labeled fixtures.** Write short responses labeled from the contract
+   alone, and run them against the grader as regression tests.
+4. **Compare with the reference and stress the grader.** Grade the same
+   responses with the benchmark authors' grader, and add property tests,
+   fuzzing, and content-free responses.
+5. **Run a model panel.** Grade real model responses with every grader, and
+   measure how each model's score changes.
+6. **Estimate the error rate with a blinded review.** Two reviewers label a
+   frozen sample of cases without seeing any grader's verdict.
+7. **Report.** Lead with the error rate and its effect on scores, then list the
+   findings and the decision entries.
+
+Steps 1 to 4 need no model responses. Steps 5 and 6 use model responses: step 5
+measures how much the grader moves scores, and step 6 how often it is wrong.
+
+Terms used below:
+
+- **Check**: one separately scored requirement, such as an instruction type or
+  a rubric item.
+- **Graded text**: the part of a response that the grader scores, such as the
+  text after the model's last end-of-reasoning marker.
+- **Contract**: a check's pass and fail conditions, written from the text that
+  the model or the judge sees.
+- **Decision entry**: a named point, `D-<topic>`, where the text allows two
+  verdicts. The maintainers of the evaluation choose the reading.
+- **Finding**: a defect, such as a verdict that is wrong under every reading
+  the text allows, an unpinned input, or a grader exception.
+- **Fixture**: a response labeled from the contract alone and kept as a
+  regression test.
+- **Reference implementation**: the benchmark authors' original grader, if one
+  exists.
+- **Replacement grader**: an implementation of the contracts, with one switch
+  per decision entry.
+- **Panel**: responses from several models and decoding settings, graded by
+  every grader.
+- **Scored coverage**: the share of expected items that receive a verdict.
+- **Lean** and **consensus**: a reviewer's lean is their verdict under the
+  reading they find most natural; two agreeing leans are a consensus.
+- **Error rate**: the share of a grader's verdicts that differ from the
+  consensus, estimated per stratum of the review sample and weighted by
+  stratum size.
+- **False reward**: a reward pass that the contract contradicts.
+
+The steps apply to each kind of grader as follows:
+
+- A programmatic checker, such as an instruction checker or a test runner for
+  code, is audited one check at a time.
+- An LLM judge is a pipeline: graded-text extraction, judge-prompt rendering,
+  the judge call, reply parsing, label mapping, and aggregation. Audit every
+  stage. Fixtures test the deterministic stages with a fake judge, and the
+  real judge grades responses only in step 5.
+- An RL reward is a grader whose verdicts train a model, so step 5 also counts
+  its false rewards.
+- An agent task's verifier grades the state that an agent leaves in a sandbox,
+  such as an answer file. Its fixtures are sandbox states, and its review cases
+  show the state frozen from each trial.
+
+[references/ifbench.md](references/ifbench.md) is a worked example, the audit
+of the 58 IFBench instruction checkers, with one example per step. That audit
+read the checker code before it wrote its contracts, counted as findings nine
+checker behaviors that step 3 treats as decisions, and kept its frozen samples
+in its own repository; where it differs from the steps below, follow the steps.
+[references/validation.md](references/validation.md) reports runs of this skill,
+without the answer keys, on five small graders with planted defects that cover
+the four kinds above.
+
+## Records
 
 Record the audit in the task's existing issue: the pinned inputs, the contract
 hash, the decision entries, the findings, and the hash of each frozen sample.
@@ -92,6 +161,10 @@ later contract change or decision entry with its reason.
   the report's decision table, with both readings, an example of each, and a
   proposed reading. The maintainers of the evaluation that runs the grader
   decide. Count decisions separately from defects.
+- A term that the text leaves undefined allows two verdicts when a careful
+  reader could defend either, for example which characters count as
+  whitespace, or whether other words may surround an answer. Give it a
+  decision entry, and write the contract's reading as the proposal.
 - If you implement the contracts as a replacement grader, give it one switch
   per decision, so that the effect of each reading can be measured. For an LLM
   judge, a replacement changes the deterministic stages and keeps the judge
