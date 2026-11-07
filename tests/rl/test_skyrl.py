@@ -34,6 +34,8 @@ from marin.rl.skyrl import (
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
+    read_skyrl_launch_receipt,
+    read_stored_skyrl_receipt,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -564,7 +566,7 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
         cluster_config.reset_data_config_cache()
 
 
-def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -639,6 +641,33 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
+
+    monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
+    launch["artifacts"]["attempts_root"] = str(tmp_path / "attempts")
+    (tmp_path / "resolved-launch.yaml").write_text(json.dumps({"config": launch}))
+    (tmp_path / "terminal.json").write_text(json.dumps({"config": launch, "result": response}))
+    receipt = read_stored_skyrl_receipt(str(tmp_path))
+    assert receipt is not None and receipt.result.model is not None
+    assert receipt.result.model.policy_export_uri == model.hf_model_uri
+    assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
+    earlier = launch | {"run": launch["run"] | {"attempt_id": "earlier-failed-attempt"}}
+    attempts = tmp_path / "attempts"
+    attempts.mkdir()
+    (attempts / "earlier-failed-attempt.json").write_text(
+        json.dumps({"config": earlier, "result": {"state": "failed", "failure": "worker lost"}})
+    )
+    historical = read_stored_skyrl_receipt(str(tmp_path), "earlier-failed-attempt")
+    assert historical is not None and historical.result.state == "failed"
+    assert historical.result.failure == "worker lost"
+    assert read_stored_skyrl_receipt(str(tmp_path), "not-written") is None
+    (tmp_path / "terminal.json").unlink()
+    current_attempt = attempts / f"{config.attempt_id}.json"
+    current_attempt.write_text(json.dumps({"config": launch, "result": {"state": "failed"}}))
+    failed = read_stored_skyrl_receipt(str(tmp_path))
+    assert failed is not None and failed.result.state == "failed"
+    assert read_skyrl_launch_receipt(str(tmp_path)) == failed
+    current_attempt.unlink()
+    assert read_stored_skyrl_receipt(str(tmp_path)) is None
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
