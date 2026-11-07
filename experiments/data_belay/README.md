@@ -157,14 +157,35 @@ and Cosmopedia.
   and so does the cost on Paloma and Uncheatable. 5% gets about half of 20%'s math gain at no cost elsewhere; 50% is
   `hurts`.
 - **Cosmopedia** (missed): synthetic textbooks were expected to improve knowledge or commonsense, and no task in either
-  group moved. With FineWeb-Edu, this is the second dataset with a published benefit on accuracy benchmarks at larger
-  scale that shows none here. The Data Belay detects data that matches an eval's domain (math, code), but has not
-  detected general "educational" data, either because answer BPB at these scales misses the effect or because the
-  effect is absent against this base mix.
+  group moved. Accuracy agrees (below), so this is a real no for this mix at d768.
+- **OpenWebMath, 20%** (met): a second math source, expected to be a yes with a smaller math gain than FineMath's. It
+  is a `trade-off` at d512 and d768 (math −6.5% and −7.7%, about half of FineMath 20%'s).
+
+## Accuracy check
+
+`experiments.data_belay.accuracy` scores a run's final checkpoint on multiple-choice tasks, cloze style: `acc_norm`
+picks the choice with the highest log-likelihood per byte. At d768, the control is above chance only on SciQ,
+ARC-Easy and PIQA. Their mean `acc_norm`, with a Welch 95% interval against 6 control seeds (3 seeds per arm):
+
+| Arm (d768) | SciQ, ARC-Easy, PIQA | Against the control (points) |
+|---|---:|---|
+| control | 51.3% | seed SD 0.7 |
+| FineWeb-Edu, 50% | 53.9% | +2.6 [+1.8, +3.4] |
+| FineWeb, 50% | 52.0% | +0.7 [−0.4, +1.7] |
+| Cosmopedia web samples, 20% | 50.9% | −0.3 [−1.3, +0.6] |
+| FineWeb-Edu against FineWeb | | +1.9 [+0.9, +3.0] |
+
+Against the control, answer BPB sees FineWeb-Edu's gain too (knowledge −4.7%, commonsense −3.7%); its verdict is
+`hurts` only because a 50% share displaces the base mix's code. Against FineWeb, answer BPB misses the Edu filter's
+gain: accuracy is 1.9 points higher, while knowledge BPB is neutral and Paloma is 2.0% worse. Answer BPB measures the
+gold answer's likelihood, not its margin over the distractors, so data that sharpens that margin without lowering the
+gold answer's loss, as a quality filter on web text can, shows up in accuracy only.
 
 ## Limits
 
 - No contamination scan yet: a gain on one eval set alone needs a check for leakage.
+- Answer BPB misses a gain in telling the gold answer from the distractors (see the accuracy check), so a quality
+  filter compared against its unfiltered source needs `experiments.data_belay.accuracy` too.
 - The sample is whole files, so a dataset with few large files is sampled coarsely, and one file tokenizes on one
   worker.
 - A seed sets both the model init and the data order. FineWeb-Edu runs varied 1.0% between seeds on Paloma, almost
