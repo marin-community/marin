@@ -60,6 +60,18 @@ export CW_KEY_SECRET=<key-secret>
 
 CoreWeave also accepts the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair.
 
+For [CoreWeave workload identity federation](https://docs.coreweave.com/products/storage/object-storage/auth-access/workload-identity-federation/use-oidc-tokens),
+point the SDK at CoreWeave's credentials endpoint and the workload's current OIDC token file:
+
+```bash
+export AWS_CONTAINER_CREDENTIALS_FULL_URI="https://api.coreweave.com/v1/cwobject/temporary-credentials/oidc/<org-id>"
+export AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=/path/to/token.jwt
+```
+
+For buckets declared as CoreWeave in the cluster config, this endpoint takes
+precedence over static keys. The SDK rereads the token file when refreshing S3
+credentials. The token issuer must keep the file current for long-running commands.
+
 Hugging Face uses `HF_TOKEN` or a token saved by `hf auth login`. For `cp` and `mv`
 with `--remote`, fsutil forwards that token to the Iris job through its environment;
 the token does not appear in the job command. The remote Iris worker uses its
@@ -68,7 +80,7 @@ fsutil is created private. Existing storage keeps its current visibility.
 Creating storage requires permission in the owning user or organization;
 uploading requires write access to the destination.
 
-`fsutil buckets` reports which backends are reachable, so an unconfigured one shows up
+`fsutil buckets` reports which backends have credentials configured, so an unconfigured one shows up
 before a command fails against it. A backend with no credentials only breaks commands
 that touch its buckets; the rest keep working.
 

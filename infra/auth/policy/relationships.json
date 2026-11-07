@@ -1,0 +1,32 @@
+[
+  {
+    "user": "principal:example-researcher",
+    "relation": "member",
+    "object": "group:marin-team"
+  },
+  {
+    "user": "group:marin-team#member",
+    "relation": "member",
+    "object": "group:marin-research"
+  },
+  {
+    "user": "group:marin-research#member",
+    "relation": "accessor",
+    "object": "scope:iris/job.submit//clusters/research-cluster/jobs/analysis/"
+  },
+  {
+    "user": "group:marin-research#member",
+    "relation": "accessor",
+    "object": "scope:loom/session.create//diagnostics/"
+  },
+  {
+    "user": "principal:service:grafana",
+    "relation": "accessor",
+    "object": "scope:loom/session.create//diagnostics/"
+  },
+  {
+    "user": "principal:service:grafana",
+    "relation": "accessor",
+    "object": "scope:cw_s3/credentials.issue/diagnostics"
+  }
+]

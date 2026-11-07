@@ -44,9 +44,8 @@ SLACK_BOT_TOKEN_SECRET = "marin-grafana-slack-bot-token"
 # marin-cloudsql stack of the marin-cloudsql project.
 CLOUDSQL_STACK = "organization/marin-cloudsql/marin-cloudsql"
 
-# This file sits beside the Dockerfile, dashboards, and bridge source; the whole directory
-# is the image build context.
-BUILD_CONTEXT = os.path.dirname(os.path.abspath(__file__))
+# The bridge builds against the same Rigging source as the receiving services.
+BUILD_CONTEXT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 # Email delivery is optional: the deploy wires Grafana's SMTP password only when this
 # secret exists, so a project without it still deploys — critical alerts then reach
@@ -149,6 +148,7 @@ def main() -> None:
             region=REGION,
             service_name=SERVICE,
             build_context=BUILD_CONTEXT,
+            dockerfile="infra/grafana/Dockerfile",
             # Grafana 13's apiserver and search indexers run between requests and need CPU
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,

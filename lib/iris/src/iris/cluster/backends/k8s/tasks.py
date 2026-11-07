@@ -33,6 +33,7 @@ from rigging.secrets import (
     secret_file_environment,
     validate_secret_name,
 )
+from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.k8s.output_contract import (
@@ -69,6 +70,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_SANDBOX_RUNTIME_CLASS,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
@@ -534,6 +536,15 @@ def _build_volumes_and_mounts(
 
 
 @dataclass(frozen=True)
+class PodDnsConfig:
+    """Explicit resolver settings for a Pod using dnsPolicy=None."""
+
+    nameservers: tuple[str, ...]
+    searches: tuple[str, ...]
+    options: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PodConfig:
     """Non-request parameters for pod manifest construction.
 
@@ -551,6 +562,8 @@ class PodConfig:
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     host_network: bool = False
+    sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
+    dns_config: PodDnsConfig | None = None
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
@@ -1033,6 +1046,16 @@ def _build_pod_manifest(
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
+    if (
+        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+        and SHARED_GRANT_TOKEN_SECRET in run_req.environment.secrets
+    ):
+        container["securityContext"] = {
+            "capabilities": {"drop": ["ALL"]},
+            "allowPrivilegeEscalation": False,
+            "runAsNonRoot": True,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
 
     if resources:
         container["resources"] = resources
@@ -1172,10 +1195,11 @@ def _build_pod_manifest(
         **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
-    # gVisor isolates the whole pod via a node RuntimeClass; the container
-    # securityContext stays at the DEFAULT posture (see _security_context).
+    # The RuntimeClass isolates the whole pod independently of container security settings.
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
-        spec["runtimeClassName"] = "gvisor"
+        if not config.sandbox_runtime_class:
+            raise PodManifestError("Sandbox tasks require a RuntimeClass")
+        spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
@@ -1199,6 +1223,13 @@ def _build_pod_manifest(
     if host_network:
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
+    if config.dns_config is not None:
+        spec["dnsPolicy"] = "None"
+        spec["dnsConfig"] = {
+            "nameservers": list(config.dns_config.nameservers),
+            "searches": list(config.dns_config.searches),
+            "options": [{"name": name, "value": value} for name, value in config.dns_config.options.items()],
+        }
 
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs

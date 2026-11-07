@@ -107,6 +107,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.shared_attempts import retire_shared_attempts, with_shared_attempt_credentials
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
@@ -866,6 +867,9 @@ class Controller:
             default_user_role=(
                 auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
             ),
+            shared_grants=(
+                auth.shared_grants.config.model_dump() if auth is not None and auth.shared_grants is not None else None
+            ),
         )
 
     def stop(self) -> None:
@@ -1035,6 +1039,8 @@ class Controller:
             return
 
         self._drain_pending_evictions()
+        if self._config.auth is not None:
+            retire_shared_attempts(self._db, self._config.auth.shared_attempts)
         pending_kicks = self._drain_pending_kicks()
 
         run_autoscale = autoscale_limiter.should_run()
@@ -1062,6 +1068,9 @@ class Controller:
                 inputs.worker_status = self._worker_status(snap)
             if scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
+
+        if inputs.reconcile_request is not None:
+            self._stamp_task_credentials(inputs.reconcile_request)
 
         sched_result: ScheduleResult | None = None
         backend_pins: list[tuple[JobName, str]] = []
@@ -1145,14 +1154,34 @@ class Controller:
             self._remove_worker_capacity(reaped_workers, reason=_WORKER_RECONCILE_TEARDOWN_REASON)
 
         self._refresh_backend_observation()
+        if self._config.auth is not None:
+            retire_shared_attempts(self._db, self._config.auth.shared_attempts)
+
+    def _task_credentials(self, request: job_pb2.RunTaskRequest) -> job_pb2.RunTaskRequest:
+        auth = self._config.auth
+        shared = with_shared_attempt_credentials(
+            request,
+            db=self._db,
+            broker=auth.shared_attempts if auth is not None else None,
+            job_prefix=auth.shared_job_prefix if auth is not None else "",
+        )
+        if shared is not None:
+            return shared
+        return with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], auth)
+
+    def _stamp_task_credentials(self, request: ReconcileRequest) -> None:
+        if isinstance(request, DirectReconcileRequest):
+            for index, task in enumerate(request.tasks_to_run):
+                request.tasks_to_run[index] = self._task_credentials(task)
+            return
+        for target in request.targets:
+            for attempt in target.plan.request.desired:
+                if attempt.HasField("run") and attempt.run.HasField("request"):
+                    attempt.run.request.CopyFrom(self._task_credentials(attempt.run.request))
 
     def _direct_reconcile_request(self) -> DirectReconcileRequest:
         drain = self._drain_dispatch_snapshot()
-        tasks_to_run = [
-            with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], self._config.auth)
-            for request in drain.tasks_to_run
-        ]
-        return DirectReconcileRequest(tasks_to_run=tasks_to_run, running_tasks=drain.running_tasks)
+        return DirectReconcileRequest(tasks_to_run=drain.tasks_to_run, running_tasks=drain.running_tasks)
 
     def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
         budget_context = self._budgets.context(snap)
@@ -1182,9 +1211,7 @@ class Controller:
                 continue
             if row.job_id not in templates:
                 template = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
-                templates[row.job_id] = (
-                    with_task_token(template, row.job_id, self._config.auth) if template is not None else None
-                )
+                templates[row.job_id] = template
         worker_snapshot = reads.ControlSnapshot(
             worker_addresses=control.worker_addresses,
             reconcile_rows=control.reconcile_rows,

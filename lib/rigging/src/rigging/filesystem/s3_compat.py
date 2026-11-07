@@ -17,6 +17,8 @@ Two ways to apply that setup, for two different callers:
 * :func:`s3_credentials` and :func:`s3_endpoint` resolve one backend's settings without touching
   the environment, so a single process can hold connections to several backends at once. This is
   what :mod:`rigging.filesystem.buckets` builds per-bucket filesystems from.
+  Routed CoreWeave clients can select the SDK's refreshable container provider through
+  :func:`coreweave_federation`.
 
 Endpoints and credential variables are not hardcoded here: each backend declares them under
 ``data.stores`` in its cluster config (``config/*.yaml``), read through
@@ -28,23 +30,30 @@ once must use the namespaced pairs, since the two have distinct keys.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
 import fsspec
 import s3fs
+from aiobotocore.credentials import AioContainerProvider, AioCredentialResolver
 from aiobotocore.httpsession import AIOHTTPSession
+from aiobotocore.session import AioSession
 from botocore.credentials import SharedCredentialProvider
 
-from rigging.filesystem.cluster_config import StoreType, data_buckets, store_config
+from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_buckets, store_config
 from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
 from rigging.secrets import get_secret
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
+_COREWEAVE_API_HOST = "api.coreweave.com"
+_CONTAINER_CREDENTIALS_URI = "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+_CONTAINER_AUTHORIZATION_FILE = "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"
 
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
@@ -202,6 +211,72 @@ def s3_credential_options() -> dict[str, str]:
     }
 
 
+@dataclass(frozen=True)
+class CoreWeaveFederation:
+    """Settings for a native SDK to exchange a rotating OIDC token for S3 credentials."""
+
+    uri: str
+    token_file: str
+
+
+def coreweave_federation() -> CoreWeaveFederation | None:
+    """Read the provider configuration when the CoreWeave API origin is selected."""
+    uri = os.environ.get(_CONTAINER_CREDENTIALS_URI)
+    if uri is None:
+        return None
+    parsed = urlparse(uri)
+    if parsed.hostname != _COREWEAVE_API_HOST:
+        return None
+    if parsed.scheme != "https" or parsed.username is not None or parsed.port not in (None, 443):
+        raise ValueError(f"{_CONTAINER_CREDENTIALS_URI} must use the CoreWeave API HTTPS origin")
+    token_file = os.environ.get(_CONTAINER_AUTHORIZATION_FILE)
+    if not token_file:
+        raise ValueError(f"{_CONTAINER_AUTHORIZATION_FILE} is required for CoreWeave federation")
+    return CoreWeaveFederation(uri, os.path.abspath(token_file))
+
+
+def coreweave_federated_bucket(bucket: str) -> tuple[BucketSpec, CoreWeaveFederation] | None:
+    """Resolve federation settings for a bucket declared as CoreWeave."""
+    if not os.environ.get(_CONTAINER_CREDENTIALS_URI):
+        return None
+    spec = data_buckets().get(bucket)
+    if spec is None or spec.store is not StoreType.COREWEAVE:
+        return None
+    federation = coreweave_federation()
+    return (spec, federation) if federation is not None else None
+
+
+def coreweave_federated_s3_options(spec: BucketSpec, federation: CoreWeaveFederation) -> dict[str, Any]:
+    """Build a routed CoreWeave filesystem configuration with refreshable credentials."""
+    endpoint = s3_endpoint(spec.store)
+    conf = fsspec_s3_conf(endpoint)
+    return {
+        "endpoint_url": endpoint,
+        "client_kwargs": {"region_name": spec.signing_region},
+        "config_kwargs": {**conf["config_kwargs"], **s3_python_config_kwargs()},
+        "session": _coreweave_federated_session(os.getpid(), federation),
+        # Ambient fsspec options can bypass the scoped credential provider.
+        "key": None,
+        "secret": None,
+        "token": None,
+        "username": None,
+        "password": None,
+        "anon": False,
+    }
+
+
+@functools.lru_cache
+def _coreweave_federated_session(_pid: int, federation: CoreWeaveFederation) -> AioSession:
+    # Keep fsspec's instance cache effective and never reuse SDK state across a fork.
+    # The provider reopens the token file on refresh, so rotating its contents needs no new session.
+    session = AioSession(session_vars={"profile": (None, None, None, None)})
+    provider = AioContainerProvider(
+        environ={_CONTAINER_CREDENTIALS_URI: federation.uri, _CONTAINER_AUTHORIZATION_FILE: federation.token_file}
+    )
+    session.register_component("credential_provider", AioCredentialResolver([provider]))
+    return session
+
+
 def s3_credentials(store: StoreType) -> tuple[str, str] | None:
     """Resolve a store's key/secret pair, or return ``None`` when unavailable.
 
@@ -244,6 +319,11 @@ def polars_s3_storage_options(url: str) -> dict[str, str]:
     spec = data_buckets().get(urlparse(url).netloc)
     if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
         return {}
+    if spec.store is StoreType.COREWEAVE and coreweave_federation() is not None:
+        raise ValueError(
+            "Polars scans do not yet support refreshable CoreWeave credentials; "
+            "use a federation-aware filesystem instead of static storage options"
+        )
     credentials = s3_credentials(spec.store)
     if credentials is None:
         return {}

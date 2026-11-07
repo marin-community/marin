@@ -290,6 +290,7 @@ their Kubernetes service account inside the cluster.
 | --- | --- |
 | `kubernetes_provider.namespace` | Namespace for task Pods and the LocalQueue. |
 | `kubernetes_provider.service_account` | Optional service account assigned to task Pods. |
+| `kubernetes_provider.sandbox_runtime_class` | RuntimeClass for sandbox Pods; defaults to `gvisor`. Select a deployed class with the correct runtime handler and node selector. |
 | `kubernetes_provider.host_network` | Enables host networking and RDMA requests for GPU Pods. |
 | `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
 | `kubernetes_provider.cache_max_age` | Maximum time since the last file write or recorded access before the node-agent reclaims a top-level cache entry. Omit it to disable reclamation. |

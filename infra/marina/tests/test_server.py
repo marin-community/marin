@@ -4,10 +4,13 @@
 import asyncio
 import gzip
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
+import httpx
+import jwt
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -42,6 +45,8 @@ from marina.sources import discover_apps, load_manifest
 from marina.testing import isolated_database
 from mcp_types import LATEST_PROTOCOL_VERSION
 from rigging.server_auth import ANONYMOUS_ADMIN, identity_scope
+from rigging.shared_grants import SharedGrantConfig
+from rigging.token_authority import generate_ed25519_keypair
 from starlette.testclient import TestClient
 
 TASKTROVE_MANIFEST = """
@@ -136,6 +141,91 @@ def config_for(tmp_path: Path, source_database: str) -> MarinaConfig:
     database = UrlDatabase(source_database)
     install_preview_sources(tmp_path / "apps", database)
     return MarinaConfig(data_root=str(data_root), iap_audience=None, database=database)
+
+
+def test_shared_grants_enforce_uuid_access_directory_release_and_revocation(tmp_path, source_database, monkeypatch):
+    source = write_api_app(tmp_path / "apps", "tasktrove")
+    write_app(tmp_path / "apps", "other")
+    config = config_for(tmp_path, source_database)
+    assert config.database is not None
+    store = AppletStore(config.database)
+    try:
+        applet_id = store.named_applet("tasktrove").id
+    finally:
+        store.close()
+    key = generate_ed25519_keypair()
+    trust = SharedGrantConfig(
+        issuer="https://auth.example", public_keys=(key.public_pem,), authority_url="https://auth.example"
+    )
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": trust.issuer,
+            "aud": "marina",
+            "sub": "session",
+            "act": {"sub": "session"},
+            "owner": "research",
+            "grant_id": "one",
+            "policy_revision": "one",
+            "grant_version": 1,
+            "permissions": [
+                {"service": "marina", "actions": ["app.read", "app.release"], "resource": f"/apps/{applet_id}/"}
+            ],
+            "iat": now,
+            "exp": now + 300,
+            "jti": "one",
+        },
+        key.private_pem,
+        algorithm="EdDSA",
+        headers={"typ": "at+jwt"},
+    )
+    remote_status = [200]
+
+    def decision(_url, *, json, **_kwargs):
+        assert json["resource"] == f"/apps/{applet_id}/"
+        return httpx.Response(
+            remote_status[0],
+            json={
+                "grant_id": "one",
+                "actor": "session",
+                "owner": "research",
+                "policy_revision": "one",
+                "expires_at": now + 300,
+            },
+        )
+
+    monkeypatch.setattr("rigging.shared_grants.requests.post", decision)
+    shared_config = replace(
+        config,
+        shared_grants=trust,
+        host_apps={"legacy.test": "tasktrove", "other.test": "other"},
+        canonical_origin="http://testserver",
+    )
+    with TestClient(create_app(shared_config), client=("127.0.0.1", 1234)) as client:
+        assert client.get("/tasktrove/").status_code == 401
+        client.headers["Authorization"] = f"Bearer {token}"
+        assert client.get("/tasktrove/").status_code == 200
+        assert client.get("/tasktrove/api/whoami").json() == {"user": "session"}
+        assert client.get("/api/whoami", headers={"Host": "legacy.test"}).json() == {"user": "session"}
+        assert client.get("/api/whoami", headers={"Host": "other.test"}).status_code == 403
+        assert client.get("/other/").status_code == 403
+        assert [app["name"] for app in client.get("/api/marina/apps").json()["apps"]] == ["tasktrove"]
+        assert client.post(MCP_PATH + "/").status_code == 403
+        assert (
+            client.post(
+                f"/api/marina/applets/{applet_id}",
+                params={"base_version": 1, "mode": "public"},
+                content=package_applet(source),
+            ).status_code
+            == 403
+        )
+        released = client.post(
+            f"/api/marina/applets/{applet_id}", params={"base_version": 1}, content=package_applet(source)
+        )
+        assert released.status_code == 201, released.text
+        for status in [403, 503, 200]:
+            remote_status[0] = status
+            assert client.get("/tasktrove/").status_code == status
 
 
 @pytest.fixture

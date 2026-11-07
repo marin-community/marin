@@ -12,6 +12,15 @@ Active bucket names, stores, locations, and endpoints come from the reviewed `da
 `marin-iac/marin` stack with the other project grants. The existing R2 bucket remains
 declared in `infra/buckets/__main__.py` independently of runtime storage routing.
 
+Optional CoreWeave federation policies select explicit
+`marin-buckets:auth_identity_names` from an auth stack named by
+`marin-buckets:auth_stack`. The stack reads that service's `issuer` and
+`coreweave_identities` outputs; subjects and complete provider permissions are
+declared only in `broker_policy.storage` in the auth stack. Credential-file
+references are excluded from those public outputs. See the
+[auth deployment guide](../auth/README.md#coreweave-standing-policies) for WIF
+registration prerequisites and policy auditing.
+
 The stack creates the private Hugging Face bucket `open-athena/marin`, addressed as
 `hf://buckets/open-athena/marin` in `fsutil`. A protected `command.local.Command`
 resource runs `.venv/bin/hf buckets create open-athena/marin --private` from the

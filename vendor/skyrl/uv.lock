@@ -2959,6 +2959,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "s3fs" },
+    { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "zstandard" },
 ]
@@ -2973,7 +2974,7 @@ secrets = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiobotocore", specifier = ">=2.12.2" },
+    { name = "aiobotocore", specifier = ">=3.3.0" },
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "braceexpand", specifier = ">=0.1.7" },
     { name = "click", specifier = ">=8.3.1" },
@@ -2992,6 +2993,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "starlette", specifier = ">=0.40" },
     { name = "zstandard", specifier = ">=0.22" },
 ]

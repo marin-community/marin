@@ -254,6 +254,7 @@ jobs_table = Table(
     # authorization; a child inherits its root's value and
     # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
+    Column("shared_grant_id", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
@@ -280,6 +281,17 @@ jobs_table = Table(
     Index("idx_jobs_root_depth", "root_job_id", "depth"),
     Index("idx_jobs_depth_submitted", text("depth"), text("submitted_at_ms DESC")),
     Index("idx_jobs_name", "name"),
+)
+
+
+shared_attempt_grants_table = Table(
+    "shared_attempt_grants",
+    metadata,
+    Column("attempt_uid", String, primary_key=True),
+    Column("job_id", JobNameType, nullable=False),
+    Column("task_id", String, nullable=False),
+    Column("grant_id", String, nullable=False),
+    Column("resource", String, nullable=False),
 )
 
 

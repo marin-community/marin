@@ -20,7 +20,7 @@ import click
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.hashing import file_md5
-from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
+from rigging.filesystem.s3_compat import coreweave_federation, s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import (
     CopyAction,
@@ -140,7 +140,12 @@ def buckets() -> None:
             endpoint, status = "-", "application default"
         else:
             endpoint = s3_endpoint(spec.store)
-            status = "set" if s3_credentials(spec.store) else "missing"
+            try:
+                federated = spec.store is StoreType.COREWEAVE and coreweave_federation() is not None
+            except ValueError:
+                status = "invalid federation"
+            else:
+                status = "federated" if federated else "set" if s3_credentials(spec.store) else "missing"
         rows.append([name, str(spec.store), endpoint, status])
     for line in table_lines(["bucket", "backend", "endpoint", "credentials"], rows):
         click.echo(line)

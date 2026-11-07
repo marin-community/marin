@@ -97,6 +97,14 @@ The directory shows the selected revision's publisher. Publisher identity does
 not restrict access. The registry retains its original-publisher `owner` column
 as historical metadata, avoiding a destructive schema migration during rollout.
 
+An experimental deployment can instead select shared grants with
+`MARINA_SHARED_GRANTS_CONFIG`, pointing to a JSON public-trust configuration.
+It checks `app.read` and `app.release` against stable `/apps/UUID/` resources,
+filters app listings, and denies operations without an implemented grant policy.
+Release grants cannot change visibility. IAP and local operation remain available
+as separate startup choices; an unavailable authority never enables local access.
+See [application adapters](../auth/README.md#application-adapters-and-local-operation).
+
 The application directory on Marina's home page lists every active application in
 a compact table, with 50 apps per page and a visible range, total and Previous/Next
 links. Click Name or Released to sort in either direction; the default shows newest

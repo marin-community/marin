@@ -55,6 +55,8 @@ pub struct NativeAuthConfig {
     #[serde(default)]
     pub user_roles: HashMap<String, String>,
     pub default_user_role: String,
+    #[serde(default)]
+    pub shared_grants: Option<marin_grants::Config>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -95,6 +97,7 @@ pub struct NativeVerifier {
     cache: Cache<[u8; 32], VerifiedIdentity>,
     stats: Arc<CacheStats>,
     trusted_networks: Vec<IpNet>,
+    shared_grants: Option<marin_grants::Verifier>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +165,17 @@ struct IapVerifier {
 
 impl NativeVerifier {
     pub(crate) fn new(config: NativeAuthConfig, stats: Arc<CacheStats>) -> Result<Self, String> {
+        if config.shared_grants.is_some()
+            && (!matches!(config.mode, NativeAuthMode::Enforcing)
+                || !config.trusted_cidrs.is_empty())
+        {
+            return Err("shared grants require enforcing mode without network trust".into());
+        }
+        let shared_grants = config
+            .shared_grants
+            .as_ref()
+            .map(|config| marin_grants::Verifier::new(config, "iris"))
+            .transpose()?;
         let keys = config
             .jwks
             .keys
@@ -211,6 +225,7 @@ impl NativeVerifier {
             cache,
             stats,
             trusted_networks,
+            shared_grants,
         })
     }
 
@@ -251,7 +266,7 @@ impl NativeVerifier {
             };
             return self.cache_result(key, verified);
         }
-        if direct_connection && self.trusts_direct_peer(peer_ip) {
+        if self.shared_grants.is_none() && direct_connection && self.trusts_direct_peer(peer_ip) {
             return VerifyOutcome::Anonymous;
         }
         if matches!(
@@ -322,6 +337,27 @@ impl NativeVerifier {
     fn verify_token(&self, token: &str) -> Result<VerifiedIdentity, String> {
         let unverified = jsonwebtoken::dangerous::insecure_decode::<UnverifiedClaims>(token)
             .map_err(|error| format!("invalid JWT claims: {error}"))?;
+        if self
+            .config
+            .shared_grants
+            .as_ref()
+            .is_some_and(|c| c.issuer == unverified.claims.iss)
+        {
+            let access = self
+                .shared_grants
+                .as_ref()
+                .ok_or("shared trust is not configured")?
+                .verify(token)?;
+            return Ok(VerifiedIdentity {
+                user_id: access.sub,
+                role: marin_grants::SHARED_GRANT_ROLE.into(),
+                audience: None,
+                job_id: None,
+                endpoint: None,
+                federation_peer: None,
+                expires_at: access.exp,
+            });
+        }
         if unverified.claims.aud == self.config.federation_audience {
             return self.verify_federation_token(token, &unverified.claims.iss);
         }

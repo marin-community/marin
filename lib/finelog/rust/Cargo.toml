@@ -53,6 +53,7 @@ name = "finelog"
 path = "src/lib.rs"
 
 [dependencies]
+marin-grants = { path = "../../rigging/rust" }
 connectrpc = { version = "0.8.1", features = ["axum", "gzip", "zstd"] }
 zstd = "0.13"
 buffa = { version = "0.8.1", features = ["json"] }
