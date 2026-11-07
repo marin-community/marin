@@ -110,6 +110,7 @@ FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024.
 | OpenCoder web code, 20% | trade-off, no gain, no gain | no |
 | FineWeb-2 Chinese, 20% | no gain, hurts | no |
 | FineWeb, 50% | hurts, hurts | no |
+| FineWeb-Edu, 20% | trade-off, trade-off, helps | yes |
 | FineWeb-Edu, 50% | hurts, hurts | no |
 | FineWeb-Edu against FineWeb, 50% | hurts, hurts | no |
 | Cosmopedia web samples, 20% | no gain, no gain | no |
@@ -139,6 +140,9 @@ FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024.
 | FineWeb-2 Chinese, 20% | d768, 3 | +2.19% | +2.83% | +2.82% | +2.49% | +3.78% | +4.11% | hurts |
 | FineWeb, 50% | d512, 6 | −2.43% | −0.01% | −2.68% | −5.13% | +3.69% | +7.78% | hurts |
 | FineWeb, 50% | d768, 3 | −2.99% | −0.65% | −3.76% | −5.51% | +2.90% | +8.29% | hurts |
+| FineWeb-Edu, 20% | d512, 3 | −0.53% | −0.21% | −1.66% | −1.28% | +0.56% | +4.02% | trade-off |
+| FineWeb-Edu, 20% | d768, 3 | −0.60% | −0.60% | −2.24% | −1.86% | −0.24% | +2.13% | trade-off |
+| FineWeb-Edu, 20% | d1024, 3 | −0.64% | −0.73% | −2.87% | −1.76% | −0.84% | +0.67% | helps |
 | FineWeb-Edu, 50% | d512, 6 | −0.14% | +0.91% | −2.68% | −2.18% | +2.99% | +8.79% | hurts |
 | FineWeb-Edu, 50% | d768, 3 | −1.06% | −0.46% | −4.72% | −3.66% | +0.77% | +7.98% | hurts |
 | FineWeb-Edu against FineWeb, 50% | d512, 6 | +2.34% | +0.92% | +0.00% | +3.11% | −0.67% | +0.94% | hurts |
@@ -152,8 +156,8 @@ Each `Δ` is BPB against the control at the same rung (6 control seeds at d512, 
 runs are `dbelay-<rung>-<candidate>-s<seed>` in W&B `marin-community/marin_moe`; the null arm is control seeds 6–8,
 judged against the control seeds above.
 
-Five arms tested the method, with expectations written down before their runs: the null arm, FineMath at 5% and 50%,
-Cosmopedia, and OpenWebMath.
+Six arms tested the method, with expectations written down before their runs: the null arm, FineMath at 5% and 50%,
+Cosmopedia, OpenWebMath, and FineWeb-Edu at 20%.
 
 - **Null** (met): no group is `better` or `worse` at either rung. At d512 one of six group intervals (commonsense,
   +0.6%) lies above 0, about the rate a 95% interval allows, so one group's gain of about 0.5% at a single rung is noise.
@@ -164,6 +168,9 @@ Cosmopedia, and OpenWebMath.
   group moved. Accuracy agrees (below), so this is a real no for this mix at d768.
 - **OpenWebMath, 20%** (met): a second math source, expected to be a yes with a smaller math gain than FineMath's. It
   is a yes (math −6.5%, −7.7% and −8.5% at d512, d768 and d1024, about half of FineMath 20%'s).
+- **FineWeb-Edu, 20%** (partly met): expected to be a yes with knowledge and commonsense `better`. It is a yes, `helps`
+  at d1024, and the code cost of a 50% share (+8.0%) shrinks to +0.7%. Commonsense is `better` at every rung, but
+  knowledge only at d1024 (−2.9%); at d512 and d768 its interval crosses 0.
 
 ## Accuracy check
 
