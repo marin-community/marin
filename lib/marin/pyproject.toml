@@ -164,9 +164,6 @@ cpu = [
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-# Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
-# See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
-
 vizier = [
     "google-vizier[jax]",
 ]

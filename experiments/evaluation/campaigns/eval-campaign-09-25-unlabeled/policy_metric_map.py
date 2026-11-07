@@ -1,17 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Metric names for the October 2026 publication-policy evaluation suite.
+"""Curated and Harbor metric contracts for the publication campaign.
 
-``evaluator_metric`` is the spelling declared by Evalchemy or Harbor. ``record_metric``
-is the canonical key consumed by Evaldash. ``published_metric`` identifies the
-machine key behind the score reported for the current publication campaign; it can
-name a subgroup or a separate cohort statistic. Historical records retain their
-recorded benchmark metadata.
-CRUXEval's record metric combines directions while its published metric uses only
-output trials. Harbor reports SOTOPIA's cohort-corrected metric when the job completes.
-PIQA's pinned task reports both `acc` and `acc_norm`; evaluator metadata selects
-`acc`, while the publication policy uses the length-normalized `acc_norm`.
+Curated evaluator and record keys use their protocol spelling. Published metrics
+can select a declared subgroup; CRUXEval publishes output-direction accuracy.
+Historical records retain their recorded benchmark metadata.
 """
 
 from collections.abc import Mapping
@@ -21,7 +15,7 @@ from types import MappingProxyType
 
 
 class PolicyMechanism(StrEnum):
-    EVALCHEMY = "evalchemy"
+    CURATED = "curated"
     HARBOR = "harbor"
 
 
@@ -34,8 +28,8 @@ class PolicyMetric:
     published_metric: str
 
 
-def _evalchemy(task: str, evaluator: str, record: str, published: str | None = None) -> PolicyMetric:
-    return PolicyMetric(PolicyMechanism.EVALCHEMY, task, evaluator, record, published or evaluator)
+def _curated(task: str, evaluator: str, record: str, published: str | None = None) -> PolicyMetric:
+    return PolicyMetric(PolicyMechanism.CURATED, task, evaluator, record, published or evaluator)
 
 
 def _harbor(metric: str = "reward") -> PolicyMetric:
@@ -44,24 +38,26 @@ def _harbor(metric: str = "reward") -> PolicyMetric:
 
 POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(
     {
-        "math500": _evalchemy("MATH500", "accuracy", "accuracy"),
-        "humanevalplus": _evalchemy("HumanEvalPlus", "pass@1", "pass_at_1"),
-        "mbppplus": _evalchemy("MBPPPlus", "pass@1", "pass_at_1"),
-        "olympiadbench": _evalchemy("OlympiadBench", "accuracy_avg", "accuracy"),
-        "gsm8k-0shot": _evalchemy("gsm8k", "exact_match", "accuracy"),
-        "piqa": _evalchemy("piqa", "acc", "accuracy", "acc_norm"),
-        "winogrande": _evalchemy("winogrande", "acc", "accuracy"),
-        "boolq": _evalchemy("boolq", "acc", "accuracy"),
-        "truthfulqa": _evalchemy("truthfulqa_mc2", "acc", "accuracy"),
-        "triviaqa": _evalchemy("triviaqa", "exact_match", "accuracy"),
-        "aime24": _evalchemy("AIME24", "accuracy_avg", "accuracy"),
-        "mmlu-pro": _evalchemy("MMLUPro", "accuracy_avg", "accuracy"),
-        "gpqa-diamond": _evalchemy("GPQADiamond", "accuracy_avg", "accuracy"),
-        "cruxeval": _evalchemy("CruxEval", "pass@1", "pass_at_1", "output_pass@1"),
-        "financebench": _evalchemy("FinanceBench", "accuracy", "accuracy"),
-        "ifbench": _evalchemy("IFBench", "strict_prompt_accuracy", "strict_prompt_accuracy"),
-        "mrcr": _evalchemy("MRCR", "mrcr_accuracy", "mrcr_accuracy"),
-        "nupa": _evalchemy("NUPA5K-Loose", "exact_match", "accuracy"),
+        "math500": _curated("MATH500", "accuracy", "accuracy"),
+        "humanevalplus": _curated("HumanEvalPlus", "accuracy", "accuracy"),
+        "mbppplus": _curated("MBPPPlus", "accuracy", "accuracy"),
+        "olympiadbench": _curated("OlympiadBench", "accuracy", "accuracy"),
+        "gsm8k-0shot": _curated("gsm8k-0shot", "exact_match,strict-match", "exact_match,strict-match"),
+        "piqa": _curated("piqa", "acc_norm,none", "acc_norm,none"),
+        "winogrande": _curated("winogrande", "acc,none", "acc,none"),
+        "boolq": _curated("boolq", "acc,none", "acc,none"),
+        "truthfulqa": _curated("truthfulqa_mc2", "acc,none", "acc,none"),
+        "triviaqa": _curated("triviaqa", "exact_match,strict_answer", "exact_match,strict_answer"),
+        "aime24": _curated("AIME24", "accuracy", "accuracy"),
+        "mmlu-pro": _curated("MMLUPro", "accuracy", "accuracy"),
+        "gpqa-diamond": _curated("GPQADiamond", "accuracy", "accuracy"),
+        "cruxeval": _curated("CruxEval", "accuracy", "accuracy", "direction=output/accuracy"),
+        "financebench": _curated("FinanceBench", "accuracy", "accuracy"),
+        "ifbench": _curated("IFBench", "strict_prompt_accuracy", "strict_prompt_accuracy"),
+        "mrcr": _curated("MRCR", "accuracy", "accuracy"),
+        "mrcr-32k": _curated("MRCR-32k", "accuracy", "accuracy"),
+        "mrcr-65k": _curated("MRCR-65k", "accuracy", "accuracy"),
+        "nupa": _curated("NUPA5K-Loose", "exact_match", "exact_match"),
         "swebench-verified": _harbor(),
         "ot-tblite-recovery": _harbor(),
         "tb2-recovery": _harbor(),

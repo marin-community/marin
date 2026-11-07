@@ -1,5 +1,3 @@
-tasks: [truthfulqa_mc2]
-task_options:
-  truthfulqa_mc2:
-    num_fewshot: 0
-    task_alias: truthfulqa_mc2_0shot
+name: truthfulqa
+sources:
+- evalchemy-truthfulqa_mc2

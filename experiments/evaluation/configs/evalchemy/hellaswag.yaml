@@ -1,6 +1,5 @@
-tasks: [hellaswag]
-task_options:
-  hellaswag:
-    num_fewshot: 10
-    task_alias: hellaswag_10shot
+name: hellaswag
+num_fewshot: 10
+sources:
+- evalchemy-hellaswag
 max_tokens: 256

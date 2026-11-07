@@ -45,7 +45,7 @@ def test_the_panel_serves_the_committed_catalog(journey: Journey) -> None:
     assert "snowball" in journey.reads()
     store = cast(dict[str, Any], journey.api(f"{API}/status"))["store"]
     assert store["backend"] == "postgres"
-    assert store["record_count"] == 21
+    assert store["record_count"] == 23
 
 
 def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey) -> None:
@@ -57,7 +57,7 @@ def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey
 
     assert "gsm8k-0shot" in unquote(journey.page.url)
     journey.page.reload(wait_until="domcontentloaded")
-    assert picker.input_value() == "gsm8k-0shot"
+    expect(picker).to_have_value("gsm8k-0shot")
 
 
 def test_panel_cohort_survives_reload_and_navigation_to_compare(journey: Journey) -> None:
@@ -220,3 +220,43 @@ def test_model_index_reports_failed_load_and_recovers(journey: Journey) -> None:
     expect(card).to_contain_text("@aaaaaaaaaaaa")
     # The rendered name wraps rather than clipping the checkpoint or config identity.
     assert card.locator("[title]").evaluate("el => el.scrollWidth <= el.clientWidth")
+
+
+def test_historical_and_native_scores_compare_across_cohorts_and_browse_terminal_samples(journey: Journey) -> None:
+    journey.visit("/?cohort=all&benchmarks=mmlu,humaneval")
+    for model in ("snowball", "native-qwen3-8b"):
+        row = journey.page.get_by_text(model, exact=True).first.locator("xpath=ancestor::tr")
+        expect(row.get_by_role("checkbox")).to_be_enabled()
+        row.get_by_role("checkbox").check()
+    journey.page.get_by_role("button", name="Compare 2 models →", exact=True).click()
+    journey.page.wait_for_url(re.compile(r"/compare\?.*cohort=all"))
+    expect(journey.page.get_by_role("button", name="Remove native-qwen3-8b", exact=True)).to_be_visible()
+    journey.sees("All cohorts may mix evaluation settings.")
+    comparison = cast(
+        dict[str, Any],
+        journey.api(f"{API}/compare?cohort=all&benchmarks=mmlu,humaneval&models=snowball,native-qwen3-8b"),
+    )
+    assert set(comparison["shared"]) == {"mmlu", "humaneval"}
+    for row in comparison["rows"]:
+        assert {cell["metric"] for cell in row["cells"].values()} == {"accuracy"}
+        assert row["cells"]["native-qwen3-8b"]["value"] == pytest.approx(2 / 3)
+        assert row["cells"]["native-qwen3-8b"]["n_scored"] == 3
+    journey.shoot("historical-native-compare")
+    journey.page.reload(wait_until="domcontentloaded")
+    expect(journey.page.get_by_role("button", name="Remove snowball", exact=True)).to_be_visible()
+    journey.page.set_viewport_size({"width": 390, "height": 844})
+    assert journey.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    journey.shoot("historical-native-compare-mobile")
+    journey.page.set_viewport_size({"width": 1280, "height": 900})
+    journey.visit("/runs/native-fixture-mmlu")
+    all_samples = journey.page.get_by_role("button", name=re.compile(r"^all.*3", re.IGNORECASE))
+    expect(all_samples).to_be_visible()
+    journey.page.get_by_role("button", name=re.compile(r"^incorrect.*1", re.IGNORECASE)).click()
+    journey.sees("1\u20131 of 1")
+    page = cast(dict[str, Any], journey.api(f"{API}/runs/native-fixture-mmlu/samples?task=mmlu&correct=all"))
+    assert page["total"] == 3
+    assert page["counts"] == {"all": 3, "correct": 2, "incorrect": 1, "ungraded": 0}
+    assert [row["grading"]["score"] for row in page["rows"]].count(0) == 1
+    all_samples.click()
+    journey.page.get_by_role("button", name="Open viewer ⛶", exact=True).click()
+    journey.sees("Which option is correct").shoot("native-sample-viewer")

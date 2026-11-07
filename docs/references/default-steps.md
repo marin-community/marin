@@ -31,10 +31,13 @@ that step's `StepContext` and returning a Levanter `LmDataConfig`.
 
 ## Evaluation
 
-::: marin.experiment.evaluation.EvalGroup
+Checkpoint evaluation builders live in `experiments.evals.evaluation` and use the
+shared curated-corpus launcher. Their reports contain run references for Evaldash.
 
-::: marin.experiment.evaluation.eval_step
+::: experiments.evals.evaluation.EvalGroup
 
-::: marin.experiment.evaluation.eval_steps
+::: experiments.evals.evaluation.eval_step
 
-::: marin.experiment.evaluation.eval_report
+::: experiments.evals.evaluation.eval_steps
+
+::: experiments.evals.evaluation.eval_report

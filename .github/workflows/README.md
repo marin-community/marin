@@ -231,12 +231,12 @@ affected-test runner use `infra/ci/run_harbor_tests.py` to check its standalone
 lock before running offline runtime tests. Changes to its local Rigging and
 FineStore dependencies also select this lane.
 
-Evalchemy is maintained under `vendor/evalchemy` with its own lock and dedicated
-`evalchemy-unit` lane. Both vendored evaluators use local Rigging and FineStore.
+Curated TaskSpec evaluation runs in the Marin unit lane. Harbor uses local
+Rigging and FineStore.
 
 `ops-external-dependencies.yaml` is manual: it regenerates packaged external
 requirements and opens an update only when generated state changes. Vendored
-SkyRL, Evalchemy and Harbor source updates land directly in Marin.
+SkyRL and Harbor source updates land directly in Marin.
 
 `ops-native-package-dependencies.yaml` applies the same policy to Marin's
 published native wheels. A successful non-PR `Marin - Release Packages` run

@@ -30,7 +30,6 @@ from experiments.post_training.task_curation.config import InputOverrides, Pipel
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.driver import main as curation_main
-from experiments.post_training.task_curation.images.build import MissingEnvironmentArtifact
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -119,7 +118,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert successful["verification_status"] is None
 
 
-def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path):
+def test_local_eval_plan_schedules_missing_grader_under_cache(tmp_path):
     cache = tmp_path / "cache"
     result = CliRunner().invoke(
         curation_main,
@@ -136,8 +135,11 @@ def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path):
             str(tmp_path / "output"),
         ],
     )
-    assert isinstance(result.exception, MissingEnvironmentArtifact)
-    assert str(cache / "images") in str(result.exception)
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["cache_dir"] == str(cache)
+    assert any(dependency.startswith("images/env-") for dependency in plan["sources"][0]["dependencies"])
+    assert not (tmp_path / "remote").exists()
 
 
 def answer_from_auxiliary(row, context):

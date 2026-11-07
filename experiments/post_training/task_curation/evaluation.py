@@ -25,6 +25,7 @@ from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
     built_environment,
     environment_artifact,
+    identity_digest,
 )
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
@@ -41,7 +42,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.11.02.1"
+EVALUATION_PIPELINE_VERSION = "2026.11.07.1"
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class EvalDataset:
     recipe: CurationRecipe
     protocol: EvaluationProtocol
     item_builder: ItemBuilder
+    fewshot_group: str | None = None
 
     def __post_init__(self) -> None:
         for source in (self.recipe.source, *self.recipe.inputs.values()):
@@ -111,6 +113,7 @@ def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run
         run.source_input,
         run.output_path,
         source_overrides=input_file_overrides(options.inputs.files),
+        curation_identity=canonical_sha256(identity),
     )
     validated = False
     try:
@@ -142,8 +145,14 @@ def curate(source: RlDataSource[EvalDataset], options: PipelineOptions) -> Artif
     grader = None
     built = None
     if dataset.recipe.grader is not None and placement(dataset.recipe.grader) != Placement.IMAGE:
-        built = built_environment(dataset.recipe.grader)
         grader = environment_artifact(dataset.recipe.grader)
+        # Package-only environments have no image output. Their declared build identity is
+        # sufficient for planning; the dependency builds the lock before publication reads it.
+        built = (
+            built_environment(dataset.recipe.grader)
+            if placement(dataset.recipe.grader) == Placement.BUILT_IMAGE
+            else EnvironmentArtifact(path=grader.path(), identity=identity_digest(dataset.recipe.grader))
+        )
     recipe = source_recipe(dataset.recipe, {}, None)
     identity = {
         "source": {

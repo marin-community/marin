@@ -28,7 +28,6 @@ EXTERNAL_RUNTIME_POLICY = PullRequestPolicy(
     allowed_files=frozenset(
         {
             "vendor/skyrl/uv.lock",
-            "vendor/evalchemy/uv.lock",
             "lib/marin/src/marin/external_dependencies.py",
             "pyproject.toml",
             "uv.lock",

@@ -1,15 +1,5 @@
-tasks: [MRCR]
-task_options:
-  MRCR:
-    num_fewshot: 0
-    task_alias: mrcr
-    generation: true
-apply_chat_template: true
-chat_tokenizer_backend: huggingface
-batch_size: 1
+name: mrcr-65k
+sources:
+- evalchemy-mrcr-65k
 seed: 42
 max_tokens: 4096
-max_length: 65472
-runtime_extras: [mrcr]
-chat_template_kwargs:
-  enable_thinking: false

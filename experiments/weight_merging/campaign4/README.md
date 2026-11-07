@@ -81,10 +81,10 @@ run_campaign_launch 1 \
   --records-prefix "$RECORDS_PREFIX" \
   --federated_cluster cw-rno2a \
   --priority interactive \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mbppplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/olympiadbench.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
+  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
+  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mbppplus.yaml \
+  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/olympiadbench.yaml \
+  --curated-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
   --harbor-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs/bfclparity-pi.yaml
 ```
 

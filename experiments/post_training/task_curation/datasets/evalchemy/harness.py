@@ -3,8 +3,10 @@
 
 """Pinned native likelihood corpora with lm-eval v0.4.12 prompt semantics."""
 
+from dataclasses import replace
 from functools import partial
 
+from taskcompendium.evaluation.corpus import chat_variant_item
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
@@ -35,7 +37,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
     BASIC_GRADER,
     MATH_GRADER,
 )
-from experiments.post_training.task_curation.datasets.evalchemy.likelihood import choice_source
+from experiments.post_training.task_curation.datasets.evalchemy.protocols import choice_source
 from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -63,7 +65,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             "ARC-Easy/test-00000-of-00001.parquet",
             2376,
             0,
-            "",
+            "ARC-Easy/train-00000-of-00001.parquet",
             normalized,
         ),
         (
@@ -83,7 +85,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             "boolq/validation-00000-of-00001.parquet",
             3270,
             0,
-            "",
+            "boolq/train-00000-of-00001.parquet",
             raw,
         ),
         (
@@ -93,8 +95,9 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             "piqa_validation.parquet",
             1838,
             0,
-            "",
-            normalized,
+            "piqa_train.parquet",
+            # The publication policy uses length-normalized PIQA accuracy.
+            (LikelihoodNormalization.CHARACTERS, LikelihoodNormalization.RAW),
         ),
         (
             "openbookqa",
@@ -127,11 +130,31 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             raw,
         ),
     ):
-        result.append(
-            choice_source(
-                name, repo, revision, file, population, HarnessTemplate(name, shots, fewshot_file=pool), normalizations
+        shot_counts = {
+            "arc_challenge": (shots, 10),
+            "arc_easy": (shots, 10),
+            "boolq": (shots, 10),
+            "piqa": (shots, 10),
+            "winogrande": (shots, 0),
+            "hellaswag": (shots, 0),
+            "truthfulqa_mc2": (shots, 6),
+        }.get(name, (shots,))
+        for count in shot_counts:
+            result.append(
+                choice_source(
+                    name if count == shots else f"{name}-{count}shot",
+                    repo,
+                    revision,
+                    file,
+                    population,
+                    HarnessTemplate(name, count, fewshot_file=pool or file),
+                    normalizations,
+                    metric_kind=MetricKind.CONTINUOUS if name == "truthfulqa_mc2" else MetricKind.BINARY,
+                    scoring="probability_mass" if name == "truthfulqa_mc2" else "most_likely",
+                    version="2026.11.05.2" if count and name in {"boolq", "piqa", "truthfulqa_mc2"} else "2026.11.02",
+                    fewshot_group=name,
+                )
             )
-        )
     result.append(
         RlDataSource(
             info=SourceInfo(
@@ -184,6 +207,36 @@ def sources() -> list[RlDataSource[EvalDataset]]:
         )
     )
     result.extend(generation_sources())
+    result.extend(chat_sources(generation_sources()))
+    return result
+
+
+def chat_sources(sources: list[RlDataSource[EvalDataset]]) -> list[RlDataSource[EvalDataset]]:
+    """Publish instruct-model transport variants as separate immutable corpora."""
+    result = []
+    for source in sources:
+        dataset = source.config
+        assert dataset is not None and dataset.protocol.sampling is not None
+        name = dataset.recipe.name.removeprefix("evalchemy-")
+        sampling = dataset.protocol.sampling.model_copy(
+            update={
+                "chat_template_kwargs": {"enable_thinking": False} if name in {"gsm8k-0shot", "triviaqa"} else {},
+            }
+        )
+        result.append(
+            replace(
+                source,
+                info=replace(source.info, id=source.info.id + "-chat"),
+                config=replace(
+                    dataset,
+                    recipe=replace(dataset.recipe, name=dataset.recipe.name + "-chat"),
+                    protocol=dataset.protocol.model_copy(
+                        update={"operation": OperationKind.CHAT_GENERATION, "sampling": sampling}
+                    ),
+                    item_builder=partial(chat_variant_item, item_builder=dataset.item_builder),
+                ),
+            )
+        )
     return result
 
 
@@ -307,6 +360,39 @@ def generation_sources() -> list[RlDataSource[EvalDataset]]:
                     item_builder=generation_item,
                 ),
                 pipeline=curate,
+            )
+        )
+    return result
+
+
+def short_answer_sources() -> list[RlDataSource[EvalDataset]]:
+    """Zero-shot completion variants of the short-answer source families."""
+    result = []
+    for source in generation_sources():
+        dataset = source.config
+        assert dataset is not None
+        profile = dataset.recipe.name.removeprefix("evalchemy-")
+        if profile not in {"nq_open", "triviaqa", "drop"}:
+            continue
+        name = profile + "-0shot"
+        assert isinstance(dataset.recipe.source, HfSource)
+        result.append(
+            replace(
+                source,
+                info=replace(source.info, id="Checkpoint:" + name, title=name),
+                config=replace(
+                    dataset,
+                    recipe=replace(
+                        dataset.recipe,
+                        name="checkpoint-" + name,
+                        inputs={},
+                        source=replace(
+                            dataset.recipe.source,
+                            read=partial(read_generation_file, template=HarnessTemplate(profile, 0)),
+                        ),
+                    ),
+                    protocol=dataset.protocol.model_copy(update={"benchmark": name, "num_fewshot": 0}),
+                ),
             )
         )
     return result

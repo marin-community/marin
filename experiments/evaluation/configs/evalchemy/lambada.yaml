@@ -1,6 +1,4 @@
-tasks: [lambada_openai]
-task_options:
-  lambada_openai:
-    num_fewshot: 0
-    task_alias: lambada_openai_0shot
+name: lambada
+sources:
+- evalchemy-lambada_openai
 max_tokens: 256

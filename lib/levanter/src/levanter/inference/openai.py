@@ -859,7 +859,12 @@ class InferenceServer:
         @app.get("/v1/models")
         async def list_models() -> dict:
             model = Model(id=model_name, object="model", created=int(time.time()), owned_by="levanter")
-            return {"object": "list", "data": [model.model_dump(mode="json")]}
+            return {
+                "object": "list",
+                "data": [
+                    {**model.model_dump(mode="json"), "max_model_len": inference_context.engine.config.max_seq_len}
+                ],
+            }
 
         # A streaming request returns a StreamingResponse, which FastAPI passes through
         # untouched; `response_model` still describes the non-streaming body.

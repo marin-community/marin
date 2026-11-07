@@ -1,9 +1,6 @@
-tasks: [gsm8k]
-task_options:
-  gsm8k:
-    num_fewshot: 5
-    task_alias: gsm8k_5shot
-    generation: true
-# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
-# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
+name: gsm8k-smoke
+sources:
+- evalchemy-gsm8k
 limit: 128
+chat_sources:
+- evalchemy-gsm8k-chat

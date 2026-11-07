@@ -1,6 +1,5 @@
-tasks: [arc_easy]
-task_options:
-  arc_easy:
-    num_fewshot: 0
-    task_alias: arc_easy_0shot
+name: arc-easy
+num_fewshot: 0
+sources:
+- evalchemy-arc_easy
 max_tokens: 256

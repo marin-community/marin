@@ -1,6 +1,5 @@
-tasks: [winogrande]
-task_options:
-  winogrande:
-    num_fewshot: 5
-    task_alias: winogrande_5shot
+name: winogrande
+num_fewshot: 5
+sources:
+- evalchemy-winogrande
 max_tokens: 256

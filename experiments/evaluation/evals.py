@@ -7,32 +7,25 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
-from urllib.parse import urlsplit
 
 from marin.evaluation.eval_policy import source_config_digest
-from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig
-from marin.evaluation.evalchemy.runner import (
-    DEFAULT_NUM_CONCURRENT,
-    EvalchemyRunConfig,
-    EvalchemyRuntimeConfig,
-)
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
-from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
+from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
+
+from experiments.evaluation.curated import CuratedDefinition
+from experiments.post_training.task_curation.sources import evaluation_sources
 
 logger = logging.getLogger(__name__)
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
-_EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
@@ -53,127 +46,8 @@ _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API
 _DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
 # Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
 _HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
-# MRCR loads tiktoken's o200k_base encoding, which tiktoken downloads at import.
-_EVALCHEMY_EGRESS: Mapping[str, tuple[str, ...]] = MappingProxyType({"mrcr": ("openaipublic.blob.core.windows.net",)})
-
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
-
-
-@dataclass(frozen=True)
-class EvalchemyDefinition:
-    name: str
-    config_path: Path
-    secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
-    family: str | None = None
-    egress_allow: tuple[str, ...] = ()
-
-    def egress_allow_for(self, config: EvalchemyRunConfig) -> tuple[str, ...]:
-        """Egress rules for the evaluation's own downloads and its external judge."""
-        if config.judge is None:
-            return self.egress_allow
-        judge_host = urlsplit(config.judge.base_url).hostname
-        assert judge_host is not None, "EvalchemyJudgeConfig requires a URL with a host"
-        return (*self.egress_allow, judge_host)
-
-    def secret_env_for(self, config: EvalchemyRunConfig) -> Mapping[str, SecretSpec]:
-        secret_env = dict(self.secret_env)
-        if config.judge is not None:
-            judge_secret = config.judge.api_key
-            if "JUDGE_API_KEY" in secret_env and secret_env["JUDGE_API_KEY"] != judge_secret:
-                raise ValueError("Evalchemy definition conflicts with judge.api_key for JUDGE_API_KEY")
-            secret_env["JUDGE_API_KEY"] = judge_secret
-        return MappingProxyType(secret_env)
-
-    def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
-        return EvalRef(
-            name=config.name,
-            mechanism="evalchemy",
-            source_digest=source_config_digest(self.config_path),
-            family=self.family,
-            tasks=tuple(
-                EvalTaskRef(
-                    name=task.name,
-                    num_fewshot=task.num_fewshot,
-                    task_alias=task.task_alias,
-                    generation=task.generation,
-                    unsafe_code=task.unsafe_code,
-                    completion_only=task.completion_only,
-                )
-                for task in config.tasks
-            ),
-            evalchemy=EvalchemyRef(
-                apply_chat_template=config.apply_chat_template,
-                chat_tokenizer_backend=config.chat_tokenizer_backend,
-                debug=config.debug,
-                prompt_budget_preflight=config.prompt_budget_preflight,
-                max_gen_toks=config.max_gen_toks,
-                max_eval_instances=config.max_eval_instances,
-                num_concurrent=config.num_concurrent,
-                batch_size=config.batch_size,
-                seed=config.seed,
-                extra_gen_kwargs=dict(config.extra_gen_kwargs),
-                extra_model_args=dict(config.extra_model_args),
-                chat_template_kwargs=dict(config.chat_template_kwargs),
-                max_length=config.max_length,
-                judge=(
-                    EvalchemyJudgeRef(base_url=config.judge.base_url, model=config.judge.model)
-                    if config.judge is not None
-                    else None
-                ),
-            ),
-        )
-
-    def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
-        config = evalchemy_run_config(self.name, source)
-        effective_limit = config.max_eval_instances if limit is None else limit
-        model_max_gen_toks = model.generation.max_gen_toks
-        max_gen_toks = config.max_gen_toks
-        if model_max_gen_toks is not None:
-            if max_gen_toks is None or model_max_gen_toks < max_gen_toks:
-                max_gen_toks = model_max_gen_toks
-            elif model_max_gen_toks > max_gen_toks:
-                logger.warning(
-                    "Model generation limit %d exceeds the %s benchmark limit %d; using the benchmark limit. "
-                    "Pass an Evalchemy config with a larger max_tokens value to evaluate longer generations.",
-                    model_max_gen_toks,
-                    self.name,
-                    max_gen_toks,
-                )
-        chat_template_kwargs = {
-            **model.generation.chat_template_kwargs,
-            **config.chat_template_kwargs,
-        }
-        if config.chat_template_kwargs.get("enable_thinking") is False and model.generation.thinking_off_template_kwargs:
-            chat_template_kwargs.pop("enable_thinking")
-            chat_template_kwargs.update(model.generation.thinking_off_template_kwargs)
-        return replace(
-            config,
-            apply_chat_template=(
-                model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
-            ),
-            max_gen_toks=max_gen_toks,
-            num_concurrent=(
-                min(config.num_concurrent, model.evalchemy_num_concurrent)
-                if model.evalchemy_num_concurrent is not None
-                else config.num_concurrent
-            ),
-            max_eval_instances=effective_limit,
-            extra_gen_kwargs={
-                **config.extra_gen_kwargs,
-                **model.generation.extra_gen_kwargs,
-            },
-            chat_template_kwargs=chat_template_kwargs,
-            extra_model_args={
-                **config.extra_model_args,
-                **(
-                    {"revision": model.effective_tokenizer_revision}
-                    if config.chat_tokenizer_backend == ChatTokenizerBackend.HUGGING_FACE
-                    and model.effective_tokenizer_revision is not None
-                    else {}
-                ),
-            },
-        )
 
 
 @dataclass(frozen=True)
@@ -265,67 +139,10 @@ def harbor_definition(
     )
 
 
-def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
-    """Lower one launch file into Marin's served Evalchemy runner."""
-    tasks: list[EvalTaskConfig] = []
-    for task_name in config.tasks:
-        options = config.task_options.get(task_name)
-        num_fewshot = config.num_fewshot
-        if options is not None and options.num_fewshot is not None:
-            num_fewshot = options.num_fewshot
-        tasks.append(
-            EvalTaskConfig(
-                name=task_name,
-                num_fewshot=num_fewshot,
-                task_alias=options.task_alias if options is not None else None,
-                generation=options.generation if options is not None else False,
-                unsafe_code=options.unsafe_code if options is not None else False,
-                completion_only=options.completion_only if options is not None else False,
-            )
-        )
-
-    extra_model_args = dict(config.extra_model_args)
-    configured_concurrency = extra_model_args.pop("num_concurrent", DEFAULT_NUM_CONCURRENT)
-    try:
-        num_concurrent = int(configured_concurrency)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"extra_model_args.num_concurrent must be an integer, got {configured_concurrency!r}") from exc
-    if num_concurrent <= 0:
-        raise ValueError(f"extra_model_args.num_concurrent must be positive, got {num_concurrent}")
-    for key in ("max_length", "max_model_len"):
-        extra_model_args.pop(key, None)
-
-    extra_gen_kwargs = dict(config.gen_kwargs)
-    for key in ("max_tokens", "max_new_tokens", "max_gen_toks"):
-        extra_gen_kwargs.pop(key, None)
-    return EvalchemyRunConfig(
-        name=name,
-        tasks=tuple(tasks),
-        apply_chat_template=config.apply_chat_template or False,
-        chat_tokenizer_backend=config.chat_tokenizer_backend,
-        debug=config.debug,
-        prompt_budget_preflight=config.prompt_budget_preflight,
-        max_gen_toks=config.max_tokens,
-        max_eval_instances=config.limit,
-        num_concurrent=num_concurrent,
-        batch_size=config.batch_size,
-        seed=config.seed,
-        extra_gen_kwargs=extra_gen_kwargs,
-        extra_model_args=extra_model_args,
-        chat_template_kwargs=dict(config.chat_template_kwargs),
-        max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(
-            extras=(*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras),
-            memory=config.runtime_memory if config.runtime_memory is not None else EvalchemyRuntimeConfig.memory,
-        ),
-        judge=config.judge,
-    )
+EvaluationDefinition = CuratedDefinition | HarborDefinition
 
 
-EvaluationDefinition = EvalchemyDefinition | HarborDefinition
-
-
-_STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
+STANDARD_EVALS: tuple[str, ...] = (
     "mmlu",
     "arc-challenge",
     "hellaswag",
@@ -361,15 +178,59 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "graphwalks",
 )
 
+_CURATED_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 EVALS: dict[str, EvaluationDefinition] = {
-    name: EvalchemyDefinition(
-        name=name,
-        config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml",
-        family=_EVAL_FAMILIES.get(name),
-        egress_allow=_EVALCHEMY_EGRESS.get(name, ()),
-    )
-    for name in _STANDARD_EVALCHEMY_EVALS
+    path.stem: CuratedDefinition.from_file(path) for path in sorted(_CURATED_CONFIG_DIR.glob("*.yaml"))
 }
+# Alternate checkpoint menus reuse their base selection and generation budget.
+for base, shots in (
+    ("arc-challenge", 10),
+    ("arc-easy", 10),
+    ("boolq", 10),
+    ("piqa", 10),
+    ("winogrande", 0),
+    ("hellaswag", 0),
+    ("truthfulqa", 6),
+    ("mmlu", 0),
+):
+    name = f"{base}-{shots}shot"
+    definition = EVALS[base]
+    assert isinstance(definition, CuratedDefinition)
+    EVALS[name] = definition.model_copy(update={"name": name, "num_fewshot": shots})
+
+_ADDITIONAL_BENCHMARKS = {
+    "commonsense_qa": "commonsense-qa-10shot",
+    "copa": "copa",
+    "wsc273": "wsc273",
+    "agieval_lsat_ar": "agieval-lsat-ar-3shot",
+    "leaderboard_mmlu_pro": "mmlu-pro-5shot",
+    "leaderboard_bbh": "bbh-3shot",
+    "leaderboard_gpqa": "gpqa-0shot",
+    "gsm8k_cot": "gsm8k-cot-8shot",
+    "bbh_cot_fewshot": "bbh-cot-3shot",
+    "minerva_math": "minerva-math-4shot",
+    "nq_open-0shot": "nq-open-0shot",
+    "triviaqa-0shot": "triviaqa-0shot",
+    "drop-0shot": "drop-0shot",
+    "humaneval-10shot": "humaneval-10shot",
+}
+_EVALUATION_SOURCES = evaluation_sources()
+for benchmark, name in _ADDITIONAL_BENCHMARKS.items():
+    EVALS[name] = CuratedDefinition(
+        name=name,
+        sources=tuple(
+            source.name
+            for source in _EVALUATION_SOURCES.values()
+            if source.config is not None and source.config.protocol.benchmark == benchmark
+        ),
+    )
+EVALS.update(
+    {
+        "nupa": CuratedDefinition(name="nupa", sources=("evalchemy-nupa5k-loose",), seed=20222943, max_tokens=256),
+        "mrcr-32k": CuratedDefinition(name="mrcr-32k", sources=("evalchemy-mrcr-32k",), seed=42, max_tokens=4096),
+        "mrcr-65k": CuratedDefinition(name="mrcr-65k", sources=("evalchemy-mrcr-65k",), seed=42, max_tokens=4096),
+    }
+)
 EVALS.update(
     {
         # --- Harbor (agentic registry benchmarks) ---
@@ -431,7 +292,7 @@ NLP_EVALS: tuple[str, ...] = (
 )
 
 # The short general-purpose chat suite. Longer publication-policy benchmarks are file-backed under
-# configs/evalchemy and validated on H100; GPQADiamond's seeded requests remain incompatible with TPU vLLM.
+# the curated catalog and validated on H100; GPQADiamond's seeded requests remain incompatible with TPU vLLM.
 CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
 
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
@@ -452,6 +313,12 @@ AGENTIC_EVALS: tuple[str, ...] = (
 # 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
 SUITES: dict[str, tuple[str, ...]] = {
     "smoke": SMOKE_EVALS,
+    "standard": (*STANDARD_EVALS, "nupa"),
+    "standard-local": tuple(
+        name
+        for name in (*STANDARD_EVALS, "nupa")
+        if isinstance(EVALS[name], CuratedDefinition) and not EVALS[name].requires_judge
+    ),
     "core": CORE_EVALS,
     "nlp": NLP_EVALS,
     "chat": CHAT_EVALS,
