@@ -19,14 +19,11 @@ import dataclasses
 import json
 import re
 from enum import Enum
-from importlib.metadata import PackageNotFoundError, version
 from functools import partial
-from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
 from uuid import uuid4
-from iris.cluster.client.job_info import get_job_info
 from loguru import logger
 from rigging.secrets import require_secret
 from rigging.provenance import launch_provenance
@@ -89,31 +86,13 @@ class Tracking:
         self.remote_loggers = []
         tracking_config = OmegaConf.to_container(config, resolve=True) if config is not None else {}
         runtime = tracking_config.get("runtime", {})
-        job_info = get_job_info()
         tracking_config.update(
             run_id=runtime.get("run_id", experiment_name),
             attempt_id=runtime.get("attempt_id", uuid4().hex[:12]),
             source_commit=launch_provenance().base_commit,
-            iris_job_id=str(job_info.job_id) if job_info is not None else None,
+            iris_job_id=runtime.get("iris_job_id"),
             coordinator_iris_job_id=runtime.get("coordinator_iris_job_id"),
         )
-
-        tracking_record = {
-            key: tracking_config[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")
-        }
-        try:
-            vllm_version = version("vllm")
-        except PackageNotFoundError:
-            vllm_version = None
-        tracking_record.update(
-            wandb_url=None, started_at=datetime.now(timezone.utc).isoformat(), vllm_version=vllm_version
-        )
-        tracking_path = None
-        if config is not None:
-            directory = join_resource_path(str(config.trainer.export_path), "attempts", tracking_config["attempt_id"])
-            io.makedirs(directory, exist_ok=True)
-            tracking_path = join_resource_path(directory, TRACKING_FILENAME)
-            io.write_bytes_atomic(tracking_path, json.dumps(tracking_record).encode())
 
         if "files" in backends:
             self.logger["files"] = _FilesAdapter(str(config.trainer.export_path), tracking_config["attempt_id"])
@@ -143,9 +122,14 @@ class Tracking:
                 ),
             )
             run_id = run.id
-            if tracking_path is not None:
-                tracking_record["wandb_url"] = run.url
-                io.write_bytes_atomic(tracking_path, json.dumps(tracking_record).encode())
+            if runtime.get("iris_job_id"):
+                tracking_path = join_resource_path(
+                    str(config.trainer.export_path), "attempts", tracking_config["attempt_id"], TRACKING_FILENAME
+                )
+                if io.exists(tracking_path):
+                    record = json.loads(io.read_bytes(tracking_path))
+                    record["wandb_url"] = run.url
+                    io.write_bytes_atomic(tracking_path, json.dumps(record).encode())
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run

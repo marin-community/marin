@@ -504,11 +504,16 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         "marin.rl.skyrl.skyrl_temporary_run_path",
         lambda _output_path, *, ttl_days: f"s3://temp/ttl={ttl_days}d/skyrl/users/alice/run",
     )
+    recipe = yaml.safe_load(_spec().config_yaml)
+    recipe["trainer"]["callbacks"] = [{"type": "best_checkpoint", "initial_model_uri": "wrong-model"}]
+    spec = dataclasses.replace(
+        _spec(), name="users/alice/tests/iceball-rl", version="dev", config_yaml=yaml.safe_dump(recipe)
+    )
+    monkeypatch.setattr("marin.rl.skyrl.get_job_info", lambda: None)
+    outside = skyrl_step(spec, _execution()).fingerprint()
     monkeypatch.setattr("marin.rl.skyrl.get_job_info", lambda: SimpleNamespace(job_id="/tests/coordinator"))
-    spec = dataclasses.replace(_spec(), name="users/alice/tests/iceball-rl", version="dev")
-    step = skyrl_step(spec, _execution(), issue=73)
-    other_issue = skyrl_step(spec, _execution(), issue=74)
-    assert (step.name, step.fingerprint()) == (other_issue.name, other_issue.fingerprint())
+    step = skyrl_step(spec, _execution())
+    assert step.fingerprint() == outside
     output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
     config = step.build_config(
         StepContext.for_run(
@@ -522,10 +527,11 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     assert step.name == "users/alice/tests/iceball-rl"
     assert config.output.checkpoint_root == "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints"
     assert config.output.export_root == f"{output_path}/exports"
-    assert config.issue == 73
     launch = yaml.safe_load(config.launch_config_yaml)
-    assert launch["run"]["issue"] == 73
+    assert "issue" not in launch["run"]
+    assert "issue" not in dataclasses.asdict(config)
     assert launch["run"]["coordinator_iris_job_id"] == "/tests/coordinator"
+    assert launch["skyrl"]["trainer"]["callbacks"][0]["initial_model_uri"] == config.model.uri
     assert launch["artifacts"] == {
         "checkpoint_root": "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
         "export_root": f"{output_path}/exports",

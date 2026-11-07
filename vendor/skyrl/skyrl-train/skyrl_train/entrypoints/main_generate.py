@@ -70,7 +70,11 @@ class EvalOnlyEntrypoint(BasePPOExp):
         return None
 
     def _run(self) -> dict[str, Any]:
-        return asyncio.run(self._evaluate())
+        with self.get_tracker() as tracker:
+            tracker.start(resumed_step=None)
+            results = asyncio.run(self._evaluate())
+            tracker.log(results, step=0, commit=True)
+        return results
 
     async def _evaluate(self) -> dict[str, Any]:
         profiles = parse_evaluation_profiles(named_evaluation_profiles(self.cfg))
@@ -155,10 +159,6 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 await trajectory_runner.shutdown()
             finally:
                 trajectory_sink.close()
-
-        with self.get_tracker() as tracker:
-            tracker.start(resumed_step=None)
-            tracker.log(results, step=0, commit=True)
 
         return results
 

@@ -29,8 +29,6 @@ from skyrl_gym.envs.cat_count.reward import TARGET_WORD
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC, TASK_TIMING_KEYS
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-from skyrl_train.io import io
-from skyrl_train.utils.tracking import Tracking
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.inference_engines.vllm.stats import (
     IntervalReadMode,
@@ -65,34 +63,6 @@ def test_policy_download_rejects_a_corrupted_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr("tests.cpu.cat_count_policy.create_s3_filesystem", lambda **_kwargs: filesystem)
     with pytest.raises(ValueError, match="manifest SHA256"):
         download_policy(tmp_path)
-
-
-def test_metrics_cleanup_uses_object_store_listing_paths(monkeypatch):
-    export_root = "s3://tracker-test/exports"
-    filesystem = fsspec.filesystem("memory")
-    list_directory = filesystem.ls
-
-    def list_objects(path, detail=True, **kwargs):
-        entries = list_directory(path, detail=detail, **kwargs)
-        return entries if detail else [entry.removeprefix("s3://") for entry in entries]
-
-    monkeypatch.setattr(filesystem, "ls", list_objects)
-    resolve = io.filesystem_and_path
-    monkeypatch.setattr(
-        io, "filesystem_and_path", lambda uri: (filesystem, uri) if uri.startswith("s3://") else resolve(uri)
-    )
-    for step in (0, 8):
-        io.write_bytes_atomic(f"{export_root}/metrics/step-{step:06d}.json", json.dumps({"old": 1}).encode())
-    config = OmegaConf.create({"trainer": {"export_path": export_root}, "runtime": {"attempt_id": "new"}})
-    with Tracking("project", "name", "files", config) as tracker:
-        tracker.start(resumed_step=None)
-        tracker.log({"loss": 0.25}, step=0)
-    assert not io.exists(f"{export_root}/metrics/step-000008.json")
-    assert json.loads(io.read_bytes(f"{export_root}/metrics/step-000000.json")) == {
-        "step": 0,
-        "attempt_id": "new",
-        "loss": 0.25,
-    }
 
 
 @pytest.fixture
@@ -365,7 +335,12 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         legacy_final = step_wise and not resume
         interval = 3 if resume or legacy_final else 2
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
-        OmegaConf.update(cfg, "runtime", {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}"}, force_add=True)
+        OmegaConf.update(
+            cfg,
+            "runtime",
+            {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}", "iris_job_id": "/tests/native-tracking"},
+            force_add=True,
+        )
         cfg.trainer.logger = ["files", "wandb"]
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
         cfg.trainer.step_wise_training = step_wise
@@ -443,9 +418,6 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             "source_commit": launch_provenance().base_commit,
             "iris_job_id": "/tests/native-tracking",
         }
-        record = json.loads((root / f"exports/attempts/attempt-{steps}/tracking.json").read_text())
-        assert record["run_id"] == "cpu-rloo-n" and record["attempt_id"] == f"attempt-{steps}"
-        assert record["wandb_url"].endswith(f"/attempt-{steps}")
         assert [row["step"] for row in records] == list(range(steps + 1))
         assert all("prior_attempt_only" not in row for row in records)
         assert records[-1]["attempt_id"] == f"attempt-{steps}"

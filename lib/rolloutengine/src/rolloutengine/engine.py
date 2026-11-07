@@ -20,7 +20,8 @@ from rolloutengine.grading import _grade_rollout
 from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.models import (
-    TASK_TIMING_KEYS,
+    GRADING_SECONDS_METRIC,
+    SETUP_SECONDS_METRIC,
     AttemptEnded,
     AttemptStarted,
     Graded,
@@ -147,8 +148,8 @@ class RolloutEngine:
             and attempt.grading_seconds is not None
             and grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
         ):
-            metrics[TASK_TIMING_KEYS[0]] = attempt.grading_seconds - grade.verifier_setup_seconds
-            metrics[TASK_TIMING_KEYS[1]] = attempt.setup_seconds + grade.verifier_setup_seconds
+            metrics[GRADING_SECONDS_METRIC] = attempt.grading_seconds - grade.verifier_setup_seconds
+            metrics[SETUP_SECONDS_METRIC] = attempt.setup_seconds + grade.verifier_setup_seconds
         rollout = replace(rollout, metrics=metrics)
         if failure is None:
             return GradedRollout(rollout, grade)
