@@ -1425,6 +1425,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
             completed = gate.completed_gate(preset, built.runs, built.gate)
             if case == "gate-record-missing":
                 (Path(completed.path()) / RECORD_FILENAME).unlink()
+                (Path(completed.path()) / ".executor_status").write_text("FAILED")
             else:
                 shutil.rmtree(completed.path())
         repeated = CliRunner().invoke(snowball.main, arguments)
