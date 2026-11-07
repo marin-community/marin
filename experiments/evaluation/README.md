@@ -40,7 +40,7 @@ For example, run an Evalchemy task and a Harbor benchmark on shared GPU serving:
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-32b \
   --evals gsm8k-smoke \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --federated_cluster cw-rno2a --limit 2
 ```
 

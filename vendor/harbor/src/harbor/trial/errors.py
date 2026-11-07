@@ -28,7 +28,7 @@ class TrialTimeoutError(asyncio.TimeoutError):
 
 
 class PhaseCancellationError(RuntimeError):
-    """A timed-out trial phase did not terminate during cleanup grace."""
+    """A trial phase did not confirm termination during cancellation cleanup."""
 
     pass
 

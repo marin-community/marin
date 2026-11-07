@@ -43,11 +43,7 @@ def _shell_tokens(keystrokes: str | list[str]) -> list[str]:
     if isinstance(keystrokes, str):
         text = keystrokes
     else:
-        keys = (
-            keystrokes[:-1]
-            if keystrokes and keystrokes[-1] in _ENTER_KEYS
-            else keystrokes
-        )
+        keys = keystrokes[:-1] if keystrokes and keystrokes[-1] in _ENTER_KEYS else keystrokes
         text = "".join(keys)
     if "\n" in text.rstrip("\r\n") or "\r" in text.rstrip("\r\n"):
         return []
@@ -63,9 +59,7 @@ def _shell_tokens(keystrokes: str | list[str]) -> list[str]:
 def _submits_command(keystrokes: str | list[str]) -> bool:
     if isinstance(keystrokes, str):
         return keystrokes.endswith(("\n", "\r"))
-    return bool(keystrokes) and (
-        keystrokes[-1] in _ENTER_KEYS or keystrokes[-1].endswith(("\n", "\r"))
-    )
+    return bool(keystrokes) and (keystrokes[-1] in _ENTER_KEYS or keystrokes[-1].endswith(("\n", "\r")))
 
 
 def _kills_runner(keystrokes: str | list[str], script: str) -> bool:
@@ -176,24 +170,35 @@ class TmuxSession:
             raise ValueError("pane_width and pane_height must be valid integers.")
         if self._pane_width <= 0 or self._pane_height <= 0:
             raise ValueError("pane_width and pane_height must be positive integers.")
-        if (
-            not math.isfinite(batch_exec_timeout_margin_sec)
-            or batch_exec_timeout_margin_sec <= 0
-        ):
-            raise ValueError(
-                "batch_exec_timeout_margin_sec must be positive and finite"
-            )
+        if not math.isfinite(batch_exec_timeout_margin_sec) or batch_exec_timeout_margin_sec <= 0:
+            raise ValueError("batch_exec_timeout_margin_sec must be positive and finite")
         self._session_name = session_name
         self._logger = logger
         self._previous_buffer: str | None = None
         self.environment = environment
         self._extra_env: dict[str, str] = extra_env or {}
+        self._socket_dir = f"/tmp/.harbor-tmux-{uuid.uuid4().hex}"
         self._user = user
         self._batch_exec_timeout_margin_sec = batch_exec_timeout_margin_sec
 
+    async def _exec(
+        self,
+        command: str,
+        *,
+        user: str | int | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+    ) -> ExecResult:
+        return await self.environment.exec(
+            command,
+            user=user,
+            timeout_sec=timeout_sec,
+            env={**(env or {}), "TMUX_TMPDIR": self._socket_dir},
+        )
+
     async def _attempt_tmux_installation(self) -> None:
         """Install tmux when the task environment does not provide it."""
-        tmux_result = await self.environment.exec(command="tmux -V", user="root")
+        tmux_result = await self._exec(command="tmux -V", user="root")
         tmux_installed = tmux_result.return_code == 0
 
         if tmux_installed:
@@ -208,17 +213,11 @@ class TmuxSession:
         if system_info["package_manager"]:
             install_command = self._get_tmux_install_command(system_info)
             if install_command:
-                self._logger.debug(
-                    f"Installing tools using {system_info['package_manager']}: {install_command}"
-                )
-                result = await self.environment.exec(
-                    command=install_command, user="root"
-                )
+                self._logger.debug(f"Installing tools using {system_info['package_manager']}: {install_command}")
+                result = await self._exec(command=install_command, user="root")
 
                 if result.return_code == 0:
-                    verify_tmux = await self.environment.exec(
-                        command="tmux -V", user="root"
-                    )
+                    verify_tmux = await self._exec(command="tmux -V", user="root")
                     if verify_tmux.return_code != 0:
                         self._logger.warning("tmux installation verification failed")
                         await self._build_tmux_from_source()
@@ -238,13 +237,13 @@ class TmuxSession:
         }
 
         # Check for OS release files
-        os_release_result = await self.environment.exec(
+        os_release_result = await self._exec(
             command="cat /etc/os-release 2>/dev/null || echo 'not found'",
             user="root",
         )
 
         # Check uname for system type
-        uname_result = await self.environment.exec(command="uname -s", user="root")
+        uname_result = await self._exec(command="uname -s", user="root")
 
         # Detect package managers by checking if they exist
         package_managers = [
@@ -259,9 +258,7 @@ class TmuxSession:
         ]
 
         for pm_name in package_managers:
-            check_result = await self.environment.exec(
-                command=f"which {pm_name} >/dev/null 2>&1", user="root"
-            )
+            check_result = await self._exec(command=f"which {pm_name} >/dev/null 2>&1", user="root")
             if check_result.return_code == 0:
                 system_info["package_manager"] = pm_name
                 break
@@ -329,7 +326,7 @@ class TmuxSession:
 
             # Try to install build dependencies
             for cmd in dep_commands:
-                result = await self.environment.exec(command=cmd, user="root")
+                result = await self._exec(command=cmd, user="root")
                 if result.return_code == 0:
                     break
 
@@ -345,12 +342,10 @@ class TmuxSession:
                 "make install"
             )
 
-            result = await self.environment.exec(command=build_cmd, user="root")
+            result = await self._exec(command=build_cmd, user="root")
 
             # Verify installation
-            verify_result = await self.environment.exec(
-                command="tmux -V || /usr/local/bin/tmux -V", user="root"
-            )
+            verify_result = await self._exec(command="tmux -V || /usr/local/bin/tmux -V", user="root")
             if verify_result.return_code == 0:
                 self._logger.debug("tmux successfully built and installed from source")
             else:
@@ -362,10 +357,7 @@ class TmuxSession:
     @property
     def _tmux_start_session(self) -> str:
         # Build environment variable options for tmux new-session -e KEY=value
-        env_options = "".join(
-            f"-e {shlex.quote(f'{key}={value}')} "
-            for key, value in self._extra_env.items()
-        )
+        env_options = "".join(f"-e {shlex.quote(f'{key}={value}')} " for key, value in self._extra_env.items())
 
         return (
             f"export TERM=xterm-256color && "
@@ -476,22 +468,33 @@ class TmuxSession:
             ]
         )
         if capture_entire:
-            return (
-                "set -o pipefail; "
-                f"{{ printf '\\n'; {command}; }} | "
-                f"tail -c {_MAX_CAPTURE_BYTES} | sed '1d'"
-            )
+            return "set -o pipefail; " f"{{ printf '\\n'; {command}; }} | " f"tail -c {_MAX_CAPTURE_BYTES} | sed '1d'"
         return command
 
     async def start(self) -> None:
         await self._attempt_tmux_installation()
-        start_session_result = await self.environment.exec(
-            command=self._tmux_start_session, user=self._user
+        prepared = await self._exec(
+            f"mkdir -p {shlex.quote(self._socket_dir)} && chmod 1777 {shlex.quote(self._socket_dir)}",
+            user="root",
+        )
+        if prepared.return_code:
+            raise RuntimeError("Cannot prepare the agent tmux socket directory")
+        await self.environment.start_process_scope(
+            "exec tmux -D",
+            env={"TMUX_TMPDIR": self._socket_dir},
+            user=self._user,
+        )
+        start_session_result = await self._exec(
+            command=(
+                f"for attempt in $(seq 1 1000); do "
+                f"[ ! -S {shlex.quote(self._socket_dir)}/tmux-$(id -u)/default ] || break; "
+                f"sleep 0.01; done; [ -S {shlex.quote(self._socket_dir)}/tmux-$(id -u)/default ] || exit 1; "
+                + self._tmux_start_session
+            ),
+            user=self._user,
         )
         if start_session_result.return_code != 0:
-            raise RuntimeError(
-                f"Failed to start tmux session. Error: {start_session_result.stderr}"
-            )
+            raise RuntimeError(f"Failed to start tmux session. Error: {start_session_result.stderr}")
 
     def _is_enter_key(self, key: str) -> bool:
         return key in _ENTER_KEYS
@@ -502,7 +505,7 @@ class TmuxSession:
 
     async def is_session_alive(self) -> bool:
         """Check if the tmux session is still alive."""
-        result = await self.environment.exec(
+        result = await self._exec(
             command="tmux has-session -t {}".format(self._session_name),
             user=self._user,
         )
@@ -599,7 +602,7 @@ class TmuxSession:
         start_time_sec = time.time()
 
         for command in self._tmux_send_keys(keys):
-            result = await self.environment.exec(command=command, user=self._user)
+            result = await self._exec(command=command, user=self._user)
             if result.return_code != 0:
                 raise RuntimeError(
                     f"{self.environment.session_id}: failed to send blocking keys: "
@@ -607,9 +610,7 @@ class TmuxSession:
                     f"stderr={result.stderr!r}, stdout={result.stdout!r}"
                 )
 
-        result = await self.environment.exec(
-            f"timeout {max_timeout_sec}s tmux wait done", user=self._user
-        )
+        result = await self._exec(f"timeout {max_timeout_sec}s tmux wait done", user=self._user)
         if result.return_code != 0:
             raise TimeoutError(f"Command timed out after {max_timeout_sec} seconds")
 
@@ -624,7 +625,7 @@ class TmuxSession:
         start_time_sec = time.time()
 
         for command in self._tmux_send_keys(keys):
-            result = await self.environment.exec(command=command, user=self._user)
+            result = await self._exec(command=command, user=self._user)
             if result.return_code != 0:
                 raise RuntimeError(
                     f"{self.environment.session_id}: failed to send non-blocking keys: "
@@ -762,9 +763,7 @@ class TmuxSession:
                 ]
             elif result.return_code in {137, 143}:
                 commands = [
-                    batch.keystrokes
-                    for batch in batches[: sent_index + 1]
-                    if _kills_runner(batch.keystrokes, script)
+                    batch.keystrokes for batch in batches[: sent_index + 1] if _kills_runner(batch.keystrokes, script)
                 ]
             else:
                 commands = []
@@ -787,7 +786,7 @@ class TmuxSession:
         markers = _BatchMarkers.create()
         script = self._build_batch_script(keystroke_batches, markers)
         total_wait = sum(max(0.0, batch.duration_sec) for batch in keystroke_batches)
-        result = await self.environment.exec(
+        result = await self._exec(
             command=script,
             timeout_sec=math.ceil(total_wait + self._batch_exec_timeout_margin_sec),
             user=self._user,
@@ -806,9 +805,7 @@ class TmuxSession:
                 f"{self.environment.session_id}: tmux session ended before "
                 "Harbor could complete the requested terminal action"
             )
-            self._raise_batch_failure(
-                error, result, keystroke_batches, sent_index, script
-            )
+            self._raise_batch_failure(error, result, keystroke_batches, sent_index, script)
         if stdout.startswith(f"{markers.command_failed}\n"):
             raise TmuxCommandError(
                 f"{self.environment.session_id}: tmux command failed while the "
@@ -825,17 +822,13 @@ class TmuxSession:
                 f"recognized status marker: return_code={result.return_code}, "
                 f"stderr={result.stderr!r}, stdout={stdout!r:.200}"
             )
-            self._raise_batch_failure(
-                error, result, keystroke_batches, sent_index, script
-            )
+            self._raise_batch_failure(error, result, keystroke_batches, sent_index, script)
         if result.return_code != 0:
             error = TmuxCommandError(
                 f"{self.environment.session_id}: tmux capture failed: "
                 f"return_code={result.return_code}, stderr={result.stderr!r}"
             )
-            self._raise_batch_failure(
-                error, result, keystroke_batches, sent_index, script
-            )
+            self._raise_batch_failure(error, result, keystroke_batches, sent_index, script)
         full_index = stdout.find(full_marker, len(visible_marker))
         if full_index == -1:
             raise TmuxBatchProtocolError(
@@ -845,15 +838,11 @@ class TmuxSession:
             )
         visible_screen = stdout[len(visible_marker) : full_index]
         current_buffer = stdout[full_index + len(full_marker) :]
-        output = await self._incremental_output_from_captures(
-            current_buffer, visible_screen
-        )
+        output = await self._incremental_output_from_captures(current_buffer, visible_screen)
         return output, True
 
     async def capture_pane(self, capture_entire: bool = False) -> str:
-        result = await self.environment.exec(
-            self._tmux_capture_pane(capture_entire=capture_entire), user=self._user
-        )
+        result = await self._exec(self._tmux_capture_pane(capture_entire=capture_entire), user=self._user)
         return result.stdout or ""
 
     async def _get_visible_screen(self) -> str:

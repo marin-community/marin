@@ -18,7 +18,6 @@ from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
-from harbor.models.agent.name import AgentName
 from harbor.models.task.config import (
     EnvironmentConfig,
     StepConfig,
@@ -58,8 +57,8 @@ from harbor.trial.errors import (
     RuntimeLogCollectionError,
     RuntimeServiceError,
     TrialNotScoredError,
-    VerifierTimeoutError,
     VerificationNotCompletedError,
+    VerifierTimeoutError,
 )
 from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
 from harbor.trial.simulated_user import (
@@ -70,10 +69,12 @@ from harbor.trial.simulated_user import (
 )
 from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_writer
 from harbor.utils.artifact_authority import validate_artifact_authority
+from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 from harbor.verifier.factory import VerifierFactory
 from harbor.verifier.base import BaseVerifier
+from shellbox.lifecycle import finish_cleanup
 
 TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
 
@@ -88,9 +89,7 @@ _MAX_VERIFIER_ENV_SESSION_ID_LEN = 63
 ENVIRONMENT_STOP_TIMEOUT_SEC = 300.0
 
 
-def _log_abandoned_stop_failure(
-    stop_task: "asyncio.Task[None]", logger: logging.Logger, label: str
-) -> None:
+def _log_abandoned_stop_failure(stop_task: "asyncio.Task[None]", logger: logging.Logger, label: str) -> None:
     """Report a late failure of an abandoned environment stop."""
 
     def _log(task: "asyncio.Task[None]") -> None:
@@ -107,9 +106,7 @@ def _log_abandoned_stop_failure(
     stop_task.add_done_callback(_log)
 
 
-def _log_abandoned_phase_failure(
-    phase_task: "asyncio.Task[Any]", logger: logging.Logger
-) -> None:
+def _log_abandoned_phase_failure(phase_task: "asyncio.Task[Any]", logger: logging.Logger) -> None:
     """Report a late failure from a cancellation-resistant trial phase."""
 
     def _log(task: "asyncio.Task[Any]") -> None:
@@ -144,10 +141,7 @@ class Trial(ABC):
         guest_environment: Mapping[str, str] = {},
     ):
         if _task is None:
-            raise ValueError(
-                "Instantiating Trial directly is deprecated. "
-                "Use `await Trial.create(config)` instead."
-            )
+            raise ValueError("Instantiating Trial directly is deprecated. " "Use `await Trial.create(config)` instead.")
 
         self.config = config
         self.host_capabilities = host_capabilities
@@ -169,9 +163,7 @@ class Trial(ABC):
         self._injected_skills = self._resolve_injected_skills()
         self._effective_skills_dir = self._resolve_effective_skills_dir()
 
-        self._hooks: dict[TrialEvent, list[TrialHookCallback]] = {
-            event: [] for event in TrialEvent
-        }
+        self._hooks: dict[TrialEvent, list[TrialHookCallback]] = {event: [] for event in TrialEvent}
 
         self._are_agent_logs_downloaded = False
         self._is_agent_environment_stopped = False
@@ -244,9 +236,7 @@ class Trial(ABC):
 
     async def _create_bridge(self) -> None:
         if self.config.user_agent is not None:
-            self.bridge = await BaseBridge.create(
-                self.config.user_agent.bridge, self.agent
-            )
+            self.bridge = await BaseBridge.create(self.config.user_agent.bridge, self.agent)
 
     @property
     def first_phase_timeout(self) -> asyncio.TimeoutError | None:
@@ -269,9 +259,7 @@ class Trial(ABC):
 
     @staticmethod
     async def _load_task(config: TrialConfig) -> Task:
-        script_not_required = (
-            config.verifier.disable or config.verifier.import_path is not None
-        )
+        script_not_required = config.verifier.disable or config.verifier.import_path is not None
         if config.task.is_git_task() or config.task.is_package_task():
             client = TaskClient()
             task_id = config.task.get_task_id()
@@ -357,6 +345,9 @@ class Trial(ABC):
             await self._record_exception(exc)
             await self._emit(TrialEvent.CANCEL)
             raise
+        except PhaseCancellationError as exc:
+            self.logger.exception("Trial %s phase ignored cancellation", self.config.trial_name)
+            await self._record_exception(exc)
         except Exception as exc:
             # TaskGroup reports a lost required service here, after the active
             # phase has been cancelled and all owned services have finished.
@@ -398,12 +389,8 @@ class Trial(ABC):
                 timeout_error=TimeoutError("Trial output recovery timed out"),
             )
         except Exception as exc:
-            self.logger.exception(
-                "Trial %s output recovery failed", self.config.trial_name
-            )
-            self.result.secondary_exception_info.append(
-                ExceptionInfo.from_exception(exc)
-            )
+            self.logger.exception("Trial %s output recovery failed", self.config.trial_name)
+            self.result.secondary_exception_info.append(ExceptionInfo.from_exception(exc))
 
     async def _collect_runtime_logs(self) -> None:
         try:
@@ -579,8 +566,7 @@ class Trial(ABC):
         # type we replaced.
         if self.result.exception_info is not None:
             self.logger.debug(
-                "Overwriting earlier exception_info (%s) with later exception "
-                "(%s): last error chronologically wins",
+                "Overwriting earlier exception_info (%s) with later exception " "(%s): last error chronologically wins",
                 self.result.exception_info.exception_type,
                 type(exc).__name__,
                 exc_info=(type(exc), exc, exc.__traceback__),
@@ -611,9 +597,7 @@ class Trial(ABC):
         max_sec: float | None = None,
         multiplier: float | None,
     ) -> float:
-        resolved_multiplier = (
-            multiplier if multiplier is not None else self.config.timeout_multiplier
-        )
+        resolved_multiplier = multiplier if multiplier is not None else self.config.timeout_multiplier
         resolved_sec = base_sec * resolved_multiplier
         if max_sec is None:
             return resolved_sec
@@ -644,9 +628,7 @@ class Trial(ABC):
                 template_path=self.config.user_agent.user_prompt_template_path,
                 persona_path=self.config.user_agent.user_persona_path,
             )
-            exec_env_context = self.agent_environment.scoped_exec_env(
-                self._bridge_exec_env()
-            )
+            exec_env_context = self.agent_environment.scoped_exec_env(self._bridge_exec_env())
 
         primary: BaseException | None = None
         try:
@@ -659,9 +641,7 @@ class Trial(ABC):
                 self.agent_environment.with_agent_timeout(timeout_sec),
                 exec_env_context,
             ):
-                error = AgentTimeoutError(
-                    f"Agent execution timed out after {timeout_sec} seconds"
-                )
+                error = AgentTimeoutError(f"Agent execution timed out after {timeout_sec} seconds")
                 await self._await_phase(
                     running_agent.run(
                         instruction=instruction,
@@ -681,8 +661,8 @@ class Trial(ABC):
             try:
                 if self.user_agent is not None:
                     await self._close_bridge(user=user)
+                await self._cleanup_agents()
                 if self.agent_environment.requires_agent_quiescence_for_verifier:
-                    await self._cleanup_agents()
                     await self._await_phase(
                         self.agent_environment.quiesce_agent_commands(),
                         timeout_sec=self.config.trial_cleanup_grace_sec,
@@ -701,7 +681,10 @@ class Trial(ABC):
                         "Could not confirm agent commands stopped"
                     ) from exc
             finally:
-                target.agent_execution.finished_at = self._now()
+                try:
+                    await finish_cleanup(self.agent_environment.kill_processes())
+                finally:
+                    target.agent_execution.finished_at = self._now()
 
     async def _cleanup_agents(self) -> None:
         try:
@@ -769,9 +752,7 @@ class Trial(ABC):
         task.cancel()
         self._track_cleanup_task(task)
         try:
-            done, _ = await asyncio.wait(
-                {task}, timeout=self.config.trial_cleanup_grace_sec
-            )
+            done, _ = await asyncio.wait({task}, timeout=self.config.trial_cleanup_grace_sec)
         except asyncio.CancelledError:
             _log_abandoned_phase_failure(task, self.logger)
             raise
@@ -787,6 +768,7 @@ class Trial(ABC):
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error
+        except PhaseCancellationError:
             raise
         except Exception as error:
             raise PhaseCancellationError(
@@ -824,9 +806,7 @@ class Trial(ABC):
             )
         self._are_agent_logs_downloaded = succeeded
 
-    async def _download_role_logs(
-        self, *, source_dir: PurePosixPath, target_dir: Path
-    ) -> bool:
+    async def _download_role_logs(self, *, source_dir: PurePosixPath, target_dir: Path) -> bool:
         try:
             await self.agent_environment.download_dir(
                 source_dir=source_dir.as_posix(),
@@ -861,8 +841,7 @@ class Trial(ABC):
 
             if result.return_code != 0:
                 self.logger.warning(
-                    "Verifier collect hook exited nonzero: command=%r "
-                    "return_code=%s stdout=%r stderr=%r",
+                    "Verifier collect hook exited nonzero: command=%r " "return_code=%s stdout=%r stderr=%r",
                     hook.command,
                     result.return_code,
                     result.stdout,
@@ -898,9 +877,7 @@ class Trial(ABC):
                 target_dir=self.agent_env_paths.user_agent_dir,
             )
 
-    async def _upload_role_logs(
-        self, *, source_dir: Path, target_dir: PurePosixPath
-    ) -> None:
+    async def _upload_role_logs(self, *, source_dir: Path, target_dir: PurePosixPath) -> None:
         try:
             await self.agent_environment.upload_dir(
                 source_dir=source_dir,
@@ -1129,14 +1106,8 @@ class Trial(ABC):
     async def _sync_agent_output(self, target: TrialResult | StepResult) -> None:
         await self._download_agent_logs()
         self._populate_agent_context(target.agent_result)
-        if (
-            self.user_agent is not None
-            and self.bridge is not None
-            and target.agent_result is not None
-        ):
-            self.bridge.enrich_context(
-                target.agent_result, self._bridge_trajectory_path
-            )
+        if self.user_agent is not None and self.bridge is not None and target.agent_result is not None:
+            self.bridge.enrich_context(target.agent_result, self._bridge_trajectory_path)
 
     async def _init_result(self) -> None:
         # Reset per-attempt so the verifier-reached signal tracks THIS run,
@@ -1151,9 +1122,7 @@ class Trial(ABC):
         # The result embeds this config, so the standalone pre-sandbox copy is
         # diagnostic. Admit it without blocking sandbox startup; resume falls
         # back to result.config if this optional write is dropped.
-        persisted_config = self.config.model_copy(
-            update={"resolved_timeouts": self._resolved_timeouts()}
-        )
+        persisted_config = self.config.model_copy(update={"resolved_timeouts": self._resolved_timeouts()})
         config_json = persisted_config.model_dump_json(indent=4)
         get_artifact_writer().submit_optional(
             self.paths.config_path,
@@ -1168,9 +1137,7 @@ class Trial(ABC):
             config=persisted_config,
             task_checksum=self.task.checksum,
             trial_uri=self.paths.trial_dir.expanduser().resolve().as_uri(),
-            trial_relpath=trial_relative_path(
-                self.config, getattr(self, "_attempt_index", None)
-            ),
+            trial_relpath=trial_relative_path(self.config, getattr(self, "_attempt_index", None)),
             agent_info=self.agent.to_agent_info(),
             source=self.config.task.source,
         )
@@ -1204,12 +1171,6 @@ class Trial(ABC):
 
     def _init_agent(self) -> None:
         extra_kwargs = {}
-        if self.config.agent.name == AgentName.ORACLE.value:
-            extra_kwargs = {
-                "task_dir": self.task.task_dir,
-                "trial_paths": self.paths,
-                "agent_timeout_sec": self._agent_timeout_sec,
-            }
         mcp_servers = {
             server.name: server
             for server in [
@@ -1227,9 +1188,7 @@ class Trial(ABC):
             guest_environment=self.guest_environment,
             host_capabilities=self.host_capabilities,
             logs_dir=self.paths.agent_dir,
-            environment_logs_dir=getattr(
-                self, "agent_env_paths", EnvironmentPaths()
-            ).agent_dir,
+            environment_logs_dir=getattr(self, "agent_env_paths", EnvironmentPaths()).agent_dir,
             logger=self.logger,
             **extra_kwargs,
         )
@@ -1302,9 +1261,7 @@ class Trial(ABC):
         self._agent_timeout_sec = self._compute_agent_timeout_sec()
         self._verifier_timeout_sec = self._compute_verifier_timeout_sec()
         self._agent_setup_timeout_sec = self._compute_agent_setup_timeout_sec()
-        self._environment_build_timeout_sec = (
-            self._compute_environment_build_timeout_sec()
-        )
+        self._environment_build_timeout_sec = self._compute_environment_build_timeout_sec()
 
     def _resolved_timeouts(self) -> ResolvedTimeouts:
         return ResolvedTimeouts(
@@ -1317,9 +1274,7 @@ class Trial(ABC):
         )
 
     def _compute_agent_timeout_sec(self) -> float | None:
-        base_timeout_sec = (
-            self.config.agent.override_timeout_sec or self.task.config.agent.timeout_sec
-        )
+        base_timeout_sec = self.config.agent.override_timeout_sec or self.task.config.agent.timeout_sec
         if base_timeout_sec is None:
             return None
 
@@ -1331,10 +1286,7 @@ class Trial(ABC):
 
     def _compute_verifier_timeout_sec(self) -> float:
         return self._resolve_timeout_sec(
-            base_sec=(
-                self.config.verifier.override_timeout_sec
-                or self.task.config.verifier.timeout_sec
-            ),
+            base_sec=(self.config.verifier.override_timeout_sec or self.task.config.verifier.timeout_sec),
             max_sec=self.config.verifier.max_timeout_sec,
             multiplier=self.config.verifier_timeout_multiplier,
         )
@@ -1364,10 +1316,7 @@ class Trial(ABC):
     def _resolve_effective_skills_dir(self) -> str | None:
         task_skills_dir = self.task.config.environment.skills_dir
         if task_skills_dir:
-            if (
-                self._injected_skills
-                and not PurePosixPath(task_skills_dir).is_absolute()
-            ):
+            if self._injected_skills and not PurePosixPath(task_skills_dir).is_absolute():
                 raise ValueError(
                     "Injected skills require environment.skills_dir to be absolute; "
                     f"got {task_skills_dir!r}. Use an absolute path like '/skills' "
@@ -1397,8 +1346,7 @@ class Trial(ABC):
 
         if self.task.config.environment.os != TaskOS.WINDOWS:
             chmod_targets = " ".join(
-                quote_shell_arg(target_dir, self.task.config.environment.os)
-                for target_dir in target_dirs
+                quote_shell_arg(target_dir, self.task.config.environment.os) for target_dir in target_dirs
             )
             await self.agent_environment.exec(
                 f"chmod -R a+rX {chmod_targets}",
@@ -1429,8 +1377,7 @@ class Trial(ABC):
     async def _start_agent_environment(self) -> None:
         assert self._service_tasks is not None
         error = EnvironmentStartTimeoutError(
-            "Environment start timed out after "
-            f"{self._environment_build_timeout_sec} seconds"
+            "Environment start timed out after " f"{self._environment_build_timeout_sec} seconds"
         )
         await self._await_phase(
             self.agent_environment.start(
@@ -1442,10 +1389,7 @@ class Trial(ABC):
         )
 
     async def _setup_agent(self) -> None:
-        if (
-            self.agent_environment.os == TaskOS.WINDOWS
-            and not self.agent.SUPPORTS_WINDOWS
-        ):
+        if self.agent_environment.os == TaskOS.WINDOWS and not self.agent.SUPPORTS_WINDOWS:
             raise RuntimeError(
                 f"Agent '{self.agent.name()}' does not support Windows containers. "
                 "Only agents with SUPPORTS_WINDOWS = True can run Windows tasks "
@@ -1454,9 +1398,7 @@ class Trial(ABC):
 
         self.result.agent_setup = TimingInfo(started_at=self._now())
         try:
-            error = AgentSetupTimeoutError(
-                f"Agent setup timed out after {self._agent_setup_timeout_sec} seconds"
-            )
+            error = AgentSetupTimeoutError(f"Agent setup timed out after {self._agent_setup_timeout_sec} seconds")
             await self._await_phase(
                 self.agent.setup(environment=self.agent_environment),
                 timeout_sec=self._agent_setup_timeout_sec,
@@ -1469,8 +1411,7 @@ class Trial(ABC):
         if self.user_agent is None:
             raise RuntimeError("_setup_user_agent requires a user agent")
         error = AgentSetupTimeoutError(
-            "Simulated-user setup timed out after "
-            f"{self._agent_setup_timeout_sec} seconds"
+            "Simulated-user setup timed out after " f"{self._agent_setup_timeout_sec} seconds"
         )
         with self.agent_environment.scoped_exec_env(self.user_agent.extra_env):
             await self._await_phase(
@@ -1481,11 +1422,7 @@ class Trial(ABC):
 
     @property
     def _bridge_trajectory_path(self):
-        filename = (
-            self.bridge.trajectory_filename
-            if self.bridge is not None
-            else BaseBridge.trajectory_filename
-        )
+        filename = self.bridge.trajectory_filename if self.bridge is not None else BaseBridge.trajectory_filename
         return self.paths.agent_dir / filename
 
     def _bridge_exec_env(self) -> dict[str, str]:
@@ -1501,9 +1438,7 @@ class Trial(ABC):
         if self.bridge is None:
             raise RuntimeError("_setup_bridge requires an initialized bridge")
         self._bridge_setup_started = True
-        error = AgentSetupTimeoutError(
-            f"Bridge setup timed out after {self._agent_setup_timeout_sec} seconds"
-        )
+        error = AgentSetupTimeoutError(f"Bridge setup timed out after {self._agent_setup_timeout_sec} seconds")
         with self.agent_environment.scoped_exec_env(self._bridge_exec_env()):
             await self._await_phase(
                 self.bridge.setup(self.agent_environment),

@@ -4,64 +4,17 @@ import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from harbor.agents.installed.cline.cline import ClineCli
 from harbor.agents.installed.codex import Codex
-from harbor.agents.installed.gemini_cli import GeminiCli
-from harbor.agents.installed.goose import Goose
-from harbor.agents.installed.hermes import Hermes
 from harbor.agents.installed.opencode import OpenCode
-from harbor.agents.installed.qwen_code import QwenCode
-
 
 # ---------------------------------------------------------------------------
 # Gemini CLI
 # ---------------------------------------------------------------------------
-class TestGeminiCliSkills:
-    """Test _build_register_skills_command() for GeminiCli."""
-
-    def test_no_skills_dir_returns_none(self, temp_dir):
-        agent = GeminiCli(logs_dir=temp_dir)
-        assert agent._build_register_skills_command() is None
-
-    def test_skills_dir_returns_cp_command(self, temp_dir):
-        agent = GeminiCli(logs_dir=temp_dir, skills_dir="/workspace/skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "/workspace/skills" in cmd
-        assert "~/.gemini/skills/" in cmd
-        assert "cp -r" in cmd
-
-    def test_skills_dir_with_spaces_is_quoted(self, temp_dir):
-        agent = GeminiCli(logs_dir=temp_dir, skills_dir="/workspace/my skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "'/workspace/my skills'" in cmd
 
 
 # ---------------------------------------------------------------------------
 # Goose
 # ---------------------------------------------------------------------------
-class TestGooseSkills:
-    """Test _build_register_skills_command() for Goose."""
-
-    def test_no_skills_dir_returns_none(self, temp_dir):
-        agent = Goose(logs_dir=temp_dir)
-        assert agent._build_register_skills_command() is None
-
-    def test_skills_dir_returns_cp_command(self, temp_dir):
-        agent = Goose(logs_dir=temp_dir, skills_dir="/workspace/skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "/workspace/skills" in cmd
-        assert "~/.config/goose/skills/" in cmd
-        assert "cp -r" in cmd
-
-    def test_skills_dir_with_spaces_is_quoted(self, temp_dir):
-        agent = Goose(logs_dir=temp_dir, skills_dir="/workspace/my skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "'/workspace/my skills'" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -92,26 +45,6 @@ class TestCodexSkills:
 # ---------------------------------------------------------------------------
 # Cline CLI
 # ---------------------------------------------------------------------------
-class TestClineCliSkills:
-    """Test _build_register_skills_command() for ClineCli."""
-
-    def test_no_skills_dir_returns_none(self, temp_dir):
-        agent = ClineCli(logs_dir=temp_dir)
-        assert agent._build_register_skills_command() is None
-
-    def test_skills_dir_returns_cp_command(self, temp_dir):
-        agent = ClineCli(logs_dir=temp_dir, skills_dir="/workspace/skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "/workspace/skills" in cmd
-        assert "~/.cline/skills/" in cmd
-        assert "cp -r" in cmd
-
-    def test_skills_dir_with_spaces_is_quoted(self, temp_dir):
-        agent = ClineCli(logs_dir=temp_dir, skills_dir="/workspace/my skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "'/workspace/my skills'" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -139,93 +72,28 @@ class TestOpenCodeSkills:
         assert "'/workspace/my skills'" in cmd
 
     @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir):
+    async def test_skills_dir_in_run_commands(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir,
             skills_dir="/workspace/skills",
             model_name="anthropic/claude-sonnet-4-5",
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
-        assert any(
-            "~/.config/opencode/skills/" in call.kwargs["command"]
-            for call in exec_calls
-        )
+        assert any("~/.config/opencode/skills/" in call.kwargs["command"] for call in exec_calls)
 
 
 # ---------------------------------------------------------------------------
 # Hermes
 # ---------------------------------------------------------------------------
-class TestHermesSkills:
-    """Test _build_register_skills_command() for Hermes."""
-
-    def test_no_skills_dir_returns_none(self, temp_dir):
-        agent = Hermes(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-6")
-        assert agent._build_register_skills_command() is None
-
-    def test_skills_dir_returns_cp_command(self, temp_dir):
-        agent = Hermes(
-            logs_dir=temp_dir,
-            model_name="anthropic/claude-sonnet-4-6",
-            skills_dir="/workspace/skills",
-        )
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "/workspace/skills" in cmd
-        assert "/tmp/hermes/skills" in cmd
-        assert "cp -r" in cmd
-
-    def test_skills_dir_with_spaces_is_quoted(self, temp_dir):
-        agent = Hermes(
-            logs_dir=temp_dir,
-            model_name="anthropic/claude-sonnet-4-6",
-            skills_dir="/workspace/my skills",
-        )
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "'/workspace/my skills'" in cmd
 
 
 # ---------------------------------------------------------------------------
 # Qwen Code
 # ---------------------------------------------------------------------------
-class TestQwenCodeSkills:
-    """Test _build_register_skills_command() for QwenCode."""
-
-    def test_no_skills_dir_returns_none(self, temp_dir):
-        agent = QwenCode(logs_dir=temp_dir)
-        assert agent._build_register_skills_command() is None
-
-    def test_skills_dir_returns_cp_command(self, temp_dir):
-        agent = QwenCode(logs_dir=temp_dir, skills_dir="/workspace/skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "/workspace/skills" in cmd
-        assert "~/.qwen/skills/" in cmd
-        assert "cp -r" in cmd
-
-    def test_skills_dir_with_spaces_is_quoted(self, temp_dir):
-        agent = QwenCode(logs_dir=temp_dir, skills_dir="/workspace/my skills")
-        cmd = agent._build_register_skills_command()
-        assert cmd is not None
-        assert "'/workspace/my skills'" in cmd
-
-    @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir):
-        agent = QwenCode(
-            logs_dir=temp_dir,
-            skills_dir="/workspace/skills",
-            model_name="openai/gpt-4o",
-        )
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-            await agent.run("do something", mock_env, AsyncMock())
-        exec_calls = mock_env.exec.call_args_list
-        assert any("~/.qwen/skills/" in call.kwargs["command"] for call in exec_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +171,7 @@ class TestTerminus2Skills:
         assert await agent._build_skills_section(env) is None
 
     async def test_skills_dir_with_valid_skill(self, temp_dir):
-        content = SKILL_FRONTMATTER.format(
-            name="greet", description="Say hello to the user.", body="Do it."
-        )
+        content = SKILL_FRONTMATTER.format(name="greet", description="Say hello to the user.", body="Do it.")
         agent = self._make_agent(temp_dir, skills_dir="/skills")
         env = _make_mock_environment(skills={"greet": content})
         result = await agent._build_skills_section(env)
@@ -317,15 +183,9 @@ class TestTerminus2Skills:
 
     async def test_multiple_skills_sorted(self, temp_dir):
         skills = {
-            "zeta": SKILL_FRONTMATTER.format(
-                name="zeta", description="Zeta skill.", body=""
-            ),
-            "alpha": SKILL_FRONTMATTER.format(
-                name="alpha", description="Alpha skill.", body=""
-            ),
-            "mid": SKILL_FRONTMATTER.format(
-                name="mid", description="Mid skill.", body=""
-            ),
+            "zeta": SKILL_FRONTMATTER.format(name="zeta", description="Zeta skill.", body=""),
+            "alpha": SKILL_FRONTMATTER.format(name="alpha", description="Alpha skill.", body=""),
+            "mid": SKILL_FRONTMATTER.format(name="mid", description="Mid skill.", body=""),
         }
         agent = self._make_agent(temp_dir, skills_dir="/skills")
         env = _make_mock_environment(skills=skills)
@@ -362,9 +222,7 @@ class TestTerminus2ParseSkillFrontmatter:
     def test_no_frontmatter_delimiter(self):
         from harbor.agents.terminus_2.terminus_2 import Terminus2
 
-        assert (
-            Terminus2._parse_skill_frontmatter("Just markdown, no frontmatter.") is None
-        )
+        assert Terminus2._parse_skill_frontmatter("Just markdown, no frontmatter.") is None
 
     def test_frontmatter_with_dashes_in_yaml_value(self):
         """Ensure --- inside a YAML value does not break frontmatter parsing."""

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 from shellbox.machine import MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine
+
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Process scopes require Linux")
 
 
 class ScriptedLLM(BaseLLM):

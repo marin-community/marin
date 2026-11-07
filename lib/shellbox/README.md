@@ -1,9 +1,12 @@
 # Marin Shellbox (0.1)
 
 `marin-shellbox` provides execution machines and has no Harbor dependency. Harbor
-owns these adapters over the machine API:
+owns the adapters over the machine API. Marin's vendored Harbor accepts only
+Pi, mini-swe-agent, Codex, OpenCode, terminus-2, and terminus-kira; it rejects
+other custom agents.
 
-- `harbor.agents.shellbox:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
+The retained adapter implementations are:
+
 - `harbor.environments.qemu:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
 - `harbor.environments.shellsim:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
 
@@ -21,7 +24,18 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 ## Machine API
 
-`factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
+Successful machine commands preserve background processes for later commands.
+Provider cancellation stops an interrupted command; machine close releases the
+sandbox. Files persist until close. Persistent services and interactive sessions
+must not be reaped after each successful command.
+
+Harbor owns the agent-phase boundary. It uses Shellbox's `ProcessScope` Linux
+subreaper around complete CLI harnesses and foreground tmux servers, then confirms
+cleanup before verification. This includes detached and orphaned descendants while
+keeping task sidecars and model relay connections outside the agent's process tree.
+The helper uses an existing Python or a private host-provisioned interpreter; task
+images do not need system Python solely for command teardown. This process ownership
+mechanism is not a security boundary against code with the supervisor's privileges.
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
@@ -63,13 +77,12 @@ finally:
 
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
-for the existing Iris command and file-transfer backend. Harbor's `BashAgent`
-requires the separate persistent `ShellSession` interface; host-side Terminus-2
-uses machine commands.
+for the existing Iris command and file-transfer backend. Host-side Terminus-2
+uses machine commands and an agent-owned tmux server.
 
 Harbor selects Shellbox adapters with `environment.type`: `local` (the default),
 `daytona`, `qemu` or `shellsim`. It has no independent provider execution backend
-or custom environment import path. Its host-side Terminus-2 and oracle agents
+or custom environment import path. Its host-side Terminus-2 and Terminus-Kira agents
 can use local bubblewrap with prebuilt digest-pinned offline tasks and private container groups.
 The local adapter delegates commands, transfers and cleanup to `LocalMachineFactory`.
 It reads prepared image references, translates a validated Compose subset into
@@ -224,15 +237,11 @@ Before grading, stop agent command submission and call `LocalMachine.quiesce_com
 to reclaim work left by earlier successful commands, including tmux servers.
 Process sessions, relay helpers and peer containers remain alive.
 
-Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
-A failed stop without confirmed completion raises an infrastructure error and closes the machine.
-Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
-
-Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
-Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
-Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
-Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
-Model commands that run as root can stop other root-owned processes.
+Docker and Daytona preserve the machine after confirmed command teardown, including
+caller cancellation. If teardown cannot be confirmed, they close the machine and
+raise an infrastructure error. Docker supervises and cancels as the execution user;
+Daytona supervises as root before switching to the command user. Non-root Daytona
+commands require a guest account and util-linux `su --session-command`.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
@@ -420,10 +429,10 @@ Install the `shellsim` extra for Shellsim 0.1.38 or later. A Harbor worker share
 environment:
   type: shellsim
 agents:
-  - import_path: harbor.agents.shellbox:BashAgent
+  - name: terminus-2
     model_name: openai/local-model
     kwargs:
-      base_url: http://127.0.0.1:8000/v1
+      api_base: http://127.0.0.1:8000/v1
 ```
 
 Default contexts load precompiled native code from Shellsim's public catalog when a compatible artifact is available. Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as `MachineSpec.source`. Use `PackageSpec(pypi_packages=())` for CPython alone; `PackageSpec()` keeps a shell-only environment. Construct `ShellSimEnvironment` directly when a caller owns a configured Context; job policies select the maintained `shellsim` type. Guest commands have no host filesystem or network access.
@@ -431,13 +440,6 @@ Default contexts load precompiled native code from Shellsim's public catalog whe
 Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning and do not support interactive input. A command timeout or caller cancellation requests native interruption and allows five seconds for cleanup. `ShellSession.interrupt()` and `close()` use the same grace period. Cleanup within that period preserves the machine for reuse, except when closing it. If native work does not stop, the machine closes and rejects further work while its worker finishes in the background. Cleanup errors are logged without replacing the caller's cancellation. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
 
 The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled memory, 512 MiB virtual disk, and 128 MiB cumulative output. `cpu_limit`, `memory_mb`, `disk_limit_bytes`, and `output_limit_bytes` configure them. An action that exhausts a ShellSim resource terminates the trial. These are ShellSim fuel and working-set limits, not host CPU or RSS limits. Tasks that request internet are rejected unless `network_policy: deny` explicitly runs them offline.
-
-Run the local Harbor smoke without QEMU:
-
-```sh
-uv run --project vendor/harbor --extra runtime --extra shellsim --frozen \
-  vendor/harbor/tests/shellbox_smoke.py shellsim /tmp/shellsim-smoke-jobs
-```
 
 ## OCI image ingestion
 
@@ -472,10 +474,10 @@ environment:
   kwargs:
     guest_bundle: /opt/marin-shellbox/bash-image
 agents:
-  - import_path: harbor.agents.shellbox:BashAgent
+  - name: terminus-2
     model_name: openai/local-model
     kwargs:
-      base_url: http://127.0.0.1:8000/v1
+      api_base: http://127.0.0.1:8000/v1
 ```
 
 To use the image named by a task's `docker_image` or build its `environment/Dockerfile`, omit `guest_bundle` and configure image preparation:
@@ -495,17 +497,19 @@ environment:
       disk_size_mb: 512
       runtime_id: pinned-runtime-v1
 agents:
-  - import_path: harbor.agents.shellbox:BashAgent
+  - name: terminus-2
     model_name: openai/local-model
     kwargs:
-      base_url: http://127.0.0.1:8000/v1
+      api_base: http://127.0.0.1:8000/v1
 ```
 
 The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves registry references and rebuilds Dockerfile contexts; the OCI and QEMU bundle caches on disk reuse matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
 
 The 0.1 QEMU extra supplies the emulator but does not supply the guest kernel, BusyBox, firmware, or OCI staging tools, so task-image preparation needs the explicit paths above. A prebuilt `guest_bundle` needs no staging tools on the trial host. Skopeo is available through Linux distribution packages; its upstream project does not publish a portable standalone release binary and recommends distribution packages or its container image. We therefore leave Skopeo outside the wheel for now.
 
-`BashAgent` runs in Harbor even though Harbor's config `mode` stays at its default `container`: that field selects a factory path and does not move a custom `BaseAgent` into the guest. The endpoint above is contacted from Harbor, not from QEMU. `BashAgent` requires an image with executable `/bin/bash` and a newly staged PTY-enabled bundle; a minimal BusyBox bundle still supports direct one-shot machine commands but cannot run this agent.
+Terminus runs in Harbor and calls the candidate endpoint from that process.
+Its task image must provide the harness tools, including Bash and tmux. Agent-phase
+cleanup stops its tmux process tree before verification.
 
 The guest has no network. By default, the environment rejects tasks that declare internet access. Set `environment.kwargs.network_policy: deny` to explicitly run such a task offline; commands that actually require internet will still fail. The TaskTrove fixture below uses this override because its task config leaves `allow_internet` at Harbor's default.
 The guest defaults to 512 MiB RAM; set `environment.kwargs.guest_memory_mb` to change that limit.
@@ -516,36 +520,8 @@ The microvm disables ACPI and explicitly loads the bundle's SeaBIOS `bios-microv
 
 Acceleration defaults to `auto`. This selects KVM when `/dev/kvm` is readable and writable by the Harbor process; QEMU falls back to TCG if KVM initialization fails. Set `environment.kwargs.acceleration: kvm` to require KVM or `tcg` to force software emulation. The environment logs the accelerator QEMU actually selected after startup. A host may have `/dev/kvm` but deny access to the current user; `auto` uses TCG in that case. The Python package cannot grant device access.
 
-The local smoke test uses a deterministic OpenAI-compatible server and a Harbor task. Supply a PTY-enabled OCI bundle with `/bin/bash`:
-
-```sh
-uv run --project vendor/harbor --extra runtime --extra qemu --frozen \
-  vendor/harbor/tests/shellbox_smoke.py /opt/marin-shellbox/bash-image /tmp/qemu-smoke-jobs
-```
-
-For a task with `docker_image` or `environment/Dockerfile`, use `task-image` and supply the QEMU asset paths in a JSON file with the same keys as `qemu_assets` above:
-
-```sh
-uv run --project vendor/harbor --extra runtime --extra qemu --frozen \
-  vendor/harbor/tests/shellbox_smoke.py task-image /tmp/qemu-image-smoke-jobs \
-  --task-path /path/to/task \
-  --image-cache /var/cache/marin-shellbox \
-  --qemu-assets-json /path/to/qemu-assets.json
-```
-
-The TaskTrove `nl2bash` fixture can be built on a Docker-capable build machine, copied to an OCI layout, and staged with `--task-dockerfile` pointing to its extracted `environment/Dockerfile`. Its unchanged Harbor task passes with:
-
-```sh
-uv run --project vendor/harbor --extra runtime --extra qemu --frozen \
-  vendor/harbor/tests/shellbox_smoke.py /opt/marin-shellbox/nl2bash /tmp/nl2bash-jobs \
-  --task-path /path/to/extracted/nl2bash \
-  --command-file lib/shellbox/tests/manual/tasktrove_nl2bash_command.sh \
-  --network-policy deny
-```
-
-This example uses a deterministic fake model to issue one Bash tool call. It exercises Harbor's external agent, task setup upload, QEMU command execution, and the real TaskTrove verifier; it does not evaluate model quality.
-
-`vendor/harbor/tests/shellbox_smoke.py --commands-json /path/to/commands.json` sends successive Bash calls from a JSON list. For example, the first call can run `cd /tmp; export ANSWER='hello from qemu'`, and the second can use `$ANSWER` and `$PWD`. `tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive behavior without Harbor.
+`tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive
+behavior directly, without Harbor.
 
 `benchmarks/tasktrove/sample.py` extracts a pinned 100-task TaskTrove Clean sample into a local directory. It needs `fsspec` and `pyarrow`:
 

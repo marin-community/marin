@@ -12,6 +12,7 @@ import httpx
 from harbor_config.errors import ErrorCategory, error_category
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.factory import AgentFactory
 from harbor.environments import local, model_relay
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import (
@@ -102,6 +103,15 @@ class BackgroundServerAgent(PartialAnswerAgent):
         await environment.exec("kill $(cat server.pid)")
 
 
+@pytest.fixture(autouse=True)
+def allow_trial_agents(monkeypatch):
+    agents = AgentFactory._AGENT_MAP | {
+        f"test-{agent.__name__}": agent
+        for agent in (PartialAnswerAgent, WaitingAgent, JudgeProbeAgent, BackgroundServerAgent)
+    }
+    monkeypatch.setattr(AgentFactory, "_AGENT_MAP", agents)
+
+
 class ProcessTaskFactory:
     def check_environment(self, requirements, spec) -> None:
         pass
@@ -184,7 +194,7 @@ async def test_agent_deadline_preserves_partial_answer_for_actual_grading_script
 
 
 @pytest.mark.parametrize("timeout", [False, True])
-async def test_actual_grader_can_probe_prior_successful_background_service(
+async def test_actual_grader_observes_agent_background_service_stopped(
     tmp_path, monkeypatch, timeout
 ):
     port = available_port()
@@ -198,8 +208,13 @@ async def test_actual_grader_can_probe_prior_successful_background_service(
     )
     (config.task.path / "tests/test.sh").write_text(
         "#!/bin/sh\nset -eu\npython3 - <<'PY'\n"
-        "import os, urllib.request\n"
-        f"assert urllib.request.urlopen('http://127.0.0.1:{port}/answer').read() == b'partial'\n"
+        "import os, urllib.error, urllib.request\n"
+        "try:\n"
+        f"    urllib.request.urlopen('http://127.0.0.1:{port}/answer', timeout=1)\n"
+        "except urllib.error.URLError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('Agent background service survived cleanup')\n"
         + (
             "pid = int(open('foreground.pid').read())\n"
             "try:\n    os.kill(pid, 0)\n"
