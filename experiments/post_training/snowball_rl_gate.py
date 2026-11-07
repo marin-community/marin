@@ -26,7 +26,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import TypeGuard
+from typing import NamedTuple, TypeGuard
 
 import click
 import pyarrow as pa
@@ -153,13 +153,12 @@ def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, c
 
 def gate_inputs(
     settings: Sequence[presets.Setting] = (),
-    tasks: ArtifactStep | str | None = None,
-    init: ArtifactStep | str | None = None,
+    tasks: str | None = None,
+    init: str | None = None,
     requirements: Sequence[str] = (),
     baselines: Sequence[str] = (),
 ) -> GateInputs:
     values = {setting.key: setting.value for setting in settings}
-    tasks, init = (f"{item.name}@{item.version}" if isinstance(item, ArtifactStep) else item for item in (tasks, init))
     return GateInputs(
         settings=tuple(f"{key}={json.dumps(value, default=str)}" for key, value in sorted(values.items())),
         tasks=tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
@@ -298,14 +297,20 @@ def _ambiguous(row: Invariant) -> TypeGuard[ErrorBoundInvariant]:
     return isinstance(row, ErrorBoundInvariant) and row.lower_bound <= row.limit < row.upper_bound
 
 
+class VerdictResult(NamedTuple):
+    verdict: Verdict
+    label: Label | None
+    reason: str | None
+
+
 def _verdict(
     invariants: Sequence[Invariant], guards: Sequence[GuardComparison], declared: Sequence[ReportedComparison]
-) -> tuple[Verdict, Label | None, str | None]:
+) -> VerdictResult:
     ambiguous = [row for row in invariants if _ambiguous(row)]
     if any(not row.holds and not _ambiguous(row) for row in invariants) or any(not row.passes for row in guards):
         verdict = Verdict.FAIL
     elif ambiguous:
-        return (
+        return VerdictResult(
             Verdict.INVALID,
             None,
             "; ".join(
@@ -319,8 +324,8 @@ def _verdict(
     better = any(row.change == Change.BETTER for row in (*guards, *declared))
     worse = verdict == Verdict.FAIL or any(row.change == Change.WORSE for row in (*guards, *declared))
     if better:
-        return verdict, Label.TRADE_OFF if worse else Label.IMPROVES, None
-    return verdict, Label.REGRESSION if worse else Label.NO_CHANGE, None
+        return VerdictResult(verdict, Label.TRADE_OFF if worse else Label.IMPROVES, None)
+    return VerdictResult(verdict, Label.REGRESSION if worse else Label.NO_CHANGE, None)
 
 
 def read_metrics(root: StoragePath) -> dict[int, dict]:
@@ -686,6 +691,12 @@ def _breakdown_group(key: str) -> str:
     return f"{parts[0]}: {dimension}"
 
 
+class ComparisonRows(NamedTuple):
+    guards: list[GuardComparison]
+    declared: list[ReportedComparison]
+    details: list[ReportedComparison]
+
+
 def _compare(
     preset: presets.Preset,
     runs: Sequence[RunData],
@@ -693,7 +704,7 @@ def _compare(
     requirements: Sequence[str] = (),
     *,
     baselines: Sequence[RunData] = (),
-) -> tuple[list[GuardComparison], list[ReportedComparison], list[ReportedComparison]]:
+) -> ComparisonRows:
     """Return guard comparisons, declared report rows and breakdown detail rows."""
     noise = calibrate({pin: [run.values for run in group] for pin, group in controls.items()})
     values = [run.values for run in runs]
@@ -777,7 +788,7 @@ def _compare(
                 control_max=max(control_values) if row.control is not None else None,
             )
         )
-    return guards, reported[: len(declared)], reported[len(declared) :]
+    return ComparisonRows(guards, reported[: len(declared)], reported[len(declared) :])
 
 
 def objective_metrics(preset: presets.Preset) -> tuple[presets.Metric, ...]:
@@ -953,22 +964,22 @@ def _write_gate(
             raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
         if any(candidate.missing_tokens for candidate in (*runs, *controls)):
             raise InvalidComparison("mismatch guard has missing or zero selected-token counts")
-        guards, declared, details = _compare(preset, runs, grouped, inputs.requirements)
-        reported = [*declared, *details]
+        comparisons = _compare(preset, runs, grouped, inputs.requirements)
+        guards = comparisons.guards
+        reported = [*comparisons.declared, *comparisons.details]
         objectives = _objectives(preset, runs, grouped, guards)
         objective_keys = {metric.key for metric in objective_metrics(preset)}
         constraints = [row for row in guards if row.metric not in objective_keys]
-        verdict, label, reason = _verdict(invariants, guards, declared)
+        decision = _verdict(invariants, guards, comparisons.declared)
+        verdict, label, reason = decision.verdict, decision.label, decision.reason
         try:
             baselines = _baseline_runs(inputs.baselines, preset, rates, controls[0])
             if baselines:
-                baseline_guards, baseline_declared, baseline_details = _compare(
-                    preset, runs, grouped, inputs.requirements, baselines=baselines
-                )
+                baseline_rows = _compare(preset, runs, grouped, inputs.requirements, baselines=baselines)
                 vs_baseline = (
-                    [ReportedComparison(**row.model_dump(exclude={"passes"})) for row in baseline_guards]
-                    + baseline_declared
-                    + baseline_details
+                    [ReportedComparison(**row.model_dump(exclude={"passes"})) for row in baseline_rows.guards]
+                    + baseline_rows.declared
+                    + baseline_rows.details
                 )
         except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError, click.BadParameter) as error:
             baseline_reason = str(error)
@@ -1025,7 +1036,12 @@ def control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
     )
 
 
-def _pass_rates_path(preset: presets.Preset) -> str | None:
+class PassRatesInput(NamedTuple):
+    identity: str
+    path: str
+
+
+def _pass_rates_input(preset: presets.Preset) -> PassRatesInput | None:
     for evaluation in preset.evaluations:
         if (
             not any(presets.guards_evaluation(evaluation, metric) for metric in preset.guards)
@@ -1033,73 +1049,96 @@ def _pass_rates_path(preset: presets.Preset) -> str | None:
         ):
             continue
         default = presets.default_selection()
-        reference = presets.selection_summary(evaluation.tasks(default, default))["recipe"]["pass_rates"]
-        return str(StoragePath(reference["uri"]).parent)
+        selection = evaluation.tasks(default, default)
+        reference = presets.selection_summary(selection)["recipe"]["pass_rates"]
+        return PassRatesInput(f"{selection.name}@{selection.version}", str(StoragePath(reference["uri"]).parent))
     return None
 
 
-def receipt_evidence(path: str | None) -> tuple[str | None, str | None, str | None]:
+def _pass_rates_path(preset: presets.Preset) -> str | None:
+    source = _pass_rates_input(preset)
+    return source.path if source is not None else None
+
+
+class ReceiptEvidence(NamedTuple):
+    path: str | None
+    native_state: str | None
+    attempt_id: str | None
+
+
+def receipt_evidence(path: str | None) -> ReceiptEvidence:
     """Hash payload (path, native state, attempt ID); unresolved lookups share one stable state."""
     if path is None:
-        return None, None, None
+        return ReceiptEvidence(None, None, None)
     try:
         receipt = read_skyrl_launch_receipt(path)
         return (
-            (path, receipt.result.state, receipt.config.get("run", {}).get("attempt_id"))
+            ReceiptEvidence(path, receipt.result.state, receipt.config.get("run", {}).get("attempt_id"))
             if receipt
-            else (path, None, None)
+            else ReceiptEvidence(path, None, None)
         )
     except (FileNotFoundError, SkyRLReceiptLookupError):
-        return path, "unresolved", None
+        return ReceiptEvidence(path, "unresolved", None)
 
 
 def _gate_artifact(
     name: str,
     preset: presets.Preset,
-    candidates: tuple[ArtifactStep[SkyRLRun], ...] | tuple[str, ...],
+    candidates: tuple[str, ...],
     inputs: GateInputs,
     leave_out: int | None = None,
+    *,
+    run_paths: tuple[str, ...],
 ) -> ArtifactStep[GateReport]:
     pins = control_pins(preset.name)
     controls = tuple(
-        tuple(control_path(preset, pin, index) for index in range(pin.runs) if pin != pins[0] or index != leave_out)
+        tuple(
+            (
+                f"{presets.control_name(pin.preset, pin.main_commit, index)}@{pin.revision}",
+                control_path(preset, pin, index),
+            )
+            for index in range(pin.runs)
+            if pin != pins[0] or index != leave_out
+        )
         for pin in pins
     )
-    if inputs.baselines and isinstance(candidates[0], ArtifactStep):
-        rates_path = _pass_rates_path(preset)
-        rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
-        try:
-            _baseline_runs(
-                inputs.baselines,
-                preset,
-                rates,
-                _load_run(controls[0][0], preset, rates),
-            )
-        except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
-            raise click.BadParameter(str(error), param_hint="--baseline") from error
+    rates = _pass_rates_input(preset)
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     name += "-base-" + fingerprint_hash(canonical_json(inputs.baselines)) if inputs.baselines else ""
     attempts = [
-        receipt_evidence(
-            candidate.path(presets.artifact_prefix(preset.recipe.layout.cluster))
-            if isinstance(candidate, ArtifactStep)
-            else candidate
-        )
-        for candidate in candidates
+        receipt_evidence(path)._replace(path=identity) for identity, path in zip(candidates, run_paths, strict=True)
     ]
     name += "-evidence-" + fingerprint_hash(canonical_json(attempts))
-    return apply(
+    step = apply(
         name,
         _write_gate,
         version=GATE_REVISION,
         artifact_type=GateReport,
         preset_name=preset.name,
         run_paths=candidates,
-        control_paths=controls,
+        control_paths=tuple(tuple(identity for identity, _ in group) for group in controls),
         pins=pins,
         inputs=inputs,
-        pass_rates_path=_pass_rates_path(preset),
+        pass_rates_path=rates.identity if rates is not None else None,
         output=OUT,
+    )
+
+    def build_config(ctx: StepContext) -> dict:
+        config = step.build_config(ctx)
+        if not ctx.is_fingerprint:
+            config.update(ctx.runtime_arg("paths"))
+        return config
+
+    return replace(
+        step,
+        build_config=build_config,
+        runtime_args={
+            "paths": {
+                "run_paths": run_paths,
+                "control_paths": tuple(tuple(path for _, path in group) for group in controls),
+                "pass_rates_path": rates.path if rates is not None else None,
+            }
+        },
     )
 
 
@@ -1107,8 +1146,22 @@ def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
     pins = control_pins(preset.name)
+    if inputs.baselines:
+        rates_path = _pass_rates_path(preset)
+        rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
+        try:
+            _baseline_runs(
+                inputs.baselines,
+                preset,
+                rates,
+                _load_run(control_path(preset, pins[0], 0), preset, rates),
+            )
+        except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
+            raise click.BadParameter(str(error), param_hint="--baseline") from error
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
-    return _gate_artifact(name, preset, runs, inputs)
+    paths = tuple(candidate.path(presets.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
+    identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
+    return replace(_gate_artifact(name, preset, identities, inputs, run_paths=paths), deps=runs)
 
 
 def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
@@ -1232,7 +1285,14 @@ def main(
         )
         for text in inputs.requirements:
             parse_requirement(text)
-        step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
+        step = _gate_artifact(
+            f"{namespace}/gate-n1-{pins[0].main_commit}",
+            preset,
+            (f"{name}@{version if separator else presets.PRESET_REVISION}",),
+            inputs,
+            index,
+            run_paths=(source,),
+        )
     except InvalidComparison as error:
         click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
         raise click.exceptions.Exit(presets.REFUSAL_EXIT_CODE) from error
