@@ -99,6 +99,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
@@ -888,6 +889,7 @@ def main(
     baselines: tuple[str, ...],
     issue: int | None,
 ) -> tuple[ArtifactStep, ...]:
+    configure_coreweave_s3()
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
     preset = presets.PRESETS[preset_name]
