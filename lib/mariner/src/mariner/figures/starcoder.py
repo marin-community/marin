@@ -353,7 +353,7 @@ def epoch_matching(root: Path) -> EpochMatching:
     require_columns(runs, EPOCH_MATCHING_COLUMNS, EPOCH_MATCHING_TABLE)
     repeated = runs[runs.duplicated(RUN_KEYS, keep=False)]
     if len(repeated):
-        raise ValueError(f"{EPOCH_MATCHING_TABLE} repeats runs: {', '.join(repeated['observation_id'])}")
+        raise ValueError(f"{EPOCH_MATCHING_TABLE} repeats runs: {', '.join(repeated[OBSERVATION_ID])}")
     epochs = runs.groupby(["arm", "starcoder_weight"])["starcoder_epochs"]
     differing = epochs.nunique()[lambda counts: counts > 1]
     if len(differing):

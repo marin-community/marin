@@ -8,12 +8,13 @@ The exact KL-regularized proposer solves the same convex program as allenai/olmi
 olmix extra, which provides cvxpy. A proposal under an epoch cap is rounded to the sampler's 2,048-block grid without
 letting any bucket exceed the cap, as the matched Olmix mixtures the paper trained were.
 
-The multistart fit's result depends on floating-point details: its 48 starts of L-BFGS-B use finite-difference
-gradients on a non-convex Huber loss. On macOS arm64 with Accelerate, where the released laws were fitted, a refit of
-the main swarm reproduces them to 1e-9. On Linux aarch64 with OpenBLAS it reached other optima of nearly equal loss:
-laws that differ in every parameter, whose matched proposals lie 82 (Uncheatable) and 190 (OlmoBaseEval Easy) of the
-2,048 blocks from the trained Olmix mixtures. The released laws (``mariner.data.released_olmix_laws``) reproduce those
-mixtures on any platform.
+A refit fits one law per task with 48 starts each, and its result depends on floating-point details: each start runs
+L-BFGS-B with finite-difference gradients on a non-convex Huber loss. On macOS arm64 with numpy and scipy on Accelerate
+(macOS 14 or later), where the laws were fitted, a refit of the main swarm reproduces the released laws to 1e-9. On
+Linux aarch64 with OpenBLAS it reached other optima of nearly equal loss: laws that differ in every parameter, whose
+matched proposals put 41 (Uncheatable) and 95 (OlmoBaseEval Easy) of the 2,048 blocks, 2.0% and 4.6%, in other buckets
+than the trained Olmix mixtures. The released laws (``mariner.data.released_olmix_laws``) reproduced the paper's Olmix
+mixtures on both platforms tested.
 """
 
 from __future__ import annotations

@@ -392,7 +392,7 @@ def frontier_values(root: Path) -> dict[str, pd.DataFrame]:
         columns.append(
             {
                 "column": column.title,
-                "objective": column.objective,
+                "objective": str(column.objective),
                 TASK_ID: column.task_id,
                 "snr": float(row["snr"]),
                 "repeat_sd": float(row["repeat_sd"]),

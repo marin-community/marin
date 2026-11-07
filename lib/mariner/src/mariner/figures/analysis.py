@@ -361,7 +361,7 @@ def mixture_epochs(
     if recorded != {(column.method.value, column.objective, column.variant)}:
         raise ValueError(
             f"the runs of {mixture} record (method, proposal objective, variant) {sorted(recorded)}, not"
-            f" {(column.method.value, column.objective, column.variant)}"
+            f" {(column.method.value, str(column.objective), column.variant)}"
         )
     weights = mixture_weights(runs, bucket_ids, VALIDATION_TABLE)
     fractions = pool_fractions(runs, bucket_ids, VALIDATION_TABLE)
@@ -387,7 +387,7 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
         )
         rows += [
             {
-                "objective": column.objective,
+                "objective": str(column.objective),
                 "column": column.name,
                 MIXTURE_ID: column.mixture_id,
                 "bucket_id": bucket,

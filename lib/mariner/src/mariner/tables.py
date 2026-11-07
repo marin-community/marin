@@ -148,7 +148,7 @@ def scaling_main_table(root: Path) -> pd.DataFrame:
             proposal = objective if mixture.proposed else UNPROPOSED
             track = ladder_track(ladder, mixture.method, proposal, f"{OUTCOME_PREFIX}{objective}")
             for (compute, statistic), value in loss_entries(track, f"{name}'s {objective}").items():
-                cells[(objective, compute, statistic)] = value
+                cells[(str(objective), compute, statistic)] = value
         scores = accuracy.loc[accuracy["method"] == mixture.method, ACCURACY]
         cells[(ACCURACY, ACCURACY_SCALE, Statistic.MEAN)] = mean_accuracy(scores, f"{name}'s accuracy")
         rows[name] = cells

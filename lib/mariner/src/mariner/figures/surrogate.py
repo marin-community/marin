@@ -512,7 +512,7 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
             rows = seed_runs(runs, mixture, objective)
             measured += [
                 {
-                    "objective": objective,
+                    "objective": str(objective),
                     "proposal": proposal.value,
                     OBSERVATION_ID: run,
                     TRAINER_SEED: seed,
@@ -530,7 +530,7 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
                     raise ValueError(f"{predictor} predicts the runs of {mixture} differently")
                 predictions.append(
                     {
-                        "objective": objective,
+                        "objective": str(objective),
                         "proposal": proposal.value,
                         "predictor": predictor,
                         "predicted_bpb": float(values["predicted_bpb"].iloc[0]),

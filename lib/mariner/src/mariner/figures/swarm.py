@@ -378,7 +378,7 @@ def support_values(root: Path) -> dict[str, pd.DataFrame]:
         by_bucket = dict(zip(partition.bucket_ids, proposed, strict=True))
         proposals += [
             {
-                "objective": column.objective,
+                "objective": str(column.objective),
                 BUCKET_ID: row[BUCKET_ID],
                 "bucket": row["bucket"],
                 "epochs": by_bucket[row[BUCKET_ID]],

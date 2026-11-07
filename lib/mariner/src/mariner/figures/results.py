@@ -193,7 +193,8 @@ def draw_scaling_curves(root: Path) -> FigureData:
     figure_legend(figure, handles, columns=3)
     values = {
         series: pd.concat(
-            [scaling[series].assign(objective=objective) for objective, scaling in drawn.items()], ignore_index=True
+            [scaling[series].assign(objective=str(objective)) for objective, scaling in drawn.items()],
+            ignore_index=True,
         )
         for series in SCALING_SERIES
     }
@@ -219,9 +220,9 @@ def on_off_values(root: Path) -> dict[str, pd.DataFrame]:
             proposals = [(UNPROPOSED, True)] if method == Method.PROPORTIONAL else [(objective, True), (other, False)]
             for proposal, on_objective in proposals:
                 key = {
-                    "objective": objective,
+                    "objective": str(objective),
                     "method": method.value,
-                    PROPOSAL_OBJECTIVE: proposal,
+                    PROPOSAL_OBJECTIVE: str(proposal),
                     "on_objective": on_objective,
                 }
                 track = ladder_track(ladder, method, proposal, f"{OUTCOME_PREFIX}{objective}")
@@ -473,7 +474,7 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
         for method in TRADEOFF_METHODS:
             runs = seed_runs(validation, panel.mixtures[method], panel.proposal_objective)
             runs_used += [
-                {"panel": panel.proposal_objective, "method": method.value, OBSERVATION_ID: run, TRAINER_SEED: seed}
+                {"panel": str(panel.proposal_objective), "method": method.value, OBSERVATION_ID: run, TRAINER_SEED: seed}
                 for run, seed in zip(runs[OBSERVATION_ID], runs[TRAINER_SEED], strict=True)
             ]
             for row in rows[panel.objective]:
@@ -485,9 +486,9 @@ def tradeoff_values(root: Path) -> dict[str, pd.DataFrame]:
                     raise ValueError(f"a run of {panel.mixtures[method]} lacks a value of {row.item}")
                 bars.append(
                     {
-                        "panel": panel.proposal_objective,
-                        "objective": panel.objective,
-                        PROPOSAL_OBJECTIVE: panel.proposal_objective,
+                        "panel": str(panel.proposal_objective),
+                        "objective": str(panel.objective),
+                        PROPOSAL_OBJECTIVE: str(panel.proposal_objective),
                         "method": method.value,
                         MIXTURE_ID: panel.mixtures[method],
                         "item": row.item,

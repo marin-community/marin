@@ -74,7 +74,8 @@ RUN_LABEL = "run_label"
 DESIGN_KIND = "design_kind"
 FIT_INCLUSION = "fit_inclusion"
 EXPOSURE_ID = "exposure_id"
-# The columns that name a trained mixture's runs in validation_3e18, heldout and ladder.
+# The columns that name a trained mixture's runs in validation_3e18, heldout and ladder. TRAINER_SEED also names the
+# trainer seed in starcoder_epoch_matching and in a designed swarm's run table.
 MIXTURE_ID = "mixture_id"
 LAUNCH = "launch"
 TRAINER_SEED = "trainer_seed"

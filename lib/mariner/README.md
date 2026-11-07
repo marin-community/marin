@@ -17,7 +17,8 @@ The first command runs the tests that need no dataset. The second runs the `data
 mariner-data snapshot in `DIR` (`mariner download --out DIR`). They refit the three swarms and the Olmix laws and
 compare them with the released tables, and they draw each of the paper's 27 figures from only the dataset
 configurations that the snapshot's `figures_tables.csv` lists for it, checking each against a number or claim that
-the paper states. They take about 10 minutes, most of it the OlmoBaseEval Easy Olmix refit.
+the paper states. The Olmix refits run only on macOS arm64 with numpy and scipy on Accelerate, where the released laws
+were fitted, and skip elsewhere. There the tests take about 10 minutes, most of it the OlmoBaseEval Easy Olmix refit.
 
 The committed PDFs in [`paper_figures/`](paper_figures/) were drawn on macOS arm64 with the lockfile's versions.
 PDF bytes depend on the platform and the BLAS build, so the tests do not compare them with the committed files.
