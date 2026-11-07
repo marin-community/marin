@@ -11,12 +11,14 @@ one row per bucket: the continuous optimum's weight, the blocks of the sampler's
 give, and the epochs that weight materializes in the target run. A command whose input it cannot use, such as a
 missing file or a table without a ``w__``, ``pf__`` or ``bpb__`` column it needs, stops with a message on stderr and
 exit status 2, as argparse does for a malformed argument, and so does a command that needs an extra not installed.
+``figures`` redraws the paper's main-text figures from a snapshot as PDFs; it needs the figures extra.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import importlib.util
 import json
 import logging
 import sys
@@ -96,6 +98,9 @@ INPUT_ERROR_STATUS = 2  # argparse's status for a malformed argument
 LOG_FORMAT = "%(asctime)s %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
 OBJECTIVE_HELP = f"objective of the tasks table ({' or '.join(OBJECTIVES)} in mariner-data)"
+MATPLOTLIB = "matplotlib"
+FONTTOOLS = "fontTools"
+MATPLOTLIB_MISSING = "redrawing the figures needs matplotlib, which marin-mariner's figures extra installs"
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -459,6 +464,18 @@ def run_design(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_figures(args: argparse.Namespace) -> int:
+    # mariner.figures imports matplotlib, an optional dependency; find it without importing it, as olmix finds cvxpy.
+    if importlib.util.find_spec(MATPLOTLIB) is None:
+        raise ImportError(MATPLOTLIB_MISSING)
+    from mariner.figures import write_figures  # noqa: PLC0415  (optional dependency: the figures extra)
+
+    logging.getLogger(FONTTOOLS).setLevel(logging.WARNING)  # it logs each font it subsets into a PDF at INFO
+    for path in write_figures(args.data, args.out, args.only):
+        print(path)
+    return 0
+
+
 def run_self_test(args: argparse.Namespace) -> int:
     checks = self_test(args.data, olmix_laws=OlmixLaws.REFIT if args.refit_olmix else OlmixLaws.RELEASED)
     for check in checks:
@@ -631,6 +648,17 @@ def argument_parser() -> argparse.ArgumentParser:
     )
     command.add_argument("--out", type=Path, required=True, metavar="CSV", help="run table to write")
     command.set_defaults(run=run_design)
+
+    command = commands.add_parser("figures", help="redraw the paper's main-text figures from a snapshot as PDFs")
+    command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")
+    command.add_argument("--out", type=Path, required=True, metavar="DIR", help="directory to write <stem>.pdf into")
+    command.add_argument(
+        "--only",
+        nargs="+",
+        metavar="LABEL",
+        help="the paper's labels of the figures to draw, such as fig:b5 (default: all)",
+    )
+    command.set_defaults(run=run_figures)
 
     command = commands.add_parser("self-test", help="re-derive the paper's fits and trained mixtures from a snapshot")
     command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")

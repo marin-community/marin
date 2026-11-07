@@ -94,6 +94,7 @@ IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
 
 MANIFEST = "MANIFEST.json"
+FIGURES_INDEX = "figures_tables.csv"  # the paper's figures and tables with the configs each reads
 # The released fits' per-task predictions at the swarm's runs and at the held-out runs.
 SWARM_PREDICTIONS_TABLE = "fits_swarm_predictions"
 HELDOUT_PREDICTIONS_TABLE = "fits_heldout_predictions"
@@ -105,13 +106,22 @@ HUGGINGFACE_HUB_MISSING = "downloading mariner-data needs huggingface_hub, which
 DOWNLOAD_PATTERNS = (
     MANIFEST,
     "README.md",
+    FIGURES_INDEX,
     "data/partition/*",
     "data/tasks/*",
     "data/swarm_*/*",
     "data/ladder/*",
+    "data/ladder_accuracy/*",
+    "data/ladder_compute_equivalence/*",
     "data/heldout/*",
     "data/validation_3e18/*",
     "data/fits/*",
+    "data/domain_sweeps/*",
+    # The StarCoder tables that the main-text figures read; the appendix's stay on the Hub.
+    "data/starcoder/starcoder_observations.*",
+    "data/starcoder/starcoder_curve_membership.*",
+    "data/starcoder/starcoder_curves.*",
+    "data/starcoder/starcoder_diagonal.*",
 )
 
 
@@ -544,10 +554,13 @@ def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
 
 
 def download(local_dir: Path, repo_id: str = DATASET_REPO, revision: str | None = None) -> Path:
-    """Download MANIFEST.json, the card and the tables this package reads into ``local_dir`` and return its path.
+    """Download MANIFEST.json, the card, figures_tables.csv and the tables this package reads into ``local_dir``.
 
-    The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits; the StarCoder,
-    domain-sweep, other ladder and run-set tables stay on the Hub.
+    The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits, which the
+    commands read; ladder_accuracy, the domain sweeps and the StarCoder observations, curves, curve membership and
+    diagonal, which the main-text figures also read; and ladder_compute_equivalence, the baselines' released ladder
+    laws, which the tests compare Figure 1's fits with. The other StarCoder tables, ladder_unimax_cap_sweep and
+    run_sets stay on the Hub. Returns the directory's path.
     """
     try:
         from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)

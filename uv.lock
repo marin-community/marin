@@ -7587,6 +7587,9 @@ dependencies = [
 download = [
     { name = "huggingface-hub" },
 ]
+figures = [
+    { name = "matplotlib" },
+]
 olmix = [
     { name = "clarabel" },
     { name = "cvxpy" },
@@ -7604,6 +7607,7 @@ requires-dist = [
     { name = "clarabel", marker = "extra == 'olmix'", specifier = "==0.11.1" },
     { name = "cvxpy", marker = "extra == 'olmix'", specifier = "==1.9.2" },
     { name = "huggingface-hub", marker = "extra == 'download'", specifier = ">=1.0" },
+    { name = "matplotlib", marker = "extra == 'figures'", specifier = ">=3.10,<4" },
     { name = "numpy", specifier = ">=2.3.5,<3" },
     { name = "pandas", specifier = ">=2.2.2,<3" },
     { name = "pyarrow", specifier = ">=17" },
@@ -7611,7 +7615,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.17,<2" },
     { name = "threadpoolctl", specifier = ">=3.2" },
 ]
-provides-extras = ["olmix", "download"]
+provides-extras = ["olmix", "download", "figures"]
 
 [package.metadata.requires-dev]
 test = [

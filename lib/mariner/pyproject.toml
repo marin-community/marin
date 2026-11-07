@@ -24,6 +24,7 @@ dependencies = [
 # these releases put the continuous weights up to 0.025 block apart, so another release can round to another mixture.
 olmix = ["cvxpy==1.9.2", "clarabel==0.11.1"]
 download = ["huggingface-hub>=1.0"]
+figures = ["matplotlib>=3.10,<4"]
 
 [project.scripts]
 mariner = "mariner.cli:main"
