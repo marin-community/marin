@@ -115,6 +115,11 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
         try:
             await agent.setup(adapter)
             await agent.run("Write first.txt.", adapter, AgentContext())
+            # The keystroke duration does not wait for shell completion.
+            ready = await adapter.exec(
+                "until test -s first.txt; do sleep 0.01; done", timeout_sec=5
+            )
+            assert ready.return_code == 0
             await agent.cleanup(adapter)
             assert machine.path("/workspace/first.txt").read_text() == "first"
             assert (
@@ -122,6 +127,10 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
             ).return_code != 0
 
             await agent.run("Copy first.txt to second.txt.", adapter, AgentContext())
+            ready = await adapter.exec(
+                "until test -s second.txt; do sleep 0.01; done", timeout_sec=5
+            )
+            assert ready.return_code == 0
             await agent.cleanup(adapter)
             assert machine.path("/workspace/second.txt").read_text() == "first"
             assert (

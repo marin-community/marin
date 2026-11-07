@@ -52,6 +52,7 @@ def _assert_training_recorded(output_path: str) -> dict:
 
 
 @pytest.mark.tpu
+@pytest.mark.timeout(240)
 def test_train_lm(local_gpt2_tokenizer_path):
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir, tokenizer=local_gpt2_tokenizer_path)
