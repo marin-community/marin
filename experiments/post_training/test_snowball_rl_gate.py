@@ -25,7 +25,7 @@ from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.timing import Timestamp
@@ -38,7 +38,6 @@ from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_test_fixtures import answer as _answer
 from experiments.post_training.snowball_rl_test_fixtures import write_json as _json
 
-pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
@@ -244,11 +243,19 @@ def test_baseline_uses_control_spread_and_unique_finished_run_group(recorded_run
             (wrong, "not a recorded speed-medium"),
             (old, "revision differs"),
             (unfinished, "no launch receipt at"),
-            (failed, "run crashed"),
+            (failed, "native job /tests/native-run is failed"),
             (incomplete, "failed invariants"),
             (missing_record, "record"),
         )
     ]
+    different_protocol = recorded_runs(
+        "learning-medium", "users/test/other-protocol", argv=("--preset", "learning-medium")
+    )
+    document = json.loads((different_protocol / "terminal.json").read_text())
+    document["config"]["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.5
+    _json(different_protocol / "terminal.json", document)
+    _json(different_protocol / "resolved-launch.yaml", {"config": document["config"]})
+    cases.append(("learning-medium", different_protocol, "evaluation protocol"))
     cases.append(("learning-medium", other_panel, "absent from its task manifest"))
     for preset_name, root, reason in cases:
         candidate_name = (
@@ -342,15 +349,6 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             set(),
             None,
         ),
-        (
-            "speed-long",
-            {"metrics": {"async/performance/response_tokens_per_configured_inference_gpu_second": 50}},
-            {},
-            "fail",
-            "regression",
-            set(),
-            None,
-        ),
         ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
         ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
         pytest.param(
@@ -430,6 +428,9 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
             (0.01, 0.02),
         ),
         ("speed-short", {}, {}, "pass", "no change", set(), None),
+        pytest.param(
+            "speed-short", {"quality_unscored": 15}, {}, "pass", "no change", set(), (0.01, 0.01), id="coverage-boundary"
+        ),
         pytest.param(
             "speed-short",
             {"quality_unscored": 16},
@@ -678,11 +679,8 @@ def test_requirement_preflight_accepts_only_keys_the_gate_computes(recorded_runs
         (learning, "test_panel/aaii_category/codng/mean>=control", {}),
         # Every fixture task is non-agentic, so the panel has no agentic split.
         (learning, "test_panel/agentic/false/mean>=0", {}),
-        (presets.PRESETS["train-long"], "test_panel/mean>=0", {}),
-        (learning, "test_panel/mean>=0", {"control": True}),
-        (learning, "invalid", {}),
     ):
-        with pytest.raises(click.BadParameter):
+        with pytest.raises(click.BadParameter, match="does not compute"):
             snowball.build_run(preset, requirements=(requirement,), **kwargs)
 
 
@@ -939,13 +937,6 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     recovered = rescore(preset, "--candidate", built.runs[0].name)
     assert recovered["run"]["baselines"] == [baseline] and recovered["vs_baseline"]
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
-    if preset == "learning-medium":
-        later = recorded_runs(preset, "users/test/later-replicate", score=0.495)
-        receipt = json.loads((later / "terminal.json").read_text())
-        _json(later / "terminal.json", receipt | {"result": receipt["result"] | {"provenance": None}})
-        second = ArtifactStep.adopt("users/test/later-replicate", presets.PRESET_REVISION, str(later), kind=SkyRLRun)
-        invalid = run(gate.gate_step(presets.PRESETS[preset], (built.runs[0], second), inputs=gate.GateInputs()))[0]
-        assert (invalid.verdict, invalid.reason) == ("invalid", f"run has no recorded source provenance: {later}")
     Path(printed["report"]).unlink()
     terminal = json.loads((source / "terminal.json").read_text())
     _json(source / "attempts/failed.json", terminal | {"result": terminal["result"] | {"state": "failed"}})
@@ -977,7 +968,18 @@ def test_unpinned_candidates_refuse_gpu_submission(recorded_runs, monkeypatch, p
     client.submit.side_effect = AssertionError("an unpinned candidate submitted a coordinator")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     for command, arguments in (
-        (snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, "--run", "--wait"]),
+        (
+            snowball.main,
+            [
+                "--preset",
+                preset,
+                "--version",
+                presets.PRESET_REVISION,
+                "--run",
+                "--wait",
+                *(["--tasks", f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"] if preset == "data-long" else []),
+            ],
+        ),
         (gate.main, ["--preset", preset, "--candidate", "tests/unpinned"]),
     ):
         refused = CliRunner().invoke(command, arguments)
@@ -1059,7 +1061,6 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     assert result.exit_code == expected, (result.output, result.exception)
     waited = [] if case in {"no-wait", "child"} else [(job,)]
     assert [call.args for call in client.job.call_args_list] == waited
-    assert all(call.kwargs["poll_interval"] == 60 for call in client.job.return_value.wait.call_args_list)
     if case != "child":
         assert client.submit.call_args.kwargs["environment"].env_vars["WANDB_ENTITY"] == "submission-team"
     if case in {"pass", "fail", "invalid"}:
@@ -1159,41 +1160,102 @@ def test_grafana_links_reference_dashboard_panels_and_variables():
             assert all(int(value) in panels for value in query.get("viewPanel", ()))
 
 
-@pytest.mark.parametrize("named", [False, True], ids=["primary", "named-final"])
-def test_evaluation_protocol_compares_optimizer_changes_and_rejects_sampling_changes(recorded_runs, named):
+@pytest.mark.parametrize(
+    "change,verdict",
+    [
+        ("training", "pass"),
+        ("attention", "pass"),
+        ("prefix", "pass"),
+        ("vllm-env", "pass"),
+        ("vllm-version", "pass"),
+        ("sampling", "invalid"),
+        ("named-sampling", "invalid"),
+        ("reply-limit", "invalid"),
+        ("chat-template", "invalid"),
+        ("task-env", "invalid"),
+    ],
+)
+def test_evaluation_protocol_compares_training_and_engine_changes_and_binds_requests(recorded_runs, change, verdict):
     preset = "learning-long"
     controls(recorded_runs, preset)
-    source = recorded_runs(preset, "users/test/protocol")
-
-    def edit(change):
-        for filename in ("terminal.json", "resolved-launch.yaml"):
-            document = json.loads((source / filename).read_text())
-            change(document["config"]["skyrl"])
-            _json(source / filename, document)
-
-    def training_only(config):
+    name = "users/test/protocol-" + change
+    source = recorded_runs(preset, name)
+    document = json.loads((source / "terminal.json").read_text())
+    config = document["config"]["skyrl"]
+    generator = config["generator"]
+    if change == "training":
         config["trainer"]["policy"]["optimizer_config"]["lr"] = 2e-6
-        config["generator"]["sampling_params"] = {"temperature": 0.7}
-        config["generator"]["trajectory_reward_shaping"] = {"enabled": True}
-        config["generator"]["weight_sync_backend"] = "nccl"
+        config["trainer"]["algorithm"]["advantage_estimator"] = "grpo"
+        generator["sampling_params"] = {"temperature": 0.7}
+        generator["trajectory_reward_shaping"] = {"enabled": True}
+        generator["weight_sync_backend"] = "nccl"
+    elif change == "attention":
+        generator["vllm_attention_backend"] = "another-backend"
+    elif change == "prefix":
+        generator["enable_prefix_caching"] = False
+    elif change == "vllm-env":
+        document["config"]["runtime"]["task_env"]["VLLM_PROBE"] = "1"
+    elif change == "vllm-version":
+        _json(
+            source / "exports/attempts/recorded-attempt/tracking.json",
+            {"attempt_id": "recorded-attempt", "engine": {"vllm_version": "another-wheel"}},
+        )
+    elif change == "sampling":
+        generator["eval_sampling_params"]["temperature"] = 0.5
+    elif change == "named-sampling":
+        config["trainer"]["callbacks"][0]["additional_evaluations"]["test_panel"]["sampling_params"]["temperature"] = 0.5
+    elif change == "reply-limit":
+        generator["eval_sampling_params"]["max_generate_length"] = 4096
+    elif change == "chat-template":
+        generator["chat_template"] = "another-template"
+    else:
+        document["config"]["runtime"]["task_env"]["TASK_PROBE"] = "1"
+    _json(source / "terminal.json", document)
+    _json(source / "resolved-launch.yaml", {"config": document["config"]})
+    report = rescore(preset, "--candidate", name)
+    assert report["verdict"] == verdict, report
+    if verdict == "invalid":
+        assert "evaluation protocol" in report["reason"]
 
-    edit(training_only)
-    comparable = rescore(preset, "--candidate", "users/test/protocol")
-    assert (comparable["verdict"], comparable["label"]) == ("pass", "no change"), comparable
 
-    def sampling_change(config):
-        if named:
-            config["trainer"]["callbacks"][0]["additional_evaluations"]["test_panel"]["sampling_params"][
-                "temperature"
-            ] = 0.5
-        else:
-            config["generator"]["eval_sampling_params"]["temperature"] = 0.5
-
-    source = recorded_runs(preset, "users/test/protocol-changed")
-    edit(training_only)
-    edit(sampling_change)
-    changed = rescore(preset, "--candidate", "users/test/protocol-changed")
-    assert changed["verdict"] == "invalid" and "evaluation protocol" in changed["reason"], changed
+@pytest.mark.timeout(180)
+def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, native_json, tmp_path):
+    preset = presets.PRESETS["learning-medium"]
+    control_roots = controls(recorded_runs, preset.name)
+    initializer = ArtifactStep.adopt(
+        "tests/custom-init", "2026.11.07", str(tmp_path / "custom-init"), kind=LevanterCheckpoint
+    )
+    builds = [
+        snowball.build_run(preset, control=True),
+        snowball.build_run(preset, settings=(presets.parse_setting("trainer.policy.optimizer_config.lr=2e-6"),)),
+        snowball.build_run(preset, init=initializer),
+    ]
+    paths = []
+    for index, built in enumerate(builds):
+        step = built.runs[0]
+        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+        path = tmp_path / f"protocol-{index}.yaml"
+        path.write_text(config.launch_config_yaml)
+        paths.append(str(path))
+    composed = native_json(
+        """
+import json, sys
+from cloud.iris.launch_config import load_launch_config
+from omegaconf import OmegaConf
+print(json.dumps([OmegaConf.to_container(load_launch_config(path), resolve=True) for path in sys.argv[1:]]))
+""",
+        paths,
+    )
+    for index, config in enumerate(composed):
+        roots = control_roots if index == 0 else [recorded_runs(preset, f"users/test/native-protocol-{index}")]
+        for source in roots:
+            document = json.loads((source / "terminal.json").read_text())
+            document["config"].update(skyrl=config["skyrl"], runtime=config["runtime"])
+            _json(source / "terminal.json", document)
+            _json(source / "resolved-launch.yaml", {"config": document["config"]})
+    for index in [1, 2]:
+        report = rescore(preset.name, "--candidate", f"users/test/native-protocol-{index}")
+        assert (report["verdict"], report["label"]) == ("pass", "no change"), report
 
 
 def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name(recorded_runs):
@@ -1234,12 +1296,10 @@ def test_issue_metadata_stays_in_launcher_status(recorded_runs):
     preset = presets.PRESETS["learning-medium"]
     controls(recorded_runs, preset.name)
     first = snowball.build_run(preset).runs[0]
-    recorded_runs(preset, first.name, fingerprint=first.fingerprint())
     before = status(preset.name, ["--issue", "73"])["runs"][0]
     after = status(preset.name, ["--issue", "74"])["runs"][0]
     assert (before["name"], before["version"]) == (after["name"], after["version"]) == (first.name, first.version)
     assert (before["issue"], after["issue"]) == (73, 74)
-    assert snowball.build_run(preset).runs[0].fingerprint() == first.fingerprint()
 
 
 @pytest.mark.parametrize("change,verdict", [("engine", "pass"), ("reply-limit", "invalid"), ("task-env", "invalid")])

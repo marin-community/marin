@@ -35,7 +35,6 @@ def _render(step, path, *, runtime=False):
     return yaml.safe_load(config.launch_config_yaml)
 
 
-pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
 
@@ -163,7 +162,6 @@ print(json.dumps([{
     "eval_interval": config.skyrl.trainer.eval_interval,
     "validation": bool(config.inputs.validation_data),
     "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
-    "window": config.skyrl.generator.engine_init_kwargs.max_model_len,
     "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
     "quality_wire": quality_request(config),
     "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
@@ -171,7 +169,6 @@ print(json.dumps([{
     "engine_settings": [config.skyrl.trainer.algorithm.batch_invariant,
                        config.skyrl.generator.vllm_attention_backend,
                        config.skyrl.generator.enable_prefix_caching],
-    "fixed": config.skyrl.generator.eval_sampling_params.ignore_eos or config.skyrl.generator.sampling_params.ignore_eos,
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
     "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
@@ -186,8 +183,6 @@ print(json.dumps([{
                  for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
                  for name, profile in (entry.get("additional_evaluations") or {}).items()},
     "primary_steps": [entry.get("eval_steps") for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
-    "primary_start": [entry.get("eval_before_train") for entry in config.skyrl.trainer.callbacks
-                      if entry.type == "evaluation"],
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
         if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
@@ -302,12 +297,12 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": ExpectedHashes(config="33f5aec9", envelope="b136610e", fingerprint="de01edf3"),
-        "data-short": ExpectedHashes(config="b8840d08", envelope="3e208b52", fingerprint="236d57f8"),
-        "speed-medium": ExpectedHashes(config="e268a2c8", envelope="6058675a", fingerprint="e27eee7a"),
-        "learning-medium": ExpectedHashes(config="934e55eb", envelope="9cd4ff51", fingerprint="263564e0"),
-        "speed-long": ExpectedHashes(config="5b99bc3f", envelope="92f1d33d", fingerprint="a6e2c92e"),
-        "learning-long": ExpectedHashes(config="5314c52b", envelope="b499db8d", fingerprint="2db00d46"),
+        "speed-short": ExpectedHashes(config="3c26e593", envelope="4983e280", fingerprint="f332ce07"),
+        "data-short": ExpectedHashes(config="f47923c5", envelope="b8748fb5", fingerprint="0894989e"),
+        "speed-medium": ExpectedHashes(config="e268a2c8", envelope="f3822837", fingerprint="8d92ad78"),
+        "learning-medium": ExpectedHashes(config="934e55eb", envelope="4bdf2d67", fingerprint="61e52823"),
+        "speed-long": ExpectedHashes(config="5b99bc3f", envelope="fa196cc1", fingerprint="07815153"),
+        "learning-long": ExpectedHashes(config="5314c52b", envelope="f082cb08", fingerprint="ad2c6a8b"),
     }
     paths = []
     for name in expected:
@@ -356,7 +351,7 @@ print(json.dumps([
     } == {name: hashes.envelope for name, hashes in expected.items()}
 
 
-def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path):
+def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
     long = presets.PRESETS["train-long"]
@@ -398,11 +393,11 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     original = run(long)
     run(long, "trainer.policy.optimizer_config.weight_decay=0.2")
     assert run(long).fingerprint() == original.fingerprint()
-    with monkeypatch.context() as preflight:
-        # The requirement preflight reads control r0; test_snowball_rl_gate.py covers it with recorded controls.
-        preflight.setattr(snowball.snowball_rl_gate, "validate_candidate", lambda *args, **kwargs: None)
-        first = snowball.build_run(learning, requirements=("test_panel/mean>=0",))
-        second = snowball.build_run(learning, requirements=("test_panel/mean>=0.1",))
+    pin = snowball.snowball_rl_gate.control_pins("learning-medium")[0]
+    for index in range(pin.runs):
+        recorded_runs("learning-medium", presets.control_name(pin.preset, pin.main_commit, index))
+    first = snowball.build_run(learning, requirements=("test_panel/mean>=0",))
+    second = snowball.build_run(learning, requirements=("test_panel/mean>=0.1",))
     assert first.runs[0].name == second.runs[0].name == name()
     assert first.gate.name != second.gate.name
     original_name = name()

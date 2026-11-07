@@ -98,7 +98,7 @@ def task_set_sha256(launch: dict, name: str) -> str:
 
 
 def evaluation_protocol(launch: dict, name: str) -> dict:
-    """The effective evaluation settings that can change generated answers."""
+    """The evaluation request recorded by native configuration composition."""
     config = launch["skyrl"]
     generator = config["generator"]
     sampling = deepcopy(generator["eval_sampling_params"])
@@ -112,7 +112,10 @@ def evaluation_protocol(launch: dict, name: str) -> dict:
     return {
         "sampling_params": sampling,
         "n_samples_per_prompt": samples,
-        "context_budget": {key: config["context_budget"][key] for key in ("max_new_tokens_per_turn", "max_turns")},
+        "context_budget": {
+            "max_new_tokens_per_turn": sampling["max_generate_length"],
+            "max_turns": generator["max_turns"],
+        },
         "max_prompt_length": config["trainer"]["max_prompt_length"],
         "chat_template": generator.get("chat_template"),
         "task_env": {key: value for key, value in launch["runtime"]["task_env"].items() if not key.startswith("VLLM_")},
