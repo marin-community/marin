@@ -191,8 +191,7 @@ def test_sampling_source_preserves_trial_seeds_before_api_caller_override(endpoi
 
 @pytest.mark.parametrize("model_class", [LocalChatCompletion, LocalCompletionsAPI])
 def test_code_sources_send_declared_sampling_under_caller_generation_settings(endpoint, tmp_path, model_class):
-    # Marin's coding evaluation passed only these settings; issue #9558 runs
-    # then sampled at the server's temperature 1.0 with no seed.
+    # Caller settings without temperature or seed must keep the sources' own sampling.
     overrides = parse_generation_overrides("max_gen_toks=8192,skip_special_tokens=false,repetition_penalty=1.1")
     humaneval_row = {"task_id": "HumanEval/0", "prompt": "def f():\n", "test": "", "entry_point": "f"}
     crux_row = {"id": "sample_0", "code": "def f(x): return x", "input": "1", "output": "1"}
