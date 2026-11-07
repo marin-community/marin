@@ -26,6 +26,7 @@ import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from haliax.jax_utils import broadcast_one_to_all
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
@@ -34,6 +35,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import Checkpointer, discover_checkpoint_candidates
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -75,6 +77,7 @@ from experiments.grug.moe_hero_ep.model import (
     Transformer,
     apply_qb_betas,
 )
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -414,9 +417,10 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
-    # Stop after this many steps while `trainer.num_train_steps` still sizes the learning-rate
+    # The absolute step the run stops at, while `trainer.num_train_steps` still sizes the learning-rate
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
-    # long schedule requires the two to differ. None runs the whole schedule.
+    # long schedule requires the two to differ. Only the optimizer's `ScheduleExtension` allows a stop past
+    # the schedule's end. None runs the whole schedule and its extension.
     stop_after_steps: int | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -428,6 +432,23 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
+
+    def __post_init__(self):
+        if self.stop_after_steps is not None and self.stop_after_steps > self.last_step:
+            raise ValueError(
+                f"stop_after_steps={self.stop_after_steps} is past the optimizer's last defined step {self.last_step}; "
+                "only a ScheduleExtension trains past the schedule"
+            )
+
+    @property
+    def last_step(self) -> int:
+        """The end of the learning-rate schedule and its extension."""
+        extension = self.optimizer.schedule_extension if isinstance(self.optimizer, GrugMoeMuonHConfig) else None
+        return self.trainer.trainer.num_train_steps + (extension.steps if extension is not None else 0)
+
+    @property
+    def stop_step(self) -> int:
+        return self.last_step if self.stop_after_steps is None else self.stop_after_steps
 
 
 def build_train_dataset(
@@ -441,7 +462,8 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
+# Queued batches live in device memory, 4 MiB per device each at 262K. At 29 s/step, 64 batches is 31 minutes of data.
+_TRAIN_LOADER_BUFFER_SIZE = 64
 # On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
 _TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
@@ -1088,6 +1110,16 @@ def _make_train_step(
     return train_step
 
 
+def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
+    """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
+    # Every process must take the same branch around the collective save, so process 0 decides for all.
+    committed = jax.process_index() == 0 and any(
+        candidate.step == step and candidate.metadata.get("is_temporary") is False
+        for candidate in discover_checkpoint_candidates(checkpointer.base_path, max_step=step)
+    )
+    return bool(broadcast_one_to_all(jnp.array(committed, dtype=jnp.bool_)))
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
@@ -1255,9 +1287,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
-        # both use it so a head-of-schedule run reports against the steps it will actually take.
-        requested_stop_step = trainer.num_train_steps if config.stop_after_steps is None else config.stop_after_steps
-        stop_step = min(requested_stop_step, trainer.num_train_steps)
+        # both use it so a run reports against the steps it will actually take.
+        stop_step = config.stop_step
+        restored_step = int(state.step)
+        # A restore exactly at the stop is allowed, because a retry after the final checkpoint lands there.
+        if restored_step > stop_step:
+            raise ValueError(f"Restored step {restored_step} is past the stop step {stop_step}; nothing would train")
 
         profiler_cfg = trainer.profiler
         profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
@@ -1364,10 +1399,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.add_hook(hook, every=interval)
 
             # Baseline point at the start of the loss curve. The periodic cadence first fires at
-            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+            # `steps_per_eval` (step 500 on the hero), thus a fresh run gets no early point.
             # These run after the first optimization step, not before it: the first train step
             # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+            # step 2 instead of first at step 500. `every=1` is the only interval that covers
             # the first step, and `_first_step_only` makes the hook fire once. A resumed run
             # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
             # is 0 there, so the point lands at step 0 on the curve.
@@ -1481,19 +1516,34 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     break
         except BaseException:
             logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+                "Fatal error in grug training loop; skipping pending final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            if not preempted:
-                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
-                with callbacks.progress_event_scope(
-                    state_callbacks.emit_event,
-                    callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                    callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-                ):
-                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
+            # The final checkpoint comes before the forced hooks, whose evals can fail, so a failure there cannot
+            # lose it. A retry that restores that checkpoint has nothing left to protect, and it must not repeat a
+            # failing eval on every rack or write a second copy of every array into the checkpoint's OCDBT store.
+            # It succeeds with no final eval, which can run offline.
+            if (
+                checkpointer is not None
+                and restored_step == stop_step
+                and _final_checkpoint_committed(checkpointer, stop_step)
+            ):
+                logger.warning(
+                    "ZERO-STEP SUCCESS: permanent checkpoint of stop step %d already exists. Skipping the final "
+                    "callbacks, including the final eval, and the final checkpoint.",
+                    stop_step,
+                )
+            else:
+                if checkpointer is not None:
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
+                        checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
+                if not preempted:
+                    state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
         finally:
             preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)

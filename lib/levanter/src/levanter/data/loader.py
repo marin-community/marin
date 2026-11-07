@@ -140,7 +140,7 @@ class DataLoader(Iterable[Ex]):
                         "finite dataset."
                     )
 
-            initial_example = blocking_wait(self.data_store.getitem_async(0))
+            initial_example = blocking_wait(self.data_store.getitem_async(self.data_store.first_readable_index()))
             self._ex_leaves, self._ex_structure = jax.tree.flatten(initial_example, is_leaf=is_named_array)
             self._padding_example = _make_padding_example(initial_example)
 

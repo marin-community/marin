@@ -21,6 +21,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.optimizer import ScheduleExtension
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
@@ -42,7 +43,10 @@ HERO_GPUS_PER_NODE = 4
 HERO_RACK_GPUS = HERO_EP_NODES * HERO_GPUS_PER_NODE
 # The hero's context-parallel degree. Each rack splits into HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE expert
 # shards of HERO_CONTEXT_AXIS_SIZE sequence shards each (see `hero_expert_axis_size`).
-HERO_CONTEXT_AXIS_SIZE = 1
+HERO_CONTEXT_AXIS_SIZE = 4
+# Steps the hero trains past the end of its schedule, and the learning rate over them. None stops at the
+# schedule's end. A deploy PR sets this; the schedule length, and everything it sizes, stays as it is.
+HERO_SCHEDULE_EXTENSION: ScheduleExtension | None = ScheduleExtension(steps=3240, final_lr_ratio=0.01)
 # Deal rows to batch shards by attention cost (`GrugTrainerConfig.balance_attention_rows`).
 HERO_BALANCE_ATTENTION_ROWS = False
 # The hero has no tensor parallelism.
