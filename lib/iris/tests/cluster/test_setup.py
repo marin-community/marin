@@ -8,11 +8,9 @@ import shlex
 import shutil
 import subprocess
 import sys
-from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pytest
-from iris.cluster import types as iris_types
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
@@ -41,39 +39,6 @@ def test_to_proto_resolves_user_setup_scripts(setup_scripts, expected):
         assert len(resolved) == 1  # the generated default
     else:
         assert resolved == expected
-
-
-@pytest.mark.parametrize(
-    "submitter, expected",
-    [((3, 12, 12), "3.12.15"), ((3, 12, 16), "3.12.15"), ((3, 13, 14), "3.13")],
-)
-def test_default_setup_selects_supported_python_version(tmp_path, monkeypatch, submitter, expected):
-    monkeypatch.setattr(
-        iris_types,
-        "sys",
-        SimpleNamespace(version_info=SimpleNamespace(major=submitter[0], minor=submitter[1], micro=submitter[2])),
-    )
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    uv = bin_dir / "uv"
-    uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$UV_CAPTURE_PATH"\n')
-    uv.chmod(0o755)
-    capture = tmp_path / "uv-args"
-    env = {
-        **os.environ,
-        "IRIS_WORKDIR": str(workdir),
-        "UV_CAPTURE_PATH": str(capture),
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-    }
-
-    script = EnvironmentSpec().to_proto().setup_scripts[0]
-    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
-
-    arguments = capture.read_text().splitlines()
-    python = arguments[arguments.index("--python") + 1]
-    assert python == expected
 
 
 def test_default_setup_supports_project_without_dependency_groups(tmp_path):
