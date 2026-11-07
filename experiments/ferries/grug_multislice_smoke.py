@@ -18,23 +18,37 @@ forwarded to the Iris parent job.
 """
 
 import dataclasses
+import json
 import logging
 import os
+from collections.abc import Sequence
 
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.optim.config import AdamConfig
+from levanter.store.cache import CacheLedger
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
+from marin.execution.step_status import (
+    STATUS_DEP_FAILED,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    StatusFile,
+)
 from marin.experiment.data import mixture
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
+from pydantic import ValidationError
+from rigging.filesystem.cluster_config import StoreType, data_config, marin_prefix
+from rigging.filesystem.distributed_lock import default_worker_id
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
-from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.proofpile import proofpile_dataset
 from experiments.datasets.starcoder import starcoder_dataset
-from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.llama import llama3_tokenizer
 
@@ -74,6 +88,9 @@ _NEMOTRON_WEIGHTS = {
 _STARCODER_WEIGHT = 0.25
 _PROOFPILE_WEIGHT = 0.055
 
+# A copy of a pinned cache in one of these states is mid-build or broken, never served.
+_UNUSABLE_STATUSES = frozenset({STATUS_FAILED, STATUS_DEP_FAILED, STATUS_RUNNING})
+
 
 def _env_int(key: str, default: int) -> int:
     raw = os.environ.get(key, "")
@@ -91,13 +108,78 @@ def multislice_smoke_resources() -> ResourceConfig:
     return ResourceConfig.with_tpu(tpu_type, slice_count=slice_count, regions=[region])
 
 
+def _pin_candidate_prefixes() -> list[str]:
+    """The local prefix, then every other GCS data bucket (the set ``mirror://`` scans)."""
+    local = marin_prefix().rstrip("/")
+    if not local.startswith("gs://"):
+        return [local]
+    buckets = [f"gs://{spec.name}" for spec in data_config().region_buckets.values() if spec.store == StoreType.GCS]
+    return [local, *(bucket for bucket in buckets if bucket != local)]
+
+
+def _is_usable_cache(path: str) -> bool:
+    """Whether ``path`` holds a finished tokenized cache with a tokenizer record.
+
+    A StepRunner ``.executor_info`` stub is not a record (``read_record`` ignores it), so a
+    failed rebuild's stub never qualifies.
+    """
+    record = read_record(path)
+    if record is None or not (record.config or {}).get("tokenizer"):
+        return False
+    status = StatusFile(path, default_worker_id()).status
+    if status in _UNUSABLE_STATUSES:
+        return False
+    if status == STATUS_SUCCESS:
+        return True
+    return CacheLedger.load(prefix_join(path, "train")).is_finished
+
+
+def resolve_available_pin(pin: str, prefixes: Sequence[str]) -> str:
+    """The first usable copy of the relative cache ``pin`` under ``prefixes``, as an absolute path.
+
+    A prefix whose filesystem errors is skipped. Raises :class:`FileNotFoundError` when no
+    prefix holds a usable copy.
+    """
+    pin = pin.removesuffix("/")
+    for prefix in prefixes:
+        candidate = prefix_join(prefix, pin)
+        try:
+            if _is_usable_cache(candidate):
+                return candidate
+        except (OSError, json.JSONDecodeError, ValidationError):
+            logger.warning("Skipping %s: could not inspect it", candidate, exc_info=True)
+    raise FileNotFoundError(f"no usable tokenized cache for pin {pin!r} under any of {list(prefixes)}")
+
+
+def _adopt_available_cache(handle: ArtifactStep[TokenizedCache]) -> ArtifactStep[TokenizedCache]:
+    """Adopt the usable copy of a pinned catalog cache, read in place wherever it lives.
+
+    The relative pin re-runs tokenize when the local copy failed, and tokenize's raw inputs
+    exist only in some regions; adopting never computes. The corpora are multi-TiB, so they
+    are streamed from the source rather than mirrored.
+    """
+    if handle.override_path is None:
+        raise ValueError(f"{handle.name}@{handle.version} is not a pinned cache")
+    source = resolve_available_pin(handle.override_path, _pin_candidate_prefixes())
+    tokenize_config = handle.build_config(StepContext.for_fingerprint(handle.runtime_args.keys(), handle.deps))
+    return ArtifactStep.adopt(
+        handle.name,
+        handle.version,
+        source,
+        kind=TokenizedCache,
+        config={"tokenizer": tokenize_config.tokenizer, "format": {"text_key": tokenize_config.format.text_key}},
+    )
+
+
 def build() -> ArtifactStep[LevanterCheckpoint]:
     """The Grug multislice smoke run as a lazy checkpoint, configured from the env.
 
     The Nemotron mix and the WandB ``replicate_path`` depend on the run context, so
     they are assembled inside ``build_config``; the TPU slice count/region is a
     run-arg, so it never bears on identity. ``GRUG_MULTISLICE_OUTPUT_PATH`` pins the
-    output to an explicit location.
+    output to an explicit location. Each pinned training cache is adopted from the first
+    region holding a usable copy (see :func:`_adopt_available_cache`). Eval is disabled, so
+    the mixture has no validation sets.
     """
     max_seq_len = _env_int("GRUG_MULTISLICE_MAX_SEQ_LEN", DEFAULT_MAX_SEQ_LEN)
     steps = _env_int("GRUG_MULTISLICE_STEPS", DEFAULT_STEPS)
@@ -108,18 +190,15 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
     override_output_path = _override_output_path()
 
     nem = nemotron_datasets(tokenizer=llama3_tokenizer)
-    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
-    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
-    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-    ]
+    pinned = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    pinned[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    pinned[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    train = {_adopt_available_cache(handle): weight for handle, weight in pinned.items()}
 
     def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(
             model=model,
-            data=mixture(ctx, train, validation=validation),
+            data=mixture(ctx, train),
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
@@ -157,7 +236,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,
         build_config=build_config,
-        deps=(*train, *validation),
+        deps=tuple(train),
         runtime_args={"train_resources": multislice_smoke_resources()},
         override_path=override_output_path,
     )
