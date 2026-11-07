@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import threading
 import time
@@ -892,3 +893,119 @@ def test_native_listener_fails_closed_while_registry_is_paused(permissive_native
         response = httpx.get(f"{proxy.address}/proxy/{_ENCODED_NAME}/echo")
 
     assert response.status_code == 503
+
+
+def test_capability_proxy_signals_task_replacement_and_forwards_new_registration() -> None:
+    threads = ThreadContainer()
+    try:
+        upstream, _ = _start_upstream(threads)
+        auth = create_controller_auth(None, cluster_name="native-replacement-test")
+        assert auth.jwt_manager is not None
+        issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+        auth_config = NativeProxyAuthConfig(
+            mode=NativeProxyAuthMode.ENFORCING,
+            issuers=issuers,
+            jwks=jwks,
+            leeway_seconds=0,
+            cache_capacity=16,
+            cache_ttl_seconds=60,
+            trusted_cidrs=(),
+        )
+        token = auth.jwt_manager.create_endpoint_token("/serve/model", "replacement-test")
+        path = f"/proxy/t/{token}/serve.model/echo"
+        task_mapping = ProxyEndpointMapping(
+            endpoint_id="serving-task",
+            name="/serve/model",
+            address="http://127.0.0.1:9",
+            link_access=True,
+            peer_id=None,
+            task_id="/job/serve/0",
+            timeout_seconds=None,
+            lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_minutes(5)).epoch_ms(),
+        )
+        with _standalone_proxy(json.dumps(asdict(auth_config))) as proxy:
+            proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(2, (task_mapping,)))))
+            with httpx.Client(base_url=proxy.address, trust_env=False) as client:
+                stale = client.get(path)
+                assert stale.status_code == 503
+                assert stale.headers["retry-after"] == "5"
+
+                expired = ProxyEndpointMapping(
+                    endpoint_id=task_mapping.endpoint_id,
+                    name=task_mapping.name,
+                    address=task_mapping.address,
+                    link_access=task_mapping.link_access,
+                    peer_id=task_mapping.peer_id,
+                    task_id=task_mapping.task_id,
+                    timeout_seconds=task_mapping.timeout_seconds,
+                    lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_seconds(-1)).epoch_ms(),
+                )
+                proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(3, (expired,)))))
+                gap = client.get(path)
+                assert gap.status_code == 503
+                assert gap.headers["retry-after"] == "5"
+
+                replacement = ProxyEndpointMapping(
+                    endpoint_id="replacement-task",
+                    name=task_mapping.name,
+                    address=upstream,
+                    link_access=task_mapping.link_access,
+                    peer_id=task_mapping.peer_id,
+                    task_id=task_mapping.task_id,
+                    timeout_seconds=task_mapping.timeout_seconds,
+                    lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_minutes(5)).epoch_ms(),
+                )
+                proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(4, (expired, replacement)))))
+                recovered = client.get(path)
+                assert recovered.status_code == 200
+                assert recovered.headers["x-native-upstream"] == "reached"
+
+                proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(5, ()))))
+                assert client.get(path).status_code == 404
+    finally:
+        threads.stop()
+
+
+def test_task_endpoint_request_timeout_remains_gateway_timeout(permissive_native_proxy_auth_json: str) -> None:
+    threads = ThreadContainer()
+    release = threading.Event()
+
+    async def hold(_request: Request) -> JSONResponse:
+        await asyncio.to_thread(release.wait)
+        return JSONResponse({"ready": True})
+
+    try:
+        server = uvicorn.Server(
+            uvicorn.Config(
+                Starlette(routes=[Route("/hold", hold)]),
+                host="127.0.0.1",
+                port=0,
+                log_level="error",
+                log_config=None,
+            )
+        )
+        threads.spawn_server(server, name="slow-native-upstream")
+        ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+            lambda: server.started, timeout=Duration.from_seconds(5)
+        )
+        assert server.servers
+        port = server.servers[0].sockets[0].getsockname()[1]
+        mapping = ProxyEndpointMapping(
+            endpoint_id="slow-task",
+            name="/serve/slow",
+            address=f"http://127.0.0.1:{port}",
+            link_access=False,
+            peer_id=None,
+            task_id="/job/serve/0",
+            timeout_seconds=0.1,
+            lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_minutes(5)).epoch_ms(),
+        )
+        with _standalone_proxy(permissive_native_proxy_auth_json) as proxy:
+            proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(2, (mapping,)))))
+            with httpx.Client(base_url=proxy.address, trust_env=False) as client:
+                response = client.get("/proxy/serve.slow/hold")
+        assert response.status_code == 504
+        assert "retry-after" not in response.headers
+    finally:
+        release.set()
+        threads.stop()
