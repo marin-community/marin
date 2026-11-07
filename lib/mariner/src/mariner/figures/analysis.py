@@ -347,6 +347,11 @@ def bucket_sources(partition: pd.DataFrame) -> pd.Series:
     return pd.Series(source, index=partition["bucket_id"])
 
 
+def bucket_names(partition: pd.DataFrame) -> pd.Series:
+    """Each bucket's name in the paper, by bucket id, with the table's LaTeX ampersands as plain text."""
+    return partition.set_index("bucket_id")["paper_name"].str.replace("\\&", "&", regex=False)
+
+
 def mixture_epochs(
     validation: pd.DataFrame, column: EpochColumn, bucket_ids: tuple[str, ...], per_weight: np.ndarray
 ) -> np.ndarray:
@@ -378,7 +383,7 @@ def mixture_epochs_values(root: Path) -> dict[str, pd.DataFrame]:
     partition = release_partition(root)
     validation = read_table(root, "validation_3e18")
     sources = bucket_sources(table)
-    names = table.set_index("bucket_id")["paper_name"].str.replace("\\&", "&", regex=False)
+    names = bucket_names(table)
     order = [bucket for source in SOURCES for bucket in partition.bucket_ids if sources[bucket] == source]
     rows = []
     for column in EPOCH_COLUMNS:

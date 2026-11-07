@@ -12,6 +12,7 @@ gives the same bytes.
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from enum import StrEnum
@@ -25,6 +26,7 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.style import context as style_context
+from scipy import stats
 
 PANEL_WIDTH = 3.4  # inches
 PANEL_HEIGHT = 2.7
@@ -52,6 +54,7 @@ STYLE = {
 PDF_METADATA = {"CreationDate": None}  # matplotlib stamps the time otherwise
 NEUTRAL = "#4D4D4D"  # marks that belong to no method: measured points, reference lines, path fits
 BAND_ALPHA = 0.16  # opacity of a shaded band: a range or an interval around a curve
+CONFIDENCE = 0.95  # of every interval the figures draw
 
 
 class Method(StrEnum):
@@ -64,6 +67,11 @@ class Method(StrEnum):
     REGMIX = "regmix"  # tuned RegMix
     REGMIX_RELEASED = "regmix_official"
     SPLINE = "spline"
+    QUADRATIC = "quadratic"
+    KERNEL_RIDGE = "krr"
+    MARINER_CONVEX = "mariner_cvx"
+    MARINER_ADDITIVE = "mariner_add"
+    MARINER_BUCKET_THRESHOLDS = "mariner_pbt"
 
 
 METHOD_LABELS = {
@@ -74,6 +82,11 @@ METHOD_LABELS = {
     Method.REGMIX: "RegMix (tuned)",
     Method.REGMIX_RELEASED: "RegMix (released)",
     Method.SPLINE: "Cubic spline",
+    Method.QUADRATIC: "Quadratic",
+    Method.KERNEL_RIDGE: "Hellinger kernel ridge",
+    Method.MARINER_CONVEX: "MARINER, fully convex objective",
+    Method.MARINER_ADDITIVE: "MARINER, additive form",
+    Method.MARINER_BUCKET_THRESHOLDS: "MARINER, per-bucket thresholds",
 }
 METHOD_COLORS = {
     Method.PROPORTIONAL: "#6C6F7D",
@@ -83,6 +96,11 @@ METHOD_COLORS = {
     Method.REGMIX: "#B35806",
     Method.REGMIX_RELEASED: "#E69F00",
     Method.SPLINE: "#0072B2",
+    Method.QUADRATIC: "#7B3294",
+    Method.KERNEL_RIDGE: "#B2182B",
+    Method.MARINER_CONVEX: "#3F3F9F",
+    Method.MARINER_ADDITIVE: "#9A9A1E",
+    Method.MARINER_BUCKET_THRESHOLDS: "#B83D8F",
 }
 OBJECTIVE_TITLES = {"uncheatable": "Uncheatable", "obe_easy": "OlmoBaseEval Easy"}  # a panel's title per objective
 LOSS_LABELS = {"uncheatable": "Uncheatable Eval loss (BPB)", "obe_easy": "OlmoBaseEval Easy loss (BPB)"}  # loss axes
@@ -160,6 +178,13 @@ def scale_colors(count: int) -> list[tuple[float, ...]]:
     """One RGBA color per rung of a scale ladder, from the smallest scale to the largest."""
     colormap = mpl.colormaps[SCALE_COLORMAP]
     return [tuple(colormap(float(position))) for position in np.linspace(*SCALE_COLOR_RANGE, count)]
+
+
+def t_interval(values: np.ndarray) -> tuple[float, float]:
+    """The mean of ``values`` and the half-width of its two-sided t-interval at ``CONFIDENCE``."""
+    count = len(values)
+    half = stats.t.ppf(0.5 + CONFIDENCE / 2, count - 1) * values.std(ddof=1) / math.sqrt(count)
+    return float(values.mean()), float(half)
 
 
 def save(figure: Figure, path: Path) -> None:

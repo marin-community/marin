@@ -11,8 +11,8 @@ one row per bucket: the continuous optimum's weight, the blocks of the sampler's
 give, and the epochs that weight materializes in the target run. A command whose input it cannot use, such as a
 missing file or a table without a ``w__``, ``pf__`` or ``bpb__`` column it needs, stops with a message on stderr and
 exit status 2, as argparse does for a malformed argument, and so does a command that needs an extra not installed.
-``figures`` redraws the paper's main-text figures from a snapshot as PDFs; it needs the figures extra. ``tables``
-prints the paper's main-text table, ``tab:scaling-main``, from a snapshot.
+``figures`` redraws the paper's figures, main text and appendix, from a snapshot as PDFs; it needs the figures extra.
+``tables`` prints the paper's main-text table, ``tab:scaling-main``, from a snapshot.
 """
 
 from __future__ import annotations
@@ -660,7 +660,9 @@ def argument_parser() -> argparse.ArgumentParser:
     command.add_argument("--out", type=Path, required=True, metavar="CSV", help="run table to write")
     command.set_defaults(run=run_design)
 
-    command = commands.add_parser("figures", help="redraw the paper's main-text figures from a snapshot as PDFs")
+    command = commands.add_parser(
+        "figures", help="redraw the paper's figures (main text and appendix) from a snapshot as PDFs"
+    )
     command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")
     command.add_argument("--out", type=Path, required=True, metavar="DIR", help="directory to write <stem>.pdf into")
     command.add_argument(

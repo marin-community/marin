@@ -18,17 +18,20 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from matplotlib.artist import Artist
+from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-from scipy import stats
 
-from mariner.data import OBJECTIVES, OBSERVATION_ID, TRAINED_MARINER, TRAINED_OLMIX, read_table
+from mariner.data import OBJECTIVES, OBSERVATION_ID, TRAINED_MARINER, TRAINED_OLMIX, read_table, require_columns
 from mariner.figures.layout import (
     BAND_ALPHA,
+    CONFIDENCE,
     METHOD_COLORS,
     METHOD_LABELS,
     NEUTRAL,
@@ -39,6 +42,7 @@ from mariner.figures.layout import (
     panel_legend,
     panels,
     scale_colors,
+    t_interval,
 )
 from mariner.figures.starcoder import (
     FIXED_PARAMETERS_CURVES,
@@ -231,41 +235,66 @@ def draw_mariner_terms(root: Path) -> FigureData:
 # Figure 6: selection regret against swarm size
 # ---------------------------------------------------------------------------------------------------------------
 
-LEARNING_CURVE_STUDY = "mariner_regmix_oof"  # the study of fits_learning_curves that fits all of Figure 6's models
+LEARNING_CURVES_TABLE = "fits_learning_curves"
+# The studies of fits_learning_curves, which fit their models on the same subsets and folds of the main swarm. MARINER,
+# which all three fit, has the same rows in each; a model's rows come from the first study here that fits it.
+LEARNING_CURVE_STUDIES = ("mariner_regmix_oof", "pbt", "extra")
 LEARNING_CURVE_MODELS = (Method.MARINER, Method.OLMIX, Method.REGMIX, Method.REGMIX_RELEASED, Method.SPLINE)
 OUT_OF_FOLD = "oof"
-FOLD, FOLD_MEAN = "fold", "fold_mean"  # strata: each fold, and the folds' mean in a draw
-CONFIDENCE = 0.95
+# Strata: each fold, the folds' mean in a draw, and the Spearman correlation over the folds' pooled predictions.
+FOLD, FOLD_MEAN, POOLED = "fold", "fold_mean", "pooled"
+CURVE_KEYS = ["target", "model", "k", "draw", "stratum", "fold"]  # one row of a study
+CURVE_METRICS = ["regret_at_1", "random_regret_at_1", "spearman"]
+REGRET_COLUMNS = ["objective", "model", "swarm_size", "mixtures", "ratio", "low", "high", "constant_fit", "draws"]
 BAND_FLOOR = 1e-3  # the log axis cannot reach a band's lower end at or below zero
 RANDOM_COLOR = "#7F7F7F"
 RATIO_AXIS_MARGIN = 2.5  # the regret axis starts this factor below the lowest mean ratio
 RATIO_AXIS_TOP = 1.6
 TICKED_SWARM_SIZES = (20, 40, 80, 160)  # the x axis labels these sizes, doubling from the smallest, and the largest
+SWARM_SIZE_LABEL = "Distinct mixtures in the swarm (including the anchor)"
 
 
-def regret_ratios(root: Path) -> pd.DataFrame:
-    """Each model's fold-averaged selection regret over a random pick's, by objective and swarm size.
+def learning_curve_summary(root: Path, models: Sequence[Method]) -> pd.DataFrame:
+    """Each model's selection regret relative to a random pick and its out-of-fold Spearman correlation, by objective
+    and swarm size.
 
-    The center is the mean over the study's subset and fold draws, with a 95% t-interval. A model whose fit is
-    constant in every fold of every draw at a size picks arbitrarily, so its ratio there is the random pick's, 1.
+    Both are means over the subset and fold draws with a 95% t-interval: the folds' mean regret over a random pick's,
+    and the Spearman correlation of the five folds' pooled predictions. A model whose fit is constant in every fold of
+    every draw at a size picks arbitrarily, so its ratio there is the random pick's, 1, and its correlation is undefined
+    (NaN). Raises ``ValueError`` when two studies disagree on a model's metrics.
     """
-    curves = read_table(root, "fits_learning_curves")
-    study = curves[
-        (curves["study"] == LEARNING_CURVE_STUDY)
+    curves = read_table(root, LEARNING_CURVES_TABLE)
+    require_columns(curves, ["study", "evaluation", *CURVE_KEYS, *CURVE_METRICS], LEARNING_CURVES_TABLE)
+    selected = curves[
+        curves["study"].isin(LEARNING_CURVE_STUDIES)
         & (curves["evaluation"] == OUT_OF_FOLD)
-        & curves["model"].isin([model.value for model in LEARNING_CURVE_MODELS])
+        & curves["model"].isin([model.value for model in models])
     ]
+    priority = selected["study"].map({study: rank for rank, study in enumerate(LEARNING_CURVE_STUDIES)})
+    selected = selected.iloc[np.argsort(priority.to_numpy(), kind="stable")]
+    selected = selected.drop_duplicates([*CURVE_KEYS, *CURVE_METRICS])
+    disagreeing = selected.loc[selected.duplicated(CURVE_KEYS), "model"].unique()
+    if len(disagreeing):
+        raise ValueError(f"the studies of {LEARNING_CURVES_TABLE} disagree on {', '.join(map(str, disagreeing))}")
     keys = ["target", "model", "k"]
-    folds = study[study["stratum"] == FOLD]
+    folds = selected[selected["stratum"] == FOLD]
     constant = folds["spearman"].isna().groupby([folds[key] for key in keys]).all()
+    pooled = {
+        cell: rows["spearman"].to_numpy(float) for cell, rows in selected[selected["stratum"] == POOLED].groupby(keys)
+    }
     rows = []
-    for (objective, model, size), draws in study[study["stratum"] == FOLD_MEAN].groupby(keys):
+    for (objective, model, size), draws in selected[selected["stratum"] == FOLD_MEAN].groupby(keys):
         ratio = (draws["regret_at_1"] / draws["random_regret_at_1"]).to_numpy(float)
         constant_fit = bool(constant.loc[(objective, model, size)])
         if constant_fit:
             ratio = np.ones_like(ratio)
-        count, center = len(ratio), float(ratio.mean())
-        half = stats.t.ppf(0.5 + CONFIDENCE / 2, count - 1) * ratio.std(ddof=1) / math.sqrt(count)
+        center, half = t_interval(ratio)
+        if constant_fit:
+            spearman, spread = math.nan, math.nan
+        elif (objective, model, size) in pooled:
+            spearman, spread = t_interval(pooled[(objective, model, size)])
+        else:
+            raise ValueError(f"{LEARNING_CURVES_TABLE} has no pooled rows of {model} on {objective} at {size} runs")
         rows.append(
             {
                 "objective": objective,
@@ -276,60 +305,80 @@ def regret_ratios(root: Path) -> pd.DataFrame:
                 "low": max(center - half, BAND_FLOOR),
                 "high": center + half,
                 "constant_fit": constant_fit,
-                "draws": count,
+                "draws": len(ratio),
+                "spearman": spearman,
+                "spearman_low": spearman - spread,
+                "spearman_high": spearman + spread,
             }
         )
     return pd.DataFrame(rows)
 
 
-def draw_learning_curves(root: Path) -> FigureData:
-    """Figure 6: selection regret relative to a random pick against swarm size, for each objective."""
-    ratios = regret_ratios(root)
-    figure, axes = panels(len(OBJECTIVES), legend_height=0.6, sharey=True)
-    for axis, objective in zip(axes, OBJECTIVES, strict=True):
-        axis.axhline(1.0, color=RANDOM_COLOR, linestyle="--", linewidth=0.9)
-        for model in LEARNING_CURVE_MODELS:
-            rows = ratios[(ratios["objective"] == objective) & (ratios["model"] == model)].sort_values("mixtures")
-            ranked, constant = rows[~rows["constant_fit"]], rows[rows["constant_fit"]]
-            color = METHOD_COLORS[model]
-            axis.fill_between(
-                ranked["mixtures"], ranked["low"], ranked["high"], color=color, alpha=BAND_ALPHA, linewidth=0
+def swarm_size_ticks(axis: Axes, summary: pd.DataFrame) -> None:
+    """A log axis of distinct mixtures that labels ``TICKED_SWARM_SIZES`` and the largest swarm."""
+    axis.set_xscale("log")
+    ticks = [size + 1 for size in (*TICKED_SWARM_SIZES, int(summary["swarm_size"].max()))]
+    axis.set_xticks(ticks, [str(tick) for tick in ticks])
+    axis.minorticks_off()
+
+
+def draw_regret_panel(axis: Axes, summary: pd.DataFrame, objective: str, models: Sequence[Method]) -> None:
+    """One objective's regret ratios against swarm size: each model's mean over the draws with its interval as a band,
+    and its constant fits as hollow diamonds joined to its first ranked size; a random pick's ratio is 1."""
+    axis.axhline(1.0, color=RANDOM_COLOR, linestyle="--", linewidth=0.9)
+    for model in models:
+        rows = summary[(summary["objective"] == objective) & (summary["model"] == model)].sort_values("mixtures")
+        ranked, constant = rows[~rows["constant_fit"]], rows[rows["constant_fit"]]
+        color = METHOD_COLORS[model]
+        axis.fill_between(ranked["mixtures"], ranked["low"], ranked["high"], color=color, alpha=BAND_ALPHA, linewidth=0)
+        axis.plot(ranked["mixtures"], ranked["ratio"], color=color, marker="o", markerfacecolor="white")
+        if len(constant):
+            joined = pd.concat([constant, ranked.iloc[:1]])
+            axis.plot(joined["mixtures"], joined["ratio"], color=color, linestyle=":")
+            axis.plot(
+                constant["mixtures"], constant["ratio"], "D", color=color, markerfacecolor="white", linestyle="none"
             )
-            axis.plot(ranked["mixtures"], ranked["ratio"], color=color, marker="o", markerfacecolor="white")
-            if len(constant):
-                joined = pd.concat([constant, ranked.iloc[:1]])
-                axis.plot(joined["mixtures"], joined["ratio"], color=color, linestyle=":")
-                axis.plot(
-                    constant["mixtures"], constant["ratio"], "D", color=color, markerfacecolor="white", linestyle="none"
-                )
-        axis.set_xscale("log")
-        axis.set_yscale("log")
-        ticks = [size + 1 for size in (*TICKED_SWARM_SIZES, int(ratios["swarm_size"].max()))]
-        axis.set_xticks(ticks, [str(tick) for tick in ticks])
-        axis.minorticks_off()
-        axis.set_xlabel("Distinct mixtures in the swarm (including the anchor)")
-        axis.set_title(OBJECTIVE_TITLES[objective])
-    axes[0].set_ylabel("Selection regret / random pick's")
-    # From below the lowest mean, as the paper's axis starts; a band whose interval reaches zero runs off the bottom.
-    axes[0].set_ylim(ratios["ratio"].min() / RATIO_AXIS_MARGIN, RATIO_AXIS_TOP)
-    handles = [
+    axis.set_yscale("log")
+    swarm_size_ticks(axis, summary)
+
+
+def learning_curve_handles(summary: pd.DataFrame, models: Sequence[Method]) -> list[Artist]:
+    """The legend of the learning-curve panels: the models, the bands, a random pick and any constant fits."""
+    handles: list[Artist] = [
         Line2D([], [], color=METHOD_COLORS[model], marker="o", markerfacecolor="white", label=METHOD_LABELS[model])
-        for model in LEARNING_CURVE_MODELS
+        for model in models
     ]
     handles += [
         Patch(color=NEUTRAL, alpha=BAND_ALPHA, linewidth=0, label=f"{CONFIDENCE:.0%} t-interval over the draws"),
         Line2D([], [], color=RANDOM_COLOR, linestyle="--", label="random pick"),
+    ]
+    handles += [
         Line2D(
             [],
             [],
-            color=METHOD_COLORS[Method.REGMIX_RELEASED],
+            color=METHOD_COLORS[Method(model)],
             marker="D",
             markerfacecolor="white",
             linestyle=":",
             label="constant fit (a random pick)",
-        ),
+        )
+        for model in summary.loc[summary["constant_fit"], "model"].unique()
     ]
-    figure_legend(figure, handles, columns=4)
+    return handles
+
+
+def draw_learning_curves(root: Path) -> FigureData:
+    """Figure 6: selection regret relative to a random pick against swarm size, for each objective."""
+    ratios = learning_curve_summary(root, LEARNING_CURVE_MODELS)[REGRET_COLUMNS]
+    figure, axes = panels(len(OBJECTIVES), legend_height=0.6, sharey=True)
+    for axis, objective in zip(axes, OBJECTIVES, strict=True):
+        draw_regret_panel(axis, ratios, objective, LEARNING_CURVE_MODELS)
+        axis.set_xlabel(SWARM_SIZE_LABEL)
+        axis.set_title(OBJECTIVE_TITLES[objective])
+    axes[0].set_ylabel("Selection regret / random pick's")
+    # From below the lowest mean, as the paper's axis starts; a band whose interval reaches zero runs off the bottom.
+    axes[0].set_ylim(ratios["ratio"].min() / RATIO_AXIS_MARGIN, RATIO_AXIS_TOP)
+    figure_legend(figure, learning_curve_handles(ratios, LEARNING_CURVE_MODELS), columns=4)
     return FigureData(figure, {"regret_ratios": ratios})
 
 
@@ -363,6 +412,17 @@ BAR_HALF_WIDTH = 0.32
 MARKERS = {Method.MARINER: "o", Method.OLMIX: "D", Method.SPLINE: "s", Method.REGMIX: "^"}
 
 
+def proposal_runs(runs: pd.DataFrame, mixture: str) -> pd.DataFrame:
+    """The ``validation_3e18`` runs that trained the proposal ``mixture`` at its three trainer seeds.
+
+    Raises ``ValueError`` unless the proposal launches hold one run at each seed.
+    """
+    rows = runs[(runs["mixture_id"] == mixture) & runs["launch"].isin(PROPOSAL_LAUNCHES)]
+    if sorted(rows["trainer_seed"]) != list(TRAINER_SEEDS):
+        raise ValueError(f"{mixture} has trainer seeds {sorted(rows['trainer_seed'])}, not {TRAINER_SEEDS}")
+    return rows
+
+
 def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each proposal's measured runs and their summary, and the predictions ``fits_proposal_predictions`` holds.
 
@@ -373,9 +433,7 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
     measured, predictions = [], []
     for objective, proposals in PROPOSAL_MIXTURES.items():
         for proposal, mixture in proposals.items():
-            rows = runs[(runs["mixture_id"] == mixture) & runs["launch"].isin(PROPOSAL_LAUNCHES)]
-            if sorted(rows["trainer_seed"]) != list(TRAINER_SEEDS):
-                raise ValueError(f"{mixture} has trainer seeds {sorted(rows['trainer_seed'])}, not {TRAINER_SEEDS}")
+            rows = proposal_runs(runs, mixture)
             measured += [
                 {
                     "objective": objective,

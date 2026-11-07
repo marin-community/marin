@@ -9,18 +9,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from mariner.cli import INPUT_ERROR_STATUS, main
+from mariner.cli import INPUT_ERROR_STATUS, PREDICTION_TOLERANCE, main
 from mariner.data import (
     FIGURES_INDEX,
     MAIN_SWARM,
     OBJECTIVES,
     objective_from_tasks,
     read_table,
+    release_anchors,
     release_runs,
+    release_swarm,
     release_tasks,
+    released_olmix_laws,
+    trained_counts,
 )
 from mariner.figures import FIGURES, write_figures
 from mariner.figures.analysis import (
+    COMMON_CRAWL,
     EPOCH_CAPS,
     FINEMATH,
     FLAN,
@@ -35,6 +40,10 @@ from mariner.figures.layout import OBJECTIVE_TITLES, Method
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
 from mariner.figures.schedules import ComputePath
 from mariner.figures.starcoder import EPOCH_MATCHING_TABLE, epoch_matching
+from mariner.figures.surrogate import TRAINER_SEEDS
+from mariner.figures.swarm import holm
+from mariner.fit import fit_objective
+from mariner.optimize import MIXTURE_BLOCK_SIZE
 
 # figures_tables.csv marks configuration constants and the two-phase data the release omits among a figure's configs.
 INDEX_MARKERS = {"constant", "deferred"}
@@ -177,6 +186,43 @@ PROPOSAL_PREDICTION_GAP = 0.005  # BPB: "Its proposed mixtures measure within 0.
 # monotone surrogates cannot represent a task loss that first falls and then rises"); and boosted trees that "reach the
 # 90% mean but stay flat past it, below the measured 100% mean" (figure1_real_data_drafts/v40/build_figure.py:14-15).
 MARKED_MARINER_OPTIMUM = "0.578"
+# Figures 18 and 19 (their captions, sections/appendix.tex:370 and :380): "Bands are 95% t-intervals over ten
+# subset/fold draws", and Figure 19's "Hollow diamonds mark swarm sizes at which released RegMix's fits are constant":
+# its fits are constant at the five smallest swarms, of 21 to 61 mixtures, on both objectives.
+LEARNING_CURVE_DRAWS = 10
+CONSTANT_FIT_MIXTURES = [21, 31, 41, 51, 61]
+# Figure 18's caption (sections/appendix.tex:370): "MARINER's ablations select mixtures with similar regret, although
+# they rank mixtures with different accuracy." On the full swarm every ablation's regret interval overlaps MARINER's,
+# and these two ablations' Spearman intervals lie below MARINER's.
+WORSE_RANKING_ABLATIONS = (Method.MARINER_CONVEX, Method.MARINER_ADDITIVE)
+# sections/appendix.tex:263: the natural cubic spline "needs more runs than MARINER to reach the same out-of-fold rank
+# correlation". The smallest swarm, in mixtures, at which each model's pooled Spearman reaches a level, 0.9 on
+# Uncheatable and 0.8 on OlmoBaseEval Easy; and the same line's "The natural cubic spline ranks the full Qwen3
+# 360M/1.6B swarm slightly better than MARINER".
+SPEARMAN_LEVELS = {"uncheatable": 0.9, "obe_easy": 0.8}
+FIRST_MIXTURES_AT_LEVEL = {Method.MARINER: 101, Method.SPLINE: 161}
+# sections/appendix.tex:388: "At every baseline's endpoint except Olmix's, and at all ten midpoints, MARINER's
+# prediction is closer to the measured loss than the baseline's own."
+BLEND_MIDPOINTS = 10
+# Olmix's released curves are its released per-task laws at each blend of the two proposals (measured 2.2e-16 BPB).
+OLMIX_CURVE_TOLERANCE = 1e-12
+# sections/appendix_analysis.tex:103: "Only two of the 39 removals change the OlmoBaseEval Easy mean detectably,
+# although that mean varies across the swarm by 12.6 times its repeat standard deviation". The paper's Figure 23
+# annotates the two, Stack-Edu and Stack-Edu FIM, 11 and 8, and 24 cells in all, 20 of them red.
+REMOVALS = 39
+PRINTED_MEAN_REMOVALS = {"Stack-Edu": "11", "Stack-Edu FIM": "8"}
+PRINTED_MEAN_SNR = "12.6"
+ANNOTATED_CELLS = 24
+RAISING_CELLS = 20
+# sections/appendix_analysis.tex:118: Holm's method's "first step requires $|T_{t,i}|>4.4$ with one run per removal";
+# and :120: "only two of these 26 removals move any task detectably".
+PRINTED_HOLM_THRESHOLD = "4.4"
+DETECTABLE_TOPIC_REMOVALS = {"Art & design (H)", "Health (H)"}
+# sections/appendix_analysis.tex:217 and Figure 24's caption (:222): the Uncheatable proposal exceeds the swarm's
+# sampled range for "Common Crawl literature (H) and olmOCR PDFs HQ", and the OlmoBaseEval Easy proposal "stays within
+# every bucket's sampled range"; the faint dots are "the 280 mixtures of the Qwen3 360M/1.6B swarm".
+OUTSIDE_SUPPORT = {"uncheatable": {"Literature (H)", "olmOCR PDFs HQ"}, "obe_easy": set()}
+SWARM_FIT_RUNS = 280
 # Figure 22's legends print each token budget's minimizing StarCoder epochs, by the StarCoder subset's repetition
 # relative to the target run's, from the smallest budget (1.00B tokens) to the largest (7.41B).
 PRINTED_REPLAY_EPOCHS = {
@@ -334,6 +380,13 @@ def test_cli_figures_names_the_column_a_snapshot_lacks(tmp_path, capsys):
     argv = ["figures", "--data", str(tmp_path), "--out", str(tmp_path / "out"), "--only", "fig:a-ramp-schedules"]
     assert main(argv) == INPUT_ERROR_STATUS
     assert "starcoder_block_sequences" in capsys.readouterr().err
+
+
+def test_holm_scales_each_p_value_by_the_hypotheses_left():
+    """Holm's step-down correction, which Figure 23 applies: the p-values in increasing order times 4, 3, 2 and 1,
+    then made non-decreasing in that order. Bonferroni's correction would give 0.12, 0.04, 0.16 and 0.02."""
+    p_values = np.array([0.03, 0.01, 0.04, 0.005])
+    np.testing.assert_allclose(holm(p_values), [0.06, 0.03, 0.06, 0.02], rtol=0, atol=1e-15)
 
 
 def check_pipeline(values: dict[str, pd.DataFrame]) -> None:
@@ -722,6 +775,96 @@ def check_ramp_schedules(values: dict[str, pd.DataFrame]) -> None:
         assert (starts[1], starts[-1]) == (decay - half, decay + half)
 
 
+def learning_curve_cells(values: dict[str, pd.DataFrame], objective: str, model: Method) -> pd.DataFrame:
+    curves = values["learning_curves"]
+    rows = curves[(curves["objective"] == objective) & (curves["model"] == model.value)]
+    return rows.sort_values("mixtures").set_index("mixtures")
+
+
+def check_learning_ablations(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 18's caption (sections/appendix.tex:370): ten draws per band, and "MARINER's ablations select mixtures
+    with similar regret, although they rank mixtures with different accuracy" (``WORSE_RANKING_ABLATIONS``)."""
+    curves = values["learning_curves"]
+    assert (curves["draws"] == LEARNING_CURVE_DRAWS).all()
+    assert not curves["constant_fit"].any()
+    full = curves["mixtures"].max()
+    for objective in OBJECTIVES:
+        mariner = learning_curve_cells(values, objective, Method.MARINER).loc[full]
+        for model in (Method.MARINER_CONVEX, Method.MARINER_ADDITIVE, Method.MARINER_BUCKET_THRESHOLDS):
+            ablation = learning_curve_cells(values, objective, model).loc[full]
+            assert ablation["low"] <= mariner["high"] and mariner["low"] <= ablation["high"]
+        for model in WORSE_RANKING_ABLATIONS:
+            ablation = learning_curve_cells(values, objective, model).loc[full]
+            assert ablation["spearman_high"] < mariner["spearman_low"]
+
+
+def check_learning_baselines(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 19: ten draws per band; released RegMix's constant fits (``CONSTANT_FIT_MIXTURES``), whose correlation
+    is undefined; and sections/appendix.tex:263 on the natural cubic spline (``FIRST_MIXTURES_AT_LEVEL``)."""
+    curves = values["learning_curves"]
+    assert (curves["draws"] == LEARNING_CURVE_DRAWS).all()
+    constant = curves[curves["constant_fit"]]
+    assert set(constant["model"]) == {Method.REGMIX_RELEASED.value}
+    for objective in OBJECTIVES:
+        sizes = constant.loc[constant["objective"] == objective, "mixtures"].sort_values().tolist()
+        assert sizes == CONSTANT_FIT_MIXTURES
+    assert constant["spearman"].isna().all()
+    assert curves.loc[~curves["constant_fit"], "spearman"].notna().all()
+    full = curves["mixtures"].max()
+    for objective, level in SPEARMAN_LEVELS.items():
+        for model, mixtures in FIRST_MIXTURES_AT_LEVEL.items():
+            spearman = learning_curve_cells(values, objective, model)["spearman"]
+            assert spearman[spearman >= level].index.min() == mixtures
+        spline = learning_curve_cells(values, objective, Method.SPLINE).loc[full, "spearman"]
+        assert spline > learning_curve_cells(values, objective, Method.MARINER).loc[full, "spearman"]
+
+
+def check_comparator_paths(values: dict[str, pd.DataFrame]) -> None:
+    """sections/appendix.tex:388: at the endpoint of every baseline but Olmix, by the mean of its three trainer seeds,
+    and at all ten midpoints, MARINER's prediction lies closer to the measured loss than the baseline's own."""
+    curves = values["curves"].set_index(["objective", "path", "predictor", "position"])["predicted_bpb"]
+    endpoints = values["endpoints"]
+    measured_end = endpoints[endpoints["position"] == 1.0].groupby(["objective", "path"])["bpb"].agg(["mean", "size"])
+    assert (measured_end["size"] == len(TRAINER_SEEDS)).all()
+    midpoints = values["midpoints"].set_index(["objective", "path"])["bpb"]
+    assert len(midpoints) == BLEND_MIDPOINTS
+    for (objective, path), measured in measured_end["mean"].items():
+        own, mariner = curves[(objective, path, path)], curves[(objective, path, Method.MARINER.value)]
+        closer_at_end = abs(mariner[1.0] - measured) < abs(own[1.0] - measured)
+        assert closer_at_end == (path != Method.OLMIX.value)
+        midpoint = midpoints[(objective, path)]
+        assert abs(mariner[0.5] - midpoint) < abs(own[0.5] - midpoint)
+
+
+def check_deletion_matrix(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 23 and sections/appendix_analysis.tex:103-120: the OlmoBaseEval Easy mean's two detectable removals and
+    their printed T, its swarm-to-repeat ratio of 12.6, Holm's first-step threshold of 4.4, the two Common Crawl topic
+    removals that move any task, and the paper figure's 24 annotated cells, 20 of them red."""
+    cells = values["cells"]
+    assert (cells.groupby("task").size() == REMOVALS).all()
+    significant = cells[cells["significant"]]
+    mean = significant[significant["task"] == values["summary"]["mean_task"].iloc[0]]
+    assert dict(zip(mean["bucket"], (f"{t:.0f}" for t in mean["t"]), strict=True)) == PRINTED_MEAN_REMOVALS
+    summary = values["summary"].iloc[0]
+    assert f"{summary['mean_snr']:.1f}" == PRINTED_MEAN_SNR
+    assert f"{summary['holm_first_step']:.1f}" == PRINTED_HOLM_THRESHOLD
+    topics = significant[significant["source"] == COMMON_CRAWL]
+    assert set(topics["bucket"]) == DETECTABLE_TOPIC_REMOVALS
+    assert (len(significant), int((significant["t"] > 0).sum())) == (ANNOTATED_CELLS, RAISING_CELLS)
+
+
+def check_swarm_support(values: dict[str, pd.DataFrame]) -> None:
+    """sections/appendix_analysis.tex:217 and Figure 24's caption (``OUTSIDE_SUPPORT``): the buckets in which each
+    MARINER proposal lies outside the swarm's sampled positive epochs, among the 280 swarm mixtures; the buckets run in
+    order of pool size."""
+    assert values["swarm"]["run"].nunique() == SWARM_FIT_RUNS
+    ranges = values["ranges"]
+    assert ranges["pool_tokens"].is_monotonic_decreasing
+    proposals = values["proposals"]
+    outside = {objective: set(rows.loc[rows["outside"], "bucket"]) for objective, rows in proposals.groupby("objective")}
+    assert outside == OUTSIDE_SUPPORT
+
+
 PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:pipeline": check_pipeline,
     "fig:epoch-matching": check_epoch_matching,
@@ -739,8 +882,13 @@ PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:r7": check_r2_vs_snr,
     "fig:analysis-floor": check_frontier,
     "fig:analysis-extrapolation": check_extrapolation_residuals,
+    "fig:a-learning-ablations": check_learning_ablations,
+    "fig:a-learning-baselines": check_learning_baselines,
+    "fig:a-comparator-paths": check_comparator_paths,
     "fig:b5a": check_downsampling_by_budget,
     "fig:a-downsampling": check_downsampling_by_repetition,
+    "fig:a-deletion": check_deletion_matrix,
+    "fig:a-support": check_swarm_support,
     "fig:a-curricula-sweeps": check_curricula_sweeps,
     "fig:a-switch-smoothing": check_switch_smoothing,
     "fig:a-ramp-schedules": check_ramp_schedules,
@@ -836,3 +984,32 @@ def test_frontier_mixtures_beat_every_swarm_run(snapshot):
         column = points[(points["column"] == OBJECTIVE_TITLES[objective]) & (points["model"] == Method.MARINER.value)]
         assert len(column) == FRONTIER_MIXTURES
         assert column["measured"].max() < swarm[f"bpb__{objective}"].min()
+
+
+@pytest.mark.data_integration
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("objective", OBJECTIVES)
+def test_comparator_paths_are_the_package_fits_along_each_blend(snapshot, objective):
+    """Figure 20 draws the released path predictions. MARINER's equal the package's refit of the main swarm, and
+    Olmix's its released per-task laws, at every blend w(s) = (1 - s) w_MARINER + s w_baseline of the trained
+    proposals."""
+    values = FIGURES["fig:a-comparator-paths"].draw(snapshot).values
+    tasks = objective_from_tasks(release_tasks(snapshot), objective)
+    swarm = release_swarm(snapshot, MAIN_SWARM, objective)
+    fit = fit_objective(swarm, tasks, release_anchors(snapshot, MAIN_SWARM, objective))
+    laws = released_olmix_laws(snapshot, objective)
+    curves = values["curves"]
+    for path in values["paths"][values["paths"]["objective"] == objective].itertuples():
+        start, end = (
+            trained_counts(snapshot, mixture) / MIXTURE_BLOCK_SIZE
+            for mixture in (path.start_mixture_id, path.end_mixture_id)
+        )
+        rows = curves[(curves["objective"] == objective) & (curves["path"] == path.path)]
+        positions = np.sort(rows["position"].unique())
+        blends = (1.0 - positions)[:, None] * start[None, :] + positions[:, None] * end[None, :]
+        mariner = rows[rows["predictor"] == Method.MARINER.value].sort_values("position")["predicted_bpb"]
+        np.testing.assert_allclose(fit.predict(blends), mariner, rtol=0, atol=PREDICTION_TOLERANCE)
+        if path.path == Method.OLMIX.value:
+            olmix = rows[rows["predictor"] == Method.OLMIX.value].sort_values("position")["predicted_bpb"]
+            per_task = np.column_stack([law.predict(blends) for law in laws])
+            np.testing.assert_allclose(per_task @ tasks.weights, olmix, rtol=0, atol=OLMIX_CURVE_TOLERANCE)

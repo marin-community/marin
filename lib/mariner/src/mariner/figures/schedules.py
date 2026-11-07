@@ -39,10 +39,10 @@ import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
-from scipy import stats
 
 from mariner.data import read_table, require_columns
 from mariner.figures.layout import (
+    CONFIDENCE,
     NEUTRAL,
     FigureData,
     figure_legend,
@@ -51,6 +51,7 @@ from mariner.figures.layout import (
     panel_legend,
     panels,
     scale_colors,
+    t_interval,
 )
 from mariner.figures.repetition import FULL_POOL, pool_colors, pool_label, repetition_label
 from mariner.figures.starcoder import tokens_label
@@ -58,7 +59,6 @@ from mariner.optimize import MIXTURE_BLOCK_SIZE
 
 GAIN_SCALE = 1e3  # gains are drawn in 1e-3 BPB
 GAIN_LABEL = "Two-phase gain (1e-3 BPB)"
-CONFIDENCE = 0.95
 ZERO_STYLE = {"color": NEUTRAL, "linewidth": 0.8, "zorder": 1}
 DODGE = 0.04  # log-spaced offset between panel A's pools at one budget
 
@@ -154,13 +154,12 @@ def confirmation_gain(root: Path, cells: pd.DataFrame) -> pd.DataFrame:
     if len(confirmed) != 1 or confirmed[0] not in set(cells["cell_id"]):
         raise ValueError(f"{CONFIRMATION_TABLE} holds pairs of {list(confirmed)}, not of one {MATCHED_TABLE} cell")
     gains = pairs["gain_tied_minus_untied_bpb"].to_numpy(float)
-    count, mean = len(gains), float(gains.mean())
-    half = stats.t.ppf(0.5 + CONFIDENCE / 2, count - 1) * gains.std(ddof=1) / math.sqrt(count)
+    mean, half = t_interval(gains)
     compute = cells.loc[cells["cell_id"] == confirmed[0], "compute_flops"].iloc[0]
     row = {
         "cell_id": confirmed[0],
         "compute_flops": compute,
-        "pairs": count,
+        "pairs": len(gains),
         "positive_pairs": int((gains > 0).sum()),
         "gain_bpb": mean,
         "low_bpb": mean - half,

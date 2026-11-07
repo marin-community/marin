@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The paper's main-text figures, redrawn in a plain layout from a mariner-data snapshot.
+"""The paper's figures, main text and appendix, redrawn in a plain layout from a mariner-data snapshot.
 
 Each redraw reads only the snapshot's tables, and fits this package's models and, for Figure 1's surrogate panel,
 LightGBM's boosted trees. It shows the paper figure's data, fitted curves and comparisons in the shared layout of
@@ -16,7 +16,18 @@ import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mariner.figures import analysis, epochs, heldout, pipeline, repetition, results, schedules, surrogate
+from mariner.figures import (
+    analysis,
+    baselines,
+    epochs,
+    heldout,
+    pipeline,
+    repetition,
+    results,
+    schedules,
+    surrogate,
+    swarm,
+)
 from mariner.figures.layout import FigureData, save, style
 
 logger = logging.getLogger(__name__)
@@ -91,9 +102,33 @@ FIGURES: dict[str, FigureSpec] = {
             ("heldout", "fits", "swarm_qwen3_360m_1p6b"),
             heldout.draw_extrapolation_residuals,
         ),
+        FigureSpec(
+            "fig:a-learning-ablations", "a_learning_curve_ablations", ("fits",), baselines.draw_learning_ablations
+        ),
+        FigureSpec(
+            "fig:a-learning-baselines", "a_learning_curve_baselines", ("fits",), baselines.draw_learning_baselines
+        ),
+        FigureSpec(
+            "fig:a-comparator-paths",
+            "a_comparator_paths_full",
+            ("validation_3e18", "fits"),
+            baselines.draw_comparator_paths,
+        ),
         FigureSpec("fig:b5a", "b5_downsampling_fixed_budget", ("starcoder",), repetition.draw_downsampling_by_budget),
         FigureSpec(
             "fig:a-downsampling", "a_replay_burden_ladder", ("starcoder",), repetition.draw_downsampling_by_repetition
+        ),
+        FigureSpec(
+            "fig:a-deletion",
+            "a_deletion_matrix_full",
+            ("swarm_qwen3_360m_1p6b", "fits", "partition", "tasks"),
+            swarm.draw_deletion_matrix,
+        ),
+        FigureSpec(
+            "fig:a-support",
+            "a_swarm_support",
+            ("swarm_qwen3_360m_1p6b", "validation_3e18", "partition"),
+            swarm.draw_swarm_support,
         ),
         FigureSpec("fig:a-curricula-sweeps", "a_curricula_sweeps", ("starcoder",), schedules.draw_curricula_sweeps),
         FigureSpec("fig:a-switch-smoothing", "a_switch_smoothing", ("starcoder",), schedules.draw_switch_smoothing),

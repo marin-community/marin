@@ -577,13 +577,13 @@ def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
 def download(local_dir: Path, repo_id: str = DATASET_REPO, revision: str | None = None) -> Path:
     """Download MANIFEST.json, the card, figures_tables.csv and the tables this package reads into ``local_dir``.
 
-    The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits, which the
-    commands read; ladder_accuracy, the domain sweeps and the StarCoder observations, curves, curve membership,
-    diagonal, epoch-matching sweep, two-phase gains (starcoder_curricula and its two matched_nd tables), mixture
-    switches (starcoder_transition) and ramp designs, which the figures also read; and ladder_compute_equivalence, the
-    baselines' released ladder laws, which the tests compare Figure 1's fits with. The StarCoder trajectories, dense
-    grid, fit parameters and repeat noise, ladder_unimax_cap_sweep and run_sets stay on the Hub. Returns the
-    directory's path.
+    The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits (Figure 20's
+    fits_path_predictions among them), which the commands and figures read; ladder_accuracy, the domain sweeps and the
+    StarCoder observations, curves, curve membership, diagonal, epoch-matching sweep, two-phase gains
+    (starcoder_curricula and its two matched_nd tables), mixture switches (starcoder_transition) and ramp designs,
+    which the figures also read; and ladder_compute_equivalence, the baselines' released ladder laws, which the tests
+    compare Figure 1's fits with. The StarCoder trajectories, dense grid, fit parameters and repeat noise,
+    ladder_unimax_cap_sweep and run_sets stay on the Hub. Returns the directory's path.
     """
     try:
         from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)
