@@ -17,6 +17,7 @@ test_targets=(
   skyrl-train/tests/gpu/test_grug_megatron.py
   skyrl-train/tests/gpu/test_grug_levanter_parity.py
   skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_flash_attention_cp2_forward_backward
+  skyrl-train/tests/gpu/test_grug_sampler_trainer.py
 )
 if [[ -n "${GRUG_MEGATRON_TESTS:-}" ]]; then
   test_targets=("$GRUG_MEGATRON_TESTS")
