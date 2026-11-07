@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "panel_id": "biotasks-v2-openrouter-first-wave-v1",
+  "source_task_snapshot": "campaigns/biotasks/combined/v2/snapshots/verified-corrections-1/",
+  "task_selection": ["verified_reference_corrected", "glm_audit_confirmed_unverified"],
+  "excluded_disposition": "audit_disputed_unresolved",
+  "models": [
+    {"model": "qwen/qwen3.5-122b-a10b", "provider_tag": "alibaba", "provider_name": "Alibaba", "context_window": 262144},
+    {"model": "deepseek/deepseek-v3.2", "provider_tag": "siliconflow/fp8", "provider_name": "SiliconFlow", "context_window": 163840},
+    {"model": "mistralai/mistral-medium-3-5", "provider_tag": "mistral/zdr", "provider_name": "Mistral", "context_window": 262144},
+    {"model": "meta-llama/llama-4-maverick", "provider_tag": "digitalocean", "provider_name": "DigitalOcean", "context_window": 524288},
+    {"model": "google/gemini-2.5-flash", "provider_tag": "google-ai-studio", "provider_name": "Google AI Studio", "context_window": 1048576},
+    {"model": "openai/gpt-4.1-mini", "provider_tag": "openai", "provider_name": "OpenAI", "context_window": 1047576},
+    {"model": "anthropic/claude-haiku-4.5", "provider_tag": "anthropic", "provider_name": "Anthropic", "context_window": 200000},
+    {"model": "moonshotai/kimi-k2.5", "provider_tag": "novita", "provider_name": "Novita", "context_window": 262144},
+    {"model": "z-ai/glm-5.3", "provider_tag": "wafer/us", "provider_name": "Wafer", "context_window": 1048576},
+    {"model": "x-ai/grok-4.3", "provider_tag": "xai", "provider_name": "xAI", "context_window": 1000000},
+    {"model": "nvidia/nemotron-3-ultra-550b-a55b", "provider_tag": "baseten/fp4", "provider_name": "BaseTen", "context_window": 202800},
+    {"model": "anthropic/claude-sonnet-4.6", "provider_tag": "anthropic", "provider_name": "Anthropic", "context_window": 1000000}
+  ]
+}

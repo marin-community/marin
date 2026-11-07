@@ -61,7 +61,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import httpx
-from pydantic import Field, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
 from shellbox.machine import Backend
@@ -177,6 +177,7 @@ class BuildRequest:
     invalidate: frozenset[str]
     model_digest: str | None
     services: BuildServiceConfig
+    build_input: JsonValue = None
 
 
 class Raised(StrEnum):
@@ -376,6 +377,7 @@ async def build_result(request: BuildRequest) -> BuildResult:
                 services,
                 request.round,
                 research=request.research,
+                build_input=request.build_input,
                 invalidate=request.invalidate,
                 model_digest=request.model_digest,
             )
