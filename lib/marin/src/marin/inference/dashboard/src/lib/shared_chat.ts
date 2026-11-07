@@ -120,6 +120,7 @@ export function conversationFromSharedChat(
     system: '',
     pythonTools: '',
     shellWorkspace: null,
+    webSearch: false,
     thinkingMode,
     customInstructions: '',
     createdAt: timestamp,

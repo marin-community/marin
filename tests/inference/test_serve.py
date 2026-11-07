@@ -1169,7 +1169,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming_without_tool_catalog(
             assert page.status_code == 200
             assert "marin · serve" in page.text
 
-            assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
+            assert requests.get(f"{base}/info", timeout=10).json() == {**dataclasses.asdict(info), "web_search": False}
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
             assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text
