@@ -7254,9 +7254,11 @@ docs = [
 ]
 test = [
     { name = "chex" },
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "librosa" },
     { name = "numba" },
+    { name = "openai" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-forked" },
@@ -7266,6 +7268,7 @@ test = [
     { name = "tensorboardx" },
     { name = "torchcodec" },
     { name = "trackio" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
@@ -7359,9 +7362,11 @@ docs = [
 ]
 test = [
     { name = "chex", specifier = ">=0.1.86" },
+    { name = "fastapi", specifier = ">=0.100.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "librosa", specifier = ">=0.11.0" },
     { name = "numba", specifier = ">=0.62.1" },
+    { name = "openai", specifier = ">=1.0.0" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-forked" },
@@ -7371,6 +7376,7 @@ test = [
     { name = "tensorboardx", specifier = ">=2.6" },
     { name = "torchcodec", specifier = ">=0.10,<0.11" },
     { name = "trackio", specifier = ">=0.5.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
 
 [[package]]
