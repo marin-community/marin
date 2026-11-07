@@ -186,6 +186,17 @@ def _budget(model: PinnedModel, pairs: int) -> None:
     print(f"BUDGET spent_usd={spent} reserve_usd={reserve} remaining_usd={remaining}", flush=True)
 
 
+def _batches(tasks: list[TaskSpec], model: PinnedModel, prefix: str) -> list[tuple[str, list[TaskSpec]]]:
+    """Bound a premium provider's per-batch reserve without altering its trials."""
+    if model.model != "anthropic/claude-sonnet-4.6":
+        return [(prefix + "results.jsonl", tasks)]
+    chunk = (len(tasks) + 2) // 3
+    return [
+        (prefix + f"results-part{index + 1}.jsonl", tasks[start : start + chunk])
+        for index, start in enumerate(range(0, len(tasks), chunk))
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--smoke-only", action="store_true")
@@ -231,18 +242,18 @@ def main() -> None:
         if args.smoke_only:
             continue
         rest = [task for task in pending if task.id not in {s.id for s in smoke}]
-        output = prefix + "results.jsonl"
-        existing = _read_completed(output, rest, model, panel_sha)
-        if existing is None:
-            _budget(model, len(rest))
-            workers = (
-                min(args.max_workers, 2) if model.model == "nvidia/nemotron-3-ultra-550b-a55b" else args.max_workers
-            )
-            _run(rest, model, panel_sha, output, workers)
-            existing = _read_completed(output, rest, model, panel_sha)
+        for output, batch in _batches(rest, model, prefix):
+            existing = _read_completed(output, batch, model, panel_sha)
             if existing is None:
-                raise RuntimeError(f"Model output missing: {model.model}")
-        _verify_routes(existing, model, output)
+                _budget(model, len(batch))
+                workers = (
+                    min(args.max_workers, 2) if model.model == "nvidia/nemotron-3-ultra-550b-a55b" else args.max_workers
+                )
+                _run(batch, model, panel_sha, output, workers)
+                existing = _read_completed(output, batch, model, panel_sha)
+                if existing is None:
+                    raise RuntimeError(f"Model output missing: {model.model}")
+            _verify_routes(existing, model, output)
         print(f"DONE model={model.model} new_pairs={len(pending)} reused_pairs={230 - len(pending)}", flush=True)
     print("V3_SMOKE_COMPLETE" if args.smoke_only else "V3_FIRST_WAVE_COMPLETE", flush=True)
 

@@ -90,14 +90,27 @@ def freeze(output: str, commit: str) -> dict[str, Any]:
         prefix = f"{OUTPUT_ROOT}attempts/{_model_path(model)}/"
         smoke, source = _read(prefix + "smoke.jsonl")
         inputs.append(source)
-        complete, source = _read(prefix + "results.jsonl")
-        inputs.append(source)
         new = {r["task_id"]: (r, prefix + "smoke.jsonl") for r in smoke}
-        if any(r["task_id"] in new for r in complete):
-            raise ValueError("Duplicated smoke and model batch trial")
-        new.update({r["task_id"]: (r, prefix + "results.jsonl") for r in complete})
+        files = (
+            ["results-part1.jsonl", "results-part2.jsonl", "results-part3.jsonl"]
+            if model.model == "anthropic/claude-sonnet-4.6"
+            else ["results.jsonl"]
+        )
+        complete_count = 0
+        for filename in files:
+            completed, source = _read(prefix + filename)
+            inputs.append(source)
+            complete_count += len(completed)
+            for result in completed:
+                if result["task_id"] in new:
+                    raise ValueError("Duplicated smoke or model batch trial")
+                new[result["task_id"]] = (result, prefix + filename)
         backfill = {}
-        for name in ("route-metadata-backfill-smoke.jsonl", "route-metadata-backfill.jsonl"):
+        overlay_names = ["route-metadata-backfill-smoke.jsonl"] + [
+            "route-metadata-backfill.jsonl" if name == "results.jsonl" else f"route-metadata-backfill-{name}"
+            for name in files
+        ]
+        for name in overlay_names:
             overlay_uri = prefix + name
             overlay_fs, overlay_path = fsspec.core.url_to_fs(overlay_uri)
             if overlay_fs.exists(overlay_path):
@@ -176,7 +189,7 @@ def freeze(output: str, commit: str) -> dict[str, Any]:
                 }
             )
         expected_new = {r["task_id"] for r in rows if r["model"] == model.model and not r["reused_identical_generation"]}
-        if set(new) != expected_new or len(smoke) != 1 or len(new) != len(smoke) + len(complete):
+        if set(new) != expected_new or len(smoke) != 1 or len(new) != len(smoke) + complete_count:
             raise ValueError(f"Incomplete or duplicated new model batch for {model.model}")
     if len(rows) != 230 * 12 or len({(r["model"], r["task_id"]) for r in rows}) != len(rows):
         raise ValueError("Incomplete v3 response matrix")
