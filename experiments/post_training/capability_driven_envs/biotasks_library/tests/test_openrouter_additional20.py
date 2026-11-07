@@ -1,9 +1,15 @@
 """Check the new panel and deterministic 12-item diagnostic allocation."""
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from experiments.post_training.capability_driven_envs.biotasks_library.finalize_openrouter_v3_effective20 import (
+    SELECTION_ID,
+    selected_models,
+)
 from experiments.post_training.capability_driven_envs.biotasks_library.run_openrouter_first_wave import (
     load_panel as first_panel,
 )
@@ -25,6 +31,26 @@ def test_panel_is_disjoint_and_has_pinned_routes() -> None:
     topup, _ = load_topup_panel()
     assert len(topup) == 16
     assert not {m.model for m in topup} & {m.model for m in [*models, *first]}
+
+
+def test_effective_selection_requires_seven_plus_thirteen_distinct_models(tmp_path: Path) -> None:
+    initial, initial_sha = load_panel()
+    topup, topup_sha = load_topup_panel()
+    selection = {
+        "selection_id": SELECTION_ID,
+        "initial_panel_sha256": initial_sha,
+        "topup_panel_sha256": topup_sha,
+        "initial_models": [m.model for m in initial[:7]],
+        "topup_models": [m.model for m in topup[:13]],
+    }
+    path = tmp_path / "selection.json"
+    path.write_text(json.dumps(selection))
+    models, _ = selected_models(path)
+    assert len({model.model for model, _, _, _ in models}) == 20
+    selection["topup_models"][0] = selection["topup_models"][1]
+    path.write_text(json.dumps(selection))
+    with pytest.raises(ValueError, match="Effective20 selection"):
+        selected_models(path)
 
 
 def test_pilot_spans_prior_difficulties_without_repeated_item() -> None:

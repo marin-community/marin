@@ -199,12 +199,20 @@ def budget_gate(model: PinnedModel, pairs: int, panel_sha: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pilot-only", action="store_true")
+    parser.add_argument("--selected-manifest", type=Path, help="Required for full run; versioned effective-20 selection")
     parser.add_argument("--max-workers", type=int, default=4)
     args = parser.parse_args()
     if not 1 <= args.max_workers <= 8:
         parser.error("max-workers must be in [1, 8]")
+    if not args.pilot_only and args.selected_manifest is None:
+        parser.error("full run needs a frozen effective-20 selection manifest")
     cohort = load_cohort()
     models, panel_sha = load_panel()
+    if args.selected_manifest is not None:
+        selected = json.loads(args.selected_manifest.read_text())["initial_models"]
+        if len(selected) != 7 or len(set(selected)) != 7 or not set(selected) <= {m.model for m in models}:
+            raise ValueError("Expected exactly seven selected initial models")
+        models = [m for m in models if m.model in selected]
     tasks = {row["task_id"]: TaskSpec.model_validate(row["task"]) for row in cohort.rows}
     pilot_ids = load_pilot_ids(set(tasks))
     for model in models:
