@@ -31,6 +31,8 @@ from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
+import numpy as np
+from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 
 
 class BatchPolicy(StrEnum):
@@ -124,6 +126,41 @@ class GroupRewards:
             optimization=tuple(NormalizedReward.from_output(reward).total for reward in batch["rewards"]),
             outcome=tuple(get_outcome_rewards(batch)),
             passed=any(get_trajectory_passes(batch)),
+        )
+
+
+@dataclass(frozen=True)
+class RowFacts:
+    """Compact row values and channel geometry in one committed verdict."""
+
+    stamped_loss_tokens: tuple[int, ...]
+    spanning_policy_steps: tuple[bool, ...]
+    prompt_len: np.ndarray
+    response_len: np.ndarray
+    exclude_from_baseline: np.ndarray
+    stop_reasons: tuple[str | None, ...] | None
+
+    @classmethod
+    def from_batch(cls, batch: TrajectoryBatch) -> RowFacts:
+        responses = batch["response_ids"]
+        policy_steps = batch.get("rollout_policy_steps")
+        stamped_steps = (
+            [
+                np.asarray(steps)[(np.asarray(steps) != UNSTAMPED_POLICY_STEP) & (np.asarray(mask) > 0)]
+                for steps, mask in zip(policy_steps, batch["loss_masks"], strict=True)
+            ]
+            if policy_steps is not None
+            else [np.empty(0, dtype=np.int32) for _ in responses]
+        )
+        return cls(
+            stamped_loss_tokens=tuple(len(steps) for steps in stamped_steps),
+            spanning_policy_steps=tuple(bool(steps.size and steps.min() != steps.max()) for steps in stamped_steps),
+            prompt_len=np.asarray([len(row) for row in batch["prompt_token_ids"]], dtype=np.int64),
+            response_len=np.asarray([len(row) for row in batch["response_ids"]], dtype=np.int64),
+            exclude_from_baseline=np.asarray(
+                batch.get("exclude_from_baseline") or [False] * len(batch["response_ids"]), dtype=bool
+            ),
+            stop_reasons=tuple(batch["stop_reasons"]) if batch.get("stop_reasons") is not None else None,
         )
 
 
