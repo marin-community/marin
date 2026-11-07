@@ -93,7 +93,7 @@ constraint-dependencies = [
     "fsspec>=2026.6.0",
     "joserfc>=1.7.6",
     "multidict>=6.9.1",
-    "oauthlib>=4.0.0",
+    "oauthlib>=4.0.1",
     "opentelemetry-api>=1.45.1",
     "soupsieve>=2.9.0",
     "urllib3>=2.8.0",
@@ -139,7 +139,7 @@ override-dependencies = [
     "notebook>=7.6.3",
     "orjson>=3.11.9",
     "pillow>=13.0.0",
-    "pyasn1>=0.6.3",
+    "pyasn1>=0.6.5",
     "python-dotenv>=1.1.1",
     "ray>=2.55.1",
     "rich>=14.1.0",
@@ -485,6 +485,9 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    # Canonical upstream instruction checkers; wrappers remain checked.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     "vendor/skyrl/**",
     "vendor/evalchemy/**",
     "vendor/harbor/**",

@@ -48,7 +48,6 @@ from skyrl_train.inference_observability import (
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
 
 from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
-from .loop_evidence import LoopEvidenceCallback
 from .types import (
     CallbackErrorBehavior,
     CHECKPOINT_CALLBACK_TYPE,
@@ -932,12 +931,6 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
-def _with_loop_evidence(cfg: DictConfig, callbacks: List[TrainerCallback]) -> List[TrainerCallback]:
-    if cfg.trainer.get("loop_evidence_enabled", False):
-        callbacks.append(LoopEvidenceCallback(str(cfg.trainer.export_path)))
-    return callbacks
-
-
 def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
@@ -993,7 +986,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             callbacks.append(LoggingCallback())
         if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
             callbacks.append(MismatchProbeCallback(cfg))
-        return _with_loop_evidence(cfg, callbacks)
+        return callbacks
 
     # Fall back to legacy interval-based configuration
     logger.debug("Using legacy interval-based callback configuration")
@@ -1072,7 +1065,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
 
     if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
         callbacks.append(MismatchProbeCallback(cfg))
-    return _with_loop_evidence(cfg, callbacks)
+    return callbacks
 
 
 class DefaultCallbackHandler(CallbackHandler):

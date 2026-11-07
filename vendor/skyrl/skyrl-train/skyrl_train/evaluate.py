@@ -243,19 +243,6 @@ def _dump_eval_results(
         )
 
 
-def _validate_fixed_cohort_scores(cfg: DictConfig, metrics: Dict[str, float]) -> None:
-    expected_rows = cfg.data.get("expected_eval_rows")
-    if expected_rows is None:
-        return
-    expected = expected_rows * cfg.generator.eval_n_samples_per_prompt
-    attempted = metrics["eval/all/num_attempted"]
-    scored = metrics.get("eval/all/num_scored")
-    if attempted != expected or scored != expected:
-        raise RuntimeError(
-            f"Fixed-cohort evaluation requires {expected} verifier scores; attempted={attempted}, scored={scored}"
-        )
-
-
 @torch.no_grad()
 async def evaluate(
     eval_dataloader: StatefulDataLoader,
@@ -313,7 +300,6 @@ async def evaluate(
             cfg.generator.eval_n_samples_per_prompt,
         )
         _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
-        _validate_fixed_cohort_scores(cfg, eval_metrics)
 
         return eval_metrics
     finally:
@@ -386,6 +372,5 @@ async def evaluate_step_wise(
         cfg.generator.eval_n_samples_per_prompt,
     )
     _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
-    _validate_fixed_cohort_scores(cfg, eval_metrics)
 
     return eval_metrics

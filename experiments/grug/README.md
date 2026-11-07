@@ -62,6 +62,33 @@ uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
 
 The entrypoint job is CPU-only; the `StepRunner` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
 
+## Preemption checkpoints
+
+The Grug trainer variants coordinate SIGTERM at each completed step. Every rank
+finishes that step, then the run saves a permanent checkpoint and waits for its
+commit marker before exiting. The pipeline variant uses the same stop decision
+and its canonical checkpoint root. Retries must use the same run ID and
+checkpoint root to restore the saved step and data position. Checkpoint
+discovery ignores directories without a completed `metadata.json` marker.
+After committing a preemption checkpoint, the trainer exits with SIGTERM status
+so Iris retries the task instead of reporting partial training as complete.
+
+Grug dispatch sets `JobRequest.termination_grace` to 60 seconds. Override it
+with the `termination_grace=Duration.from_seconds(...)` argument to
+`dispatch_grug_training_run`. Iris validates values from 1 to 110 seconds when
+accepting the job and preserves the resolved value across retries and federation.
+The supervisor receives that budget; the task Pod and worker receive five
+additional seconds for teardown.
+
+A controlled two-H100 base-model probe with remote CoreWeave checkpoints passed
+preemption during a step and an async save, exact restore, and continuation with
+the same batches. Shutdown took 8.75 and 10.22 seconds for that small synthetic
+model. This does not establish a 60-second budget for production-size checkpoints.
+Measure the slowest training step, pending save, commit, and process teardown
+before choosing a production value. See the
+[validation record](https://github.com/marin-community/marin/pull/10774#issuecomment-6501275454)
+for the tested revision and remaining limits.
+
 ## Visual diff for template variants
 
 When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
@@ -150,8 +177,8 @@ Useful flags:
 - `mixture/weight/<dataset_name>`: effective sampling weight per dataset in the active stage.
 - `eval/loss`, `eval/loading_time`, `eval/total_time`: tagged-eval loss and timing for current model.
 - `eval/ema/*`: same eval metrics for EMA weights when EMA is enabled.
-- `eval/macro_loss`: macro average loss across tags when multiple tags exist.
-- `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views.
+- `eval/macro_loss`: macro average loss across tags with scored tokens when multiple tags exist.
+- `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views. A tag with no scored tokens logs none of them.
 - `eval/bpb`, `eval/macro_bpb`, `eval/<tag>/bpb`, `eval/<tag>/macro_bpb`: bits-per-byte metrics when tokenizer/BPB logging is enabled.
 - `grad/*`, `params/*`, `updates/*`, `opt_state/*`: optional watch metrics (norms/histograms) when watch is enabled.
 - `backward_flow/<scope>/*`: sampled activation and backward-gradient scale stats when `trainer.backward_flow.interval > 0`. Grug also logs `*_gradient_rms_scaled`, where gradients are multiplied by `sum(loss_weight)` to undo mean-loss scaling for the visualization.

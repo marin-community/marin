@@ -51,7 +51,6 @@ from torch import nn
 
 from skyrl_train.models.megatron_router_replay import RouterScoreType
 from skyrl_train.models.grug_shortconv import causal_short_conv
-from skyrl_train.models.grug_attention_context import grug_scoring_attention_context
 from skyrl_train.models.grug_moe import (
     GRUG_ATTN_GATE_SCALE,
     GRUG_GATED_NORM_RANK,
@@ -204,29 +203,27 @@ class GrugSelfAttention(SelfAttention):
         # Grug is causal-only and the trainer removes left padding, so right-padded keys sit after
         # every valid query and the causal (or causal sliding-window) mask alone is exact.
         attention_mask = None
-        # TE's fused attention can choose different arithmetic for training and inference,
-        # even with dropout disabled. Score old policies with the learner-capable forward.
-        with grug_scoring_attention_context(self.core_attention, self.config.attention_dropout):
-            if self.checkpoint_core_attention and self.training:
-                core_attn_out = self._checkpointed_attention_forward(
-                    query,
-                    key,
-                    value,
-                    attention_mask,
-                    attn_mask_type=self.attn_mask_type,
-                    attention_bias=attention_bias,
-                    packed_seq_params=packed_seq_params,
-                )
-            else:
-                core_attn_out = self._run_core_attention(
-                    query,
-                    key,
-                    value,
-                    attention_mask,
-                    attn_mask_type=self.attn_mask_type,
-                    attention_bias=attention_bias,
-                    packed_seq_params=packed_seq_params,
-                )
+        if self.checkpoint_core_attention and self.training:
+            core_attn_out = self._checkpointed_attention_forward(
+                query,
+                key,
+                value,
+                attention_mask,
+                attn_mask_type=self.attn_mask_type,
+                attention_bias=attention_bias,
+                packed_seq_params=packed_seq_params,
+            )
+        else:
+            core_attn_out = self._run_core_attention(
+                query,
+                key,
+                value,
+                attention_mask,
+                attn_mask_type=self.attn_mask_type,
+                attention_bias=attention_bias,
+                packed_seq_params=packed_seq_params,
+            )
+
         core_attn_out = self._apply_xsa(core_attn_out, value)
         if is_thd:
             core_attn_out = core_attn_out.reshape(core_attn_out.size(0), 1, -1)

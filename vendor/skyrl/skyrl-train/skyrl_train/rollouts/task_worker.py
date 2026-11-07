@@ -22,6 +22,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
+    ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
     ModelRequest,
@@ -61,6 +62,7 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    ContextLengthExceededError,
     REASONING_VIOLATION_TOKENS_KEY,
     REASONING_VIOLATIONS_KEY,
     DirectModelClient,
@@ -179,8 +181,8 @@ async def _model_turn(
                     max_prompt_length=max_prompt_length,
                 )
             output = await client.generate(model_input)
-    except GenerationBudgetExceededError as limit:
-        raise GenerationLimitReached(limit.prompt_token_ids) from limit
+    except GenerationBudgetExceededError as error:
+        raise GenerationLimitReached(error.prompt_token_ids) from error
     if output["token_provenance"] != TokenProvenance.ENGINE:
         raise RolloutContractError("The canonical rollout engine requires exact model tokens")
     logprobs = output.get("response_logprobs")
@@ -237,27 +239,6 @@ def _failed_rollout(
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
-        causes = []
-        cause = error.__cause__
-        seen_causes = {id(error)}
-        while cause is not None and id(cause) not in seen_causes:
-            seen_causes.add(id(cause))
-            origin = None
-            traceback = cause.__traceback__
-            while traceback is not None:
-                frame = traceback.tb_frame
-                module = frame.f_globals.get("__name__", "")
-                if module.startswith(("shellbox.", "daytona.", "daytona_sdk.", "daytona_api_client_async.")):
-                    origin = {
-                        "module": module,
-                        "function": frame.f_code.co_qualname,
-                        "line": traceback.tb_lineno,
-                    }
-                traceback = traceback.tb_next
-            # Exception arguments and notes may contain command text or credentials.
-            causes.append({"exception_type": type(cause).__name__, "origin": origin})
-            cause = cause.__cause__ or cause.__context__
-        diagnostics["machine_error_causes"] = causes
         provider_error = error.__cause__
         if isinstance(provider_error, DaytonaError):
             if type(provider_error.status_code) is int and 100 <= provider_error.status_code <= 599:
@@ -300,6 +281,9 @@ def _failed_rollout(
         diagnostics["cause_error_type"] = type(error).__name__
     elif isinstance(error, TaskMachineError):
         exception_type = "TaskMachineError"
+    elif isinstance(error, ContextWindowExceeded):
+        exception_type = "ContextLengthExceededError"
+        diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
         exception_type = VERIFIER_RUNTIME_ERROR
         diagnostics.setdefault("cause_error_type", type(error).__name__)
@@ -496,15 +480,23 @@ class TaskRolloutWorker:
             session_id = session_ids[index]
 
             async def model(request):
-                return await _model_turn(
-                    self.model_client,
-                    request,
-                    sampling_params=sampling,
-                    max_context_length=max_context_length,
-                    max_prompt_length=max_input_length,
-                    chat_template_kwargs=self.chat_template_kwargs,
-                    session_id=session_id,
-                )
+                try:
+                    return await _model_turn(
+                        self.model_client,
+                        request,
+                        sampling_params=sampling,
+                        max_context_length=max_context_length,
+                        max_prompt_length=max_input_length,
+                        chat_template_kwargs=self.chat_template_kwargs,
+                        session_id=session_id,
+                    )
+                except (GenerationLimitReached, ContextLengthExceededError) as error:
+                    if lowered.harness != SKYRL_AGENT_HARNESS:
+                        raise
+                    raise ContextWindowExceeded(
+                        f"This request exceeds the maximum context length of {max_context_length} tokens. "
+                        "Compact the conversation and retry."
+                    ) from error
 
             engine = engines[index]
             harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
@@ -659,11 +651,19 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
+            from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
             settings = InstalledAgentSettings.model_validate(
                 OmegaConf.to_container(self.harbor_config.installed_agent, resolve=True)
+            )
+            assert harbor is not None
+            daytona_options = harbor.environment.kwargs
+            daytona_connection = DaytonaConnection(
+                api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
+                api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+                target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(
                 settings,
@@ -671,6 +671,11 @@ class TaskRolloutWorkerSpec:
                     inference.model_name, generation_context_limit(runner_config), inference.tokenize, tokenizer
                 ),
                 int(runner_config.sampling_params.max_generate_length),
+                daytona_connection=daytona_connection,
+                eval_daytona_connection=replace(
+                    daytona_connection,
+                    api_key=os.environ.get(daytona_options.get("eval_api_key_env") or "DAYTONA_API_KEY"),
+                ),
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:

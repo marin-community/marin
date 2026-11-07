@@ -3,13 +3,7 @@
 
 """Model path resolution and automatic inference sharding."""
 
-import contextlib
 import json
-import logging
-import time
-from collections.abc import Iterator
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from urllib.parse import unquote, urlsplit
 
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -21,26 +15,6 @@ from marin.inference.config import RemoteInferenceConfig, VllmEngineConfig
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
-logger = logging.getLogger(__name__)
-
-
-@contextlib.contextmanager
-def staged_model_path(weights: str) -> Iterator[str]:
-    """Keep remote model weights on worker-local disk for the context's lifetime."""
-    source = StoragePath(weights)
-    if not source.is_remote:
-        yield weights
-        return
-
-    with TemporaryDirectory(prefix="marin-model-") as temporary_directory:
-        local_weights = Path(temporary_directory) / "model"
-        started = time.monotonic()
-        logger.info("Staging model weights from %s to worker-local disk", source)
-        source.download_to(str(local_weights), recursive=True, batch_size=16)
-        if not local_weights.is_dir():
-            raise FileNotFoundError(f"staged model directory was not created: {local_weights}")
-        logger.info("Staged model weights from %s in %.1f seconds", source, time.monotonic() - started)
-        yield str(local_weights)
 
 
 def _tool_template_probe() -> list[dict[str, object]]:
