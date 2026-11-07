@@ -14,6 +14,7 @@ from skyrl_train.utils.tracking import Tracking
 
 def test_tracker_keeps_failed_attempt_identity_and_wandb_link_on_retry(tmp_path, monkeypatch):
     launches = []
+    monkeypatch.setattr("skyrl_train.utils.tracking.version", lambda name: "fixture-vllm" if name == "vllm" else None)
 
     def init(**kwargs):
         launches.append(kwargs)
@@ -67,6 +68,7 @@ def test_tracker_keeps_failed_attempt_identity_and_wandb_link_on_retry(tmp_path,
         assert record["wandb_url"] == (
             None if attempt == "failed-attempt" else f"https://wandb.example/team/project/runs/{attempt}"
         )
+        assert record["vllm_version"] == "fixture-vllm"
         assert before <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
     assert failed.read_bytes() == retained
     assert [(row.get("id"), row["group"], row["resume"]) for row in launches] == [

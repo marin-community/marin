@@ -19,6 +19,7 @@ import dataclasses
 import json
 import re
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,7 +101,13 @@ class Tracking:
         tracking_record = {
             key: tracking_config[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")
         }
-        tracking_record.update(wandb_url=None, started_at=datetime.now(timezone.utc).isoformat())
+        try:
+            vllm_version = version("vllm")
+        except PackageNotFoundError:
+            vllm_version = None
+        tracking_record.update(
+            wandb_url=None, started_at=datetime.now(timezone.utc).isoformat(), vllm_version=vllm_version
+        )
         tracking_path = None
         if config is not None:
             directory = join_resource_path(str(config.trainer.export_path), "attempts", tracking_config["attempt_id"])
