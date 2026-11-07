@@ -16,17 +16,27 @@
 # limitations under the License.
 
 import dataclasses
+import json
+import re
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from functools import partial
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
+from uuid import uuid4
+from iris.cluster.client.job_info import get_job_info
 from loguru import logger
 from rigging.secrets import require_secret
+from rigging.provenance import launch_provenance
 from omegaconf import DictConfig, OmegaConf
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from marinskyrl.resource_locator import join_resource_path
+from marinskyrl.checkpoint_paths import TRACKING_FILENAME
+from skyrl_train.io import io
 
 
 _WANDB_STEP_METRIC = "trainer/global_step"
@@ -67,7 +77,7 @@ class WandbNodeLogger:
 
 # TODO(tgriggs): Test all backends.
 class Tracking:
-    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console"]
+    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "files"]
 
     def __init__(self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None):
         if isinstance(backends, str):
@@ -77,10 +87,39 @@ class Tracking:
 
         self.logger = {}
         self.remote_loggers = []
+        tracking_config = OmegaConf.to_container(config, resolve=True) if config is not None else {}
+        runtime = tracking_config.get("runtime", {})
+        job_info = get_job_info()
+        tracking_config.update(
+            run_id=runtime.get("run_id", experiment_name),
+            attempt_id=runtime.get("attempt_id", uuid4().hex[:12]),
+            source_commit=launch_provenance().base_commit,
+            iris_job_id=str(job_info.job_id) if job_info is not None else None,
+            coordinator_iris_job_id=runtime.get("coordinator_iris_job_id"),
+        )
+
+        tracking_record = {
+            key: tracking_config[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")
+        }
+        try:
+            vllm_version = version("vllm")
+        except PackageNotFoundError:
+            vllm_version = None
+        tracking_record.update(
+            wandb_url=None, started_at=datetime.now(timezone.utc).isoformat(), vllm_version=vllm_version
+        )
+        tracking_path = None
+        if config is not None:
+            directory = join_resource_path(str(config.trainer.export_path), "attempts", tracking_config["attempt_id"])
+            io.makedirs(directory, exist_ok=True)
+            tracking_path = join_resource_path(directory, TRACKING_FILENAME)
+            io.write_bytes_atomic(tracking_path, json.dumps(tracking_record).encode())
+
+        if "files" in backends:
+            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path), tracking_config["attempt_id"])
 
         if "wandb" in backends:
             import wandb
-            from omegaconf import OmegaConf
 
             current_node_ip = "head"
             if ray.is_initialized():
@@ -92,8 +131,9 @@ class Tracking:
             run = wandb.init(
                 project=project_name,
                 name=experiment_name,
-                config=OmegaConf.to_container(config, resolve=True),
-                group=experiment_name,
+                id=tracking_config["attempt_id"],
+                config=tracking_config,
+                group=tracking_config["run_id"],
                 resume="allow",
                 settings=wandb.Settings(
                     api_key=require_secret("WANDB_API_KEY"),
@@ -103,11 +143,14 @@ class Tracking:
                 ),
             )
             run_id = run.id
+            if tracking_path is not None:
+                tracking_record["wandb_url"] = run.url
+                io.write_bytes_atomic(tracking_path, json.dumps(tracking_record).encode())
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                project_name, experiment_name, run_id, config, current_node_ip
+                project_name, experiment_name, run_id, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:
@@ -174,9 +217,9 @@ class Tracking:
                         ).remote(
                             project_name=project_name,
                             experiment_name=experiment_name,
-                            config=OmegaConf.to_container(config, resolve=True),
+                            config=config,
                             run_id=run_id,
-                            group_name=experiment_name,
+                            group_name=config["run_id"],
                             x_label=f"node-{node_ip}",
                         )
                         self.remote_loggers.append(logger_actor)
@@ -188,6 +231,11 @@ class Tracking:
                 logger.warning(f"Failed to setup distributed wandb logging: {e}")
         else:
             logger.warning("Ray is not initialized, skipping distributed wandb logging")
+
+    def start(self, *, resumed_step: int | None) -> None:
+        """Keep step files belonging to the checkpoint selected for this attempt."""
+        if "files" in self.logger:
+            self.logger["files"].start(resumed_step=resumed_step)
 
     def log(self, data, step, commit=True):
         for logger_name, logger_instance in self.logger.items():
@@ -222,6 +270,35 @@ class Tracking:
                     backend.finish()
             except Exception as error:
                 logger.warning("Tracker backend {} shutdown failed: {}", name, error)
+
+
+class _FilesAdapter:
+    def __init__(self, export_path: str, attempt_id: str):
+        self.directory = join_resource_path(export_path, "metrics")
+        self.attempt_id = attempt_id
+        self.step: int | None = None
+        self.metrics: dict[str, Any] = {}
+        io.makedirs(self.directory, exist_ok=True)
+
+    def start(self, *, resumed_step: int | None) -> None:
+        if not io.exists(self.directory):
+            return
+        for path in io.list_dir(self.directory):
+            match = re.fullmatch(r"step-(\d+)\.json", Path(path).name)
+            if match and (resumed_step is None or int(match[1]) > resumed_step):
+                io.remove(join_resource_path(self.directory, Path(path).name))
+
+    def log(self, data: dict[str, Any], step: int) -> None:
+        path = join_resource_path(self.directory, f"step-{step:06d}.json")
+        if step != self.step:
+            self.metrics = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
+            self.step = step
+        self.metrics.update(data)
+        self.metrics["attempt_id"] = self.attempt_id
+        io.write_bytes_atomic(path, (json.dumps(self.metrics, default=float, sort_keys=True) + "\n").encode())
+
+    def finish(self) -> None:
+        pass
 
 
 class ConsoleLogger:

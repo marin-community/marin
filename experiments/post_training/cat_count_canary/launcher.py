@@ -30,7 +30,7 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
-    _role_plan_config_values,
+    role_plan_config_values,
     run_skyrl,
     skyrl_step,
 )
@@ -128,7 +128,7 @@ def role_plan(
     )
 
 
-ROLE_SETTINGS = frozenset(_role_plan_config_values(role_plan()))
+ROLE_SETTINGS = frozenset(role_plan_config_values(role_plan()))
 DERIVED_SETTINGS = frozenset(
     {
         "generator.max_input_length",

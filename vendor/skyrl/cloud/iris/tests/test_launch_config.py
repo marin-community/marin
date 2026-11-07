@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import base64
+import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import yaml
 from omegaconf import OmegaConf
@@ -13,7 +18,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from cloud.iris import training_driver
+from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -28,6 +33,7 @@ from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.utils.tracking import Tracking
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -294,7 +300,7 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     raw["skyrl"]["trainer"]["placement"]["colocate_all"] = False
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"max_staleness_steps": max_staleness_steps}
     raw["skyrl"]["trainer"]["algorithm"]["off_policy_correction"] = "none"
-    raw["iris"]["allocation"]["num_nodes"] = 2
+    raw["iris"]["allocation"]["num_nodes"] = 1 if entrypoint == "generate" else 2
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
 
@@ -355,9 +361,12 @@ def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_
     assert seen[0].model_source_uri is None
 
 
-def test_task_materializes_the_forwarded_launch_document(tmp_path: Path) -> None:
+def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path, monkeypatch) -> None:
     destination = tmp_path / "launch.yaml"
-    contents = yaml.safe_dump(_raw_config()).encode()
+    document = _raw_config()
+    document["run"]["coordinator_iris_job_id"] = "/tests/coordinator"
+    document["artifacts"]["export_root"] = str(tmp_path / "exports")
+    contents = yaml.safe_dump(document).encode()
 
     path = materialize_launch_config(
         str(destination),
@@ -366,6 +375,19 @@ def test_task_materializes_the_forwarded_launch_document(tmp_path: Path) -> None
 
     assert path == str(destination)
     assert destination.read_bytes() == contents
+
+    def workload(config):
+        with Tracking("project", "display-name", "files", config):
+            pass
+
+    monkeypatch.setitem(sys.modules, "skyrl_train.entrypoints.main_base", SimpleNamespace(run=workload))
+    skyrl_entrypoint.run_config(destination)
+    record = json.loads((tmp_path / "exports/attempts/attempt-1/tracking.json").read_text())
+    assert (record["run_id"], record["attempt_id"], record["coordinator_iris_job_id"]) == (
+        "smoke",
+        "attempt-1",
+        "/tests/coordinator",
+    )
 
 
 def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) -> None:
@@ -382,6 +404,58 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
     assert config.trainer.callbacks[0].metric_groups == groups
     assert config.trainer.callbacks[0].additional_evaluations == profiles
+
+
+def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "evaluation.yaml"
+    document = _raw_config()
+    document["run"]["export_hf"] = False
+    document["skyrl"]["entrypoint"] = "generate"
+    document["skyrl"]["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"sampled": {}}}]
+    sources = []
+    for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
+        directory = tmp_path / name
+        directory.mkdir()
+        pq.write_table(pa.table({"task_id": [identifier]}), directory / "rows.parquet")
+        sources.append(
+            {
+                "kind": "directory",
+                "uri": directory.as_uri(),
+                "identity": name,
+                "local_path": str(tmp_path / ("staged-" + name)),
+                "relative_path": "rows.parquet",
+            }
+        )
+    document["inputs"]["validation_data"] = sources[:1]
+    document["inputs"]["evaluation_data"] = {"sampled": sources[1:]}
+    path.write_text(yaml.safe_dump(document))
+    prepared = launch._prepare_config(load_launch_config(path))
+    task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)
+    runner = training_driver.LocalRLRunner(
+        training_driver.LocalRLConfig(
+            job_name="named-evaluation-data",
+            model_path=str(prepared.inputs.model.local_path),
+            model_source_uri=str(prepared.inputs.model.uri),
+            model_source_identity=str(prepared.inputs.model.identity),
+            val_data=list(prepared.inputs.validation_data),
+            launch_config=prepared,
+            resolved_config_uri=(tmp_path / "resolved.json").as_uri(),
+        )
+    )
+    observed = {}
+
+    def read_datasets(config):
+        profile = config.skyrl.trainer.callbacks[0].additional_evaluations.sampled
+        observed["primary"] = pq.read_table(config.skyrl.data.val_data[0])["task_id"].to_pylist()
+        observed["profile"] = pq.read_table(profile.data_files[0])["task_id"].to_pylist()
+        return 0
+
+    monkeypatch.setattr(runner, "_setup_environment", lambda: None)
+    monkeypatch.setattr(runner, "_run_skyrl", read_datasets)
+    assert runner.run() == 0
+    assert observed == {"primary": ["throughput-only"], "profile": ["panel-only"]}
+    record = json.loads((tmp_path / "resolved.json").read_text())
+    assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "panel"
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:

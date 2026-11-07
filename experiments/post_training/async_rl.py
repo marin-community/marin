@@ -48,7 +48,7 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
-    _role_plan_config_values,
+    role_plan_config_values,
     skyrl_step,
 )
 from rigging.provenance import username_segment
@@ -229,7 +229,7 @@ def parse_setting(text: str) -> Setting:
 
 
 # Keys that cannot change through --set because typed run inputs own them.
-ROLE_PLAN_SETTINGS = frozenset(_role_plan_config_values(SNOWBALL_RECIPE.role_plan))
+ROLE_PLAN_SETTINGS = frozenset(role_plan_config_values(SNOWBALL_RECIPE.role_plan))
 RETENTION_SETTINGS = frozenset({"trainer.max_ckpts_to_keep"})
 # Keys MarinSkyRL derives from context_budget and rejects as direct YAML.
 DERIVED_CONTEXT_SETTINGS = frozenset(
