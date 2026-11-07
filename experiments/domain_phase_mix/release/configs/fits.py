@@ -39,7 +39,11 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
   `mariner_add`, `mariner_pbt`, `mariner_mk1`); MARINER's development variants keep their registry names. The
   epoch-cap and KL sweep recorded Olmix's predictions at continuous optima only, and no folder records predictions for
   the native Olmix proposals, the QA-subset proposals (relative to MARINER only), the best swarm run or UniMax-8; those
-  runs have no rows.
+  runs have no rows. Figure 7's inputs (CROSS_PREDICTIONS) hold all 32 predictions among four models and their
+  proposals, MARINER's, the matched Olmix policy's, the spline's and tuned RegMix's, on both objectives, from the
+  full-swarm fits that the path-midpoint launch froze. They add the 12 that no launch recorded: Olmix's predictions of
+  the other three proposals and the other three models' predictions of Olmix's. The other 20 agree with the launches'
+  within 5e-15.
 - `fits_olmix_task_laws`: the matched Olmix baseline's per-task log-linear laws on the Qwen3 swarm, one row per
   objective and task: BPB(w) = exp(log_c) + exp(sum over buckets b of coef__b * w_b), fitted to the 280 fit runs with
   a Huber loss (delta 0.01; `huber_loss` is the fit's loss) (`delphi_matched_olmix_3e18_20260908/laws_*.json`). The
@@ -147,6 +151,11 @@ OLMIX_SUBSET = paths.RO / "delphi_olmix_subset_optima_3e18_20260929/summary.json
 REGMIX_ARGMIN = paths.RO / "regmix_tuned_argmin_3e18_20260930/summary.json"
 SNR_SUBSET = paths.RO / "delphi_table9_snr_subset_3e18_20260928/subset_validation.csv"
 MIDPOINTS = paths.RO / "delphi_path_midpoints_3e18_20260912/prediction_freeze/midpoint_predictions.csv"
+# Figure 7's inputs: each of four models' predictions of each one's trained proposal on both objectives, from the
+# full-swarm fits that the midpoint launch froze, and the proposals' measured runs, which name each proposal's candidate
+# (collect_proposal_cross_predictions_20261024.py writes both).
+CROSS_PREDICTIONS = paths.RO / "proposal_cross_predictions_20261024"
+CROSS_PREDICTION_FILES = ("cross_predictions.csv", "measured_runs.csv")
 REGMIX_REFERENCE = paths.RO / "regmix_official_rerun_20260913"
 REGMIX_REFERENCE_FILES = ("candidate_weights.csv", "cross_predictions.csv")
 # The rerun's predictors: the released recipe's objective head and its per-component diagnostic, the tuned trees
@@ -233,6 +242,7 @@ def required_sources() -> list[Path]:
         REGMIX_ARGMIN,
         SNR_SUBSET,
         MIDPOINTS,
+        *(CROSS_PREDICTIONS / name for name in CROSS_PREDICTION_FILES),
         *(REGMIX_REFERENCE / name for name in REGMIX_REFERENCE_FILES),
         *(THREE_COMPONENT / name for name in THREE_COMPONENT_FILES),
         FACTORIAL,
@@ -533,6 +543,21 @@ def _midpoints() -> pd.DataFrame:
     return _rows(m.candidate_id, m.target, m.predictor.map(MODEL_CODES), False, m.prediction_bpb)
 
 
+def _cross_predictions() -> pd.DataFrame:
+    """Figure 7's predictions: every model's prediction of every model's proposal on each objective. The figure's
+    measured runs name the candidate of each objective's proposal by each model."""
+    predictions, measured = (_csv(CROSS_PREDICTIONS / name) for name in CROSS_PREDICTION_FILES)
+    candidates = measured[["target", "proposal", "candidate_id"]].drop_duplicates()
+    if candidates.duplicated(["target", "proposal"]).any():
+        raise ValueError(f"{CROSS_PREDICTIONS.name}: a model's proposal names several candidates")
+    joined = predictions.merge(candidates, on=["target", "proposal"], how="left", validate="many_to_one")
+    unknown = (set(joined.predictor) | set(joined.proposal)) - set(MODEL_CODES)
+    if joined.candidate_id.isna().any() or unknown:
+        raise ValueError(f"{CROSS_PREDICTIONS.name}: unknown models {sorted(unknown)} or proposals without runs")
+    own = joined.predictor == joined.proposal
+    return _rows(joined.candidate_id, joined.target, joined.predictor.map(MODEL_CODES), own, joined.prediction)
+
+
 def _regmix_reference() -> pd.DataFrame:
     """The rerun's predictions at its trained endpoints and midpoints (policy `official_objective_<role>`) and at the
     frozen MARINER proposals (`mariner`); only an endpoint has a proposing model, the released recipe."""
@@ -608,6 +633,7 @@ def _proposal_predictions(validation_table: pd.DataFrame) -> pd.DataFrame:
             _regmix_reference(),
             _three_component(),
             _factorial(),
+            _cross_predictions(),
         ],
         ignore_index=True,
     )

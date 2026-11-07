@@ -222,6 +222,33 @@ def test_proposal_predictions_reproduce_the_kl_and_regmix_tables(out):
         assert _predicted(p, variant, objective, "mariner") == {mariner}
 
 
+def test_proposal_predictions_and_validation_runs_redraw_figure7(out, validation_table):
+    # Figure 7 plots, for each objective, the measured loss of each of four models' proposals (three trainer seeds) and
+    # all four models' predictions of it; its builder reads both from the collector's two files.
+    figure = {
+        name: pd.read_csv(fits.CROSS_PREDICTIONS / name, float_precision="round_trip")
+        for name in fits.CROSS_PREDICTION_FILES
+    }
+    measured = figure["measured_runs.csv"]
+    runs = measured.merge(
+        validation_table,
+        left_on=["launch", "candidate_id", "trainer_seed"],
+        right_on=["launch", "variant", "trainer_seed"],
+        validate="one_to_one",
+    )
+    loss = np.where(runs.target == "table9", runs.bpb__obe_easy, runs.bpb__uncheatable)
+    assert len(runs) == len(measured) == 24 and np.allclose(loss, runs.loss, rtol=0, atol=1e-12)
+    p = out["fits_proposal_predictions"]
+    variants = measured.drop_duplicates(["target", "proposal"]).set_index(["target", "proposal"]).candidate_id
+    predictions = figure["cross_predictions.csv"]
+    assert len(predictions) == 32
+    for row in predictions.itertuples():
+        variant, objective = variants[row.target, row.proposal], {"table9": "obe_easy"}.get(row.target, row.target)
+        mine = p[(p.variant == variant) & (p.objective == objective) & (p.predictor == fits.MODEL_CODES[row.predictor])]
+        assert set(mine.observation_id) == set(validation_table.observation_id[validation_table.variant == variant])
+        assert np.allclose(mine.predicted_bpb, row.prediction, rtol=0, atol=1e-12)
+
+
 def test_olmix_task_laws_reproduce_the_matched_olmix_predictions(ctx, out, validation_table):
     laws = out["fits_olmix_task_laws"]
     assert len(laws) == 58 and set(laws.task_id) == set(naming.TASKS)
