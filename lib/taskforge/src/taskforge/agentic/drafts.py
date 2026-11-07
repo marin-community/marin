@@ -83,7 +83,7 @@ from taskforge.agentic.tools import (
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "6"
+DRAFT_REVISION = "7"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than

@@ -230,7 +230,14 @@ such an answer scores 0. A checklist has at most 8 criteria, each a check of a s
 required element, not of a phrase. A script grader normalizes only what the prompt allows, and checks a formula \
 symbolically or at points beyond the ones the prompt shows.
 - For a number to d decimals, set tolerance_abs to 0.5 * 10**-d around the unrounded value, as the numeric \
-example does, so that only the correctly rounded answer passes.
+example does, so that only the correctly rounded answer passes. A script grader does the same for every number \
+that it compares, in every field of a JSON answer: compute the tolerance in the program from the same d that the \
+prompt states, never as a typed constant such as 0.15. For n significant figures, the tolerance is half a unit of \
+the n-th figure, relative to the value. A validation step moves each number of the reference by one unit of its \
+last asked digit and drops the task if the grader passes it.
+- A grader checks every field and deliverable that the prompt requires: a script grader fails an answer that \
+omits a field or fills it with filler, and a judge's criteria name each required deliverable. A grader fails an \
+answer with more than one \\boxed{{}} or "Answer:" value, even when the last one is right.
 - Run the program for one task id, then call submit with the TaskSpec's path and the program's path.
 
 # Tools
