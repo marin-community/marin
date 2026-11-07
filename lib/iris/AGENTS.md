@@ -135,14 +135,6 @@ Iris-managed uv installs use symlinks on TPU worker hosts, including CPU tasks
 scheduled there. Other hosts default to copy mode. Kubernetes keeps copies because its
 node agent may clean the shared uv cache while tasks run.
 
-The default setup passes the submitter's major and minor Python version to
-`uv sync --python`. Iris sets `UV_PYTHON_PREFERENCE=system` for every task, so uv
-uses the task image's interpreter when it matches that version. Otherwise uv
-prefers a managed build from the node's shared `/uv/cache/python`, and nodes that
-cached different builds run different interpreters. uv uses a managed build only
-when the image has no matching Python. On Kubernetes, a job's env cannot override
-this setting, because Iris's env takes precedence there.
-
 ## Architecture Notes
 
 ### The TaskBackend contract

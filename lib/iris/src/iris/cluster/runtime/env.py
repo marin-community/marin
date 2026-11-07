@@ -291,11 +291,6 @@ def build_common_iris_env(
     # Kubernetes may clean the shared cache while tasks run, so its venvs own copies.
     env[UV_LINK_MODE_ENV] = DEFAULT_UV_LINK_MODE
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
-    # Each node's install dir keeps whatever managed builds earlier tasks fetched,
-    # and builds of one patch release differ in APIs such as os.pidfd_open. Prefer
-    # the image's interpreter so every node runs the same one; uv still falls back
-    # to a managed build when the image has no matching Python.
-    env["UV_PYTHON_PREFERENCE"] = "system"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
     # installed elsewhere still resolves, since PATH finds the binary.
