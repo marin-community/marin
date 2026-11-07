@@ -141,6 +141,12 @@ def parse_requirement(text: str) -> Requirement:
     return Requirement(key, operator == ">=", bound)
 
 
+def _first_control(preset: presets.Preset, pins: Sequence[ControlPin]) -> tuple[pa.Table | None, RunData]:
+    rates_path = _pass_rates_path(preset)
+    rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
+    return rates, _load_run(control_path(preset, pins[0], 0), preset, rates)
+
+
 def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
     gated = presets.gated(preset)
@@ -150,9 +156,7 @@ def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, c
     pins = control_pins(preset.name) if not control and gated else ()
     if not requirements:
         return
-    rates_path = _pass_rates_path(preset)
-    rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
-    reference = _with_objectives(_load_run(control_path(preset, pins[0], 0), preset, rates), preset)
+    reference = _with_objectives(_first_control(preset, pins)[1], preset)
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
@@ -1154,15 +1158,8 @@ def gate_step(
 ) -> ArtifactStep[GateReport]:
     pins = control_pins(preset.name)
     if inputs.baselines:
-        rates_path = _pass_rates_path(preset)
-        rates = scoring.read_pass_rates(rates_path) if rates_path is not None else None
         try:
-            _baseline_runs(
-                inputs.baselines,
-                preset,
-                rates,
-                _load_run(control_path(preset, pins[0], 0), preset, rates),
-            )
+            _baseline_runs(inputs.baselines, preset, *_first_control(preset, pins))
         except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
             raise click.BadParameter(str(error), param_hint="--baseline") from error
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
