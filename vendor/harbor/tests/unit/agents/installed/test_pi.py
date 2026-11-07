@@ -1234,6 +1234,7 @@ class TestPiTrajectoryConversion:
                 "message": {
                     "role": "assistant",
                     "content": [
+                        {"type": "thinking", "thinking": "List files before writing."},
                         {"type": "text", "text": "Listing the directory before writing."},
                         {
                             "type": "toolCall",
@@ -1250,7 +1251,7 @@ class TestPiTrajectoryConversion:
                         "output": 20,
                         "cacheRead": 5,
                         "cacheWrite": 2,
-                        "cost": {"input": 0, "output": 0, "total": 0},
+                        "cost": {"input": 0.1, "output": 0, "total": 0.1},
                     },
                     "stopReason": "toolCall",
                 },
@@ -1298,7 +1299,7 @@ class TestPiTrajectoryConversion:
                     "toolCallId": "chatcmpl-tool-bbb",
                     "toolName": "write",
                     "content": [{"type": "text", "text": "wrote /app/greeting.txt"}],
-                    "isError": False,
+                    "isError": True,
                     "timestamp": 1762309200006,
                 },
             },
@@ -1364,6 +1365,7 @@ class TestPiTrajectoryConversion:
 
         tool_step = trajectory.steps[2]
         assert tool_step.message == "Listing the directory before writing."
+        assert tool_step.reasoning_content == "List files before writing."
         assert tool_step.model_name == "hosted_vllm/test-model"
         assert [call.function_name for call in tool_step.tool_calls] == ["bash"]
         assert tool_step.tool_calls[0].tool_call_id == "chatcmpl-tool-aaa"
@@ -1374,10 +1376,12 @@ class TestPiTrajectoryConversion:
         result = tool_step.observation.results[0]
         assert result.source_call_id == "chatcmpl-tool-aaa"
         assert result.content == "total 4\nhello.txt"
+        assert result.extra == {"is_error": False}
 
         second_tool_step = trajectory.steps[3]
         assert [call.function_name for call in second_tool_step.tool_calls] == ["write"]
         assert second_tool_step.observation.results[0].content == "wrote /app/greeting.txt"
+        assert second_tool_step.observation.results[0].extra == {"is_error": True}
 
         final = trajectory.steps[4]
         assert final.message == (
@@ -1386,9 +1390,13 @@ class TestPiTrajectoryConversion:
         assert final.tool_calls is None
         assert final.metrics.prompt_tokens == 180
 
-        assert trajectory.final_metrics.total_prompt_tokens == 425  # 105 + 140 + 180
-        assert trajectory.final_metrics.total_completion_tokens == 95
-        assert trajectory.final_metrics.total_steps == 5
+        # Source session: 105 + 140 + 180 prompt, 20 + 35 + 40 completion,
+        # five system/user/assistant messages, and two tool results.
+        assert trajectory.final_metrics.total_prompt_tokens == context.n_input_tokens == 425
+        assert trajectory.final_metrics.total_completion_tokens == context.n_output_tokens == 95
+        assert trajectory.final_metrics.total_cached_tokens == context.n_cache_tokens == 5
+        assert trajectory.final_metrics.total_cost_usd == context.cost_usd == 0.1
+        assert trajectory.final_metrics.total_steps == len(trajectory.steps) == 5
 
         # Usage still counts every assistant turn, including the turns the
         # trajectory records as steps.
