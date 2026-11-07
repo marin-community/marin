@@ -1,0 +1,6 @@
+applet_id = "fe24b7ec-33fa-4edb-8787-2df5b9091a75"
+title = "Knotmeter"
+description = "Browse saved AgentX performance measurements, request timelines and corpus conversations."
+python_entrypoint = "server.app:create_api"
+build_command = "npm ci --no-audit --no-fund && npm run build"
+source_paths = ["infra/marina/web"]
