@@ -1,0 +1,6 @@
+tests
+README.md
+Pulumi*.yaml
+__main__.py
+*.pyc
+__pycache__

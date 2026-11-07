@@ -1,0 +1,1064 @@
+diff --git a/packages/app/next.config.ts b/packages/app/next.config.ts
+index cd1d35a..0a7faba 100644
+--- a/packages/app/next.config.ts
++++ b/packages/app/next.config.ts
+@@ -1,16 +1,26 @@
+ import { withPostHogConfig } from '@posthog/nextjs-config';
+ import type { NextConfig } from 'next';
++import path from 'node:path';
+ import { allowedDevOriginsFromEnv } from './src/lib/runtime/allowed-dev-origins';
+ import { INFERENCE_MODEL_ALIAS_REDIRECTS } from './src/lib/routing/inference-model-redirects';
+ import { VIDEO_ALIAS_REDIRECTS } from './src/lib/video/video-alias-redirects';
+ 
+ const nextConfig: NextConfig = {
++  output: 'standalone',
++  outputFileTracingRoot: path.join(__dirname, '../..'),
+   distDir: process.env.NEXT_DIST_DIR || '.next',
+   allowedDevOrigins: allowedDevOriginsFromEnv(),
+   transpilePackages: ['@semianalysisai/inferencex-constants'],
+   serverExternalPackages: ['shiki'],
+   redirects() {
+     return Promise.resolve([
++      ...['', '/zh'].flatMap((prefix) =>
++        ['', '/inference'].map((route) => ({
++          source: `${prefix}${route}` || '/',
++          destination: `${prefix}/inference/marin-snowball-v011?i_seq=agentic-traces&i_prec=bf16&i_metric=y_outputTputPerGpu&i_pctl=p90`,
++          permanent: false,
++        })),
++      ),
+       ...INFERENCE_MODEL_ALIAS_REDIRECTS,
+       ...VIDEO_ALIAS_REDIRECTS,
+       {
+diff --git a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
+index d797752..ae4bfba 100644
+--- a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
++++ b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
+@@ -52,6 +52,11 @@ export default async function InferenceModelPage({ params }: Props) {
+   if (!entry) notFound();
+   return (
+     <InferenceProvider activeTab="inference">
++      {entry.slug === 'marin-hero-step144000' && (
++        <p className="mx-auto max-w-7xl px-4 pt-4 text-sm text-muted-foreground">
++          Saved October 28 Hero results use the older serving setup and remain provisional.
++        </p>
++      )}
+       <InferenceChartDisplay />
+     </InferenceProvider>
+   );
+diff --git a/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx b/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
+index a9c567e..2a65e58 100644
+--- a/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
++++ b/packages/app/src/app/(dashboard)/inference/agentic/[id]/page.tsx
+@@ -12,7 +12,7 @@ export async function generateMetadata({
+ }): Promise<Metadata> {
+   const { id } = await params;
+   return {
+-    title: 'Agentic trace detail | InferenceX',
++    title: 'Agentic trace detail',
+     description: `Inspect request timelines, server metrics, aggregates, and logs for Agentic benchmark point #${id}.`,
+     alternates: enAlternates(`/inference/agentic/${id}`),
+     robots: { index: false },
+diff --git a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
+index 091e729..b3765d0 100644
+--- a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
++++ b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
+@@ -56,6 +56,11 @@ export default async function ZhInferenceModelPage({ params }: Props) {
+     <>
+       <ZhTabIntro tab="inference" />
+       <InferenceProvider activeTab="inference">
++        {entry.slug === 'marin-hero-step144000' && (
++          <p className="mx-auto max-w-7xl px-4 pt-4 text-sm text-muted-foreground">
++            保留的 10 月 28 日 Hero 结果来自旧的服务配置，结果仍属暂定。
++          </p>
++        )}
+         <InferenceChartDisplay />
+       </InferenceProvider>
+     </>
+diff --git a/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
+index a40ad29..32d12ad 100644
+--- a/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
++++ b/packages/app/src/app/zh/(dashboard)/inference/agentic/[id]/page.tsx
+@@ -12,7 +12,7 @@ export async function generateMetadata({
+ }): Promise<Metadata> {
+   const { id } = await params;
+   return {
+-    title: 'Agentic trace 详情 | InferenceX',
++    title: 'Agentic trace 详情',
+     description: `查看 Agentic 基准测试数据点 #${id} 的请求时间线、服务器指标、聚合数据与日志。`,
+     alternates: zhAlternates(`/inference/agentic/${id}`),
+     openGraph: { locale: ZH_OG_LOCALE },
+diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
+index ffa80dc..00a24b8 100644
+--- a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
++++ b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
+@@ -207,6 +207,28 @@ describe('sliceTimelineByPhase', () => {
+ });
+ 
+ describe('sliceRequestChartDataByPhase', () => {
++  it('retains the first profiling request at real epoch-nanosecond origins', () => {
++    // Adding this offset to the epoch and subtracting it rounds upward by 80 ns.
++    // That previously excluded the earliest request from the profiling charts.
++    const offset = 61_005_390_000;
++    const tl = timeline(
++      [
++        req({ cid: 'warmup', phase: 'warmup', start: 0 }),
++        req({ cid: 'first-profile', start: offset, end: offset + 1000 }),
++      ],
++      1_792_821_503_345_722_600,
++    );
++    const compact: RequestChartData = { ...tl, timelineVersion: 6 };
++    for (const result of [
++      sliceTimelineByPhase(tl, 'profiling'),
++      sliceRequestChartDataByPhase(compact, 'profiling'),
++    ]) {
++      expect(result.requests.map((request) => request.cid)).toEqual(['first-profile']);
++      expect(result.requests[0]!.start).toBe(0);
++    }
++    expect(phaseBoundarySec({ startNs: tl.startNs }, tl)).toBe(offset / 1e9);
++  });
++
+   it('filters and rebases the compact request payload without Gantt-only fields', () => {
+     const data: RequestChartData = {
+       version: 1,
+diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.ts b/packages/app/src/components/inference/agentic-point/phase-slice.ts
+index 39b5484..fb4c28b 100644
+--- a/packages/app/src/components/inference/agentic-point/phase-slice.ts
++++ b/packages/app/src/components/inference/agentic-point/phase-slice.ts
+@@ -26,7 +26,7 @@ export function timelineHasWarmup(timeline: RequestPhaseData | null | undefined)
+   return Boolean(timeline?.requests.some((r) => r.phase !== 'profiling'));
+ }
+ 
+-export function phaseBoundaryNs(timeline: RequestPhaseData | null | undefined): number | null {
++function phaseBoundaryOffsetNs(timeline: RequestPhaseData | null | undefined): number | null {
+   if (!timeline) return null;
+   let hasWarmup = false;
+   let minProfilingStart: number | null = null;
+@@ -38,7 +38,12 @@ export function phaseBoundaryNs(timeline: RequestPhaseData | null | undefined):
+     }
+   }
+   if (!hasWarmup || minProfilingStart === null) return null;
+-  return timeline.startNs + minProfilingStart;
++  return minProfilingStart;
++}
++
++export function phaseBoundaryNs(timeline: RequestPhaseData | null | undefined): number | null {
++  const offset = phaseBoundaryOffsetNs(timeline);
++  return offset === null || !timeline ? null : timeline.startNs + offset;
+ }
+ 
+ export function phaseBoundarySec(
+@@ -46,9 +51,9 @@ export function phaseBoundarySec(
+   timeline: RequestPhaseData | null | undefined,
+ ): number | null {
+   if (!serverMetrics) return null;
+-  const boundaryNs = phaseBoundaryNs(timeline);
+-  if (boundaryNs === null) return null;
+-  return Math.max(0, (boundaryNs - serverMetrics.startNs) / 1e9);
++  const offset = phaseBoundaryOffsetNs(timeline);
++  if (offset === null || !timeline) return null;
++  return Math.max(0, (timeline.startNs - serverMetrics.startNs + offset) / 1e9);
+ }
+ 
+ export interface PhaseSlicedSeries<S> {
+@@ -108,9 +113,8 @@ export function sliceTimelineByPhase(
+   timeline: RequestTimeline,
+   phase: StagePhase,
+ ): RequestTimeline {
+-  const boundaryNs = phaseBoundaryNs(timeline);
+-  if (boundaryNs === null) return timeline;
+-  const boundaryOff = boundaryNs - timeline.startNs;
++  const boundaryOff = phaseBoundaryOffsetNs(timeline);
++  if (boundaryOff === null) return timeline;
+   const inPhase = (r: RequestRecord) =>
+     phase === 'warmup' ? r.start < boundaryOff : r.start >= boundaryOff;
+   const shift = phase === 'profiling' ? boundaryOff : 0;
+@@ -130,9 +134,8 @@ export function sliceRequestChartDataByPhase(
+   data: RequestChartData,
+   phase: StagePhase,
+ ): RequestChartData {
+-  const boundaryNs = phaseBoundaryNs(data);
+-  if (boundaryNs === null) return data;
+-  const boundaryOff = boundaryNs - data.startNs;
++  const boundaryOff = phaseBoundaryOffsetNs(data);
++  if (boundaryOff === null) return data;
+   const inPhase = (request: RequestChartRecord) =>
+     phase === 'warmup' ? request.start < boundaryOff : request.start >= boundaryOff;
+   const shift = phase === 'profiling' ? boundaryOff : 0;
+diff --git a/packages/app/src/components/inference/agentic-point/point-summary.test.ts b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
+index a3bbce4..94b290c 100644
+--- a/packages/app/src/components/inference/agentic-point/point-summary.test.ts
++++ b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
+@@ -32,6 +32,7 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
+     num_prefill_gpu: 8,
+     num_decode_gpu: 64,
+     recipe_fingerprint: null,
++    image: null,
+     conc: 128,
+     offload_mode: 'off',
+     kv_offloading: null,
+@@ -52,6 +53,15 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
+ }
+ 
+ describe('PointSummary', () => {
++  it('shows the stored runtime build and recipe', () => {
++    const html = renderToStaticMarkup(
++      createElement(PointSummary, {
++        meta: meta({ image: 'marin-vllm:build-sha', recipe_fingerprint: 'recipe-sha' }),
++      }),
++    );
++    expect(html).toContain('marin-vllm:build-sha');
++    expect(html).toContain('recipe-sha');
++  });
+   it('identifies multinode aggregate without calling it disaggregated', () => {
+     const html = renderToStaticMarkup(
+       createElement(PointSummary, {
+diff --git a/packages/app/src/components/inference/agentic-point/point-summary.tsx b/packages/app/src/components/inference/agentic-point/point-summary.tsx
+index 8978926..19db34c 100644
+--- a/packages/app/src/components/inference/agentic-point/point-summary.tsx
++++ b/packages/app/src/components/inference/agentic-point/point-summary.tsx
+@@ -24,6 +24,8 @@ export const POINT_SUMMARY_STRINGS = {
+     transferEngine: 'KV Transfer Engine',
+     router: 'Router',
+     concurrency: 'Concurrency',
++    runtimeBuild: 'Runtime build',
++    recipeFingerprint: 'Serving recipe',
+     gpuCacheHit: 'Chip cache hit',
+     cpuCacheHit: 'CPU cache hit',
+     combinedCacheHit: 'Combined chip + CPU cache hit',
+@@ -41,6 +43,8 @@ export const POINT_SUMMARY_STRINGS = {
+     transferEngine: 'KV 传输引擎',
+     router: '路由器',
+     concurrency: '并发数',
++    runtimeBuild: '运行构建',
++    recipeFingerprint: '服务配置',
+     gpuCacheHit: '芯片 cache 命中率',
+     cpuCacheHit: 'CPU cache 命中率',
+     combinedCacheHit: '芯片 + CPU 综合 cache 命中率',
+@@ -111,6 +115,14 @@ export function PointSummary({ meta }: { meta: PointMeta }) {
+         </div>
+       </div>
+       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
++        <MetaLine
++          label={t.runtimeBuild}
++          value={<code className="break-all">{meta.image ?? '—'}</code>}
++        />
++        <MetaLine
++          label={t.recipeFingerprint}
++          value={<code className="break-all">{meta.recipe_fingerprint ?? '—'}</code>}
++        />
+         <MetaLine label={t.offloadType} value={offloadDisplay(meta, locale)} />
+         {offloadBackend && <MetaLine label={t.offloadBackend} value={offloadBackend} />}
+         {transferEngine && <MetaLine label={t.transferEngine} value={transferEngine} />}
+diff --git a/packages/app/src/components/inference/ui/ChartDisplay.tsx b/packages/app/src/components/inference/ui/ChartDisplay.tsx
+index ca8ba5e..3ffbb22 100644
+--- a/packages/app/src/components/inference/ui/ChartDisplay.tsx
++++ b/packages/app/src/components/inference/ui/ChartDisplay.tsx
+@@ -135,7 +135,7 @@ const STRINGS = {
+     chart: 'Chart',
+     table: 'Table',
+     sourceUnofficial: 'Source: UNOFFICIAL',
+-    sourceOfficial: 'Source: SemiAnalysis InferenceX™',
++    sourceOfficial: 'Source: Knotmeter (Marin)',
+     revenuePrices: (input: string, cached: string | null, output: string) =>
+       cached === null
+         ? `Input $${input}/M tok · Output $${output}/M tok`
+@@ -166,7 +166,7 @@ const STRINGS = {
+     chart: '图表',
+     table: '表格',
+     sourceUnofficial: '来源：非官方',
+-    sourceOfficial: '来源：SemiAnalysis InferenceX™',
++    sourceOfficial: '来源：Knotmeter (Marin)',
+     revenuePrices: (input: string, cached: string | null, output: string) =>
+       cached === null
+         ? `输入 $${input}/百万 token · 输出 $${output}/百万 token`
+@@ -957,7 +957,7 @@ export default function ChartDisplay({ embedded = false }: { embedded?: boolean
+                       hideImageExport={getViewMode(graphIndex) === 'table'}
+                       setIsLegendExpanded={setIsLegendExpanded}
+                       hideLegendOnExport={showLineLabels}
+-                      exportFileName={`InferenceX_${selectedModel}_${graph.chartDefinition.chartType}`}
++                      exportFileName={`Knotmeter_${selectedModel}_${graph.chartDefinition.chartType}`}
+                       onExportMp4={
+                         replayAvailable
+                           ? () => replayHandlesRef.current[graphIndex]?.open()
+@@ -1016,7 +1016,7 @@ export default function ChartDisplay({ embedded = false }: { embedded?: boolean
+                           knownIssueCsvNote(issue, getDisplayLabel(getHardwareConfig(issue.hwKey))),
+                         );
+                         exportToCsv(
+-                          `InferenceX_${selectedModel}_${graph.chartDefinition.chartType}`,
++                          `Knotmeter_${selectedModel}_${graph.chartDefinition.chartType}`,
+                           headers,
+                           rows,
+                           issueNotes,
+@@ -1117,9 +1117,9 @@ export default function ChartDisplay({ embedded = false }: { embedded?: boolean
+                             source={
+                               isUnofficialRun
+                                 ? locale === 'zh'
+-                                  ? 'SemiAnalysis InferenceX™ + 非官方 overlays'
+-                                  : 'SemiAnalysis InferenceX™ + UNOFFICIAL overlays'
+-                                : 'SemiAnalysis InferenceX™'
++                                  ? 'Knotmeter (Marin) + 非官方 overlays'
++                                  : 'Knotmeter (Marin) + UNOFFICIAL overlays'
++                                : 'Knotmeter (Marin)'
+                             }
+                             costBasis={
+                               usesTokenSalePricing(selectedYAxisMetric) && tokenRevenuePricing
+diff --git a/packages/app/src/components/inference/ui/ComparisonChangelog.tsx b/packages/app/src/components/inference/ui/ComparisonChangelog.tsx
+index 36b77f6..04d1509 100644
+--- a/packages/app/src/components/inference/ui/ComparisonChangelog.tsx
++++ b/packages/app/src/components/inference/ui/ComparisonChangelog.tsx
+@@ -74,7 +74,7 @@ function renderRunLinks(locale: Locale, headRef?: string, runUrl?: string) {
+     <>
+       {headRef && (
+         <a
+-          href={`https://github.com/SemiAnalysisAI/InferenceX/commit/${headRef}`}
++          href={`https://github.com/marin-community/marin/commit/${headRef}`}
+           target="_blank"
+           rel="noopener noreferrer"
+           className="text-sm hover:underline text-foreground underline"
+diff --git a/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx b/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
+index b2e386f..9fda6e9 100644
+--- a/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
++++ b/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
+@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
+ import { TooltipContent, TooltipRoot, TooltipTrigger } from '@/components/ui/tooltip';
+ import { getModelSlugEntryForDisplayName } from '@/lib/compare/compare-slug';
+ import { formatParamCount, getModelArchitecture } from '@/lib/catalog/model-architectures';
+-import { type Model, getModelLabel } from '@/lib/catalog/data-mappings';
++import { Model, getModelLabel } from '@/lib/catalog/data-mappings';
+ import { localePath } from '@/lib/i18n/i18n';
+ 
+ export function ModelArchitectureInfoLink({
+@@ -18,7 +18,7 @@ export function ModelArchitectureInfoLink({
+   locale: 'en' | 'zh';
+ }) {
+   const entry = getModelSlugEntryForDisplayName(model);
+-  if (!entry) return null;
++  if (!entry || model === Model.Snowball011 || model === Model.Hero144k) return null;
+   const arch = getModelArchitecture(model);
+   const label = getModelLabel(model);
+   const text =
+diff --git a/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx b/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx
+index 9a21e1f..49986c5 100644
+--- a/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx
++++ b/packages/app/src/components/inference/ui/WorkflowInfoDisplay.tsx
+@@ -260,7 +260,7 @@ export default function WorkflowInfoDisplay() {
+                   ))}
+                   {changelog.entries[0]?.head_ref && (
+                     <a
+-                      href={`https://github.com/SemiAnalysisAI/InferenceX/commit/${changelog.entries[0].head_ref}`}
++                      href={`https://github.com/marin-community/marin/commit/${changelog.entries[0].head_ref}`}
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       className="text-xs hover:underline text-foreground underline"
+diff --git a/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx b/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx
+index e1cf052..471bf0d 100644
+--- a/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx
++++ b/packages/app/src/components/trends/HistoricalTrendsDisplay.tsx
+@@ -75,7 +75,7 @@ const STRINGS = {
+       "The interactivity operating point used for interpolation. Move the slider to see how each chip's performance changes at different interactivity levels.",
+     captionTitle: (yTitle: string, target: number, isAgentic: boolean) =>
+       `${yTitle} Over Time at ${target} tok/s/user ${isAgentic ? 'P90 ' : ''}Interactivity`,
+-    source: 'Source: SemiAnalysis InferenceX™',
++    source: 'Source: Knotmeter (Marin)',
+     updated: 'Updated:',
+     logScale: 'Log Scale',
+     highContrast: 'High Contrast',
+@@ -100,7 +100,7 @@ const STRINGS = {
+     targetTooltip: '设置插值计算采用的交互性水平。移动滑块可比较不同交互性水平下的芯片性能。',
+     captionTitle: (yTitle: string, target: number, isAgentic: boolean) =>
+       `${yTitle} 随时间变化（${isAgentic ? 'P90 ' : ''}交互性 ${target} tok/s/user）`,
+-    source: '来源：SemiAnalysis InferenceX™',
++    source: '来源：Knotmeter (Marin)',
+     updated: '更新时间：',
+     logScale: '对数缩放',
+     highContrast: '高对比度',
+@@ -436,7 +436,7 @@ export default function HistoricalTrendsDisplay() {
+               analyticsPrefix="historical"
+               zoomResetEvent="d3chart_zoom_reset_historical-trend"
+               setIsLegendExpanded={setIsLegendExpanded}
+-              exportFileName={`InferenceX_historical_${selectedModel}`}
++              exportFileName={`Knotmeter_historical_${selectedModel}`}
+               onExportCsv={() => {
+                 const { headers, rows } = historicalTrendToCsv(
+                   trendLines,
+@@ -445,7 +445,7 @@ export default function HistoricalTrendsDisplay() {
+                   targetInteractivity,
+                   isAgentic ? 'p90' : 'median',
+                 );
+-                exportToCsv(`InferenceX_historical_${selectedModel}`, headers, rows);
++                exportToCsv(`Knotmeter_historical_${selectedModel}`, headers, rows);
+               }}
+             />
+             <Card>
+@@ -479,7 +479,7 @@ export default function HistoricalTrendsDisplay() {
+                       date={
+                         selectedRunDate ? historicalRunDate(selectedRunDate, locale) : undefined
+                       }
+-                      source="SemiAnalysis InferenceX™"
++                      source="Knotmeter (Marin)"
+                     />
+                     {showsJalapenoPreview && <JalapenoOfficialPreviewNotice />}
+                     {showsVeraRubinPreview && <VeraRubinOfficialPreviewNotice />}
+diff --git a/packages/app/src/hooks/api/use-trace-server-metrics.ts b/packages/app/src/hooks/api/use-trace-server-metrics.ts
+index 2605cfb..a4b2c85 100644
+--- a/packages/app/src/hooks/api/use-trace-server-metrics.ts
++++ b/packages/app/src/hooks/api/use-trace-server-metrics.ts
+@@ -32,6 +32,7 @@ export interface PointMeta {
+   num_prefill_gpu: number;
+   num_decode_gpu: number;
+   recipe_fingerprint: string | null;
++  image: string | null;
+   conc: number;
+   offload_mode: string | null;
+   kv_offloading: string | null;
+diff --git a/packages/app/src/lib/api/api-documentation-base.ts b/packages/app/src/lib/api/api-documentation-base.ts
+index ce70f22..fa937c3 100644
+--- a/packages/app/src/lib/api/api-documentation-base.ts
++++ b/packages/app/src/lib/api/api-documentation-base.ts
+@@ -1,6 +1,6 @@
+-import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants';
++import { DISPLAY_MODEL_TO_DB, SITE_URL } from '@semianalysisai/inferencex-constants';
+ 
+-export const API_BASE_URL = 'https://inferencex.semianalysis.com' as const;
++export const API_BASE_URL = SITE_URL;
+ 
+ export const SUPPORTED_BENCHMARK_MODELS = Object.freeze(
+   Object.keys(DISPLAY_MODEL_TO_DB).toSorted(),
+diff --git a/packages/app/src/lib/api/api-documentation.ts b/packages/app/src/lib/api/api-documentation.ts
+index a75f880..580bc8e 100644
+--- a/packages/app/src/lib/api/api-documentation.ts
++++ b/packages/app/src/lib/api/api-documentation.ts
+@@ -2,6 +2,7 @@ import {
+   DB_MODEL_TO_DISPLAY,
+   DISPLAY_MODEL_TO_DB,
+   POWER_METRIC_KEYS,
++  SITE_URL,
+ } from '@semianalysisai/inferencex-constants';
+ import { COLLECTIVEX_VERSIONS } from '@semianalysisai/inferencex-db/collectivex/types';
+ 
+@@ -137,7 +138,7 @@ export interface OpenApiDocument {
+   readonly components: Readonly<{ schemas: Readonly<Record<string, ApiSchema>> }>;
+ }
+ 
+-export const API_BASE_URL = 'https://inferencex.semianalysis.com' as const;
++export const API_BASE_URL = SITE_URL;
+ export const API_VERSION = 'v1' as const;
+ export const OPENAPI_VERSION = '3.1.0' as const;
+ export const API_DOCUMENT_VERSION = '1.0.0' as const;
+@@ -2913,8 +2914,8 @@ export const apiOperations: readonly ApiOperation[] = [
+     path: '/api/v1/trace-server-metrics',
+     summary: text('Read trace server metrics', '读取跟踪服务器指标'),
+     description: text(
+-      'Returns point metadata, including prefill/decode TP, EP, DP attention, worker counts, physical GPU counts and recipe_fingerprint for cache-reuse links, and chart-ready aggregate time series for cache usage, queue depth, prefill and decode throughput, and prompt-token sources. metricSources contains source descriptors; source-specific arrays are loaded by the point-detail UI only when selected.',
+-      '返回数据点元数据（含 prefill/decode TP、EP、DP attention、worker 数、物理 GPU 数及 recipe_fingerprint，用于缓存复用链接），以及可直接用于图表的聚合时间序列，涵盖缓存使用率、队列深度、prefill/decode 吞吐量和 prompt token 来源。metricSources 包含各来源的描述信息；仅当用户在数据点详情界面选择某个来源时，才会加载该来源对应的数组。',
++      'Returns point metadata, including the runtime build identity in image, prefill/decode TP, EP, DP attention, worker counts, physical GPU counts and recipe_fingerprint for cache-reuse links, and chart-ready aggregate time series for cache usage, queue depth, prefill and decode throughput, and prompt-token sources. metricSources contains source descriptors; source-specific arrays are loaded by the point-detail UI only when selected.',
++      '返回数据点元数据（含运行构建标识 image、prefill/decode TP、EP、DP attention、worker 数、物理 GPU 数及 recipe_fingerprint，用于缓存复用链接），以及可直接用于图表的聚合时间序列，涵盖缓存使用率、队列深度、prefill/decode 吞吐量和 prompt token 来源。metricSources 包含各来源的描述信息；仅当用户在数据点详情界面选择某个来源时，才会加载该来源对应的数组。',
+     ),
+     audience: 'public',
+     stability: 'beta',
+@@ -2949,6 +2950,7 @@ export const apiOperations: readonly ApiOperation[] = [
+               num_prefill_gpu: integerSchema,
+               num_decode_gpu: integerSchema,
+               recipe_fingerprint: nullableStringSchema,
++              image: nullableStringSchema,
+             },
+           },
+           startNs: integerSchema,
+@@ -3018,17 +3020,17 @@ export const apiOperations: readonly ApiOperation[] = [
+ ];
+ 
+ const overview = {
+-  title: text('InferenceX API reference', 'InferenceX API 参考文档'),
+-  eyebrow: text('Public data API', '公开数据 API'),
++  title: text('Knotmeter API reference', 'Knotmeter API 参考文档'),
++  eyebrow: text('Data API', '数据 API'),
+   description: text(
+-    'Read benchmark, provenance, dataset, CollectiveX, and diagnostic data from the same sources that power InferenceX.',
+-    '从 InferenceX 使用的同一组数据源中，读取基准测试数据、溯源信息、数据集、CollectiveX 数据和诊断数据。',
++    'Read benchmark, provenance, dataset, CollectiveX, and diagnostic data used by Knotmeter.',
++    '从 Knotmeter 使用的数据源中，读取基准测试数据、溯源信息、数据集、CollectiveX 数据和诊断数据。',
+   ),
+   auth: {
+     title: text('Authentication', '身份验证'),
+     description: text(
+-      'Published read endpoints do not require authentication.',
+-      '已发布的只读端点不需要身份验证。',
++      'The hosted service requires IAP authentication, including read endpoints.',
++      '托管服务的所有端点（包括只读端点）都需要 IAP 身份验证。',
+     ),
+   },
+   format: {
+@@ -3293,14 +3295,14 @@ export function buildOpenApiDocument(serverUrl: string = API_BASE_URL): OpenApiD
+   return {
+     openapi: OPENAPI_VERSION,
+     info: {
+-      title: 'InferenceX Data API',
++      title: 'Knotmeter Data API',
+       version: API_DOCUMENT_VERSION,
+       description: `${overview.description.en}\n\n${overview.conventions.find((item) => item.id === 'client-attribution')!.description.en}`,
+       'x-description-zh': `${overview.description.zh}\n\n${overview.conventions.find((item) => item.id === 'client-attribution')!.description.zh}`,
+     },
+-    servers: [{ url: normalizedServerUrl, description: 'InferenceX production API' }],
++    servers: [{ url: normalizedServerUrl, description: 'Knotmeter API' }],
+     externalDocs: {
+-      description: 'InferenceX API reference',
++      description: 'Knotmeter API reference',
+       url: `${normalizedServerUrl}/api`,
+     },
+     tags: apiDocumentationGroups.map((group) => ({
+diff --git a/packages/app/src/lib/api/api-route-catalog.ts b/packages/app/src/lib/api/api-route-catalog.ts
+index 0956a0d..ec059cb 100644
+--- a/packages/app/src/lib/api/api-route-catalog.ts
++++ b/packages/app/src/lib/api/api-route-catalog.ts
+@@ -1629,7 +1629,7 @@ export const apiContractSourceDigests = [
+     // Reviewed for the MiniMax-M3.1-Flash addition (InferenceX#4426): one new DB
+     // key, `minimaxm31flash`, with its own display name and release date. The
+     // AgentX cookbook documents the model; no endpoint or parameter shape changes.
+-    sourceSha256: '63a8ca335fccef8db1e93205db10456d75f2f8d4f100f89b160e6c1c574d62d4',
++    sourceSha256: '12fd739c92c9f8250276f4eefd3203d504dd07a50cb30419604899d70d8d0799',
+     reviewArea: {
+       en: 'Published benchmark and TCO model names, aliases, and parameter enums.',
+       zh: '已发布基准与 TCO 模型名称、别名和参数枚举。',
+@@ -1769,7 +1769,7 @@ export const apiContractSourceDigests = [
+   },
+   {
+     source: '../db/src/queries/trace-server-metrics.ts',
+-    sourceSha256: '5e5409267997e2ca5df90e6ffa74042090a332ac5bd29e3a52055b8674725bdb',
++    sourceSha256: '7cbb850ea509b836f004eae7c6517d98ea958e9367c2e582ab2c94ed0184c54e',
+     reviewArea: {
+       en: 'Trace server metric metadata, time-series groups, source labels, and units.',
+       zh: '跟踪服务器指标元数据、时间序列分组、来源标签和单位。',
+diff --git a/packages/app/src/lib/calculator/cache-reuse-link.test.ts b/packages/app/src/lib/calculator/cache-reuse-link.test.ts
+index 2bb8f1e..243938b 100644
+--- a/packages/app/src/lib/calculator/cache-reuse-link.test.ts
++++ b/packages/app/src/lib/calculator/cache-reuse-link.test.ts
+@@ -24,6 +24,7 @@ const point: PointMeta = {
+   num_prefill_gpu: 8,
+   num_decode_gpu: 32,
+   recipe_fingerprint: 'measured-recipe',
++  image: null,
+   conc: 8,
+   offload_mode: 'on',
+   kv_offloading: 'dram',
+diff --git a/packages/app/src/lib/catalog/data-mappings.test.ts b/packages/app/src/lib/catalog/data-mappings.test.ts
+index 46be7d2..459f84d 100644
+--- a/packages/app/src/lib/catalog/data-mappings.test.ts
++++ b/packages/app/src/lib/catalog/data-mappings.test.ts
+@@ -369,9 +369,13 @@ describe('getModelLabel', () => {
+ });
+ 
+ describe('getOpenRouterModelId', () => {
+-  it('maps catalog models to exact OpenRouter ids without inventing one for Muse', () => {
++  it('maps catalog models to exact OpenRouter ids without inventing unavailable listings', () => {
+     for (const model of MODEL_OPTIONS) {
+-      if (model === Model.Muse_Spark_Open) {
++      if (
++        model === Model.Muse_Spark_Open ||
++        model === Model.Snowball011 ||
++        model === Model.Hero144k
++      ) {
+         expect(getOpenRouterModelId(model)).toBeNull();
+         continue;
+       }
+diff --git a/packages/app/src/lib/catalog/data-mappings.ts b/packages/app/src/lib/catalog/data-mappings.ts
+index 72b251b..dae4489 100644
+--- a/packages/app/src/lib/catalog/data-mappings.ts
++++ b/packages/app/src/lib/catalog/data-mappings.ts
+@@ -3,6 +3,8 @@ import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants/models
+ import type { ExclusionConflictPolicy, ExclusionSpec } from '../benchmarks/exclusion';
+ 
+ export enum Model {
++  Hero144k = 'Marin-Hero-535B-step144000',
++  Snowball011 = 'Marin-Snowball-67B-A2B-v0.1.1',
+   Llama3_3_70B = 'Llama-3.3-70B-Instruct-FP8',
+   Llama3_1_70B = 'Llama-3.1-70B-Instruct-FP8-KV',
+   DeepSeek_R1 = 'DeepSeek-R1-0528',
+@@ -70,6 +72,16 @@ const STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
+ const GUARDED_ENGINE_FAMILIES = ['vllm', 'sglang'] as const;
+ 
+ const MODEL_CONFIG: Record<Model, ModelConfig> = {
++  [Model.Hero144k]: {
++    label: 'Marin Hero 535B step144000',
++    prefix: 'hero144k',
++    category: 'experimental',
++  },
++  [Model.Snowball011]: {
++    label: 'Marin Snowball 67B-A2B v0.1.1',
++    prefix: 'snowball011',
++    category: 'experimental',
++  },
+   [Model.Muse_Spark_Open]: {
+     label: 'Muse Spark Open 816B',
+     prefix: 'musespark',
+diff --git a/packages/app/src/lib/catalog/model-architectures.test.ts b/packages/app/src/lib/catalog/model-architectures.test.ts
+index 496db69..65be9cb 100644
+--- a/packages/app/src/lib/catalog/model-architectures.test.ts
++++ b/packages/app/src/lib/catalog/model-architectures.test.ts
+@@ -22,9 +22,9 @@ import {
+ } from './model-architectures';
+ 
+ describe('MODEL_RELEASE_DATES coverage', () => {
+-  it('has a sourced date for every model except Muse, whose release date is unverified', () => {
++  it('keeps unverified dates absent for Muse and the private Hero export', () => {
+     const missing = MODEL_OPTIONS.filter((model) => !getModelReleaseDate(model));
+-    expect(missing).toEqual([Model.Muse_Spark_Open]);
++    expect(missing.toSorted()).toEqual([Model.Muse_Spark_Open, Model.Hero144k].toSorted());
+   });
+ 
+   it('anchors each model to its weights publication, not its first sweep', () => {
+diff --git a/packages/app/src/lib/compare/compare-agentx.test.ts b/packages/app/src/lib/compare/compare-agentx.test.ts
+index 96fc177..c595143 100644
+--- a/packages/app/src/lib/compare/compare-agentx.test.ts
++++ b/packages/app/src/lib/compare/compare-agentx.test.ts
+@@ -13,6 +13,18 @@ import { Model } from '../catalog/data-mappings';
+ import { overviewScenariosForModel } from '../overview/overview-data';
+ 
+ describe('AgentX comparison links', () => {
++  it.each(['marin-snowball-v011', 'marin-hero-step144000'])(
++    'opens saved agentic measurements for %s',
++    (slug) => {
++      const model = COMPARE_MODEL_SLUGS.find((entry) => entry.slug === slug)!;
++      expect(comparisonScenarioForModel(model).sequence).toBe('agentic-traces');
++      expect(comparisonPairHref('en', `${slug}-gb200-vs-h100`, model)).toBe(
++        `/compare/${slug}-gb200-vs-h100/agentic`,
++      );
++      expect(agentxDashboardHref('en', model)).toBe(`/inference/${slug}`);
++    },
++  );
++
+   it('keeps the featured AgentX models in the editorial order', () => {
+     expect(FEATURED_AGENTX_MODELS.map((model) => model.slug)).toEqual([
+       'kimi-k3',
+diff --git a/packages/app/src/lib/compare/compare-agentx.ts b/packages/app/src/lib/compare/compare-agentx.ts
+index 9c1fb2a..13b4cfd 100644
+--- a/packages/app/src/lib/compare/compare-agentx.ts
++++ b/packages/app/src/lib/compare/compare-agentx.ts
+@@ -15,7 +15,11 @@ const FEATURED_AGENTX_MODEL_SLUGS = [
+ 
+ const AGENTX_NEW_MODEL_SLUGS: readonly (typeof FEATURED_AGENTX_MODEL_SLUGS)[number][] = [];
+ 
+-const AGENTX_ONLY_MODEL_SLUGS: readonly string[] = ['minimax-m31-flash'];
++const AGENTX_ONLY_MODEL_SLUGS: readonly string[] = [
++  'minimax-m31-flash',
++  'marin-snowball-v011',
++  'marin-hero-step144000',
++];
+ 
+ const AGENTX_SCENARIO_MODEL_SET = new Set<string>([
+   ...FEATURED_AGENTX_MODEL_SLUGS,
+diff --git a/packages/app/src/lib/compare/compare-slug.test.ts b/packages/app/src/lib/compare/compare-slug.test.ts
+index 11ca8de..12855f9 100644
+--- a/packages/app/src/lib/compare/compare-slug.test.ts
++++ b/packages/app/src/lib/compare/compare-slug.test.ts
+@@ -262,6 +262,8 @@ describe('compareModelDisplayLabel', () => {
+ 
+ describe('compareModelSeoName', () => {
+   const EXPECTED: Record<string, string> = {
++    'marin-hero-step144000': 'Marin Hero step144000',
++    'marin-snowball-v011': 'Marin Snowball v0.1.1',
+     'muse-spark-open': 'Muse Spark Open',
+     'deepseek-v4': 'DeepSeek V4 Pro',
+     'deepseek-v41-flash': 'DeepSeek V4.1 Flash',
+diff --git a/packages/app/src/lib/compare/compare-slug.ts b/packages/app/src/lib/compare/compare-slug.ts
+index 53f33b6..c464e33 100644
+--- a/packages/app/src/lib/compare/compare-slug.ts
++++ b/packages/app/src/lib/compare/compare-slug.ts
+@@ -11,6 +11,20 @@ export interface CompareModelSlug {
+ }
+ 
+ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
++  {
++    slug: 'marin-hero-step144000',
++    displayName: 'Marin-Hero-535B-step144000',
++    dbKeys: ['hero144k'],
++    label: 'Marin Hero 535B step144000',
++    seoName: 'Marin Hero step144000',
++  },
++  {
++    slug: 'marin-snowball-v011',
++    displayName: 'Marin-Snowball-67B-A2B-v0.1.1',
++    dbKeys: ['snowball011'],
++    label: 'Marin Snowball 67B-A2B v0.1.1',
++    seoName: 'Marin Snowball v0.1.1',
++  },
+   {
+     slug: 'muse-spark-open',
+     displayName: 'Muse-Spark-Open',
+diff --git a/packages/app/src/lib/compare/compare-ssr.ts b/packages/app/src/lib/compare/compare-ssr.ts
+index 84f77f6..dd0ee6e 100644
+--- a/packages/app/src/lib/compare/compare-ssr.ts
++++ b/packages/app/src/lib/compare/compare-ssr.ts
+@@ -27,6 +27,8 @@ import { getHardwareConfig, getGpuSpecs } from '@/lib/catalog/constants';
+ export { getCachedBenchmarks };
+ 
+ export const KNOWN_MODELS = new Set([
++  'Marin-Hero-535B-step144000',
++  'Marin-Snowball-67B-A2B-v0.1.1',
+   'Muse-Spark-Open',
+   'Llama-3.3-70B-Instruct-FP8',
+   'Llama-3.1-70B-Instruct-FP8-KV',
+diff --git a/packages/app/src/lib/live-seo/rankings.test.ts b/packages/app/src/lib/live-seo/rankings.test.ts
+index 6247ac3..dd4ca5c 100644
+--- a/packages/app/src/lib/live-seo/rankings.test.ts
++++ b/packages/app/src/lib/live-seo/rankings.test.ts
+@@ -57,7 +57,6 @@ describe('rankings registry', () => {
+   it('has one page per (kind, model) pair', () => {
+     const entries = getAllRankingPageEntries();
+     expect(entries.length).toBe(RANKING_KINDS.length * INFERENCE_MODEL_SLUGS.length);
+-    expect(entries.length).toBe(34);
+   });
+ 
+   it('has unique, well-formed slugs', () => {
+diff --git a/packages/app/src/lib/live-seo/run-pages.test.ts b/packages/app/src/lib/live-seo/run-pages.test.ts
+index fbb69bb..6a32c9b 100644
+--- a/packages/app/src/lib/live-seo/run-pages.test.ts
++++ b/packages/app/src/lib/live-seo/run-pages.test.ts
+@@ -24,7 +24,6 @@ describe('run pages registry', () => {
+   it('has one candidate per (model, chip) pair', () => {
+     const entries = getAllRunPageEntries();
+     expect(entries.length).toBe(INFERENCE_MODEL_SLUGS.length * getAllChipPages().length);
+-    expect(entries.length).toBe(153);
+   });
+ 
+   it('has unique, well-formed slugs', () => {
+diff --git a/packages/constants/src/models.ts b/packages/constants/src/models.ts
+index 6d8b60f..74a9446 100644
+--- a/packages/constants/src/models.ts
++++ b/packages/constants/src/models.ts
+@@ -7,6 +7,8 @@
+  * display option in the UI. See `DISPLAY_MODEL_TO_DB` for the inverse mapping.
+  */
+ export const DB_MODEL_TO_DISPLAY: Record<string, string> = {
++  snowball011: 'Marin-Snowball-67B-A2B-v0.1.1',
++  hero144k: 'Marin-Hero-535B-step144000',
+   dsr1: 'DeepSeek-R1-0528',
+   gptoss120b: 'gpt-oss-120b',
+   llama70b: 'Llama-3.3-70B-Instruct-FP8',
+@@ -126,6 +128,9 @@ export function rowToSequence(row: {
+  * earliest date they actually have data for.
+  */
+ export const MODEL_RELEASE_DATES: Record<string, string> = {
++  // The private Hero export has no verified public weights-release date.
++  // https://huggingface.co/open-athena/Marin-Snowball-67B-A2B-v0.1.1/commits/main
++  'Marin-Snowball-67B-A2B-v0.1.1': '2026-10-22',
+   // Newest first. `sweep:` is the model's "Date added" from MODELS.md — the first
+   // InferenceX benchmark — recorded so the "cannot predate its own weights"
+   // invariant above is checkable by eye at review time.
+diff --git a/packages/constants/src/seo.ts b/packages/constants/src/seo.ts
+index c4088fb..a20e754 100644
+--- a/packages/constants/src/seo.ts
++++ b/packages/constants/src/seo.ts
+@@ -1,5 +1,5 @@
+-export const SITE_NAME = 'InferenceX';
+-export const SITE_URL = 'https://inferencex.semianalysis.com';
++export const SITE_NAME = 'Knotmeter';
++export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://inferencex.semianalysis.com';
+ export const AUTHOR_NAME = 'SemiAnalysis';
+ export const AUTHOR_URL = 'https://semianalysis.com';
+ export const AUTHOR_HANDLE = '@SemiAnalysis_';
+diff --git a/packages/db/src/etl/benchmark-ingest-upsert.test.ts b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
+index 12c5a9d..d37e302 100644
+--- a/packages/db/src/etl/benchmark-ingest-upsert.test.ts
++++ b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
+@@ -75,3 +75,56 @@ describe('bulkIngestBenchmarkRows — power_audit on conflict', () => {
+     expect(await ingest(singleTurn)).toEqual([null]);
+   });
+ });
++
++describe('bulkIngestBenchmarkRows — trace-derived cache rates on conflict', () => {
++  it('refreshes aggregate-only rows but preserves linked trace rates across replay', async () => {
++    const aggregate = row({
++      metrics: { server_gpu_cache_hit_rate: 0.57382, output_tput_per_gpu: 86.31751 },
++    });
++    await bulkIngestBenchmarkRows(sql, [aggregate], 1, '2026-09-11');
++    await bulkIngestBenchmarkRows(
++      sql,
++      [{ ...aggregate, metrics: { server_gpu_cache_hit_rate: 0.6 } }],
++      1,
++      '2026-09-11',
++    );
++    const before = await db.query<{ id: number; metrics: Record<string, number> }>(
++      'SELECT id, metrics FROM benchmark_results',
++    );
++    expect(before.rows[0].metrics.server_gpu_cache_hit_rate).toBe(0.6);
++    const trace = await db.query<{ id: number }>(
++      'INSERT INTO agentic_trace_replay DEFAULT VALUES RETURNING id',
++    );
++    const traceId = trace.rows[0].id;
++    await db.query(
++      `UPDATE benchmark_results SET trace_replay_id = $1, metrics = $2::jsonb WHERE id = $3`,
++      [
++        traceId,
++        JSON.stringify({
++          server_gpu_cache_hit_rate: 0.526827832069493,
++          server_cpu_cache_hit_rate: 0,
++          kv_cache_pool_tokens: 20609536,
++        }),
++        before.rows[0].id,
++      ],
++    );
++    await bulkIngestBenchmarkRows(sql, [aggregate], 1, '2026-09-11');
++    const after = await db.query<{
++      id: number;
++      trace_replay_id: number;
++      metrics: Record<string, number>;
++    }>('SELECT id, trace_replay_id, metrics FROM benchmark_results');
++    expect(after.rows).toEqual([
++      {
++        id: before.rows[0].id,
++        trace_replay_id: traceId,
++        metrics: {
++          server_gpu_cache_hit_rate: 0.526827832069493,
++          server_cpu_cache_hit_rate: 0,
++          kv_cache_pool_tokens: 20609536,
++          output_tput_per_gpu: 86.31751,
++        },
++      },
++    ]);
++  });
++});
+diff --git a/packages/db/src/etl/benchmark-ingest.ts b/packages/db/src/etl/benchmark-ingest.ts
+index 0d12ce3..3c68dd5 100644
+--- a/packages/db/src/etl/benchmark-ingest.ts
++++ b/packages/db/src/etl/benchmark-ingest.ts
+@@ -107,12 +107,17 @@ export async function bulkIngestBenchmarkRows(
+       recipe_fingerprint
+     )
+     do update set
+-      -- Replace metrics with the fresh artifact values, but carry over
+-      -- kv_cache_pool_tokens: it is derived from the server log at
+-      -- insertServerLog time (not present in any artifact JSON), so a later
+-      -- upsert from the aggregated results_bmk artifact would silently wipe it.
++      -- Retain metrics derived from stored telemetry when an aggregate is replayed.
++      -- A linked trace is not reprocessed, so its chart-window cache rates must
++      -- survive the aggregate's server-counter rates on repeat ingestion.
+       metrics = excluded.metrics || jsonb_strip_nulls(
+-        jsonb_build_object('kv_cache_pool_tokens', benchmark_results.metrics->'kv_cache_pool_tokens')
++        jsonb_build_object(
++          'kv_cache_pool_tokens', benchmark_results.metrics->'kv_cache_pool_tokens',
++          'server_gpu_cache_hit_rate', case when benchmark_results.trace_replay_id is not null
++            then benchmark_results.metrics->'server_gpu_cache_hit_rate' end,
++          'server_cpu_cache_hit_rate', case when benchmark_results.trace_replay_id is not null
++            then benchmark_results.metrics->'server_cpu_cache_hit_rate' end
++        )
+       ),
+       image = excluded.image,
+       workers = excluded.workers,
+diff --git a/packages/db/src/etl/normalizers.test.ts b/packages/db/src/etl/normalizers.test.ts
+index eb07bae..17ad89e 100644
+--- a/packages/db/src/etl/normalizers.test.ts
++++ b/packages/db/src/etl/normalizers.test.ts
+@@ -14,6 +14,16 @@ import {
+ } from './normalizers';
+ import { DB_MODEL_TO_DISPLAY } from '@semianalysisai/inferencex-constants';
+ 
++describe('Marin Hero serving export', () => {
++  it.each([
++    { infmax_model_prefix: 'hero144k' },
++    { model_prefix: 'hero144k' },
++    { model: 'marin-community/Hero-535B-step144000' },
++  ])('keeps the pinned Hero checkpoint separate from Snowball: %j', (row) => {
++    expect(resolveModelKey(row)).toBe('hero144k');
++  });
++});
++
+ describe('Muse Spark Open ingestion', () => {
+   it.each([
+     { infmax_model_prefix: 'musespark' },
+diff --git a/packages/db/src/etl/normalizers.ts b/packages/db/src/etl/normalizers.ts
+index 552759e..bb26350 100644
+--- a/packages/db/src/etl/normalizers.ts
++++ b/packages/db/src/etl/normalizers.ts
+@@ -33,6 +33,8 @@ function resolvePrefixToKey(prefix: string): string | null {
+ }
+ 
+ export const MODEL_TO_KEY: Record<string, string> = {
++  'marin-community/Hero-535B-step144000': 'hero144k',
++  'open-athena/Marin-Snowball-67B-A2B-v0.1.1': 'snowball011',
+   'nvidia/DeepSeek-R1-0528-FP4-V2': 'dsr1',
+   'nvidia/DeepSeek-R1-0528-FP4-v2': 'dsr1',
+   'nvidia/DeepSeek-R1-0528-FP4': 'dsr1',
+diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/workflow-run.test.ts
+index ed633fe..6f7d961 100644
+--- a/packages/db/src/etl/workflow-run.test.ts
++++ b/packages/db/src/etl/workflow-run.test.ts
+@@ -4,7 +4,7 @@ import { createWorkflowRunServices } from './workflow-run';
+ 
+ const RUN_ID = 12_345_678_901;
+ 
+-function runResponse(repo: string): Response {
++function runResponse(repo: string, runAttempt = 2): Response {
+   return Response.json({
+     name: 'Run Sweep',
+     status: 'completed',
+@@ -15,7 +15,7 @@ function runResponse(repo: string): Response {
+     head_sha: '0123456789abcdef0123456789abcdef01234567',
+     head_branch: 'sweep-updates',
+     head_commit: { message: 'Add sweep' },
+-    run_attempt: 2,
++    run_attempt: runAttempt,
+     pull_requests: [{ number: 12 }],
+     repository: { html_url: `https://github.com/${repo}` },
+   });
+@@ -34,6 +34,23 @@ afterEach(() => {
+ });
+ 
+ describe('fetchGithubRun', () => {
++  it('keeps historical attempts separate from the latest run response', async () => {
++    const fetchMock = stubFetch(
++      runResponse('example-org/single', 1),
++      runResponse('example-org/single'),
++    );
++    const { fetchGithubRun } = createWorkflowRunServices({} as never, 'test-token', [
++      'example-org/single',
++    ]);
++    await expect(fetchGithubRun(RUN_ID, 1)).resolves.toMatchObject({ runAttempt: 1 });
++    await expect(fetchGithubRun(RUN_ID, 2)).resolves.toMatchObject({ runAttempt: 2 });
++    await expect(fetchGithubRun(RUN_ID, 1)).resolves.toMatchObject({ runAttempt: 1 });
++    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
++      `https://api.github.com/repos/example-org/single/actions/runs/${RUN_ID}/attempts/1`,
++      `https://api.github.com/repos/example-org/single/actions/runs/${RUN_ID}/attempts/2`,
++    ]);
++  });
++
+   it('searches the primary and then the legacy repository by default', async () => {
+     vi.stubEnv('INFERENCEX_SOURCE_REPOS', undefined);
+     const fetchMock = stubFetch(
+diff --git a/packages/db/src/etl/workflow-run.ts b/packages/db/src/etl/workflow-run.ts
+index d4f3195..17d0b9c 100644
+--- a/packages/db/src/etl/workflow-run.ts
++++ b/packages/db/src/etl/workflow-run.ts
+@@ -35,24 +35,28 @@ export function createWorkflowRunServices(
+   repos: readonly string[] = [...benchmarkSourceRepos(), LEGACY_GITHUB_REPO],
+ ) {
+   const workflowRunCache = new Map<string, number>();
+-  const githubRunCache = new Map<number, GithubRunInfo | null>();
++  const githubRunCache = new Map<string, GithubRunInfo | null>();
+ 
+-  async function fetchGithubRun(runId: number): Promise<GithubRunInfo | null> {
+-    if (githubRunCache.has(runId)) return githubRunCache.get(runId)!;
++  async function fetchGithubRun(runId: number, runAttempt?: number): Promise<GithubRunInfo | null> {
++    const cacheKey = `${runId}:${runAttempt ?? 'latest'}`;
++    if (githubRunCache.has(cacheKey)) return githubRunCache.get(cacheKey)!;
+     if (!githubToken) {
+-      githubRunCache.set(runId, null);
++      githubRunCache.set(cacheKey, null);
+       return null;
+     }
+ 
+     try {
+       let resp: Response | null = null;
+       for (const repo of repos) {
+-        resp = await fetch(`${GITHUB_API_BASE}/repos/${repo}/actions/runs/${runId}`, {
+-          headers: {
+-            Authorization: `Bearer ${githubToken}`,
+-            Accept: 'application/vnd.github+json',
++        resp = await fetch(
++          `${GITHUB_API_BASE}/repos/${repo}/actions/runs/${runId}${runAttempt ? `/attempts/${runAttempt}` : ''}`,
++          {
++            headers: {
++              Authorization: `Bearer ${githubToken}`,
++              Accept: 'application/vnd.github+json',
++            },
+           },
+-        });
++        );
+         if (resp.ok) break;
+         if (resp.status !== 404) {
+           console.warn(
+@@ -61,7 +65,7 @@ export function createWorkflowRunServices(
+         }
+       }
+       if (!resp || !resp.ok) {
+-        githubRunCache.set(runId, null);
++        githubRunCache.set(cacheKey, null);
+         return null;
+       }
+       const d = (await resp.json()) as Record<string, any>;
+@@ -88,11 +92,11 @@ export function createWorkflowRunServices(
+         runAttempt: typeof d.run_attempt === 'number' ? d.run_attempt : null,
+         pullRequests,
+       };
+-      githubRunCache.set(runId, info);
++      githubRunCache.set(cacheKey, info);
+       return info;
+     } catch (error: any) {
+       console.warn(`  [WARN] GitHub API run ${runId}: ${error.message}`);
+-      githubRunCache.set(runId, null);
++      githubRunCache.set(cacheKey, null);
+       return null;
+     }
+   }
+diff --git a/packages/db/src/ingest-ci-run.ts b/packages/db/src/ingest-ci-run.ts
+index 50130cb..d972667 100644
+--- a/packages/db/src/ingest-ci-run.ts
++++ b/packages/db/src/ingest-ci-run.ts
+@@ -296,7 +296,10 @@ async function main(): Promise<void> {
+   ]);
+ 
+   const runId = parseInt(runIdStr, 10);
+-  const ghInfo = await fetchGithubRun(runId);
++  const ghInfo = await fetchGithubRun(runId, runAttemptNum);
++  if (!ghInfo) {
++    throw new Error('GitHub source run metadata is unavailable; retry ingestion');
++  }
+   const triggerRunIdStr = reusedIngestMetadata?.triggerRunId ?? requestedRunIdStr;
+   const triggerRunId = parseInt(triggerRunIdStr, 10);
+   const triggerGhInfo = reusedIngestMetadata ? await fetchGithubRun(triggerRunId) : null;
+diff --git a/packages/db/src/queries/trace-server-metrics.test.ts b/packages/db/src/queries/trace-server-metrics.test.ts
+index bbbffb1..be3118f 100644
+--- a/packages/db/src/queries/trace-server-metrics.test.ts
++++ b/packages/db/src/queries/trace-server-metrics.test.ts
+@@ -56,6 +56,7 @@ function metaRow(overrides: Record<string, unknown> = {}) {
+     num_prefill_gpu: 8,
+     num_decode_gpu: 64,
+     recipe_fingerprint: 'exact-fingerprint',
++    image: 'marin-vllm:verified-build',
+     conc: 128,
+     offload_mode: 'off',
+     kv_offloading: null,
+@@ -124,6 +125,7 @@ describe('getTraceServerMetrics', () => {
+       num_prefill_gpu: 8,
+       num_decode_gpu: 64,
+       recipe_fingerprint: 'exact-fingerprint',
++      image: 'marin-vllm:verified-build',
+     });
+     expect(calls).toHaveLength(1);
+     expect(calls[0]).not.toContain('server_metrics_json_gz as blob');
+diff --git a/packages/db/src/queries/trace-server-metrics.ts b/packages/db/src/queries/trace-server-metrics.ts
+index 66dfa5c..8e12a6c 100644
+--- a/packages/db/src/queries/trace-server-metrics.ts
++++ b/packages/db/src/queries/trace-server-metrics.ts
+@@ -31,7 +31,7 @@ export type {
+ // The endpoint payload combines chart_series with separately queried point
+ // metadata. Keep a composite response version so metadata-shape changes roll
+ // the blob-cache namespace without forcing an expensive chart_series backfill.
+-const POINT_META_VERSION = 6;
++const POINT_META_VERSION = 7;
+ export const TRACE_SERVER_METRICS_VERSION = CHART_SERIES_VERSION * 100 + POINT_META_VERSION;
+ 
+ export interface MetricSourceDescriptor {
+@@ -58,6 +58,7 @@ export interface PointMeta {
+   num_prefill_gpu: number;
+   num_decode_gpu: number;
+   recipe_fingerprint: string | null;
++  image: string | null;
+   conc: number;
+   offload_mode: string | null;
+   kv_offloading: string | null;
+@@ -163,6 +164,7 @@ function buildMeta(row: RawMetaRow): PointMeta {
+     num_prefill_gpu: row.num_prefill_gpu,
+     num_decode_gpu: row.num_decode_gpu,
+     recipe_fingerprint: row.recipe_fingerprint,
++    image: row.image,
+     conc: row.conc,
+     offload_mode: row.offload_mode,
+     kv_offloading: row.kv_offloading,
+@@ -343,6 +345,7 @@ export async function getTraceServerMetrics(
+       c.decode_tp, c.decode_ep, c.decode_dp_attention, c.decode_num_workers,
+       c.num_prefill_gpu, c.num_decode_gpu,
+       br.recipe_fingerprint,
++      br.image,
+       br.conc, br.offload_mode, br.isl, br.osl, br.benchmark_type,
+       br.date::text,
+       case when wr.html_url is not null then wr.html_url || '/attempts/' || wr.run_attempt else null end as run_url,

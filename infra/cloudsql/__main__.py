@@ -4,8 +4,8 @@
 """Pulumi entry point for Marin's shared Cloud SQL metadata instance.
 
 Declares the `marin-metadata` PostgreSQL instance through the reusable
-`iac.gcp.cloud_sql.CloudSqlPostgres` component — one instance carrying the `grafana` and
-`evals` databases, with a Secret Manager secret shell per native user — plus the
+`iac.gcp.cloud_sql.CloudSqlPostgres` component — one instance carrying `grafana`,
+`evals` and `knotmeter`, with a Secret Manager secret shell per native user — plus the
 `marin-eval-metadata` GCS bucket that holds eval run records. SQL users and secret values are
 set out-of-band; see README.md.
 
@@ -32,8 +32,13 @@ def main() -> None:
             project=PROJECT,
             region=REGION,
             instance_name=INSTANCE,
-            databases=("grafana", "evals"),
-            password_secrets=("cloudsql-grafana-password", "cloudsql-evals-password"),
+            databases=("grafana", "evals", "knotmeter"),
+            password_secrets=(
+                "cloudsql-grafana-password",
+                "cloudsql-evals-password",
+                "cloudsql-knotmeter-reader-password",
+                "cloudsql-knotmeter-writer-password",
+            ),
         ),
         gcp_provider=provider,
     )
@@ -51,6 +56,8 @@ def main() -> None:
     pulumi.export("connection_name", postgres.connection_name)
     pulumi.export("public_ip", postgres.public_ip)
     pulumi.export("eval_bucket", bucket.name)
+    # Preserve the deployed ops credential-generation output during this scoped addition.
+    pulumi.export("ops_password_generation", 1)
 
 
 main()
