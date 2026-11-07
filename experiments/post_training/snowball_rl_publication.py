@@ -365,14 +365,12 @@ def publish_controls(preset_name: str, *, service_url: str | None = None) -> dic
     for pin in gate.control_pins(preset_name):
         for index in range(pin.runs):
             path = gate.control_path(preset, pin, index)
-            training = replace(
-                ArtifactStep.adopt(
-                    presets.control_name(pin.preset, pin.main_commit, index),
-                    pin.revision,
-                    path,
-                    kind=Artifact,
-                    config={},
-                ),
+            training = ArtifactStep(
+                name=presets.control_name(pin.preset, pin.main_commit, index),
+                version=pin.revision,
+                artifact_type=Artifact,
+                build_config=lambda _context: None,
+                run=Artifact.raw_load,
                 override_path=path,
             )
             published = publish_run(training, presets.PRESETS[pin.preset], service_url=service_url)
