@@ -1,0 +1,29 @@
+{
+  "schema_version": "1",
+  "panel_id": "biotasks-v3-openrouter-additional20-v1",
+  "task_snapshot_sha256": "b893bd40fb1c6676619b32cd11a180969605b2b69a7a3b5b6df1974ae4bbb8d6",
+  "prior_response_sha256": "acf9b5aff6a47230e2e0d0c751554e03969d4af9fbbb22099154db1aed039cda",
+  "max_new_spend_usd": "40",
+  "models": [
+    {"model":"openai/gpt-4o-mini","provider_tag":"openai","provider_name":"OpenAI","context_window":128000},
+    {"model":"openai/gpt-oss-20b","provider_tag":"primeintellect/fp4","provider_name":"PrimeIntellect","context_window":131072},
+    {"model":"openai/gpt-oss-120b","provider_tag":"primeintellect/fp4","provider_name":"PrimeIntellect","context_window":131072},
+    {"model":"qwen/qwen3.5-9b","provider_tag":"primeintellect/bf16","provider_name":"PrimeIntellect","context_window":262144},
+    {"model":"qwen/qwen3.5-35b-a3b","provider_tag":"alibaba","provider_name":"Alibaba","context_window":262144},
+    {"model":"qwen/qwen3-32b","provider_tag":"siliconflow/fp8","provider_name":"SiliconFlow","context_window":131072},
+    {"model":"mistralai/ministral-14b-2512","provider_tag":"mistral/zdr","provider_name":"Mistral","context_window":262144},
+    {"model":"mistralai/mistral-small-2603","provider_tag":"mistral/zdr","provider_name":"Mistral","context_window":262144},
+    {"model":"mistralai/mistral-large-2512","provider_tag":"mistral/zdr","provider_name":"Mistral","context_window":262144},
+    {"model":"meta-llama/llama-3.3-70b-instruct","provider_tag":"deepinfra/turbo","provider_name":"DeepInfra","context_window":131072},
+    {"model":"meta-llama/llama-4-scout","provider_tag":"google-vertex/us-east5","provider_name":"Google","context_window":1310720},
+    {"model":"google/gemini-2.5-flash-lite","provider_tag":"google-ai-studio","provider_name":"Google AI Studio","context_window":1048576},
+    {"model":"google/gemini-3-flash-preview","provider_tag":"google-ai-studio","provider_name":"Google AI Studio","context_window":1048576},
+    {"model":"deepseek/deepseek-chat-v3.1","provider_tag":"deepinfra/fp4","provider_name":"DeepInfra","context_window":163840},
+    {"model":"deepseek/deepseek-v3.1-terminus","provider_tag":"siliconflow/fp8","provider_name":"SiliconFlow","context_window":163840},
+    {"model":"z-ai/glm-4.7-flash","provider_tag":"novita/bf16","provider_name":"Novita","context_window":200000},
+    {"model":"z-ai/glm-4.5-air","provider_tag":"novita/bf16","provider_name":"Novita","context_window":131072},
+    {"model":"minimax/minimax-m2.5","provider_tag":"venice","provider_name":"Venice","context_window":198000},
+    {"model":"cohere/command-a-plus","provider_tag":"cohere/fp8","provider_name":"Cohere","context_window":192000},
+    {"model":"nvidia/nemotron-3-super-120b-a12b","provider_tag":"deepinfra/bf16","provider_name":"DeepInfra","context_window":262144}
+  ]
+}
