@@ -1416,12 +1416,14 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name
     descriptor = document["config"]["inputs"]["validation_data"][0]
     copied = source / "panel-copy"
     shutil.copytree(descriptor["uri"], copied)
-    original = scoring.task_set_sha256(document["config"], "test_panel")
+    panel = scoring.read_recorded_panel(document["config"], "test_panel")
+    original = panel.task_set_sha256
     descriptor["uri"] = str(copied)
     path = copied / descriptor["relative_path"]
     rows = pq.read_table(path).to_pylist()
+    assert set(panel.task_ids) == {json.loads(row["task_spec"])["id"] for row in rows}
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), path)
-    assert scoring.task_set_sha256(document["config"], "test_panel") == original
+    assert scoring.read_recorded_panel(document["config"], "test_panel").task_set_sha256 == original
     _json(source / "terminal.json", document)
     _json(source / "resolved-launch.yaml", {"config": document["config"]})
     assert rescore(preset, "--candidate", "users/test/task-content")["verdict"] == "pass"
@@ -1432,12 +1434,12 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name
     _json(changed_source / "resolved-launch.yaml", {"config": changed_document["config"]})
     rows[0]["task_spec"] = json.dumps(json.loads(rows[0]["task_spec"]), indent=2)
     pq.write_table(pa.Table.from_pylist(rows), path)
-    assert scoring.task_set_sha256(document["config"], "test_panel") != original
+    assert scoring.read_recorded_panel(document["config"], "test_panel").task_set_sha256 != original
     task = json.loads(rows[0]["task_spec"])
     task["context"]["events"][0]["content"] = "Return dog."
     rows[0]["task_spec"] = json.dumps(task)
     pq.write_table(pa.Table.from_pylist(rows), path)
-    assert scoring.task_set_sha256(document["config"], "test_panel") != original
+    assert scoring.read_recorded_panel(document["config"], "test_panel").task_set_sha256 != original
     report = rescore(preset, "--candidate", "users/test/task-content-changed")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
