@@ -193,8 +193,9 @@ def exact_proposal(
         raise ImportError(CVXPY_MISSING) from error
 
     # The sums are products with constant vectors, which give the solvers the same problem: cp.sum takes its result's
-    # shape from np.sum over an uninitialized array, which warns ("invalid value") whenever that memory holds both +inf
-    # and -inf, so a proposal's warnings would depend on what ran before it in the process. A NaN there sums silently.
+    # shape from np.sum over an uninitialized array, which warns whenever that memory holds values whose sum is invalid
+    # (+inf with -inf, or a signaling NaN) or overflows, so a proposal's warnings would depend on what ran before it in
+    # the process. A quiet NaN sums silently.
     ones = np.ones(len(natural))
     weights = cp.Variable(len(natural))
     prediction = sum(

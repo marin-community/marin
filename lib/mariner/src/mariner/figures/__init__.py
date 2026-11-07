@@ -89,8 +89,9 @@ FIGURES: dict[str, FigureSpec] = {
 
 
 def write_figure(spec: FigureSpec, root: Path, out: Path) -> FigureData:
-    """Draw ``spec`` from the snapshot at ``root`` in the shared style and save it as ``spec.path(out)``; returns the
-    drawn figure and every series it plots."""
+    """Draw ``spec`` from the snapshot at ``root`` in the shared style and save it as ``spec.path(out)``, creating
+    ``out`` if needed; returns the drawn figure and every series it plots."""
+    out.mkdir(parents=True, exist_ok=True)
     with style():
         drawn = spec.draw(root)
         save(drawn.figure, spec.path(out))
@@ -106,7 +107,6 @@ def write_figures(root: Path, out: Path, labels: Sequence[str] | None = None) ->
     unknown = [label for label in selected if label not in FIGURES]
     if unknown:
         raise ValueError(f"no figure is labelled {', '.join(unknown)}; the figures are {', '.join(FIGURES)}")
-    out.mkdir(parents=True, exist_ok=True)
     paths = []
     for label in selected:
         spec = FIGURES[label]

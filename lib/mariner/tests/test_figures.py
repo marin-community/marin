@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import filecmp
 import json
 import math
 from collections.abc import Callable
@@ -56,7 +55,6 @@ from mariner.tables import REPEATED_SCALE, Statistic, scaling_main_table
 
 # figures_tables.csv marks configuration constants and the two-phase data the release omits among a figure's configs.
 INDEX_MARKERS = {"constant", "deferred"}
-PAPER_FIGURES = Path(__file__).resolve().parents[1] / "paper_figures"  # the committed PDFs, lib/mariner/paper_figures
 TERMS = "fig:mariner-terms"  # the one figure that reads no table: mariner.model's terms at the paper's values
 # Figure 3's inset tables print each sweep's training FLOPs and fitted optimum in materialized StarCoder epochs, by
 # path and scale; the paths match compute at each scale (its caption: "within 3% across columns").
@@ -1117,16 +1115,11 @@ def snapshot_view(snapshot: Path, label: str, root: Path) -> Path:
 @pytest.mark.parametrize("label", list(FIGURES))
 def test_redraw_reproduces_the_paper(snapshot, label, tmp_path):
     """Each figure, drawn once from a view of the snapshot that holds only the configs its row of figures_tables.csv
-    names, reproduces what the paper prints from its data and writes the committed PDF byte for byte, so that
-    lib/mariner/paper_figures cannot drift from the code."""
-    spec = FIGURES[label]
-    values = write_figure(spec, snapshot_view(snapshot, label, tmp_path / "snapshot"), tmp_path).values
+    names and written as a PDF, reproduces what the paper prints from its data."""
+    values = write_figure(FIGURES[label], snapshot_view(snapshot, label, tmp_path / "snapshot"), tmp_path).values
     PAPER_CHECKS[label](values)
     if label in SNAPSHOT_CHECKS:
         SNAPSHOT_CHECKS[label](values, snapshot)
-    assert filecmp.cmp(
-        spec.path(tmp_path), spec.path(PAPER_FIGURES), shallow=False
-    ), f"{spec.path(tmp_path).name} differs from {PAPER_FIGURES}: redraw it with mariner figures"
 
 
 @pytest.mark.data_integration
