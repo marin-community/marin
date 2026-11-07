@@ -10,7 +10,15 @@ import numpy as np
 import pandas as pd
 import pytest
 from mariner.cli import main
-from mariner.data import FIGURES_INDEX, OBJECTIVES, objective_from_tasks, read_table, release_tasks
+from mariner.data import (
+    FIGURES_INDEX,
+    MAIN_SWARM,
+    OBJECTIVES,
+    objective_from_tasks,
+    read_table,
+    release_runs,
+    release_tasks,
+)
 from mariner.figures import FIGURES, write_figures
 from mariner.figures.analysis import (
     EPOCH_CAPS,
@@ -23,7 +31,7 @@ from mariner.figures.analysis import (
     sweep_olmix_law,
 )
 from mariner.figures.epochs import Track
-from mariner.figures.layout import Method
+from mariner.figures.layout import OBJECTIVE_TITLES, Method
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
 from mariner.figures.starcoder import EPOCH_MATCHING_TABLE, epoch_matching
 
@@ -103,6 +111,35 @@ PRINTED_EPOCH_MAXIMA = {
 # The tasks Figure 15 labels, by the names the redraw gives them; the paper prints them as "Basic Skills: pattern
 # recognition", "CSQA" and "SciQ" (sections/analysis.tex:61: "labels identify tasks with negative Olmix $R^2$").
 LABELED_TASKS = {"Basic Skills: Simple Pattern Recognition", "CSQA", "SciQ"}
+# Figure 14's correlations over the 280 designs (its caption, sections/analysis.tex:41: "Top: Uncheatable BPB for 280
+# swarm mixtures"), as its columns print them: Pearson r of their BPB and Spearman rho of their ranks, by (source,
+# target) setting.
+TRANSFER_DESIGNS = 280
+PRINTED_TRANSFER_CORRELATIONS = {
+    ("llama_160m_1p2b", "qwen3_360m_1p6b"): ("0.94", "0.93"),
+    ("llama_160m_1p2b", "llama_200m_6b"): ("0.83", "0.80"),
+    ("qwen3_360m_1p6b", "llama_200m_6b"): ("0.65", "0.59"),
+}
+# sections/analysis.tex:48: "the best swarm mixture at Qwen3 360M/1.6B still ranks second of 280 at Llama 200M/6B".
+PRINTED_BEST_TRANSFER_RANK = 2
+# Figure 16's Spearman correlations over each column's 30 best held-out mixtures, MARINER's and then Olmix's, as the
+# paper's figure prints them since its rebuild from the released fits on 2026-11-07
+# (revision_notes/20261107_fig16_released_fits/CHANGES.md in the paper's folder).
+FRONTIER_MIXTURES = 30  # its caption (sections/analysis.tex:75): "the 30 lowest-loss held-out mixtures"
+PRINTED_FRONTIER_SPEARMAN = {
+    "Uncheatable": ("0.84", "0.71"),
+    "OlmoBaseEval Easy": ("0.34", "0.18"),
+    "Arithmetic": ("0.70", "0.59"),
+    "arXiv physics": ("0.73", "0.59"),
+    "SciQ": ("-0.33", "0.40"),
+}
+# Its titles' signal-to-noise ratios. The paper prints arXiv physics's as 14, dividing by the standard deviation of
+# eleven proportional runs, the June run among them; fits_reliability's ten repeats give 16, which the redraw prints.
+PRINTED_FRONTIER_SNR = {"Uncheatable": 28, "OlmoBaseEval Easy": 13, "Arithmetic": 6, "SciQ": 16}
+# Figure 17 draws every held-out mixture of the two banks that has the component: 169 of the 170 Uncheatable ones (one
+# has no Uncheatable components) and the 157 OlmoBaseEval Easy ones, as the paper's figure does since its rebuild
+# (revision_notes/20261107_fig16_released_fits/CHANGES.md).
+EXTRAPOLATION_POINTS = {"arXiv physics": 169, "SciQ": 157}
 # sections/analysis.tex:8: "the matched proxies place both minima where the target runs do, and FineMath's optimal
 # epoch count is about seven times FLAN's".
 PRINTED_EPOCH_RATIO = 7
@@ -437,11 +474,69 @@ def check_mixture_epochs(values: dict[str, pd.DataFrame]) -> None:
     assert {key: epoch_text(epochs) for key, epochs in largest.items()} == PRINTED_EPOCH_MAXIMA
 
 
+def check_scale_transfer(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 14's printed correlations; its caption (sections/analysis.tex:41): "MARINER's proposal beats every swarm
+    mixture at all three settings", which sections/analysis.tex:45 extends to "every baseline"; and
+    sections/analysis.tex:48: "the best swarm mixture at Qwen3 360M/1.6B still ranks second of 280 at Llama 200M/6B"."""
+    pairs = values["pairs"].set_index(["source", "target"])
+    printed = {pair: (f"{row['pearson']:.2f}", f"{row['spearman']:.2f}") for pair, row in pairs.iterrows()}
+    assert printed == PRINTED_TRANSFER_CORRELATIONS
+    designs = values["designs"].pivot(index="run_label", columns="setting", values="bpb")
+    ranks = values["designs"].pivot(index="run_label", columns="setting", values="rank")
+    proposals = values["proposals"].pivot(index="method", columns="setting", values="bpb")
+    assert len(designs) == TRANSFER_DESIGNS
+    others = proposals.drop(index=Method.MARINER.value)
+    for setting, design_bpb in designs.items():
+        mariner = proposals.loc[Method.MARINER.value, setting]
+        assert mariner < design_bpb.min()
+        assert mariner < others[setting].min()
+    best = designs["qwen3_360m_1p6b"].idxmin()
+    assert ranks.loc[best, "llama_200m_6b"] == PRINTED_BEST_TRANSFER_RANK
+
+
 def check_r2_vs_snr(values: dict[str, pd.DataFrame]) -> None:
     """Figure 15's caption (sections/analysis.tex:61): "labels identify tasks with negative Olmix $R^2$". The redraw
     labels the paper's three tasks."""
     points = values["points"]
     assert set(points.loc[points["labeled"], "name"]) == LABELED_TASKS
+
+
+def check_frontier(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 16's printed Spearman correlations and signal-to-noise ratios; its caption's 30 mixtures per column; and
+    sections/analysis.tex:90: "MARINER's predictions of the best held-out mixtures are instead mostly pessimistic", which
+    holds in every column. ``test_frontier_mixtures_beat_every_swarm_run`` checks the rest of its caption."""
+    correlation = values["spearman"].pivot(index="column", columns="model", values="spearman")
+    printed = {
+        column: (f"{row[Method.MARINER.value]:.2f}", f"{row[Method.OLMIX.value]:.2f}")
+        for column, row in correlation.iterrows()
+    }
+    assert printed == PRINTED_FRONTIER_SPEARMAN
+    snr = values["columns"].set_index("column")["snr"]
+    assert {column: round(snr[column]) for column in PRINTED_FRONTIER_SNR} == PRINTED_FRONTIER_SNR
+    points = values["points"]
+    assert (points.groupby(["column", "model"]).size() == FRONTIER_MIXTURES).all()
+    mariner = points[points["model"] == Method.MARINER.value]
+    pessimistic = (mariner["predicted"] > mariner["measured"]).groupby(mariner["column"]).sum()
+    assert (pessimistic > FRONTIER_MIXTURES / 2).all()
+
+
+def check_extrapolation_residuals(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 17's caption (sections/analysis.tex:84): "MARINER overestimates SciQ loss more for held-out mixtures
+    farther from the swarm, whereas arXiv physics shows no comparable overestimate". SciQ's residual, measured minus
+    predicted, falls with the distance by least squares, and its median over the farther half of the mixtures lies
+    below its median over the nearer half; arXiv physics's slope is not negative, and none of its residuals reaches
+    SciQ's median over the farther half."""
+    residuals = values["residuals"]
+    assert residuals.groupby("component").size().to_dict() == EXTRAPOLATION_POINTS
+    slope, near, far = {}, {}, {}
+    for component, rows in residuals.groupby("component"):
+        slope[component] = np.polyfit(rows["distance"], rows["residual"], 1)[0]
+        farther = rows["distance"] > rows["distance"].median()
+        near[component] = rows.loc[~farther, "residual"].median()
+        far[component] = rows.loc[farther, "residual"].median()
+    assert slope["SciQ"] < 0 <= slope["arXiv physics"]
+    assert far["SciQ"] < near["SciQ"]
+    assert residuals.loc[residuals["component"] == "arXiv physics", "residual"].min() > far["SciQ"]
 
 
 PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
@@ -457,7 +552,10 @@ PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:component-tradeoffs": check_component_tradeoffs,
     "fig:domain-repetition": check_domain_repetition,
     "fig:mixture-epochs": check_mixture_epochs,
+    "fig:r3": check_scale_transfer,
     "fig:r7": check_r2_vs_snr,
+    "fig:analysis-floor": check_frontier,
+    "fig:analysis-extrapolation": check_extrapolation_residuals,
 }
 
 
@@ -536,3 +634,17 @@ def test_domain_repetition_fits_reproduce_the_released_olmix_fits(snapshot):
             weights @ fit[["coefficient_domain", "coefficient_web"]].to_numpy(float)
         )
         np.testing.assert_allclose(law.predict(weights), expected, rtol=0, atol=DOMAIN_FIT_TOLERANCE)
+
+
+@pytest.mark.data_integration
+@pytest.mark.timeout(120)
+def test_frontier_mixtures_beat_every_swarm_run(snapshot):
+    """Figure 16's caption (sections/analysis.tex:75): its 30 lowest-loss held-out mixtures "beat every swarm run on
+    both objectives". The 30 of each objective's column measure below every run of the main swarm on that objective.
+    (Across objectives the claim would fail: 26 of the Uncheatable column's 30 beat the swarm on OlmoBaseEval Easy.)"""
+    points = FIGURES["fig:analysis-floor"].draw(snapshot).values["points"]
+    swarm = release_runs(snapshot, MAIN_SWARM)
+    for objective in OBJECTIVES:
+        column = points[(points["column"] == OBJECTIVE_TITLES[objective]) & (points["model"] == Method.MARINER.value)]
+        assert len(column) == FRONTIER_MIXTURES
+        assert column["measured"].max() < swarm[f"bpb__{objective}"].min()

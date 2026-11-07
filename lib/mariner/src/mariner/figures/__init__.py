@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mariner.figures import analysis, epochs, pipeline, results, surrogate
+from mariner.figures import analysis, epochs, heldout, pipeline, results, surrogate
 from mariner.figures.layout import FigureData, save, style
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,23 @@ FIGURES: dict[str, FigureSpec] = {
         FigureSpec(
             "fig:mixture-epochs", "r_mixture_epochs", ("validation_3e18", "partition"), analysis.draw_mixture_epochs
         ),
+        # Figure 14's row of the dataset's index also names fits, which the redraw does not read.
+        FigureSpec(
+            "fig:r3",
+            "r3_transfer_main",
+            ("swarm_llama_160m_1p2b", "swarm_llama_200m_6b", "swarm_qwen3_360m_1p6b", "heldout", "fits"),
+            heldout.draw_scale_transfer,
+        ),
         FigureSpec("fig:r7", "r7_r2_vs_snr", ("fits",), analysis.draw_r2_vs_snr),
+        FigureSpec(
+            "fig:analysis-floor", "r_analysis_frontier", ("heldout", "fits", "partition", "tasks"), heldout.draw_frontier
+        ),
+        FigureSpec(
+            "fig:analysis-extrapolation",
+            "r_extrapolation_residuals",
+            ("heldout", "fits", "swarm_qwen3_360m_1p6b"),
+            heldout.draw_extrapolation_residuals,
+        ),
     )
 }
 
