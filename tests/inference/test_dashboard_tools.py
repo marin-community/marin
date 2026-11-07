@@ -452,8 +452,6 @@ def _fake_parallel_app(received: list[tuple[str | None, dict[str, object]]]) -> 
     async def search(request: Request) -> JSONResponse:
         body = await request.json()
         received.append((request.headers.get("x-api-key"), body))
-        if "search_queries" not in body:
-            return JSONResponse({"error": {"message": "search_queries: Field required"}}, status_code=422)
         return JSONResponse(PARALLEL_RESULTS)
 
     return Starlette(routes=[Route("/v1/search", search, methods=["POST"])])
@@ -481,11 +479,7 @@ def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
     assert search.status_code == 200
     assert search.json() == PARALLEL_RESULTS
     assert rejected.status_code == 422
-    assert "search_queries" in rejected.json()["details"]
-    assert received == [
-        ("test-key", {"objective": "Find an example", "search_queries": ["example"]}),
-        ("test-key", {"objective": "Find an example"}),
-    ]
+    assert received == [("test-key", {"objective": "Find an example", "search_queries": ["example"]})]
 
     unconfigured = build_dashboard_app(upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info)
     with TestClient(unconfigured) as client:

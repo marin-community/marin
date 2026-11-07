@@ -223,35 +223,18 @@ credential.
 
 ## Web search
 
-The **Web search** checkbox above the Chat composer is shown only when the
-serving process holds a Parallel API key. When it is checked, the request's
-`tools` field gets a `web_search` function with two required arguments:
-`objective`, a one-sentence description of what to find, and `search_queries`,
-a list of keyword queries. The served model's active chat template renders the
-definition, as it does for custom Python tools. The browser sends each call to
-the dashboard's `/web-search` route. That route forwards only `objective` and
-`search_queries` to Parallel's `/v1/search` API, adds the key, and returns
-Parallel's JSON response, typically about 1 KB per result. The key is not sent
-to the browser. A rejected argument returns Parallel's validation error to the
-model. Other Parallel failures return HTTP 502, and the route does not retry.
-Python tools cannot use the name `web_search` while web search is enabled.
-
-To enable web search, deliver the key as the Iris secret `PARALLEL_API_KEY`:
+The **Web search** checkbox above the Chat composer adds a `web_search` tool,
+backed by Parallel's search API, to the request's `tools` field. It is shown
+only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
+dashboard server adds the key to each call, so the browser never receives it.
+Each search is billed to the account that owns the key.
 
 ```bash
-export PARALLEL_API_KEY=...
-uv run marin-serve iris MODEL --cluster marin --parallel-api-key env:PARALLEL_API_KEY
+uv run marin-serve iris MODEL --cluster marin --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
 ```
 
-`--parallel-api-key` takes a secret reference (`env:NAME`, `file:/path`, or
-`gcp-secret://...`). The client resolves it and Iris delivers the value as a
-read-only file, so the key does not appear in the job command. A custom launcher
-that calls `build_dashboard_app` directly must submit the same secret and pass
-`web_search=parallel_web_search_from_secret()` from
-`marin.inference.web_search`.
-
-In brokered mode, the dashboard runs in the broker job, and the model worker
-jobs it submits do not receive the key. In direct mode, the model server runs in
-the same task as the dashboard and can read the key file.
-
-Each search is billed to the Parallel account that owns the key.
+A custom launcher that calls `build_dashboard_app` directly must submit the same
+secret and pass `web_search=parallel_web_search_from_secret()` from
+`marin.inference.web_search`. In brokered mode, the model worker jobs do not
+receive the key; in direct mode, the model server shares the dashboard's task
+and can read it.

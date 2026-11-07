@@ -867,10 +867,10 @@ def _run_broker_worker(
 
 
 def _child_worker_environment(environment: EnvironmentConfig) -> EnvironmentConfig:
-    """Return the environment for a model worker job submitted from this task.
+    """Return the environment for an inference job submitted from this task.
 
-    Inherited secrets become an explicit map without ``PARALLEL_API_KEY``: only the dashboard uses
-    that key, and model workers may run remote model code.
+    Inherited secrets become an explicit map without ``PARALLEL_API_KEY``, because the child job runs
+    model code that may come from the model repository. A dashboard in that child job has no web search.
     """
     if environment.secret_behavior is SecretBehavior.ISOLATE:
         return environment

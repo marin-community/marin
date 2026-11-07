@@ -30,10 +30,6 @@ The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
 named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
 inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``. Once the
 endpoint is ready, the command always mints and prints an endpoint-scoped capability URL.
-
-``--parallel-api-key`` enables the dashboard's ``web_search`` tool. It takes a secret reference such as
-``env:PARALLEL_API_KEY``, resolves it on the client, and delivers the key to the job as the Iris secret
-``PARALLEL_API_KEY``, so the key stays out of the job command.
 """
 
 import contextlib
@@ -81,7 +77,6 @@ from marin.inference.config import (
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from marin.inference.iris_tpu_vllm import RAY_PORTS
-from marin.inference.web_search import PARALLEL_API_KEY_SECRET
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
@@ -439,11 +434,12 @@ def _wait_and_report_endpoint(
     "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
 @click.option(
-    "--parallel-api-key",
-    "parallel_api_key_source",
-    default=None,
-    help="Secret reference for a Parallel API key (e.g. env:PARALLEL_API_KEY). Enables the dashboard's "
-    "web_search tool; the key reaches the job as an Iris secret.",
+    "--secret",
+    "secret_sources",
+    multiple=True,
+    type=(str, str),
+    help="Deliver a named secret to the serving job as a file (NAME SOURCE), e.g. "
+    "--secret PARALLEL_API_KEY env:PARALLEL_API_KEY. Can be repeated.",
 )
 @click.option("--dry-run", is_flag=True, help="Print resources, gang placement and named ports without submitting.")
 @click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
@@ -489,7 +485,7 @@ def main(
     vllm_source: str,
     extras: tuple[str, ...],
     task_image: str | None,
-    parallel_api_key_source: str | None,
+    secret_sources: tuple[tuple[str, str], ...],
     dry_run: bool,
     wait: bool,
     wait_timeout: float,
@@ -614,10 +610,7 @@ def main(
         controller_proxy_timeout_seconds=proxy_timeout,
     )
 
-    # The dashboard runs in this outer job in both direct and brokered mode.
-    secrets = {}
-    if parallel_api_key_source is not None:
-        secrets[PARALLEL_API_KEY_SECRET] = resolve_secret_spec(parallel_api_key_source).value
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
     if workspace_dir is None:
         outer_extras = () if brokered else plan.worker_extras
         environment = EnvironmentSpec(
