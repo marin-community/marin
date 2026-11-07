@@ -3,6 +3,7 @@
 
 """Lean proof sources freeze each statement into the contract the kernel-replay grader checks."""
 
+import json
 import os
 import time
 
@@ -19,6 +20,7 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     declares_target,
     over_quota,
     proof_block,
+    verdict_line,
     without_comments,
 )
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
@@ -162,7 +164,15 @@ def test_a_proof_block_is_read_in_linear_time_before_any_step(block):
 
 
 @pytest.mark.parametrize(
-    "reply", ["```lean4\n" * (REPLY_BYTES // 9), "```" * (REPLY_BYTES // 3), "`" * REPLY_BYTES, "\n" * REPLY_BYTES]
+    "reply",
+    [
+        "```lean4\n" * (REPLY_BYTES // 9),
+        "```" * (REPLY_BYTES // 3),
+        "`" * REPLY_BYTES,
+        "\n" * REPLY_BYTES,
+        "```" + " " * REPLY_BYTES,
+    ],
+    ids=["open_fences", "bare_fences", "backticks", "newlines", "fence_then_blanks"],
 )
 def test_a_reply_is_read_in_linear_time_before_any_step(reply):
     start = time.monotonic()
@@ -242,3 +252,10 @@ def test_root_copies_only_a_regular_file_the_candidate_left_and_never_fails_as_t
         assert not copy_untrusted(tmp_path / source, tmp_path / f"{source}.copy", 16)
     assert not copy_untrusted(tmp_path / "data", tmp_path / "no-such-directory" / "copy", 16)
     assert not copy_untrusted(tmp_path / "data", tmp_path / "small", 1)
+
+
+def test_the_verdict_is_the_last_json_line_even_when_a_name_holds_a_line_separator():
+    entry = {"name": "t", "ok": True, "mode": "prove", "axioms": ["propext\u2028"]}
+    output = "replaying\n" + json.dumps({"ok": True, "targets": [entry]}, ensure_ascii=False) + "\n"
+    assert json.loads(verdict_line(output)) == {"ok": True, "targets": [entry]}
+    assert verdict_line("no verdict\n") is None

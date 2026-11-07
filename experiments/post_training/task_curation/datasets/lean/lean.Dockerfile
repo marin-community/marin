@@ -5,8 +5,10 @@
 # lean-toolchain is LEAN_TOOLCHAIN, which the build checks) with the prebuilt object files that
 # `lake exe cache get` fetches, and the checker by commit: `lean-export` and `lean-verify` from
 # PrimeIntellect-ai/prime-envs (packages/lean_common/image/checker, Apache-2.0; its LICENSE is copied
-# beside the build). Grading runs `lean` directly with the LEAN_PATH recorded here, so it needs neither
-# the network nor Lake.
+# beside the build). The build makes one change to the checker: `sameExpr` no longer skips expressions
+# that are already equal, so each one is compared through its own module's matchers, which
+# `unchangedDeps` relies on. Grading runs `lean` directly with the LEAN_PATH recorded here, so it needs
+# neither the network nor Lake.
 ARG ELAN_VERSION=4.2.4
 ARG ELAN_SHA256=42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
 ARG MATHLIB_COMMIT=d13f23b723b8a846827a245b89c10fc7d3f11612
@@ -42,6 +44,9 @@ RUN git init -q /tmp/prime-envs \
     && cp LICENSE /opt/lean/verify/LICENSE \
     && cd /opt/lean/verify \
     && rm -rf /tmp/prime-envs \
+    && sed -i 's/^  a == b || proofFree ma (unfoldMatchers ma a) == proofFree mb (unfoldMatchers mb b)$/  proofFree ma (unfoldMatchers ma a) == proofFree mb (unfoldMatchers mb b)/' Main.lean \
+    && test "$(grep -c '^  proofFree ma (unfoldMatchers ma a) == proofFree mb (unfoldMatchers mb b)$' Main.lean)" = 1 \
+    && ! grep -q 'a == b || proofFree' Main.lean \
     && echo "${LEAN_TOOLCHAIN}" > lean-toolchain \
     && lake build \
     && chmod -R a+rX /opt/lean/verify

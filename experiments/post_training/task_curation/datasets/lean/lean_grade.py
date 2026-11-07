@@ -106,8 +106,8 @@ MAX_PROCESSES = 1024
 """Processes and threads the candidate's uid may run."""
 OUTPUT_TAIL = 4000
 """Bytes of a step's output kept for diagnostics."""
-FENCE = re.compile(r"```[ \t]*(?P<language>[\w+-]*)[ \t]*\n(?P<code>.*?)```", re.DOTALL)
-"""A fenced code block and its language tag."""
+FENCE = re.compile(r"```[ \t]*+(?P<language>[\w+-]*+)[ \t]*+\n(?P<code>.*?)```", re.DOTALL)
+"""A fenced code block and its language tag; the possessive quantifiers keep a long run of blanks linear."""
 IMPORT_LINE = re.compile(r"^[ \t]*import\s.*$", re.MULTILINE)
 COMMENT_OR_STRING = re.compile(r'"(?:\\.|\\\Z|[^"\\])*(?:"|\Z)|--[^\n]*|/-', re.DOTALL)
 """A Lean string literal (one left open runs to the end), a line comment, or the start of a block comment.
@@ -543,18 +543,25 @@ def build_candidate(contract: Contract, block: str, steps: GraderSteps) -> Path:
     return verify / PROOF_DATA
 
 
+def verdict_line(output: str) -> str | None:
+    """The last line of ``lean-verify``'s output that starts a JSON object. Lines end only at ``\\n``, since a
+    name in the verdict may hold another line separator."""
+    lines = [line for line in output.split("\n") if line.startswith("{")]
+    return lines[-1] if lines else None
+
+
 def verify_candidate(contract: Contract, reference: Path, proof_data: Path, steps: GraderSteps) -> tuple[float, dict]:
     """Replay the proof data against the reference as root; the reward and ``lean-verify``'s verdict."""
     argv = [str(VERIFY_BIN), str(reference), str(proof_data), "--target", contract.target]
     result = steps.run("verify", argv, proof_data.parent, capture=True)
     assert result.stdout is not None
-    lines = [line for line in result.stdout.read_text(errors="replace").splitlines() if line.startswith("{")]
-    if result.exit_code != 0 or not lines:
+    line = verdict_line(result.stdout.read_text(errors="replace"))
+    if result.exit_code != 0 or line is None:
         raise GraderFailure(f"lean-verify failed ({result.stopped or result.exit_code}): {result.tail()}")
     try:
-        verdict = json.loads(lines[-1])
+        verdict = json.loads(line)
     except json.JSONDecodeError as error:
-        raise GraderFailure(f"lean-verify printed no JSON verdict: {lines[-1][:500]}") from error
+        raise GraderFailure(f"lean-verify printed no JSON verdict: {line[:500]}") from error
     ok = accepted(verdict, contract.target)
     return (1.0 if ok else 0.0), {"status": "accepted" if ok else "rejected", "verdict": verdict}
 
