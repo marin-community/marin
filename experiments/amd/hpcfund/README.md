@@ -89,6 +89,12 @@ uv pip install --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ \
 uv pip install jax==0.11.0 jaxlib==0.11.0
 ```
 
+## Run in AMD's TheRock container
+
+`run_jax_aiter.sh` runs a command inside AMD's TheRock 7.14 JAX image (`ghcr.io/rocm/jax-dev-ubu24.therock-7.14`) under Apptainer, with the same XLA settings as `run_gpu.sh`. JAX-AITER supports only this stack, and the Vultr MI355X nodes use it for all runs. The comments at the top of the script cover pulling the image and building its venv with `setup_jax_aiter.sh`.
+
+The image ships no RDMA libraries, so across nodes RCCL falls back to TCP sockets on one Ethernet port. When the host has `libibverbs`, the wrapper mounts it, `librdmacm`, the host's NIC providers and their config, and the libraries they link into the container. On two Vultr MI355X nodes, a 16-GPU `ragged_all_to_all` that moves 1.26 GB per call took 26.7 ms over sockets and 5.87 ms over RDMA. Check that a multi-node job logs `NET/IB` rather than `NET/Socket` with `NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET`.
+
 ## Known issues
 
 - XLA command buffers (HIP graphs) corrupt memory on this ROCm stack. Runs
