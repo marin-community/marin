@@ -208,6 +208,10 @@ for options, put the correct one at a position drawn from the id. Never put the 
 that gives it, in the prompt or in the solver's files.
 - Write every number and fact of the prompt from the same variables that the program computes the reference \
 from, and never type a value twice: a prompt whose data differs from the key's fails every careful solver.
+- Make the task hard for a strong model that answers with no reasoning: a later step keeps a task only if such a \
+solver fails it at least once in 8 tries. A short answer that one formula evaluation or one lookup gives is too \
+easy. Within the proposal's design, make the answer need several dependent steps, or data that the solver must \
+select from among irrelevant values.
 - Define in the prompt every string that the grader compares exactly: list each allowed value of an enum with \
 its meaning, and give the format of times, dates and ids, for example "day4_0900".
 - An exact or mcq grader with answer_format plain_text compares the whole final message, so a right answer after \
