@@ -182,6 +182,15 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "rl-progress": (
+        "infra/marina/",
+        "lib/marin/src/marin/rl/rl_progress.py",
+        "experiments/post_training/publish_rl_progress.py",
+        "experiments/post_training/snowball_rl_publication.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "skyrl-wheel": (
         "vendor/skyrl/",
         "vendor/harbor/",

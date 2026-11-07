@@ -79,15 +79,16 @@ class RunSummary(BaseModel):
     label: Identity
     campaign: str | None = None
     series: str | None = None
-    issue: Annotated[StrictInt, Field(gt=0)] | None = None
+    issue: StrictInt | None = None
     verdict: Literal["pass", "fail", "invalid"] | None = None
     gate: str | None = None
+    failed_facts: list[str] = Field(default_factory=list)
     min_scored_fraction: Annotated[FiniteFloat, Field(gt=0, le=1)] = 1.0
-    run_date: str
+    run_date: str | None
     date_basis: Literal["submission_acknowledged", "launch_started"]
-    started_at: str
+    started_at: str | None
     completed_at: str | None
-    elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)]
+    elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
     timing_scope: Identity
     status: Literal["succeeded", "failed", "running"]
     optimizer_steps: Count
@@ -111,10 +112,12 @@ class RunSummary(BaseModel):
 
     @model_validator(mode="after")
     def valid_outcome(self):
-        if self.status != "running" and self.completed_at is None:
+        if self.elapsed_seconds is not None and self.status != "running" and self.completed_at is None:
             raise ValueError("Terminal attempts require a completion timestamp")
-        if self.final is not None and (self.baseline is None or self.elapsed_seconds <= 0):
-            raise ValueError("A final measurement requires a baseline and positive elapsed time")
+        if self.final is not None and (
+            self.baseline is None or (self.elapsed_seconds is not None and self.elapsed_seconds <= 0)
+        ):
+            raise ValueError("A final measurement requires a baseline and positive elapsed time when known")
         for phase in (self.baseline, self.final):
             if phase is not None and phase.attempted > self.evaluation.task_count:
                 raise ValueError("Attempted count exceeds the fixed evaluation cohort")

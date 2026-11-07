@@ -51,6 +51,40 @@ The 1,500-task `test_panel` runs in the update-100 evaluation and supplies the q
 before training or after an early stop. A completed run with no full-panel result is INVALID. Long
 candidates require qualified controls before submission.
 
+## Dashboard publication
+
+Learning and data training presets, their controls, and train-long retain one dashboard record per
+native `(run_id, attempt_id)`, including failed attempts. The coordinator writes
+`exports/attempts/<attempt_id>/loop-result.json`. The launcher publishes these records after
+`--run --wait` observes the coordinator finish, using the caller's cached Marina login. Status includes
+`rl_progress_url` after publication is verified. Controls and train-long have a null gate verdict.
+
+Repeat the original command with `--wait` to retry publication from the same source and inputs.
+Retained terminal attempts and successful publication steps are reused. A publication error prints the
+unserved record paths and `iris login` hint; the command keeps its experiment exit code.
+Each publication step retains its first payload at `publication/<attempt_id>/loop-result.json` under the
+run output and writes `publication.json` after exact database readback and serving verification.
+The record keeps its first published gate and verdict; the current `gate_report.json` gives the current verdict.
+
+Records contain the preset and override label, issue, layout, actual native
+identity and available Iris/W&B links. Native failures and failed training invariants set `status: failed`
+and name the `failed_facts`. Baseline and final measurements use this attempt's evaluation evidence;
+an absent baseline leaves the gain unavailable. Learning-long and data-long record their `test_panel_100`
+measurements. Speed presets and data-short use their gate reports.
+
+`snowball_rl_publication.build_record(run_output, preset, attempt_id=...)` builds the same record on a
+host from stored outputs. It reads per-attempt tracking, metrics, evaluations and the native result
+receipt. Native receipt timestamps determine elapsed time; missing timing stays unknown, preserving
+observed rewards without gain or ranking. Source facts come from stored provenance. Engine facts are
+recorded separately from the evaluation request protocol. The launcher's `--issue` supplies publication
+metadata and does not enter the native launch configuration.
+
+The app compares task-content, membership, evaluation request protocol and timing identities. Every
+Snowball record writes the presets' 0.99 coverage threshold, including train-long. Coverage and comparison
+eligibility are computed by the app. Unknown evaluation protocol identity stays unranked. The dashboard shows
+one row per run, with attempts latest first; `#run=<run_id>&attempt=<attempt_id>` selects an attempt.
+Standalone gate commands publish no records.
+
 ## Change one input
 
 ```bash

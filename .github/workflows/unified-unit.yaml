@@ -122,6 +122,23 @@ jobs:
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
 
+  rl_progress:
+    name: rl-progress
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'rl-progress') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Test progress publication through Marina and Postgres
+        run: >-
+          uv run --all-packages --no-default-groups --extra cpu --extra dedup
+          --group test pytest -n 0 infra/marina/tests/test_rl_progress.py
+
   slow:
     if: ${{ github.event_name == 'schedule' }}
     name: slow
