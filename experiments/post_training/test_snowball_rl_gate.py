@@ -358,6 +358,36 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ("speed-long", {"metrics": {"policy/mismatch/pooled/kl_k3": 100}}, {}, "pass", "regression", set(), None),
         ("speed-long", {"metrics": {"policy/mismatch/staleness0/kl_k3": 100}}, {}, "fail", "regression", set(), None),
         pytest.param(
+            "speed-long",
+            {"mismatch_window": "empty-update"},
+            {},
+            "pass",
+            "regression",
+            set(),
+            None,
+            id="async-empty-staleness0-update",
+        ),
+        pytest.param(
+            "speed-long",
+            {"mismatch_window": "all-stale"},
+            {},
+            "invalid",
+            None,
+            set(),
+            None,
+            id="async-all-stale-window",
+        ),
+        pytest.param(
+            "speed-medium",
+            {"mismatch_window": "spike"},
+            {},
+            "fail",
+            "regression",
+            set(),
+            None,
+            id="sync-token-weighted-kl-spike",
+        ),
+        pytest.param(
             "learning-medium",
             {"panel_identity": None},
             {},
@@ -528,8 +558,28 @@ def test_rescore_reports_candidate_and_control_contracts(
         control_fault.get("preset", preset),
         **{key: value for key, value in control_fault.items() if key != "preset"},
     )
-    recorded_fault = {key: value for key, value in fault.items() if key not in {"missing_final_panel", "refusal"}}
+    recorded_fault = {
+        key: value for key, value in fault.items() if key not in {"missing_final_panel", "refusal", "mismatch_window"}
+    }
     source = recorded_runs(preset, f"users/test/{preset}", **({"score": 0.495} | recorded_fault))
+    mismatch_window = fault.get("mismatch_window")
+    if mismatch_window:
+        measured = presets.PRESETS[preset].measured
+        for step in measured:
+            path = source / f"exports/metrics/step-{step:06d}.json"
+            row = json.loads(path.read_text())
+            prefix = "policy/mismatch/staleness0/"
+            if mismatch_window == "all-stale" or (mismatch_window == "empty-update" and step == measured.start):
+                row[prefix + "selected_tokens"] = 0
+                row.pop(prefix + "kl_k3")
+                row.pop(prefix + "finite_fraction")
+                row["policy/mismatch/staleness2/selected_tokens"] = 1758754
+                row["policy/mismatch/pooled/selected_tokens"] = 1758754
+                row["policy/mismatch/pooled/finite_fraction"] = 1
+            if mismatch_window == "spike" and step == measured.start:
+                row[prefix + "selected_tokens"] = 9000
+                row[prefix + "kl_k3"] = 0.5
+            _json(path, row)
     if fault.get("missing_final_panel"):
         shutil.rmtree(source / "exports/test_panel")
     report = rescore(
@@ -561,7 +611,10 @@ def test_rescore_reports_candidate_and_control_contracts(
         assert throughput["passes"]
         fixed = next(row for row in report["invariants"] if row["name"] == "fixed_reply_tokens")
         assert fixed["holds"]
-    if preset == "speed-long":
+    if mismatch_window and verdict != "invalid":
+        mismatch = next(row for row in report["guards"] if row["metric"] == "policy/mismatch/staleness0/kl_k3")
+        assert mismatch["run"] == pytest.approx(53 / 170 if mismatch_window == "spike" else 0.1)
+    if preset == "speed-long" and verdict != "invalid":
         assert {row["metric"] for row in report["guards"]} == {
             "speed/update_seconds",
             "async/performance/loss_tokens_per_configured_policy_gpu_second",
