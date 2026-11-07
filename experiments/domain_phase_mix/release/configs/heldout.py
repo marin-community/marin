@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The cumulative held-out registry: frozen (September 2) and expanded (September 13) cohorts of all three swarms.
+"""The cumulative held-out registry, with its frozen (September 2) and expanded (September 13) cohorts of all three
+swarms, and the scale-transfer cohort: the eight runs that Figure 14 draws at the two Llama settings.
 
 Observation ids are W&B run ids (`observation_ids`). The 116 validation-launch runs take the run directory of their
 evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take the registry's W&B training run id, which for
@@ -24,7 +25,21 @@ registry's recorded aggregate where that used the fixed rule. Every run whose re
 weights (the Llama panels' legacy weights) has its Uncheatable components: the registry's, or for one archived Llama
 160M run, which the registry scores by its pooled aggregate only, those of its W&B run summary (WANDB_PULLS). The
 registry records no Uncheatable values for 17 Llama 200M runs; their components also come from their W&B run
-summaries, and their aggregate from those components.
+summaries, and their aggregate from those components. Four frozen Qwen3 runs, which the registry scores by their
+pooled Uncheatable aggregate only, take their seven components from the last line of their evaluation-metrics files
+(FINAL_EVALUATIONS): their final evaluations, at step 3006, where training ended. Their W&B logging crashed at step
+2000 or 1000, so their W&B summaries hold an early evaluation. The fixed byte-share sums of the final components lie
+within 4.9e-8 of the recorded aggregates.
+
+The scale-transfer cohort (SCALE_TRANSFER) holds the runs of `launch_mariner_optimum_scale_transfer.py`: the four
+Uncheatable proposals of `validation_3e18` (MARINER's, Olmix's at cap 4 and KL 0.05, and tuned and released RegMix's),
+each trained at Llama 160M/1.2B and Llama 200M/6B with the same weights in both phases and the swarms' simulated
+epoching, so every pool fraction is 1. Each run's `proposal_method` is its proposal's 3e18 candidate id, the `variant`
+of that proposal's `validation_3e18` rows, so the three settings' runs of one proposal share it and its `mixture_id`.
+The launch's manifest gives the data seeds and sets no trainer seed. The seven Uncheatable components are the last line
+of each run's evaluation-metrics file (SCALE_TRANSFER_EVALUATIONS), the evaluation that the launch's collector scored
+for Figure 14. Their fixed byte-share sums equal the collector's within 2.3e-16: the collector added them with Python's
+compensated `sum`, `tables.add_aggregates` with plain float additions. The runs have no OlmoBaseEval Easy values.
 """
 
 from pathlib import Path
@@ -71,6 +86,42 @@ WANDB_PULLS = tuple(
 # (`wandb_pulls.read_runs`). 20 of the ids keep only the last 54 characters of the run name.
 LLAMA_200M_RUNS = paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_llama200m_wandb_runs_20261015.csv"
 LLAMA_200M_ROW = "300m::"  # the registry's prefix before a Llama 200M run's name
+# Final Uncheatable evaluations, each the last line of a run's evaluation-metrics file, frozen with the file's URI and
+# the evaluation's step (`_evaluation_pull`): those of the four frozen Qwen3 runs that the registry scores by their
+# pooled aggregate only, whose W&B summaries hold an early evaluation, and those of the scale-transfer runs.
+FINAL_EVALUATIONS = (
+    paths.REPO / "experiments/domain_phase_mix/release/configs/heldout_eval_metrics_components_20261106.csv"
+)
+SCALE_TRANSFER_EVALUATIONS = (
+    paths.REPO
+    / "experiments/domain_phase_mix/release/configs/heldout_scale_transfer_eval_metrics_components_20261106.csv"
+)
+UNCHEATABLE_METRICS = [f"eval/uncheatable_eval/{t.removeprefix('uncheatable/')}/bpb" for t in naming.TASKS[:7]]
+EVALUATION_COLUMNS = [
+    "training_wandb_run_id",
+    "eval_metrics_uri",
+    "step",
+    *UNCHEATABLE_METRICS,
+    wandb_pulls.POOLED,
+    "pulled_at",
+]
+# The registry read the four runs' pooled aggregates with pandas' default float parser, which misreads some 17-digit
+# values by one ulp (`tables.read_csv`); one ulp near 1 BPB is 2.2e-16.
+REGISTRY_PARSE_TOLERANCE = 2.3e-16
+# The scale-transfer launch's records (`launch_mariner_optimum_scale_transfer.py`): its manifest of the eight runs, and
+# its collector's record of each run's directory, final step, evaluation-metrics file and pooled aggregate.
+SCALE_TRANSFER = paths.RO / "mariner_optimum_scale_transfer_20260924"
+SCALE_TRANSFER_FILES = ("training_manifest.csv", "deployed_optima_provenance.csv")
+SCALE_TRANSFER_COHORT = "scale_transfer"
+SCALE_TRANSFER_SWARMS = {"60m_1p2b": "llama_160m_1p2b", "300m_6b": "llama_200m_6b"}  # by the launch's scale
+# Each launch run name's proposal: the 3e18 candidate that the launch trained (its MIXTURES), validation_3e18's
+# `variant`, and that candidate's epoch cap.
+SCALE_TRANSFER_PROPOSALS = {
+    "mariner_u": ("lwspu_u_snc_cap06", 6.0),
+    "olmix_u": ("olmixq_u_kl0p05_cap04", 4.0),
+    "regmix_tun_u": ("cmp_u_lgbm_cap08", 8.0),
+    "regmix_rel_u": ("rgref_u_endpoint_cap64", 64.0),
+}
 # Result folders of the validation launches in the expanded cohort, from the launch registry of
 # collect_delphi_3e18_validation_results_20260906.py, which the expanded registry's builder read.
 VALIDATION_LAUNCHES = {
@@ -97,7 +148,19 @@ def required_sources() -> list[Path]:
     launches = [paths.RO / folder / name for folder in VALIDATION_LAUNCHES.values() for name in LAUNCH_FILES]
     frozen = [FROZEN / name for name in FROZEN_FILES]
     expanded = [EXPANDED / name for name in EXPANDED_FILES]
-    return [*frozen, *expanded, *launches, UNIMAX8_WEIGHTS, UNIMAX8_REPEATS, *WANDB_PULLS, LLAMA_200M_RUNS]
+    scale_transfer = [SCALE_TRANSFER / name for name in SCALE_TRANSFER_FILES]
+    evaluations = [FINAL_EVALUATIONS, SCALE_TRANSFER_EVALUATIONS]
+    return [
+        *frozen,
+        *expanded,
+        *launches,
+        UNIMAX8_WEIGHTS,
+        UNIMAX8_REPEATS,
+        *WANDB_PULLS,
+        LLAMA_200M_RUNS,
+        *evaluations,
+        *scale_transfer,
+    ]
 
 
 def _unimax8_mixture() -> str:
@@ -228,6 +291,102 @@ def _with_pulled_components(out: pd.DataFrame, runs: pd.DataFrame, run_ids: pd.S
     return out
 
 
+def _evaluation_pull(path: Path) -> pd.DataFrame:
+    """A frozen read of final evaluations, one row per run indexed by W&B run id: `bpb__<task>` for the seven
+    Uncheatable corpora in task order, `pooled` (the run's pooled Uncheatable aggregate), `step` and `eval_metrics_uri`.
+
+    Raises ValueError unless the file has EVALUATION_COLUMNS without null values, one row per run, and each URI names
+    its row's run.
+    """
+    pull = tables.read_csv(paths.require(path), comment="#")
+    if list(pull.columns) != EVALUATION_COLUMNS or pull.isna().any().any():
+        raise ValueError(f"{path.name}: expected the columns {EVALUATION_COLUMNS} without null values")
+    if not pull.training_wandb_run_id.is_unique:
+        raise ValueError(f"{path.name}: a run appears twice")
+    uris = zip(pull.training_wandb_run_id, pull.eval_metrics_uri, strict=True)
+    if any(run_names.training_run_name_from_uri(uri) != run for run, uri in uris):
+        raise ValueError(f"{path.name}: evaluation-metrics URIs that name another run")
+    names = {metric: f"bpb__{naming.task_public(metric)}" for metric in UNCHEATABLE_METRICS}
+    pull = pull.rename(columns={**names, wandb_pulls.POOLED: "pooled"}).set_index("training_wandb_run_id")
+    return pull[[*names.values(), "pooled", "step", "eval_metrics_uri"]]
+
+
+def _with_final_evaluations(out: pd.DataFrame, runs: pd.DataFrame, run_ids: pd.Series) -> pd.DataFrame:
+    """`out` with the Uncheatable components of the registry runs in FINAL_EVALUATIONS, which the registry lacks.
+
+    Raises unless each evaluated run is a held-out run without Uncheatable components, and its evaluation's pooled
+    aggregate is the one the registry records, to within REGISTRY_PARSE_TOLERANCE.
+    """
+    pull = _evaluation_pull(FINAL_EVALUATIONS)
+    evaluated = run_ids[run_ids.isin(pull.index)]
+    if sorted(evaluated) != sorted(pull.index):
+        raise ValueError(f"evaluated runs that are not held-out runs: {sorted(set(pull.index) - set(evaluated))}")
+    columns = [c for c in pull.columns if c.startswith("bpb__")]
+    if out.loc[evaluated.index, columns].notna().any().any():
+        raise ValueError(f"evaluated runs that already have Uncheatable components: {evaluated.tolist()}")
+    evaluation = pull.loc[evaluated].set_axis(evaluated.index)
+    gap = (evaluation.pooled - runs.uncheatable_bpb[evaluated.index]).abs()
+    tied = gap <= REGISTRY_PARSE_TOLERANCE  # false for a run without a recorded aggregate
+    if not tied.all():
+        raise ValueError(f"evaluations whose pooled aggregate the registry does not record: {evaluated[~tied].tolist()}")
+    out = out.copy()
+    out.loc[evaluated.index, columns] = evaluation[columns]
+    return out
+
+
+def _scale_transfer_runs(ctx: ExportContext) -> pd.DataFrame:
+    """The scale-transfer cohort's rows, with ids, labels, seeds, weights, pool fractions and Uncheatable components.
+
+    Raises unless every run of the launch's manifest has the collector's record of a measurement at its final step,
+    trains the same weights in both phases, and has its evaluation in SCALE_TRANSFER_EVALUATIONS, which must come from
+    the file and step that the collector recorded and give the collector's pooled aggregate.
+    """
+    manifest = tables.read_csv(paths.require(SCALE_TRANSFER / "training_manifest.csv"))
+    provenance = tables.read_csv(paths.require(SCALE_TRANSFER / "deployed_optima_provenance.csv"))
+    if len(provenance) != len(manifest):
+        raise ValueError("the collector's record and the launch's manifest list different runs")
+    runs = manifest.merge(provenance, on=["run_name", "scale"], how="left", validate="one_to_one")
+    measured = (runs.status == "measured") & (runs.final_step == runs.target_final_checkpoint_step)
+    if not measured.all():
+        raise ValueError(f"scale-transfer runs without a final measurement: {runs.run_name[~measured].tolist()}")
+    phases = [runs.filter(regex=f"^phase_{phase}_") for phase in (0, 1)]
+    phases = [p.set_axis([naming.bucket_public(c.split("_", 2)[2]) for c in p.columns], axis=1) for p in phases]
+    if sorted(phases[0].columns) != sorted(ctx.buckets) or not phases[0].equals(phases[1]):
+        raise ValueError("scale-transfer runs whose two phases train different weights")
+    ids = runs.run_dir.map(run_names.training_run_name_from_uri)
+    pull = _evaluation_pull(SCALE_TRANSFER_EVALUATIONS)
+    if sorted(pull.index) != sorted(ids):
+        raise ValueError(f"{SCALE_TRANSFER_EVALUATIONS.name} holds other runs than the launch: {sorted(pull.index)}")
+    evaluation = pull.loc[list(ids)].reset_index(drop=True)
+    files = np.array([f"{run_dir}/checkpoints/eval_metrics.jsonl" for run_dir in runs.run_dir])
+    recorded = (
+        (evaluation.eval_metrics_uri.to_numpy() == files)
+        & (evaluation.step.to_numpy() == runs.final_step.to_numpy())
+        & (evaluation.pooled.to_numpy() == runs.uncheatable_raw_bpb.to_numpy())
+    )
+    if not recorded.all():
+        raise ValueError(f"scale-transfer evaluations that the collector did not record: {ids[~recorded].tolist()}")
+    proposals = runs.run_name.map(SCALE_TRANSFER_PROPOSALS)
+    out = pd.DataFrame(
+        {
+            "observation_id": ids,
+            "swarm": runs.scale.map(SCALE_TRANSFER_SWARMS),
+            "cohort": SCALE_TRANSFER_COHORT,
+            "proposal_method": [candidate for candidate, _ in proposals],
+            "proposal_objective": "uncheatable",
+            "epoch_cap": [cap for _, cap in proposals],
+            "data_seed": runs.data_seed,
+            "trainer_seed": runs.trainer_seed,  # the launch sets none
+            "subset_seed": np.nan,
+            "phase_tv": 0.0,
+        }
+    )
+    weights = phases[0].add_prefix("w__")
+    fractions = pd.DataFrame(1.0, index=runs.index, columns=[f"pf__{b}" for b in phases[0].columns])
+    components = evaluation[[c for c in evaluation.columns if c.startswith("bpb__")]]
+    return pd.concat([out, weights, fractions, components], axis=1)
+
+
 def _seeds(runs: pd.DataFrame, run_ids: pd.Series) -> pd.DataFrame:
     """Each run's seeds: the registry's, completed from the launch record or W&B pull that holds the run.
 
@@ -302,6 +461,15 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
         out[f"w__{naming.bucket_public(c.removeprefix('weight::'))}"] = runs[c]
     for c in pcols:
         out[f"pf__{naming.bucket_public(c.removeprefix('pool_fraction::'))}"] = runs[c]
+    out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
+    out = _with_pulled_components(out, runs, run_ids)
+    out = _with_final_evaluations(out, runs, run_ids)
+    recorded = pd.DataFrame({"uncheatable": runs.uncheatable_bpb, "obe_easy": runs.table9_macro_bpb})
+    fixed_rule = pd.DataFrame({"uncheatable": runs.panel == FIXED_RULE_PANEL, "obe_easy": True})
+    # The scale-transfer runs follow the registry's rows; their aggregates come from their components alone.
+    out = pd.concat([out, _scale_transfer_runs(ctx)], ignore_index=True)
+    recorded = recorded.reindex(out.index)
+    fixed_rule = fixed_rule.reindex(out.index, fill_value=False)
     bucket_order = ctx.buckets
     out["mixture_id"] = [
         keys.mixture_id(dict(zip(bucket_order, row, strict=True)))
@@ -319,11 +487,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     ]
     unimax8 = (out.proposal_objective == "none") & (out.mixture_id == _unimax8_mixture())
     out.loc[unimax8, "epoch_cap"] = UNIMAX8_EPOCH_CAP
-    out = out.join(_components(ctx, runs).reindex(runs.row_id).reset_index(drop=True))
-    out = _with_pulled_components(out, runs, run_ids)
     out["components_available"] = out[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
-    recorded = pd.DataFrame({"uncheatable": runs.uncheatable_bpb, "obe_easy": runs.table9_macro_bpb})
-    fixed_rule = pd.DataFrame({"uncheatable": runs.panel == FIXED_RULE_PANEL, "obe_easy": True})
     # Raises for a run that would need a recorded aggregate under other weights; null where neither exists.
     out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)
     return {"heldout": tables.order_columns(out, ctx.buckets, ctx.tasks)}

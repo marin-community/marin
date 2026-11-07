@@ -77,9 +77,9 @@ KEYING = {
     "swarm_llama_160m_1p2b": "Each run's W&B run id: its training run name with its six-hex-digit hash.",
     "swarm_llama_200m_6b": "Each run's W&B run id: its training run name with its six-hex-digit hash.",
     "heldout": (
-        "Each run's W&B run id: the training run name with its six-hex-digit hash that the registry or a validation "
-        "launch records, or for the 134 Llama 200M runs, which the registry records without one, the id read from W&B. "
-        "20 of those ids keep only the last 54 characters of the run name."
+        "Each run's W&B run id: the training run name with its six-hex-digit hash that the registry, a validation "
+        "launch or the scale-transfer launch records, or for the 134 Llama 200M runs of the registry, which records "
+        "none for them, the id read from W&B. 20 of those ids keep only the last 54 characters of the run name."
     ),
     "validation_3e18": (
         "Each run's W&B run id: its training run name with its six-hex-digit hash, from its evaluation-metrics path or "
@@ -151,16 +151,24 @@ NOTES = {
         "differ).",
         "Ten frozen archive runs, in four exposure groups, are deterministic re-trainings: their aggregates are "
         "bit-identical within each group.",
-        "645 of the 929 runs (455 Qwen3, 134 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
+        "649 of the 937 runs (459 Qwen3, 134 Llama 200M and 56 Llama 160M runs) have all 58 per-task values.",
         "One archived Llama 160M run, which the registry scores by its pooled Uncheatable aggregate only, takes its "
         "seven Uncheatable components and its data seed from its W&B run summary and config; it logged no OlmoBaseEval "
         "Easy metrics, so those values are null.",
-        "The 134 Llama 200M runs take their W&B run ids and seeds from W&B, read on 2026-10-15, as the registry records "
-        "neither. The 17 of them that the registry records without Uncheatable values take their seven Uncheatable "
-        "components from their W&B run summaries.",
+        "The 134 Llama 200M runs of the registry take their W&B run ids and seeds from W&B, read on 2026-10-15, as the "
+        "registry records neither. The 17 of them that the registry records without Uncheatable values take their "
+        "seven Uncheatable components from their W&B run summaries.",
+        "Four Qwen3 runs, which the registry scores by their pooled Uncheatable aggregate only and whose W&B logging "
+        "stopped at step 2000 or 1000, take their seven Uncheatable components from the final evaluation that each run "
+        "saved at step 3006; their bpb__uncheatable lies within 4.9e-8 of the recorded aggregate.",
+        "The scale_transfer cohort holds eight runs that train the four Uncheatable proposals of validation_3e18 "
+        "(MARINER's, Olmix's at cap 4 and KL 0.05, and tuned and released RegMix's) at both Llama settings, with the "
+        "same weights in both phases. proposal_method is each proposal's validation_3e18 variant, and mixture_id "
+        "equals that proposal's validation_3e18 rows'. The runs have Uncheatable values only, and their launch records "
+        "no trainer seed.",
         "proposal_objective uses the public objective names: none for the UniMax-8 baseline (epoch cap 8, as in "
         "validation_3e18), uncheatable_and_obe_easy for designs built for both objectives, and other where the "
-        "registry's run names name no objective; the Llama panels leave it null.",
+        "registry's run names name no objective; the registry's Llama runs leave it null.",
     ],
     "validation_3e18": [
         "UniMax-8 trainer seeds 1 and 2 carry recorded aggregates only; their per-task values are not among the "
@@ -220,7 +228,7 @@ RELEASE_NOTES = [
     "the same weights, or null where the source recorded none under those weights.",
     "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
     "mixture-selection repository's; `*` stands for a hash that names a folder.",
-    "figures_tables.csv lists the paper's 26 figures and 20 tables with their builders (paths in the paper folder, or "
+    "figures_tables.csv lists the paper's 27 figures and 20 tables with their builders (paths in the paper folder, or "
     "in the repository under experiments/ and .agents/) and the configs they read: deferred marks two-phase data "
     "this release omits, and constant marks configuration constants typed into the paper.",
 ]
