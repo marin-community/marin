@@ -1218,6 +1218,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "control-failed",
         "control-missing-receipt",
         "gate-missing",
+        "gate-record-missing",
         "missing-login",
         "partial-retry",
         "child",
@@ -1326,6 +1327,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
                 "fail-no-login",
                 "invalid-no-login",
                 "gate-missing",
+                "gate-record-missing",
                 "control-failed",
                 "control-missing-receipt",
             }
@@ -1391,7 +1393,12 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     if case == "builder-error":
         assert snapshot["publication"]["unserved_records"] == paths
         assert "login" not in snapshot["publication"] and snapshot["publication"]["errors"]
-    if unavailable["value"] and case not in {"control-failed", "control-missing-receipt", "gate-missing"}:
+    if unavailable["value"] and case not in {
+        "control-failed",
+        "control-missing-receipt",
+        "gate-missing",
+        "gate-record-missing",
+    }:
         assert snapshot["publication"]["login"] == "iris login"
         assert snapshot["publication"]["unserved_records"] == (paths[1:] if case == "partial-retry" else paths)
         unavailable["value"] = False
@@ -1407,16 +1414,19 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         assert snapshot["publication"]["unserved_records"] == paths[1:]
         assert snapshot["publication"]["errors"] == ["gate report missing; repeat the original command with --wait"]
         assert not (sources[1] / "publication/native-1" / publication.RESULT_FILENAME).exists()
-    if case in {"control-failed", "control-missing-receipt", "gate-missing"}:
+    if case in {"control-failed", "control-missing-receipt", "gate-missing", "gate-record-missing"}:
         assert snapshot["publication"]["login"] == "iris login"
         assert snapshot["publication"]["unserved_records"] == (
             [str(sources[0]), paths[1]] if case == "control-missing-receipt" else paths
         )
         unavailable["value"] = False
         phase["retry"] = True
-        if case == "gate-missing":
+        if case in {"gate-missing", "gate-record-missing"}:
             completed = gate.completed_gate(preset, built.runs, built.gate)
-            shutil.rmtree(completed.path())
+            if case == "gate-record-missing":
+                (Path(completed.path()) / RECORD_FILENAME).unlink()
+            else:
+                shutil.rmtree(completed.path())
         repeated = CliRunner().invoke(snowball.main, arguments)
         assert repeated.exit_code == 0, (repeated.output, repeated.exception)
         assert [call.args for call in client.job.call_args_list] == [(job,), (job,)]

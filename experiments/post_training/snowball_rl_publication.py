@@ -293,6 +293,13 @@ def publication_step(
     return replace(step, override_path=str(publication_path(run_output, attempt_id)))
 
 
+def gate_complete(gate_path: str | None) -> bool:
+    """A completed gate has its report and the executor's artifact record."""
+    return gate_path is not None and all(
+        presets.exists(StoragePath(gate_path) / filename) for filename in (gate.GATE_REPORT_FILENAME, RECORD_FILENAME)
+    )
+
+
 def publish_run(
     run_output: str,
     name: str,
@@ -325,11 +332,7 @@ def publish_run(
                 gate_required
                 and attempt_id == current_id
                 and attempts[attempt_id].result.state == "succeeded"
-                and (
-                    gate_path is None
-                    or not presets.exists(StoragePath(gate_path) / gate.GATE_REPORT_FILENAME)
-                    or not presets.exists(StoragePath(gate_path) / RECORD_FILENAME)
-                )
+                and not gate_complete(gate_path)
             ):
                 raise ValueError("gate report missing; repeat the original command with --wait")
             record = (

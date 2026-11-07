@@ -54,7 +54,7 @@ candidates require qualified controls before submission.
 ## Dashboard publication
 
 After `--run --wait` observes the coordinator finish, the launcher builds and publishes trained-panel
-records using the caller's Marina login. Each terminal native `(run_id, attempt_id)`, including failures,
+records using the caller's Marina login. Each published terminal native `(run_id, attempt_id)`, including failures,
 has a stored `exports/attempts/<attempt_id>/progress-record.json`. Status includes `rl_progress_url` after
 verification. Controls and train-long have a null gate verdict; standalone gate commands publish nothing.
 

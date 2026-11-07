@@ -764,9 +764,7 @@ def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
         except (OSError, ValueError, KeyError):
             return False
     completed = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
-    return missing_publication and (
-        completed is None or presets.exists(StoragePath(completed.path(prefix)) / snowball_rl_gate.GATE_REPORT_FILENAME)
-    )
+    return missing_publication and (completed is None or snowball_rl_publication.gate_complete(completed.path(prefix)))
 
 
 def _finish_run(
