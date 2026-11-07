@@ -32,6 +32,7 @@ from mariner.figures.layout import (
     METHOD_COLORS,
     METHOD_LABELS,
     NEUTRAL,
+    OBJECTIVE_TITLES,
     FigureData,
     Method,
     figure_legend,
@@ -48,8 +49,6 @@ from mariner.figures.starcoder import (
 )
 from mariner.model import Head, Shape, benefit, design_matrix, harm
 from mariner.olmix import fit_log_linear
-
-OBJECTIVE_TITLES = {"uncheatable": "Uncheatable", "obe_easy": "OlmoBaseEval Easy"}
 
 # ---------------------------------------------------------------------------------------------------------------
 # Figure 4: monotone Olmix heads against MARINER on the fixed-model sweeps

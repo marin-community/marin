@@ -11,7 +11,8 @@ one row per bucket: the continuous optimum's weight, the blocks of the sampler's
 give, and the epochs that weight materializes in the target run. A command whose input it cannot use, such as a
 missing file or a table without a ``w__``, ``pf__`` or ``bpb__`` column it needs, stops with a message on stderr and
 exit status 2, as argparse does for a malformed argument, and so does a command that needs an extra not installed.
-``figures`` redraws the paper's main-text figures from a snapshot as PDFs; it needs the figures extra.
+``figures`` redraws the paper's main-text figures from a snapshot as PDFs; it needs the figures extra. ``tables``
+prints the paper's main-text table, ``tab:scaling-main``, from a snapshot.
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ from mariner.evaluate import (
 )
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm, check_buckets, order_difference, shown_values
+from mariner.tables import format_scaling_main, scaling_main_table
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +482,11 @@ def run_figures(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_tables(args: argparse.Namespace) -> int:
+    print(format_scaling_main(scaling_main_table(args.data)))
+    return 0
+
+
 def run_self_test(args: argparse.Namespace) -> int:
     checks = self_test(args.data, olmix_laws=OlmixLaws.REFIT if args.refit_olmix else OlmixLaws.RELEASED)
     for check in checks:
@@ -663,6 +670,10 @@ def argument_parser() -> argparse.ArgumentParser:
         help="the paper's labels of the figures to draw, such as fig:b5 (default: all)",
     )
     command.set_defaults(run=run_figures)
+
+    command = commands.add_parser("tables", help="print the paper's main-text table (tab:scaling-main) from a snapshot")
+    command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")
+    command.set_defaults(run=run_tables)
 
     command = commands.add_parser("self-test", help="re-derive the paper's fits and trained mixtures from a snapshot")
     command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")

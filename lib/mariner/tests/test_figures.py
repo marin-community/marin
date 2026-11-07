@@ -10,11 +10,12 @@ import numpy as np
 import pandas as pd
 import pytest
 from mariner.cli import main
-from mariner.data import FIGURES_INDEX, OBJECTIVES, read_table
+from mariner.data import FIGURES_INDEX, OBJECTIVES, objective_from_tasks, read_table, release_tasks
 from mariner.figures import FIGURES, write_figures
+from mariner.figures.analysis import EPOCH_CAPS, FINEMATH, FLAN, epoch_text, matched_proxy, sweep_olmix_law
 from mariner.figures.epochs import Track
 from mariner.figures.layout import Method
-from mariner.figures.pipeline import scaling_values
+from mariner.figures.pipeline import ALL_TASKS, scaling_values
 from mariner.figures.starcoder import EPOCH_MATCHING_TABLE, epoch_matching
 
 # figures_tables.csv marks configuration constants and the two-phase data the release omits among a figure's configs.
@@ -44,10 +45,61 @@ HARM_CURVE_TOLERANCE = 1e-5
 LOWEST_COMPUTE_DIP = 0.22
 # The dataset recomputes the ladder's Uncheatable aggregate from its components, up to 7.7e-8 BPB from the means the
 # paper fitted, which moves the fitted laws by up to 3.1e-7 (measured); the module's fit of the paper's own means gives
-# the released laws exactly.
+# the released laws exactly. The OlmoBaseEval Easy laws match the released ones within 4.4e-9 (measured).
 LAW_TOLERANCE = 1e-6
-# Figure 1's compute multiples of MARINER over Olmix and over proportional mixing at 3e18, 2e19, 3e20 and 1e21 FLOPs.
+# Figures 1 and 9's compute multiples of MARINER over Olmix and over proportional mixing at 3e18, 2e19, 3e20 and 1e21
+# FLOPs: Uncheatable (Figure 1, Figure 9's left panel) and OlmoBaseEval Easy (Figure 9's right panel).
 PRINTED_MULTIPLES = {"olmix": [1.3, 1.4, 1.5, 1.6], "proportional": [2.0, 2.4, 2.8, 3.2]}
+PRINTED_OBE_EASY_MULTIPLES = {"olmix": [1.2, 1.3, 1.4, 1.3], "proportional": [2.8, 3.1, 4.8, 5.9]}
+# sections/abstract.tex:1: "MARINER's mixtures require 69--83\% less final-training compute than proportional mixing
+# to reach the same loss, and 26--38\% less than Olmix" at 1e21 FLOPs: the savings 1 - 1 / multiple (%) over the two
+# objectives.
+PRINTED_SAVINGS = {"proportional": [69, 83], "olmix": [26, 38]}
+LARGEST_SCALE = 1e21
+# tab:scaling-main's accuracy column (sections/results.tex:22-25), mean accuracy (%) over the 51 components at 1e21.
+PRINTED_TABLE_ACCURACY = {"proportional": "30.1", "unimax8": "32.7", "olmix": "35.1", "mariner": "36.4"}
+# tab:scaling-main's losses (sections/results.tex:22-25) of the mixtures Figure 10 draws on their own objective: the
+# 3e18 mean and standard deviation, then 2e19, 3e20 and 1e21 FLOPs.
+PRINTED_ON_OBJECTIVE = {
+    ("uncheatable", "proportional"): ["1.038", "0.001", "0.902", "0.770", "0.721"],
+    ("uncheatable", "olmix"): ["1.002", "0.001", "0.873", "0.745", "0.700"],
+    ("uncheatable", "mariner"): ["0.982", "0.001", "0.854", "0.729", "0.686"],
+    ("obe_easy", "proportional"): ["1.198", "0.004", "0.972", "0.754", "0.673"],
+    ("obe_easy", "olmix"): ["1.092", "0.004", "0.892", "0.676", "0.607"],
+    ("obe_easy", "mariner"): ["1.068", "0.005", "0.868", "0.656", "0.589"],
+}
+# Figure 11's All bars against the weighted sums of their rows' bars: they differ by floating rounding alone (measured
+# 2.4e-16), since each run's aggregate and its proportional mean are those sums of their components.
+AGGREGATE_TOLERANCE = 1e-12
+# The rows of Figure 11 that sections/results.tex:53 names: "MARINER's full-objective mixtures do not improve over
+# proportional mixing on AO3, BBC News, or Wikipedia on Uncheatable, or question answering on OlmoBaseEval Easy.
+# MARINER's mixtures optimized for these components lower their loss below proportional mixing. Olmix's mixtures
+# optimized for the same components lower it less. Both, however, raise the full-objective loss above proportional
+# mixing."
+TRADEOFF_ROWS = {
+    "uncheatable": ("uncheatable/ao3_english", "uncheatable/bbc_news", "uncheatable/wikipedia_english"),
+    "obe_easy": ("QA",),
+}
+# Figure 13's caption (sections/analysis.tex:29), "Proportional mixing gives every bucket 0.9 epochs", and the largest
+# number it prints in each column, by objective and mixture.
+PRINTED_PROPORTIONAL_EPOCHS = "0.9"
+PRINTED_EPOCH_MAXIMA = {
+    ("uncheatable", "MARINER"): "5.3",
+    ("uncheatable", "Olmix, cap 4, KL 0.05"): "3.2",
+    ("uncheatable", "Olmix, no cap, no KL"): "16",
+    ("obe_easy", "MARINER"): "7.5",
+    ("obe_easy", "Olmix, cap 4, KL 0.005"): "4.0",
+    ("obe_easy", "Olmix, no cap, no KL"): "17",
+}
+# The tasks Figure 15 labels, by the names the redraw gives them; the paper prints them as "Basic Skills: pattern
+# recognition", "CSQA" and "SciQ" (sections/analysis.tex:61: "labels identify tasks with negative Olmix $R^2$").
+LABELED_TASKS = {"Basic Skills: Simple Pattern Recognition", "CSQA", "SciQ"}
+# sections/analysis.tex:8: "the matched proxies place both minima where the target runs do, and FineMath's optimal
+# epoch count is about seven times FLAN's".
+PRINTED_EPOCH_RATIO = 7
+# The package's fits of Figure 12 against the dataset's domain_sweeps_olmix_fits, in BPB over the mixture fraction
+# (measured 6.8e-8).
+DOMAIN_FIT_TOLERANCE = 1e-6
 # Mean OlmoBaseEval Easy accuracy at 1e21 FLOPs: the abstract's 30.1% and 36.4%, and Figure 1's MARINER bar labels.
 PRINTED_ACCURACY = {("All", "proportional"): "30.1", ("All", "mariner"): "36.4"}
 PRINTED_MARINER_GROUPS = {"Basic": "78.5", "Math": "9.9", "Code": "15.9", "MMLU": "36.8", "QA": "57.8"}
@@ -277,6 +329,112 @@ def check_proposal_predictions(values: dict[str, pd.DataFrame]) -> None:
         assert abs(gap) <= PROPOSAL_PREDICTION_GAP
 
 
+def check_accuracy_vs_bpb(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 8: the per-task accuracies average to tab:scaling-main's accuracy column (sections/results.tex:22-25),
+    30.1, 32.7, 35.1 and 36.4%, and "mean accuracy on OlmoBaseEval Easy follows the BPB ordering"
+    (sections/results.tex:6)."""
+    accuracy = values["accuracy"]
+    all_tasks = accuracy[accuracy["group"] == ALL_TASKS].set_index("method")
+    assert {method: f"{value:.1f}" for method, value in all_tasks["accuracy"].items()} == PRINTED_TABLE_ACCURACY
+    by_bpb = all_tasks.sort_values("bpb")
+    assert by_bpb["accuracy"].is_monotonic_decreasing
+
+
+def check_scaling_curves(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 9's compute multiples on both objectives, and the savings at 1e21 FLOPs behind the abstract's "69--83\\%
+    less final-training compute than proportional mixing ... and 26--38\\% less than Olmix" (sections/abstract.tex:1).
+    """
+    multiples = values["multiples"].sort_values("compute_flops")
+    printed = {"uncheatable": PRINTED_MULTIPLES, "obe_easy": PRINTED_OBE_EASY_MULTIPLES}
+    for objective, baselines in printed.items():
+        for baseline, row in baselines.items():
+            rows = multiples[(multiples["objective"] == objective) & (multiples["baseline"] == baseline)]
+            assert rows["multiple"].round(1).tolist() == row
+    largest = multiples[multiples["compute_flops"] == LARGEST_SCALE]
+    for baseline, saved in PRINTED_SAVINGS.items():
+        multiple = largest.loc[largest["baseline"] == baseline, "multiple"]
+        assert sorted(round(100 * (1 - 1 / value)) for value in multiple) == saved
+
+
+def check_on_off_objective(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 10: the on-objective values equal tab:scaling-main's (sections/results.tex:22-25), and
+    sections/results.tex:44: "MARINER's still outperform Olmix's at every compute scale ... Off-objective mixtures all
+    have lower loss than proportional mixing but higher loss than their on-objective counterparts." """
+    tracks = values["tracks"].sort_values("compute_flops")
+    on_objective = tracks[tracks["on_objective"]]
+    for (objective, method), printed in PRINTED_ON_OBJECTIVE.items():
+        rows = on_objective[(on_objective["objective"] == objective) & (on_objective["method"] == method)]
+        first = rows.iloc[0]
+        drawn = [first["mean_bpb"], first["sd_bpb"], *rows["mean_bpb"].iloc[1:]]
+        assert [f"{value:.3f}" for value in drawn] == printed
+    loss = tracks.pivot_table(
+        index=["objective", "compute_flops"], columns=["method", "on_objective"], values="mean_bpb"
+    )
+    proportional = loss[(Method.PROPORTIONAL.value, True)]
+    for method in (Method.OLMIX.value, Method.MARINER.value):
+        off, on = loss[(method, False)], loss[(method, True)]
+        assert ((on < off) & (off < proportional)).all()
+    assert (loss[(Method.MARINER.value, False)] < loss[(Method.OLMIX.value, False)]).all()
+
+
+def check_component_tradeoffs(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 11: on OlmoBaseEval Easy, each All bar is the change of the mean over the 51 tasks, the task-weighted
+    mean of the group bars (its caption: "All is the aggregate"); and the rows that sections/results.tex:53 names
+    (``TRADEOFF_ROWS``). ``test_component_tradeoffs_all_bars_are_the_aggregate_changes`` checks Uncheatable's All."""
+    bars = values["bars"]
+    obe_easy = bars[(bars["objective"] == "obe_easy") & (bars["item"] != ALL_TASKS)]
+    for (panel, method), rows in obe_easy.groupby(["panel", "method"]):
+        everything = bars[(bars["panel"] == panel) & (bars["method"] == method) & (bars["item"] == ALL_TASKS)]
+        weighted = np.average(rows["delta_bpb"], weights=rows["tasks"])
+        assert everything["delta_bpb"].iloc[0] == pytest.approx(weighted, rel=0, abs=AGGREGATE_TOLERANCE)
+    change = bars.set_index(["objective", "proposal_objective", "method", "item"])["delta_bpb"]
+    mariner, olmix = Method.MARINER.value, Method.OLMIX.value
+    for objective, rows in TRADEOFF_ROWS.items():
+        subset = bars.loc[
+            (bars["objective"] == objective) & (bars["proposal_objective"] != objective), "proposal_objective"
+        ]
+        (proposal,) = subset.unique()
+        for row in rows:
+            assert change[(objective, objective, mariner, row)] >= 0  # the full objective does not improve it
+            assert change[(objective, proposal, mariner, row)] < change[(objective, proposal, olmix, row)] < 0
+        for method in (mariner, olmix):
+            assert change[(objective, proposal, method, ALL_TASKS)] > 0
+
+
+def check_domain_repetition(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 12's caption (sections/analysis.tex:13): "Olmix selects zero FLAN under every cap and saturates each
+    FineMath cap, missing both interior minima." And sections/analysis.tex:8: "the matched proxies place both minima
+    where the target runs do, and FineMath's optimal epoch count is about seven times FLAN's"."""
+    selections = values["selections"].set_index(["domain", "cap"])
+    for cap in EPOCH_CAPS:
+        assert selections.loc[(FLAN.domain, cap), "share"] == 0.0
+        assert selections.loc[(FINEMATH.domain, cap), "epochs"] == pytest.approx(cap, rel=1e-12)
+    minima = {}
+    for scale in ("proxy", "target"):
+        curves = values[scale]
+        minima[scale] = curves.loc[curves.groupby("domain")["bpb"].idxmin()].set_index("domain")
+    assert (minima["proxy"]["share"] == minima["target"]["share"]).all()
+    for domain, row in minima["target"].iterrows():
+        assert not np.isclose(selections.xs(domain, level="domain")["share"], row["share"]).any()
+    target_epochs = minima["target"]["epochs"]
+    assert round(target_epochs[FINEMATH.domain] / target_epochs[FLAN.domain]) == PRINTED_EPOCH_RATIO
+
+
+def check_mixture_epochs(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 13: "Proportional mixing gives every bucket 0.9 epochs" (its caption, sections/analysis.tex:29), and the
+    largest number each column prints equals the paper's."""
+    assert {epoch_text(epochs) for epochs in values["proportional"]["epochs"]} == {PRINTED_PROPORTIONAL_EPOCHS}
+    largest = values["epochs"].groupby(["objective", "column"])["epochs"].max()
+    assert {key: epoch_text(epochs) for key, epochs in largest.items()} == PRINTED_EPOCH_MAXIMA
+
+
+def check_r2_vs_snr(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 15's caption (sections/analysis.tex:61): "labels identify tasks with negative Olmix $R^2$"."""
+    points = values["points"]
+    labeled = set(points.loc[points["labeled"], "name"])
+    assert labeled == set(points.loc[points[f"{Method.OLMIX.value}_r2"] < 0, "name"]) == LABELED_TASKS
+
+
 PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:pipeline": check_pipeline,
     "fig:epoch-matching": check_epoch_matching,
@@ -284,6 +442,13 @@ PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:b6": check_olmix_capacity_failure,
     "fig:r6": check_learning_curves,
     "fig:proposal-predictions": check_proposal_predictions,
+    "fig:accuracy": check_accuracy_vs_bpb,
+    "fig:r1": check_scaling_curves,
+    "fig:off-objective": check_on_off_objective,
+    "fig:component-tradeoffs": check_component_tradeoffs,
+    "fig:domain-repetition": check_domain_repetition,
+    "fig:mixture-epochs": check_mixture_epochs,
+    "fig:r7": check_r2_vs_snr,
 }
 
 
@@ -318,11 +483,47 @@ def test_starcoder_fits_reproduce_the_papers_printed_optima_and_compute(snapshot
 
 @pytest.mark.data_integration
 @pytest.mark.timeout(120)
-def test_pipeline_scaling_laws_match_the_released_compute_equivalence(snapshot):
-    laws = scaling_values(snapshot)["laws"].set_index("method")
+@pytest.mark.parametrize("objective", OBJECTIVES)
+def test_scaling_laws_match_the_released_compute_equivalence(snapshot, objective):
+    """Figures 1 and 9 fit the baselines' ladder laws that ladder_compute_equivalence releases."""
+    laws = scaling_values(snapshot, objective)["laws"].set_index("method")
     equivalence = read_table(snapshot, "ladder_compute_equivalence")
-    released = equivalence[equivalence["objective"] == "uncheatable"].drop_duplicates("baseline").set_index("baseline")
+    released = equivalence[equivalence["objective"] == objective].drop_duplicates("baseline").set_index("baseline")
     for baseline in released.index:
         fitted = laws.loc[baseline, ["e", "a", "alpha"]].to_numpy(float)
         expected = released.loc[baseline, ["law_e", "law_a", "law_alpha"]].to_numpy(float)
         np.testing.assert_allclose(fitted, expected, rtol=0, atol=LAW_TOLERANCE)
+
+
+@pytest.mark.data_integration
+@pytest.mark.timeout(120)
+def test_component_tradeoffs_all_bars_are_the_aggregate_changes(snapshot):
+    """Figure 11's caption: "All is the aggregate". Each Uncheatable All bar, the change of the runs' recorded
+    aggregate, equals its component bars weighted by the tasks table's byte shares, as the dataset records the
+    aggregate: the shares as printed, which sum to 1 + 2.1e-8."""
+    bars = FIGURES["fig:component-tradeoffs"].draw(snapshot).values["bars"]
+    objective = objective_from_tasks(release_tasks(snapshot), "uncheatable")
+    weights = pd.Series(objective.weights, index=list(objective.tasks))
+    uncheatable = bars[bars["objective"] == "uncheatable"]
+    for _, rows in uncheatable.groupby(["panel", "method"]):
+        change = rows.set_index("item")["delta_bpb"]
+        weighted = float(change.loc[weights.index] @ weights)
+        assert change.loc[ALL_TASKS] == pytest.approx(weighted, rel=0, abs=AGGREGATE_TOLERANCE)
+
+
+@pytest.mark.data_integration
+@pytest.mark.timeout(120)
+def test_domain_repetition_fits_reproduce_the_released_olmix_fits(snapshot):
+    """Figure 12's Olmix fits to the matched proxies are the dataset's domain_sweeps_olmix_fits."""
+    sweeps = read_table(snapshot, "domain_sweeps")
+    released = read_table(snapshot, "domain_sweeps_olmix_fits").set_index("domain")
+    shares = np.linspace(0.0, 1.0, 101)
+    weights = np.column_stack([shares, 1.0 - shares])
+    for sweep in (FLAN, FINEMATH):
+        proxy = matched_proxy(sweeps, sweep)
+        law = sweep_olmix_law(proxy)
+        fit = released.loc[sweep.domain]
+        expected = np.exp(fit["log_c"]) + np.exp(
+            weights @ fit[["coefficient_domain", "coefficient_web"]].to_numpy(float)
+        )
+        np.testing.assert_allclose(law.predict(weights), expected, rtol=0, atol=DOMAIN_FIT_TOLERANCE)

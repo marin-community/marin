@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mariner.figures import epochs, pipeline, surrogate
+from mariner.figures import analysis, epochs, pipeline, results, surrogate
 from mariner.figures.layout import FigureData, save, style
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,29 @@ FIGURES: dict[str, FigureSpec] = {
             ("validation_3e18", "fits"),
             surrogate.draw_proposal_predictions,
         ),
+        FigureSpec("fig:accuracy", "r_accuracy_vs_bpb", ("ladder_accuracy",), results.draw_accuracy_vs_bpb),
+        # Figures 9 and 10 read the ladder alone: its 3e18 rung holds the runs of the other configs their rows of
+        # figures_tables.csv name, the main swarm's proportional repeats and the validation launches' runs.
+        FigureSpec(
+            "fig:r1",
+            "r1_scaling_curves_placeholder",
+            ("ladder", "validation_3e18", "swarm_qwen3_360m_1p6b"),
+            results.draw_scaling_curves,
+        ),
+        FigureSpec(
+            "fig:off-objective", "r_on_off_objective", ("ladder", "validation_3e18"), results.draw_on_off_objective
+        ),
+        FigureSpec(
+            "fig:component-tradeoffs",
+            "r8_component_tradeoffs_4panel",
+            ("validation_3e18", "fits"),
+            results.draw_component_tradeoffs,
+        ),
+        FigureSpec("fig:domain-repetition", "figure4_cap_policy", ("domain_sweeps",), analysis.draw_domain_repetition),
+        FigureSpec(
+            "fig:mixture-epochs", "r_mixture_epochs", ("validation_3e18", "partition"), analysis.draw_mixture_epochs
+        ),
+        FigureSpec("fig:r7", "r7_r2_vs_snr", ("fits",), analysis.draw_r2_vs_snr),
     )
 }
 

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared fixtures: one thread per BLAS and OpenMP pool in each test, a synthetic swarm drawn from a known MARINER
-model, a miniature snapshot in mariner-data's layout, and the local mariner-data snapshot."""
+model, miniature snapshots in mariner-data's layout (of the swarm and held-out tables, and of the scaling ladder), and
+the local mariner-data snapshot."""
 
 import json
 import math
@@ -219,6 +220,66 @@ def release_snapshot(tmp_path: Path) -> Path:
         write_release_table(tmp_path, "ladder", "ladder", ladder, "csv"),
         write_release_table(tmp_path, "heldout", "heldout", heldout, "csv"),
         write_release_table(tmp_path, "fits", "fits_heldout_predictions", predictions, "parquet"),
+    ]
+    (tmp_path / "MANIFEST.json").write_text(json.dumps({"tables": entries}, indent=1))
+    return tmp_path
+
+
+LADDER_MIXTURES = (("proportional", False), ("unimax8", False), ("olmix", True), ("mariner", True))
+LADDER_RUNG_DROP = 0.1  # BPB by which each larger rung of the small ladder lies below the previous one
+REPEAT_GAP = 0.002  # BPB between the two 3e18 runs of a small-ladder track: mean base + 0.001, SD 0.0014
+OFF_OBJECTIVE_BPB = 9.0  # a proposal's value on the other objective, which the table never reads
+
+
+def small_ladder_base(mixture: int, objective: int) -> float:
+    """The 3e18 base BPB of the ``mixture``-th mixture of the small ladder on its ``objective``-th objective."""
+    return 1.0 + 0.1 * mixture + 0.01 * objective
+
+
+@pytest.fixture
+def small_ladder_snapshot(tmp_path: Path) -> Path:
+    """A snapshot holding only the ``ladder`` and ``ladder_accuracy`` rows that ``tab:scaling-main``'s queries select.
+
+    Each mixture's track on each objective has two runs at 3e18 FLOPs, ``small_ladder_base`` and REPEAT_GAP above
+    it, and one run at each larger rung, LADDER_RUNG_DROP lower each time. Proportional and UniMax-8 (proposal
+    objective ``none``) record both objectives in one track; Olmix and MARINER have a proposal per objective, whose
+    runs record OFF_OBJECTIVE_BPB on the other. In ``ladder_accuracy``, the k-th mixture scores 30 + k and 32 + k on
+    two tasks.
+    """
+    runs = []
+    for index, (method, proposed) in enumerate(LADDER_MIXTURES):
+        proposals = ("uncheatable", "obe_easy") if proposed else ("none",)
+        for proposal in proposals:
+            for rung, compute in enumerate((3e18, 3e18, 2e19, 3e20, 1e21)):
+                values = {}
+                for position, objective in enumerate(("uncheatable", "obe_easy")):
+                    base = small_ladder_base(index, position)
+                    value = base + REPEAT_GAP if rung == 1 else base - LADDER_RUNG_DROP * max(rung - 1, 0)
+                    values[f"bpb__{objective}"] = value if proposal in ("none", objective) else OFF_OBJECTIVE_BPB
+                runs.append(
+                    {
+                        "observation_id": f"{method}_{proposal}_{rung}",
+                        "method": method,
+                        "proposal_objective": proposal,
+                        "compute_flops": compute,
+                        **values,
+                    }
+                )
+    accuracy = pd.DataFrame(
+        [
+            {
+                "observation_id": f"{method}_1e21",
+                "method": method,
+                "task_id": task,
+                "accuracy": 30.0 + index + 2 * task_index,
+            }
+            for index, (method, _) in enumerate(LADDER_MIXTURES)
+            for task_index, task in enumerate(("arc_easy", "sciq"))
+        ]
+    )
+    entries = [
+        write_release_table(tmp_path, "ladder", "ladder", pd.DataFrame(runs), "csv"),
+        write_release_table(tmp_path, "ladder_accuracy", "ladder_accuracy", accuracy, "csv"),
     ]
     (tmp_path / "MANIFEST.json").write_text(json.dumps({"tables": entries}, indent=1))
     return tmp_path

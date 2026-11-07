@@ -8,7 +8,7 @@ with and without simulated epoching, the target's loss, and the excess loss that
 surrogate panel fits MARINER, Olmix and LightGBM's boosted trees to six of the matched proxy's means
 (``surrogate_values``). The lower panels draw each mixture's Uncheatable loss across the compute ladder with its
 fitted power law and MARINER's compute multiples (``scaling_values``), and downstream accuracy at 1e21 FLOPs
-(``accuracy_values``).
+(``accuracy_values``). Figures 8 and 9 (``mariner.figures.results``) draw the same values for both objectives.
 
 The paper's surrogate panel fitted MARINER with Nemotron-CC at the proxy's web epochs, 165,937,152 tokens over a pool
 of 3,639,928,832, which the dataset does not record; this module fits it as Figures 3 and 4 do, at one Nemotron-CC
@@ -50,6 +50,7 @@ from mariner.figures.starcoder import DIAMOND, Arm, EpochMatching, draw_repetiti
 from mariner.olmix import fit_log_linear
 
 SCALING_OBJECTIVE = "uncheatable"  # the lower-left panel's evaluation
+LOSS_LABELS = {"uncheatable": "Uncheatable Eval loss (BPB)", "obe_easy": "OlmoBaseEval Easy loss (BPB)"}
 LADDER_METHODS = (Method.PROPORTIONAL, Method.UNIMAX, Method.OLMIX, Method.MARINER)
 PROPOSED_METHODS = (Method.OLMIX, Method.MARINER)  # the ladder trains their proposals for each objective
 MULTIPLE_BASELINES = (Method.OLMIX, Method.PROPORTIONAL)  # Figure 1 prints MARINER's compute multiples over these
@@ -117,13 +118,13 @@ def ladder_means(root: Path, objective: str) -> pd.DataFrame:
     return means.sort_values(["method", "compute_flops"], ignore_index=True)
 
 
-def scaling_values(root: Path) -> dict[str, pd.DataFrame]:
-    """Figure 1's lower-left panel: the ladder's Uncheatable means, each mixture's law and MARINER's multiples.
+def scaling_values(root: Path, objective: str) -> dict[str, pd.DataFrame]:
+    """A loss-across-compute panel: the ladder's means of ``objective``, each mixture's law and MARINER's multiples.
 
     A multiple is the compute at which a baseline's law reaches MARINER's measured loss, over MARINER's compute; it
     is extrapolated where that compute lies beyond the ladder's largest scale.
     """
-    points = ladder_means(root, SCALING_OBJECTIVE)
+    points = ladder_means(root, objective)
     laws = {
         method: fit_scaling_law(rows["compute_flops"].to_numpy(float), rows["mean_bpb"].to_numpy(float))
         for method, rows in points.groupby("method")
@@ -165,8 +166,8 @@ def scaling_values(root: Path) -> dict[str, pd.DataFrame]:
     }
 
 
-def draw_scaling(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
-    """The lower-left panel of Figure 1 from ``scaling_values``."""
+def draw_scaling(axis: Axes, values: dict[str, pd.DataFrame], objective: str) -> None:
+    """A panel of ``objective``'s loss across compute scales from ``scaling_values``, without a title."""
     points, curves = values["points"], values["law_curves"]
     for method in LADDER_METHODS:
         color = METHOD_COLORS[method]
@@ -205,12 +206,11 @@ def draw_scaling(axis: Axes, values: dict[str, pd.DataFrame]) -> None:
     for ticks in (axis.yaxis.set_major_formatter, axis.yaxis.set_minor_formatter):
         ticks(FormatStrFormatter("%.1f"))
     axis.set_xlabel("Training compute (FLOPs)")
-    axis.set_ylabel("Uncheatable Eval loss (BPB)")
-    axis.set_title("Loss across compute scales († extrapolated)")
+    axis.set_ylabel(LOSS_LABELS[objective])
 
 
 def accuracy_values(root: Path) -> dict[str, pd.DataFrame]:
-    """Figure 1's lower-right panel: each mixture's mean OlmoBaseEval Easy accuracy (%) at 1e21 FLOPs by task group.
+    """Each mixture's mean OlmoBaseEval Easy accuracy (%) and BPB at 1e21 FLOPs by task group (Figures 1 and 8).
 
     The ``ladder_accuracy`` runs train each mixture at 1e21 FLOPs, Olmix's and MARINER's proposals for OlmoBaseEval
     Easy; ``All`` is the mean of the 51 tasks.
@@ -221,8 +221,16 @@ def accuracy_values(root: Path) -> dict[str, pd.DataFrame]:
     for name, members in groups:
         tasks = accuracy[accuracy["group"].isin(members)]
         for method in LADDER_METHODS:
-            scores = tasks.loc[tasks["method"] == method, "accuracy"]
-            rows.append({"group": name, "tasks": len(scores), "method": method.value, "accuracy": scores.mean()})
+            scored = tasks[tasks["method"] == method]
+            rows.append(
+                {
+                    "group": name,
+                    "tasks": len(scored),
+                    "method": method.value,
+                    "accuracy": scored["accuracy"].mean(),
+                    "bpb": scored["bpb"].mean(),
+                }
+            )
     return {"accuracy": pd.DataFrame(rows)}
 
 
@@ -430,8 +438,9 @@ def draw_pipeline(root: Path) -> FigureData:
     )
     surrogates = surrogate_values(matching)
     draw_surrogates(axes["surrogates"], surrogates)
-    scaling, accuracy = scaling_values(root), accuracy_values(root)
-    draw_scaling(axes["scaling"], scaling)
+    scaling, accuracy = scaling_values(root, SCALING_OBJECTIVE), accuracy_values(root)
+    draw_scaling(axes["scaling"], scaling, SCALING_OBJECTIVE)
+    axes["scaling"].set_title("Loss across compute scales († extrapolated)")
     draw_accuracy(axes["accuracy"], accuracy)
     handles = [
         Line2D([], [], color=METHOD_COLORS[method], marker="o", label=METHOD_LABELS[method]) for method in LADDER_METHODS
