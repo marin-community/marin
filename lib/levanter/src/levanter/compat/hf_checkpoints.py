@@ -39,7 +39,7 @@ from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub.errors import HfHubHTTPError, RemoteEntryNotFoundError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -1295,7 +1295,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             try:
                 source_path = hf_hub_download(repo_id=repo, filename="generation_config.json", revision=revision)
-            except EntryNotFoundError:
+            except RemoteEntryNotFoundError:
                 return
             with open(source_path, "rb") as source_file:
                 contents = source_file.read()

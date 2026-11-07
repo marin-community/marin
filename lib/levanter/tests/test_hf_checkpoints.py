@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import safetensors
 import transformers
+from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
@@ -201,6 +202,25 @@ def test_export_preserves_reference_generation_config(
         assert not saved.exists()
     else:
         assert json.loads(saved.read_text()) == (original if override is None else override)
+
+
+def test_export_propagates_unavailable_hub_generation_config(tmp_path, local_gpt2_tokenizer_path, monkeypatch):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = replace(
+        config.hf_checkpoint_converter(), reference_checkpoint=RepoRef("test/reference", "pinned-revision")
+    )
+
+    def unavailable_download(*, repo_id, filename, revision):
+        assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+        raise LocalEntryNotFoundError("Hub unavailable and generation config is not cached")
+
+    monkeypatch.setattr(hf_checkpoints, "hf_hub_download", unavailable_download)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        with pytest.raises(LocalEntryNotFoundError):
+            converter.save_pretrained(model, str(tmp_path / "output"), save_reference_code=False)
 
 
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
