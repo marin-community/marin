@@ -64,10 +64,12 @@ from zephyr.stats import (
 from zephyr.worker_context import (
     Aggregation,
     CounterEntry,
+    CounterKey,
     CounterSnapshot,
     InputProgress,
     RunnerSnapshot,
     _worker_ctx_var,
+    counters_by_name,
     merge_counter_entries,
 )
 
@@ -108,7 +110,8 @@ class _InProcessWorkerContext:
         self._execution_id = execution_id
         self._stage_name = stage_name
         self._shared_data_cache: dict[str, Any] = {}
-        self._counters: dict[str, CounterEntry] = {}
+        self._counters: dict[CounterKey, CounterEntry] = {}
+        self._aggregations: dict[str, Aggregation] = {}
         self._input_progress: InputProgress | None = None
         self._generation = 0
         self.task_memory_bytes = task_memory_bytes
@@ -121,41 +124,35 @@ class _InProcessWorkerContext:
         return self._shared_data_cache[name]
 
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
-        if name in self._counters:
-            entry = self._counters[name]
+        key = CounterKey(stage, name)
+        entry = self._counters.get(key)
+        if entry is None:
+            self._counters[key] = CounterEntry(value, self._aggregations.get(name, Aggregation.SUM))
+        else:
             entry.value = value
             entry.count = 1
-            entry.stage = stage
-        else:
-            self._counters[name] = CounterEntry(value, stage=stage)
 
     def update_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
-        entry = self._counters.get(name)
-        if entry is None or entry.count == 0:
-            # First real observation: initialise the value regardless of aggregation.
-            if entry is None:
-                self._counters[name] = CounterEntry(value, stage=stage)
-            else:
-                entry.value = value
-                entry.stage = stage
-                entry.count = 1
+        key = CounterKey(stage, name)
+        entry = self._counters.get(key)
+        if entry is None:
+            self._counters[key] = CounterEntry(value, self._aggregations.get(name, Aggregation.SUM))
             return
-        entry.merge(CounterEntry(value, entry.aggregation, stage, count=1))
+        entry.merge(CounterEntry(value, entry.aggregation))
 
     def set_aggregation(self, name: str, agg: Aggregation) -> None:
-        if name in self._counters:
-            self._counters[name].aggregation = agg
-        else:
-            # count=0 marks the entry as uninitialised so update_counter sets the
-            # first value directly rather than applying MIN/MAX/AVERAGE to 0.
-            self._counters[name] = CounterEntry(0, aggregation=agg, count=0)
+        self._aggregations[name] = agg
+        # The sampler thread may add keys while user code sets an aggregation.
+        for key, entry in dict(self._counters).items():
+            if key.name == name:
+                entry.aggregation = agg
 
     def current_stage_name(self) -> str:
         return self._stage_name
 
     def get_counters(self, stage: str | None = None) -> dict[str, int | float]:
-        """Flat view of counter values, for use by stats emission code."""
-        return {k: e.value for k, e in self._counters.items() if stage is None or e.stage == stage}
+        """Flat view of counter values by name, for use by stats emission code."""
+        return {name: entry.value for name, entry in counters_by_name(dict(self._counters).items(), stage).items()}
 
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._generation += 1
@@ -171,7 +168,7 @@ class _InProcessWorkerContext:
         progress = self._input_progress
         # The task thread may add keys while a heartbeat samples these counters.
         return RunnerSnapshot(
-            counters={name: replace(entry) for name, entry in dict(self._counters).items()},
+            counters={key: replace(entry) for key, entry in dict(self._counters).items()},
             input_progress=replace(progress) if progress is not None else None,
         )
 
@@ -351,7 +348,7 @@ class InlineRunner:
         task: ShardTask,
         chunk_prefix: str,
         execution_id: str,
-    ) -> tuple[TaskResult, dict[str, CounterEntry]]:
+    ) -> tuple[TaskResult, dict[CounterKey, CounterEntry]]:
         ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         self._ctx = ctx
         self._last_snapshot = RunnerSnapshot()
@@ -428,15 +425,19 @@ class SubprocessRunner:
                 with self._state_lock:
                     self._process = None
 
-    def _final_counters(self, child_counters: dict[str, CounterEntry]) -> dict[str, CounterEntry]:
+    def _final_counters(self, child_counters: dict[CounterKey, CounterEntry]) -> dict[CounterKey, CounterEntry]:
         with self._state_lock:
             process_counters = dict(self._process_stats._counters) if self._process_stats is not None else {}
         final_counters = dict(child_counters)
-        for name in _ACCUMULATED_RESOURCE_COUNTER_KEYS:
-            entries = [(name, entry) for entry in (process_counters.get(name), final_counters.get(name)) if entry]
-            if entries:
-                merged, _ = merge_counter_entries(entries)
-                final_counters[name] = merged[name]
+        accumulated_keys = {
+            key
+            for key in process_counters.keys() | final_counters.keys()
+            if key.name in _ACCUMULATED_RESOURCE_COUNTER_KEYS
+        }
+        for key in accumulated_keys:
+            entries = [(key, entry) for entry in (process_counters.get(key), final_counters.get(key)) if entry]
+            merged, _ = merge_counter_entries(entries)
+            final_counters[key] = merged[key]
         return final_counters
 
     def execute(
@@ -444,7 +445,7 @@ class SubprocessRunner:
         task: ShardTask,
         chunk_prefix: str,
         execution_id: str,
-    ) -> tuple[TaskResult, dict[str, CounterEntry]]:
+    ) -> tuple[TaskResult, dict[CounterKey, CounterEntry]]:
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             cloudpickle.dump((task, chunk_prefix, execution_id), f)
             task_file = f.name
