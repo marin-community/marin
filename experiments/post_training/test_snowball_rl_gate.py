@@ -1056,6 +1056,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert (recovered["verdict"], recovered["label"]) == (report["verdict"], report["label"])
     Path(printed["report"]).unlink()
     terminal = json.loads((source / "terminal.json").read_text())
+    terminal["config"]["run"]["attempt_id"] = "failed"
     _json(source / "attempts/failed.json", terminal | {"result": terminal["result"] | {"state": "failed"}})
     (source / "terminal.json").unlink()
     launch = json.loads((source / "resolved-launch.yaml").read_text())["config"]
