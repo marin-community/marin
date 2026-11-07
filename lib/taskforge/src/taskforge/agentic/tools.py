@@ -418,7 +418,7 @@ class ToolSession:
             )
         if status != Outcome.GRADED:
             raise ToolError(f"The grade failed ({status}); check the task: {grade.error}")
-        passed = _passed(grade)
+        passed = grade_passed(grade)
         key = _task_digest(task)
         self.tools.evidence[key].controls.append((expect == "pass", passed))
         if passed and expect == "pass":
@@ -438,7 +438,7 @@ class ToolSession:
     async def _grade(self, task: TaskSpec, answer: str) -> GradeResult:
         """The grade of ``answer`` by the task's grader, from a rollout of a model that gives only that answer."""
         try:
-            result = await self.tools.solver_engine.run_task(_solver_spec(task, self.config), _ReplayModel(answer))
+            result = await self.tools.solver_engine.run_task(_solver_spec(task, self.config), ReplayModel(answer))
         except RolloutInterrupted as error:
             raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
         except (ValueError, NotImplementedError) as error:
@@ -484,7 +484,7 @@ class ToolSession:
                 reason = f"{grade.status}: {grade.error}" if grade is not None else f"interrupted: {_failure(rollout)}"
                 ungraded[_clip(reason, limit=300)] += 1
                 continue
-            passed = _passed(grade)
+            passed = grade_passed(grade)
             answer = _final_answer(rollout)
             format_failure = (
                 grade.status == Outcome.SUBMISSION_FAILURE and rollout.stop_reason not in RAN_OUT_STOP_REASONS
@@ -572,7 +572,7 @@ class ToolSession:
         accepted = {
             answer
             for answer, grade in zip(answers, grades, strict=True)
-            if grade.status == Outcome.GRADED and _passed(grade)
+            if grade.status == Outcome.GRADED and grade_passed(grade)
         }
         problems = [
             f"The grader accepts {answer}, one unit from your right control {right} in its last digit. Write the "
@@ -598,7 +598,7 @@ class ToolSession:
             return 0
         spec = _solver_spec(_guess_task(task), self.config)
         outcomes = await asyncio.gather(*(self._solve(spec) for _ in range(GUESS_RUNS)))
-        return sum(isinstance(outcome, GradedRollout) and _passed(outcome.grade) for outcome in outcomes)
+        return sum(isinstance(outcome, GradedRollout) and grade_passed(outcome.grade) for outcome in outcomes)
 
     async def _program_problems(self, program: str, task: TaskSpec) -> list[str]:
         def problems(variant: TaskSpec) -> list[str]:
@@ -701,7 +701,7 @@ class ToolSession:
 
 
 @dataclass
-class _ReplayModel:
+class ReplayModel:
     """A model that answers with ``answer`` and no tool call, so that the grader grades a given answer."""
 
     answer: str
@@ -1109,7 +1109,7 @@ def _with_system_prompt(task: TaskSpec, prompt: str) -> TaskSpec:
     return task.model_copy(update={"context": task.context.model_copy(update={"events": tuple(events)})})
 
 
-def _passed(grade: GradeResult) -> bool:
+def grade_passed(grade: GradeResult) -> bool:
     if grade.status != Outcome.GRADED or grade.reward is None:
         return False
     return grade.passed if grade.passed is not None else grade.reward >= grade.score_max

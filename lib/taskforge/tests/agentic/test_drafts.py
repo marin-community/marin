@@ -24,7 +24,14 @@ from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec, JudgeSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic import example_build
-from taskforge.agentic.drafts import DRAFT_MAX_ANSWER_SHARE, DraftConfig, DraftProposal, DraftTools, draft_task
+from taskforge.agentic.drafts import (
+    DRAFT_MAX_ANSWER_SHARE,
+    DraftConfig,
+    DraftProposal,
+    DraftTools,
+    draft_task,
+    shifted_answers,
+)
 from taskforge.agentic.grader_examples import EXAMPLES, json_task, judge_task, script_task
 from taskforge.agentic.instances import task_instances
 from taskforge.agentic.tools import VARIANT_SUFFIX, VARIANTS, reference_answer
@@ -92,7 +99,7 @@ def write_task(task_json: str, build: str) -> tuple[str, dict[str, object]]:
 
 
 def submit() -> tuple[str, dict[str, object]]:
-    return "submit", {"path": TASK, "program": "build.sh"}
+    return "submit", {"path": TASK, "program": "build.sh", "right_answer": EXPECTED}
 
 
 @dataclass
@@ -318,4 +325,37 @@ def test_submit_refuses_a_task_without_the_machine_of_the_proposal():
 
     assert tools.problems(EXAMPLES["numeric"]("example")) == [
         "The proposal's solver_machine is shellsim: the task must give the solver that machine"
+    ]
+
+
+def _numeric(tolerance: float) -> tuple[TaskSpec, str]:
+    """The numeric example with ``tolerance``, and its right answer to the 2 decimals that its prompt asks for."""
+    task = EXAMPLES["numeric"]("example")
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    assert isinstance(spec, NumericSpec)
+    task = task.model_copy(
+        update={"grader": verifyit_package(dataclasses.replace(spec, tolerance_abs=tolerance)).grader}
+    )
+    return task, f"{float(spec.expected):.2f}"
+
+
+async def test_submit_grades_the_right_answer_and_its_shifted_numbers():
+    tools = DraftTools(proposal(solver_machine="none"), config(ScriptedAgent([])))
+    task, right = _numeric(0.005)
+    loose, _ = _numeric(0.02)
+
+    assert await tools.control_problems(task, right) == []
+    shifted, candidates = await tools.control_problems(loose, right)
+    assert "moving one number by one unit of its last digit" in shifted
+    assert "together with a wrong answer" in candidates
+    [problem] = await tools.control_problems(task, "12345.67")
+    assert "fails right_answer" in problem
+
+
+def test_each_number_of_an_answer_moves_alone_by_a_unit_of_its_last_digit():
+    assert shifted_answers('{"a": 2.50, "b": 7, "c": "x1"}') == [
+        '{"a": 2.51, "b": 7, "c": "x1"}',
+        '{"a": 2.50, "b": 8, "c": "x1"}',
     ]

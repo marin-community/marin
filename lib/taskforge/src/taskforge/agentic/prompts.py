@@ -245,7 +245,10 @@ last asked digit and drops the task if the grader passes it.
 - A grader checks every field and deliverable that the prompt requires: a script grader fails an answer that \
 omits a field or fills it with filler, and a judge's criteria name each required deliverable. A grader fails an \
 answer with more than one \\boxed{{}} or "Answer:" value, even when the last one is right.
-- Run the program for one task id, then call submit with the TaskSpec's path and the program's path.
+- Run the program for one task id, then call submit with the TaskSpec's path, the program's path and the right \
+answer of that task id, written exactly as a correct solver's final reply in the answer format, with the asked \
+precision. submit grades it, and wrong answers made from it by moving one of its numbers by one unit of the last \
+digit, with the task's grader, except a judge.
 
 # Tools
 

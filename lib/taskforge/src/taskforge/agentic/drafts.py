@@ -4,16 +4,20 @@
 """Draft one task from one task proposal with a short agent session, and no model besides the agent.
 
 ``draft_task`` gives the agent the proposal, the example build program and the TaskSpec references, and two tools:
-``submit``, which runs only the checks of ``taskforge.agentic.tools`` that need no model, and ``finish``. Nothing
-grades, rolls out or reviews the task: a later step validates the drafts. A draft keeps its build program and the
+``submit``, which runs only checks that need no model, and ``finish``. ``submit`` grades the agent's right answer
+and wrong answers made from it by moving one number, except for a judge; nothing rolls out a solver or reviews the
+task: a later step validates the drafts. A draft keeps its build program and the
 workspace that the program reads, so ``task_instances`` can make more tasks of its kind from other task ids.
 """
 
+import asyncio
 import json
+import logging
 import math
 import re
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
@@ -25,6 +29,7 @@ from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContex
 from rolloutengine.models import Model, Rollout, RolloutInterrupted, RolloutLimits, TaskRolloutSpec, TraceMode
 from shellbox.machine import Backend, Machine, MachineFactory, PackageSpec
 from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     Boxed,
@@ -67,7 +72,9 @@ from taskforge.agentic.tools import (
     COMMAND_SEMANTICS,
     SOLVER_HARNESS,
     WORKDIR,
+    ReplayModel,
     ToolError,
+    grade_passed,
     keyword_grader_problems,
     machine_runtime,
     malformed_files,
@@ -80,10 +87,12 @@ from taskforge.agentic.tools import (
     workspace_snapshot,
 )
 
+logger = logging.getLogger(__name__)
+
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "8"
+DRAFT_REVISION = "9"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -110,6 +119,10 @@ OWN_SCALE = re.compile(
 """Words of a judge question that set its own scale or reply format: a ``reference`` or ``checklist`` judge must end
 with verifyit's ``SCORE`` line, so such a question leaves every answer ungraded."""
 MAX_CHECKLIST_CRITERIA = 8
+MAX_SHIFTED_NUMBERS = 12
+"""The most numbers of a right answer that ``submit`` moves, one at a time: each is one grader run."""
+ANSWER_NUMBER = re.compile(r"(?<![\w.])[+-]?\d+(?:\.\d+)?(?![\w.])")
+"""A plain decimal of an answer, whose last digit gives its precision; not part of a name or of 1e-3."""
 # The ways a prompt asks a solver to mark its final answer, and the prose a solver writes before it.
 BOXED_ASKED = re.compile(r"\\boxed")
 ANSWER_LINE_ASKED = re.compile(r"\banswer:", re.IGNORECASE)
@@ -189,9 +202,10 @@ class DraftConfig:
     taskcompendium and verifyit."""
     solver_factories: Mapping[Backend, MachineFactory]
     """The solver machines that ``RolloutEngine.check`` checks a task against, by backend, with the
-    ``VERIFIER_BACKEND`` machines of graders that run in an environment. No solver or grader runs."""
+    ``VERIFIER_BACKEND`` machines of graders that run in an environment. No solver runs: ``submit`` grades only the
+    agent's right answer and wrong answers made from it, with a replayed reply."""
     judge: JudgeConnection
-    """The judge that a judge grader would use. ``check`` needs it, and no draft calls it."""
+    """The judge that a judge grader would use. ``check`` needs it, and no draft calls it: controls skip judges."""
     agent_limits: RolloutLimits
     solver_limits: RolloutLimits
     command_timeout: float
@@ -243,6 +257,14 @@ TOOL_DEFINITIONS = (
                     "(or `sh <program> ...` for a .sh file) must write this TaskSpec again."
                 ),
             },
+            "right_answer": {
+                "type": "string",
+                "description": (
+                    "The correct final reply to this task, exactly as a careful solver writes it in the answer "
+                    "format, with the precision that the prompt asks for. The grader must pass it and fail it with "
+                    "any one of its numbers moved by one unit of the last digit. A judge grader is not run."
+                ),
+            },
         },
     ),
     _tool(
@@ -289,6 +311,71 @@ class DraftTools:
             return problems + draft_task_problems(task, self.proposal.solver_machine)
         except (TypeError, ValueError) as error:
             return [*problems, f"The grader is invalid: {error}"]
+
+    async def control_problems(self, task: TaskSpec, right_answer: str) -> list[str]:
+        """The problems of a grader that fails ``right_answer``, passes it with one number moved by one unit of its
+        last digit, or passes it given together with such a wrong answer in both orders. A judge is not run, since
+        drafts call no model, and a grader that cannot run here is not checked."""
+        if _judge_spec(task) is not None:
+            return []
+        right = await self._grade(task, right_answer)
+        if right is None:
+            return []
+        if right.status == Outcome.INVALID_TASK:
+            return [f"The grader cannot grade right_answer: {right.error}"]
+        if not grade_passed(right):
+            return [
+                f"The grader fails right_answer {right_answer[:200]!r}: outcome {right.status}, reward {right.reward}, "
+                f"{right.error or 'no error'}. Fix the grader, or give right_answer exactly as a correct solver replies "
+                "in the answer format"
+            ]
+        shifted = shifted_answers(right_answer)
+        if not shifted:
+            return []
+        candidates = [f"{shifted[0]}\n{right_answer}", f"{right_answer}\n{shifted[0]}"]
+        answers = [*shifted, *candidates]
+        grades = await asyncio.gather(*(self._grade(task, answer) for answer in answers))
+        passing = {answer for answer, grade in zip(answers, grades, strict=True) if grade and grade_passed(grade)}
+        problems = []
+        moved = [answer for answer in shifted if answer in passing]
+        if moved:
+            problems.append(
+                f"The grader passes {len(moved)} of {len(shifted)} wrong answers made from right_answer by moving one "
+                f"number by one unit of its last digit, for example {moved[0][:200]!r}. Give each compared number a "
+                "tolerance of half a unit of the decimals that the prompt asks for, 0.5 * 10**-d around the unrounded "
+                "value, and write right_answer with exactly those decimals. Leave out of right_answer any number that "
+                "the grader does not compare"
+            )
+        if set(candidates) <= passing:
+            problems.append(
+                "The grader passes right_answer given together with a wrong answer, in both orders, so it reads one "
+                "candidate of several. Fail an answer that gives more than one value for an asked quantity"
+            )
+        return problems
+
+    async def _grade(self, task: TaskSpec, answer: str) -> GradeResult | None:
+        """The grade of ``answer``, or None when the grader cannot run here, which must not refuse a draft."""
+        limits = self.config.solver_limits
+        spec = solver_spec(task, self.backend, limits, judge=self.config.judge, verifier_backend=VERIFIER_BACKEND)
+        try:
+            grade = (await self.solver_engine.run_task(spec, ReplayModel(answer))).grade
+        except RolloutInterrupted as error:
+            logger.warning("A control of %s did not run: %s", task.id, error.rollout.failure)
+            return None
+        if grade.status == Outcome.INFRA_ERROR:
+            logger.warning("A control of %s did not grade: %s", task.id, grade.error)
+            return None
+        return grade
+
+
+def shifted_answers(answer: str) -> list[str]:
+    """``answer`` with each of its first plain decimals, one at a time, one unit larger in its last digit."""
+    shifted = []
+    for match in list(ANSWER_NUMBER.finditer(answer))[:MAX_SHIFTED_NUMBERS]:
+        token = match.group()
+        unit = Decimal(1).scaleb(-len(token.partition(".")[2]))
+        shifted.append(answer[: match.start()] + str(Decimal(token) + unit) + answer[match.end() :])
+    return shifted
 
 
 def draft_grader_problems(grader: Grader) -> list[str]:
@@ -597,11 +684,13 @@ class DraftSession:
     async def close(self) -> None:
         pass
 
-    async def submit(self, path: str, program: str) -> ToolCallResult:
+    async def submit(self, path: str, program: str, right_answer: str) -> ToolCallResult:
         self.tools.submits += 1
         timeout = self.tools.config.command_timeout
         task = await read_task(self.machine, path, timeout)
         problems = self.tools.problems(task)
+        if not problems:
+            problems = await self.tools.control_problems(task, right_answer)
         if not problems:
             problems = await program_problems(
                 self.machine, program, task, self.tools.problems, timeout, max_answer_share=DRAFT_MAX_ANSWER_SHARE
