@@ -398,6 +398,14 @@ class CheckpointCandidate:
     metadata: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class ResolvedCheckpoint:
+    """A concrete checkpoint path and its available stored metadata."""
+
+    path: str
+    metadata: Mapping[str, Any]
+
+
 @dataclass
 class CheckpointDebugConfig:
     enabled: bool = False
@@ -590,7 +598,7 @@ class Checkpointer:
         ret_dict = self.load_checkpoint({"model": model}, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
         return ret_dict["model"]
 
-    def on_step(self, *, tree: PyTree, step: int, force: bool = False):
+    def on_step(self, *, tree: PyTree, step: int, force: bool = False, metadata: Mapping[str, Any] | None = None):
         step = int(step)
 
         if step == 0:
@@ -663,6 +671,7 @@ class Checkpointer:
                 commit_callback=callback,
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
+                metadata=metadata,
             )
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
@@ -779,6 +788,7 @@ class Checkpointer:
         *,
         is_temporary: bool = False,
         base_path_override: Optional[str] = None,
+        metadata: Mapping[str, Any] | None = None,
     ):
         base = base_path_override if base_path_override is not None else self.base_path
         path = os.path.join(base, destination)
@@ -793,6 +803,7 @@ class Checkpointer:
             is_temporary=is_temporary,
             debug=self.debug,
             write_config=self.write_config,
+            metadata=metadata,
         )
         self._last_save_step = step
         self._last_save_permanent = not is_temporary
@@ -838,6 +849,8 @@ def save_checkpoint(
     """
     if metadata is not None and {"step", "timestamp", "is_temporary"}.intersection(metadata):
         raise ValueError("Checkpoint metadata must not override step, timestamp, or is_temporary")
+    if metadata is not None:
+        metadata = json.loads(json.dumps(dict(metadata), allow_nan=False))
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
@@ -1145,6 +1158,22 @@ def discover_checkpoint_candidates(
             candidates_by_path[candidate.path] = candidate
 
     return sorted(candidates_by_path.values(), key=_checkpoint_candidate_sort_key)
+
+
+def resolve_checkpoint(checkpoint_path: PathLike) -> ResolvedCheckpoint:
+    """Resolve the latest candidate or a direct checkpoint with optional metadata.
+
+    Present direct metadata is read even when its discovery bookkeeping is unusable;
+    unreadable metadata raises. A metadata-free direct checkpoint returns empty metadata.
+    """
+    checkpoint_path = str(checkpoint_path)
+    candidates = discover_checkpoint_candidates(checkpoint_path)
+    if candidates:
+        candidate = candidates[-1]
+        return ResolvedCheckpoint(path=candidate.path, metadata=candidate.metadata)
+    if StoragePath(prefix_join(checkpoint_path, "metadata.json")).exists():
+        return ResolvedCheckpoint(path=checkpoint_path, metadata=_load_metadata(checkpoint_path))
+    return ResolvedCheckpoint(path=checkpoint_path, metadata={})
 
 
 def _checkpoint_candidate_sort_key(candidate: CheckpointCandidate) -> tuple[int, datetime.datetime, str]:
