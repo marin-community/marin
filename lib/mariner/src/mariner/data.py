@@ -122,12 +122,18 @@ DOWNLOAD_PATTERNS = (
     "data/validation_3e18/*",
     "data/fits/*",
     "data/domain_sweeps/*",
-    # The StarCoder tables that the main-text figures read; the appendix's stay on the Hub.
+    # The StarCoder tables that the figures read. The trajectories, the dense grid, the fit parameters and the repeat
+    # noise stay on the Hub.
     "data/starcoder/starcoder_observations.*",
     "data/starcoder/starcoder_curve_membership.*",
     "data/starcoder/starcoder_curves.*",
     "data/starcoder/starcoder_diagonal.*",
     "data/starcoder/starcoder_epoch_matching.*",
+    "data/starcoder/starcoder_curricula.*",
+    "data/starcoder/starcoder_curricula_matched_nd.*",
+    "data/starcoder/starcoder_curricula_matched_nd_confirmation.*",
+    "data/starcoder/starcoder_transition.*",
+    "data/starcoder/starcoder_ramp_designs.*",
 )
 
 
@@ -573,9 +579,11 @@ def download(local_dir: Path, repo_id: str = DATASET_REPO, revision: str | None 
 
     The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits, which the
     commands read; ladder_accuracy, the domain sweeps and the StarCoder observations, curves, curve membership,
-    diagonal and epoch-matching sweep, which the main-text figures also read; and ladder_compute_equivalence, the
-    baselines' released ladder laws, which the tests compare Figure 1's fits with. The other StarCoder tables,
-    ladder_unimax_cap_sweep and run_sets stay on the Hub. Returns the directory's path.
+    diagonal, epoch-matching sweep, two-phase gains (starcoder_curricula and its two matched_nd tables), mixture
+    switches (starcoder_transition) and ramp designs, which the figures also read; and ladder_compute_equivalence, the
+    baselines' released ladder laws, which the tests compare Figure 1's fits with. The StarCoder trajectories, dense
+    grid, fit parameters and repeat noise, ladder_unimax_cap_sweep and run_sets stay on the Hub. Returns the
+    directory's path.
     """
     try:
         from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)

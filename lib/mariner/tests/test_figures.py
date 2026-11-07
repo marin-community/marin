@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from mariner.cli import main
+from mariner.cli import INPUT_ERROR_STATUS, main
 from mariner.data import (
     FIGURES_INDEX,
     MAIN_SWARM,
@@ -33,6 +33,7 @@ from mariner.figures.analysis import (
 from mariner.figures.epochs import Track
 from mariner.figures.layout import OBJECTIVE_TITLES, Method
 from mariner.figures.pipeline import ALL_TASKS, scaling_values
+from mariner.figures.schedules import ComputePath
 from mariner.figures.starcoder import EPOCH_MATCHING_TABLE, epoch_matching
 
 # figures_tables.csv marks configuration constants and the two-phase data the release omits among a figure's configs.
@@ -176,6 +177,46 @@ PROPOSAL_PREDICTION_GAP = 0.005  # BPB: "Its proposed mixtures measure within 0.
 # monotone surrogates cannot represent a task loss that first falls and then rises"); and boosted trees that "reach the
 # 90% mean but stay flat past it, below the measured 100% mean" (figure1_real_data_drafts/v40/build_figure.py:14-15).
 MARKED_MARINER_OPTIMUM = "0.578"
+# Figure 22's legends print each token budget's minimizing StarCoder epochs, by the StarCoder subset's repetition
+# relative to the target run's, from the smallest budget (1.00B tokens) to the largest (7.41B).
+PRINTED_REPLAY_EPOCHS = {
+    0.125: ["3.0", "3.3", "3.3", "3.3"],
+    0.25: ["6.0", "5.3", "6.6", "6.6"],
+    0.5: ["8.6", "10.6", "10.6", "11.9"],
+    1.0: ["9.3", "10.6", "13.2", "18.5"],
+    2.0: ["9.0", "13.2", "15.9", "21.2"],
+    4.0: ["10.6", "14.9", "15.9", "21.2"],
+}
+# Its caption (sections/appendix.tex:414): "the shift is not monotone at every degree of downsampling". The minimizing
+# epochs fall from one budget to the next only at 1/4x, from the smallest budget to the second: (repetition, step).
+REPLAY_EPOCH_FALLS = [(0.25, 0)]
+# Figure 25's caption (sections/appendix_analysis.tex:307): Holm correction "over the 28 blocks" of token budget and
+# StarCoder pool, each measured on "five fresh paired seeds", and one schedule pair measured "over eight fresh paired
+# seeds".
+CURRICULA_BLOCKS = 28
+BLOCK_PAIRS = 5
+CONFIRMATION_PAIRS = 8
+# sections/appendix_analysis.tex:302: "A cell went to a fresh-seed test only if its first 23 schedules gave a
+# single-seed gain of at least 0.005 BPB."
+FRESH_SEED_GAIN = 0.005
+# Figure 26's caption (sections/appendix_analysis.tex:358): panel A's switch "from 0.02 to 0.82 StarCoder when the
+# learning-rate decay begins", its gaps "relative to the same gap 64 steps before the switch" over "eight seeds", and
+# panel B's "five paired seeds".
+SWITCH_SHARES = (0.02, 0.82)
+SWITCH_LR_STATE = "decay onset"  # starcoder_transition's name for the start of the learning-rate decay
+SWITCH_BASELINE_LEAD = 64
+SWITCH_PAIRS = 8
+RAMP_PAIRS = 5
+# sections/appendix_analysis.tex:362: "Ramps of up to 512 steps changed the mean final programming-languages BPB by at
+# most 0.0005, and the 2,048- and 5,632-step ramps raised it in every seed."
+NARROW_RAMP_WIDTH = 512
+NARROW_RAMP_CHANGE = 0.0005
+WIDE_RAMPS = 2
+# Figure 27's caption (sections/appendix_analysis.tex:368): "each mixture block of 2,048 sequences (16 training steps)",
+# and "All ramps are centred on the start of the decay, 80% of the way through training."
+BLOCK_SEQUENCES = 2048
+BLOCK_STEPS = 16
+DECAY_START = 0.8
 
 
 def epoch_label(value: float) -> str:
@@ -250,11 +291,12 @@ def small_epoch_matching() -> pd.DataFrame:
     )
 
 
-def write_epoch_matching(root: Path, runs: pd.DataFrame) -> None:
-    table = Path("data/starcoder") / f"{EPOCH_MATCHING_TABLE}.csv"
+def write_starcoder_table(root: Path, name: str, frame: pd.DataFrame) -> None:
+    """A snapshot at ``root`` of the one StarCoder table ``name``, as CSV."""
+    table = Path("data/starcoder") / f"{name}.csv"
     (root / table).parent.mkdir(parents=True)
-    runs.to_csv(root / table, index=False)
-    entry = {"table": EPOCH_MATCHING_TABLE, "path": table.as_posix(), "format": "csv"}
+    frame.to_csv(root / table, index=False)
+    entry = {"table": name, "path": table.as_posix(), "format": "csv"}
     (root / "MANIFEST.json").write_text(json.dumps({"tables": [entry]}))
 
 
@@ -267,9 +309,31 @@ def write_epoch_matching(root: Path, runs: pd.DataFrame) -> None:
     ids=["repeated", "missing"],
 )
 def test_epoch_matching_refuses_repeated_or_missing_runs(tmp_path, edit, message):
-    write_epoch_matching(tmp_path, edit(small_epoch_matching()))
+    write_starcoder_table(tmp_path, EPOCH_MATCHING_TABLE, edit(small_epoch_matching()))
     with pytest.raises(ValueError, match=message):
         epoch_matching(tmp_path)
+
+
+def test_cli_figures_names_the_column_a_snapshot_lacks(tmp_path, capsys):
+    """A snapshot whose starcoder_ramp_designs predates the data loader's per-block StarCoder counts cannot draw
+    Figure 27: the command stops with the input-error status and names the missing column."""
+    designs = pd.DataFrame(
+        {
+            "arm": ["abrupt", "abrupt"],
+            "ramp_width": [math.nan, math.nan],
+            "data_seed": [1, 1],
+            "stage": [0, 1],
+            "start_step": [0, 80],
+            "total_steps": [100, 100],
+            "boundary_step": [80, 80],
+            "steps_per_block": [16, 16],
+            "starcoder_weight": [0.0, 0.3],
+        }
+    )
+    write_starcoder_table(tmp_path, "starcoder_ramp_designs", designs)
+    argv = ["figures", "--data", str(tmp_path), "--out", str(tmp_path / "out"), "--only", "fig:a-ramp-schedules"]
+    assert main(argv) == INPUT_ERROR_STATUS
+    assert "starcoder_block_sequences" in capsys.readouterr().err
 
 
 def check_pipeline(values: dict[str, pd.DataFrame]) -> None:
@@ -539,6 +603,125 @@ def check_extrapolation_residuals(values: dict[str, pd.DataFrame]) -> None:
     assert residuals.loc[residuals["component"] == "arXiv physics", "residual"].min() > far["SciQ"]
 
 
+def check_downsampling_by_budget(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 21's caption (sections/appendix.tex:405): "At every token budget $D$, stronger downsampling shifts the
+    minimum toward a smaller StarCoder fraction", with the full StarCoder pool added. At each of the four budgets the
+    grid minimum's share never rises from the full pool through the six subsets in order of repetition, and the most
+    repeated subset's lies below the full pool's. The shift is weak: the minimum stays put in 8 of the 24 steps between
+    neighbouring pools, so sections/appendix.tex:400's "each smaller StarCoder subset puts the minimum at a smaller
+    StarCoder fraction" holds only in that weak sense."""
+    minima = values["minima"]
+    assert minima.groupby("train_tokens").size().tolist() == [7, 7, 7, 7]
+    for _, rows in minima.groupby("train_tokens"):
+        shares = rows.sort_values("support_order")["share"].to_numpy()
+        assert (np.diff(shares) <= 0).all()
+        assert shares[-1] < shares[0]
+
+
+def check_downsampling_by_repetition(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 22: its legends' minimizing StarCoder epochs (``PRINTED_REPLAY_EPOCHS``), and its caption
+    (sections/appendix.tex:414): "Larger token budgets generally favor more repetition, although the shift is not
+    monotone at every degree of downsampling" (``REPLAY_EPOCH_FALLS``)."""
+    printed, falls = {}, []
+    for multiplier, rows in values["minima"].groupby("epoch_multiplier"):
+        epochs = rows.sort_values("train_tokens")["epochs"].to_numpy()
+        printed[multiplier] = [f"{value:.1f}" for value in epochs]
+        falls += [(multiplier, int(step)) for step in np.flatnonzero(np.diff(epochs) < 0)]
+    assert printed == PRINTED_REPLAY_EPOCHS
+    assert falls == REPLAY_EPOCH_FALLS
+
+
+def check_curricula_sweeps(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 25 and sections/appendix_analysis.tex:298-302:
+
+    - the selected two-phase schedule "beat the selected single-phase mixture only at the longest budget and only with
+      StarCoder repeated at least as often as in the target run": the blocks that stay positive after Holm correction
+      are exactly the longest budget's at 1x repetition or more;
+    - "At 7.4B tokens the gain increases across all six downsampled subsets, and none of the four full-corpus blocks
+      has a positive mean gain";
+    - "the fitted gain grew with tokens at a fixed model size but not with model size at a fixed number of tokens": it
+      rises along the tokens path, and every larger model's gain stays below the smallest model's;
+    - "A cell went to a fresh-seed test only if its first 23 schedules gave a single-seed gain of at least 0.005 BPB.
+      Only the cell with the most tokens qualified, and its selected two-phase schedule beat its selected single-phase
+      mixture in all eight fresh paired seeds."
+    """
+    blocks = values["blocks"]
+    assert len(blocks) == CURRICULA_BLOCKS
+    assert (blocks["pairs"] == BLOCK_PAIRS).all()
+    longest = blocks["train_tokens"] == blocks["train_tokens"].max()
+    repeated = blocks["epoch_multiplier"] >= 1.0  # False for the full pool, whose multiplier is NaN
+    assert blocks["holm_positive"].equals(longest & repeated)
+    subsets = blocks[longest & blocks["epoch_multiplier"].notna()].sort_values("epoch_multiplier")
+    assert len(subsets) == 6
+    assert (np.diff(subsets["gain_bpb"]) > 0).all()
+    full_pool = blocks[blocks["epoch_multiplier"].isna()]
+    assert len(full_pool) == 4
+    assert (full_pool["gain_bpb"] <= 0).all()
+    paths = values["fitted_gains"].sort_values("compute_flops")
+    tokens = paths.loc[paths["path"] == ComputePath.TOKENS, "gain_bpb"].to_numpy()
+    parameters = paths.loc[paths["path"] == ComputePath.PARAMETERS, "gain_bpb"].to_numpy()
+    assert (np.diff(tokens) > 0).all()
+    assert (parameters[1:] < parameters[0]).all()
+    cells = values["cells"]
+    assert cells["confirmation_eligible"].equals(cells["stage1_gain_bpb"] >= FRESH_SEED_GAIN)
+    (qualified,) = cells.loc[cells["confirmation_eligible"], "cell_id"]
+    assert cells.set_index("cell_id")["train_tokens"].idxmax() == qualified
+    confirmation = values["confirmation"].iloc[0]
+    assert confirmation["cell_id"] == qualified
+    assert confirmation["pairs"] == confirmation["positive_pairs"] == CONFIRMATION_PAIRS
+
+
+def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 26: its caption's switch, baseline step and seeds (``SWITCH_SHARES`` to ``RAMP_PAIRS``);
+    sections/appendix_analysis.tex:353: the PL and C4 gaps "move monotonically to their new levels", each step up to
+    the 95% interval of the point it reaches; and sections/appendix_analysis.tex:362: "Ramps of up to 512 steps changed
+    the mean final programming-languages BPB by at most 0.0005, and the 2,048- and 5,632-step ramps raised it in every
+    seed"."""
+    switch = values["switch"].iloc[0]
+    assert (switch["p0"], switch["p1"]) == SWITCH_SHARES
+    assert switch["lr_state"] == SWITCH_LR_STATE
+    assert switch["switch_step"] - switch["baseline_step"] == SWITCH_BASELINE_LEAD
+    assert switch["pairs"] == SWITCH_PAIRS
+    for _, rows in values["gaps"].groupby("metric"):
+        rows = rows.sort_values("lag")
+        change = rows["gap_change_bpb"].to_numpy()
+        steps = np.sign(change[-1] - change[0]) * np.diff(change)
+        assert (steps >= -rows["half_width_bpb"].to_numpy()[1:]).all()
+    ramps = values["ramp_gains"]
+    assert (ramps["pairs"] == RAMP_PAIRS).all()
+    narrow = ramps["width"] <= NARROW_RAMP_WIDTH
+    assert (ramps.loc[narrow, "gain_bpb"].abs() <= NARROW_RAMP_CHANGE).all()
+    assert (~narrow).sum() == WIDE_RAMPS
+    assert (ramps.loc[~narrow, "worse_in"] == ramps.loc[~narrow, "pairs"]).all()
+
+
+def check_ramp_schedules(values: dict[str, pd.DataFrame]) -> None:
+    """Figure 27's caption (sections/appendix_analysis.tex:368): "Smoothing keeps StarCoder's total exposure and moves
+    some of it from just after the start of the learning-rate decay to just before it"; each line gives "the StarCoder
+    share of each mixture block of 2,048 sequences (16 training steps), as the data loader allocated it", a whole number
+    of sequences per block, which the design's weights are not; "All ramps are centred on the start of the decay, 80%
+    of the way through training." At every data seed each ramp's StarCoder total equals the abrupt switch's, and a
+    wider ramp draws more of it before the decay. Each plotted ramp runs from half its width before the decay to half
+    its width after it."""
+    training = values["training"].iloc[0]
+    decay = training["decay_step"]
+    assert decay / training["total_steps"] == DECAY_START
+    assert training["steps_per_block"] == BLOCK_STEPS
+    sequences = values["schedules"]["share"].to_numpy() * BLOCK_SEQUENCES
+    assert np.array_equal(sequences, np.round(sequences))
+    for _, rows in values["totals"].groupby("data_seed"):
+        abrupt = rows["ramp_width"].isna()
+        assert abrupt.sum() == 1
+        assert (rows["starcoder_sequences"] == rows.loc[abrupt, "starcoder_sequences"].iloc[0]).all()
+        before = rows.sort_values("ramp_width", na_position="first")["before_decay"].to_numpy()
+        assert before[0] == 0
+        assert (np.diff(before) > 0).all()
+    for _, rows in values["schedules"].groupby("arm"):
+        starts = rows.sort_values("stage")["start_step"].to_numpy()
+        half = np.nan_to_num(rows["ramp_width"].iloc[0]) / 2
+        assert (starts[1], starts[-1]) == (decay - half, decay + half)
+
+
 PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:pipeline": check_pipeline,
     "fig:epoch-matching": check_epoch_matching,
@@ -556,6 +739,11 @@ PAPER_CHECKS: dict[str, Callable[[dict[str, pd.DataFrame]], None]] = {
     "fig:r7": check_r2_vs_snr,
     "fig:analysis-floor": check_frontier,
     "fig:analysis-extrapolation": check_extrapolation_residuals,
+    "fig:b5a": check_downsampling_by_budget,
+    "fig:a-downsampling": check_downsampling_by_repetition,
+    "fig:a-curricula-sweeps": check_curricula_sweeps,
+    "fig:a-switch-smoothing": check_switch_smoothing,
+    "fig:a-ramp-schedules": check_ramp_schedules,
 }
 
 

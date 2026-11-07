@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mariner.figures import analysis, epochs, heldout, pipeline, results, surrogate
+from mariner.figures import analysis, epochs, heldout, pipeline, repetition, results, schedules, surrogate
 from mariner.figures.layout import FigureData, save, style
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,13 @@ FIGURES: dict[str, FigureSpec] = {
             ("heldout", "fits", "swarm_qwen3_360m_1p6b"),
             heldout.draw_extrapolation_residuals,
         ),
+        FigureSpec("fig:b5a", "b5_downsampling_fixed_budget", ("starcoder",), repetition.draw_downsampling_by_budget),
+        FigureSpec(
+            "fig:a-downsampling", "a_replay_burden_ladder", ("starcoder",), repetition.draw_downsampling_by_repetition
+        ),
+        FigureSpec("fig:a-curricula-sweeps", "a_curricula_sweeps", ("starcoder",), schedules.draw_curricula_sweeps),
+        FigureSpec("fig:a-switch-smoothing", "a_switch_smoothing", ("starcoder",), schedules.draw_switch_smoothing),
+        FigureSpec("fig:a-ramp-schedules", "a_ramp_schedules", ("starcoder",), schedules.draw_ramp_schedules),
     )
 }
 
