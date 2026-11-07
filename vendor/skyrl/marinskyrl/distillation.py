@@ -501,8 +501,6 @@ def _teacher_spec(teacher_id: str, raw: object) -> TeacherSpec:
             raise ValueError(f"{path}.{unexpected_external_fields[0]} is only valid for openai_compatible teachers")
 
     if source is TeacherSource.LOCAL_INFERENCE:
-        if backend == "sglang":
-            raise ValueError(f"{path}.backend='sglang' cannot provide the prompt logprobs required for teacher scoring")
         if backend != "vllm":
             raise ValueError(f"{path}.backend must be vllm for local_inference teachers; got {backend!r}")
         if placement not in {TeacherPlacement.PINNED, TeacherPlacement.ROTATING}:

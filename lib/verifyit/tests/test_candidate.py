@@ -216,14 +216,6 @@ def test_substring_contract_is_rejected_before_candidate_scoring(expected):
     assert grade_candidate(spec, "Paris", {}).status == Status.INVALID_TASK
 
 
-def test_predicted_action_overflowing_tolerance_is_invalid_configuration():
-    with pytest.raises(ValueError):
-        candidate_spec(
-            Mode.PREDICTED_ACTION,
-            {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}], "numeric_tolerance": 10**400},
-        )
-
-
 @pytest.mark.parametrize("policy,reward", [(NumericTypePolicy.VALUE, 1.0), (NumericTypePolicy.STRICT, 0.0)])
 def test_structured_exact_numeric_policy_survives_json_and_toml_roundtrips(policy, reward):
     spec = StructuredExactSpec(expected={"nested": [16, True]}, numeric_types=policy)

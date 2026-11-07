@@ -81,11 +81,6 @@ def test_exact_literal_boundary_preserves_whitespace(candidate, expected, reward
     assert grade_exact.grade_exact_candidate(spec, candidate).reward == reward
 
 
-def test_invalid_direct_normalization_flag_cannot_award_correct_answer():
-    with pytest.raises(InvalidTask, match="booleans"):
-        grade_exact.grade_exact_candidate(ExactSpec(("2",), ignore_case="false"), "2")
-
-
 @pytest.mark.parametrize(
     "candidate,score",
     [("The capital is Paris.", 1.0), ("Parisian", 1.0), ("Lyon", 0.0), ("", 0.0)],
@@ -103,11 +98,6 @@ def test_substring_vacuous_or_multi_reference_task_invalid_before_missing_output
     result = dispatch(spec, tmp_path, tmp_path)
     assert result.status == Status.INVALID_TASK
     assert result.reward == 0.0
-
-
-def test_substring_boolean_flag_is_strict():
-    with pytest.raises(InvalidTask, match="booleans"):
-        grade_exact.grade_exact_candidate(ExactSpec(("Paris",), substring=1), "Paris")
 
 
 def test_source_lower_semantics_are_separate_from_casefold():
@@ -258,3 +248,13 @@ def test_collection_subset_invalid_reference_precedes_empty_candidate():
         grade_exact.grade_collection_subset(tuple("ABCDE"), (), item_credit=0.5)
     with pytest.raises(InvalidTask):
         grade_exact.grade_collection_subset(("A", "B"), (), item_credit=10**400)
+
+
+@pytest.mark.parametrize(
+    "invalid_fields,candidate", [({"ignore_case": "false"}, "Paris"), ({"substring": 1}, "Parisian")]
+)
+def test_malformed_normalization_contract_cannot_publish_correct_credit(tmp_path, invalid_fields, candidate):
+    _answer(tmp_path, candidate)
+    result = dispatch(ExactSpec(("Paris",), **invalid_fields), tmp_path, tmp_path)
+
+    assert (result.status, result.reward) == (Status.INVALID_TASK, 0.0)

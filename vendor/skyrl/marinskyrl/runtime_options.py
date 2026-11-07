@@ -16,11 +16,6 @@ class WeightSyncTransport(StrEnum):
     EXPERT_BLOCK = "expert_block"
 
 
-class GDNBackend(StrEnum):
-    TORCH = "torch"
-    FLASHQLA = "flashqla"
-
-
 TRAJECTORY_SELECTOR_TYPE_PATH = "trainer.trajectory_selector.type"
 
 
@@ -32,7 +27,6 @@ class RolloutGrading(StrEnum):
 
 
 class AdvantageEstimator(StrEnum):
-    GAE = "gae"
     GRPO = "grpo"
     RLOO = "rloo"
     RLOO_N = "rloo_n"  # RLOO-Neutral: excludes masked samples from baseline

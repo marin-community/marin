@@ -1,6 +1,6 @@
 from collections.abc import Sequence
-from typing import List, Dict, Any, Union, Callable, Optional
-from omegaconf import OmegaConf, DictConfig
+from typing import List, Dict, Union, Callable, Optional
+from omegaconf import DictConfig
 from enum import Enum
 import ray
 from skyrl_train.workers.worker import PPORayActorGroup
@@ -52,27 +52,20 @@ class ResumeMode(Enum):
         return super()._missing_(value)
 
 
-def get_node_ids(
-    policy_model: PPORayActorGroup, critic_model: Optional[PPORayActorGroup], ref_model: Optional[PPORayActorGroup]
-) -> List[str]:
-    """Get the node ids of the policy, critic, and ref models.
+def get_node_ids(policy_model: PPORayActorGroup, ref_model: Optional[PPORayActorGroup]) -> List[str]:
+    """Get the node ids of the policy and ref models.
 
     Args:
         policy_model: Policy model actor group
-        critic_model: Critic model actor group (Optional)
         ref_model: Ref model actor group (Optional)
     """
     policy_node_ids: List[str] = ray.get(policy_model.async_run_ray_method("pass_through", "get_ray_node_id"))
-    if critic_model is not None:
-        critic_node_ids: List[str] = ray.get(critic_model.async_run_ray_method("pass_through", "get_ray_node_id"))
-    else:
-        critic_node_ids = []
     if ref_model is not None:
         ref_node_ids: List[str] = ray.get(ref_model.async_run_ray_method("pass_through", "get_ray_node_id"))
     else:
         ref_node_ids = []
 
-    unique_node_ids = list(set(policy_node_ids + critic_node_ids + ref_node_ids))
+    unique_node_ids = list(set(policy_node_ids + ref_node_ids))
     return unique_node_ids
 
 
@@ -429,17 +422,3 @@ def build_eval_dataloader(cfg: DictConfig, dataset: PromptDataset) -> StatefulDa
     )
     logger.info(f"Validation set size: {len(dataloader)}")
     return dataloader
-
-
-def get_rope_scaling_config(trainer_cfg: DictConfig) -> dict[str, Any]:
-    if "rope_scaling" not in trainer_cfg:
-        return {}
-    if trainer_cfg.rope_scaling is None:
-        return None
-    return OmegaConf.to_container(trainer_cfg.rope_scaling)
-
-
-def get_rope_theta_config(trainer_cfg: DictConfig) -> int | None:
-    if "rope_theta" not in trainer_cfg:
-        return None
-    return trainer_cfg.rope_theta

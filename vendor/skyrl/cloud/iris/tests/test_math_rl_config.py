@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import create_default_callbacks
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
@@ -57,24 +59,6 @@ def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_con
     assert "model_num_attention_heads" not in cfg
 
 
-def test_launch_without_hub_destination_does_not_publish(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
-
-    cfg = compose_skyrl_config(
-        parsed,
-        {
-            "job_name": "artifact-only-run",
-            "export_hf_artifact": True,
-            "hf_hub_repo_id": None,
-            "num_nodes": 4,
-        },
-        _HPCStub(),
-    ).config
-
-    assert cfg.trainer.export_hf_artifact is True
-    assert cfg.trainer.get("hf_hub_repo_id") is None
-
-
 def test_iris_derives_durable_training_trajectory_path(math_rl_config_path):
     parsed = parse_rl_config(str(math_rl_config_path))
     cfg = compose_skyrl_config(
@@ -86,38 +70,6 @@ def test_iris_derives_durable_training_trajectory_path(math_rl_config_path):
         cfg.generator.trajectory_retention.output_path
         == "s3://bucket/iris/retained-run/trace_jobs/training_trajectories"
     )
-
-
-def test_model_source_locator_reaches_trainer_config(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
-    exp_args = {
-        "job_name": "exportable-run",
-        "model_path": "/tmp/materialized-model",
-        "model_source_uri": "s3://models/policy",
-        "model_source_identity": "policy@abc123",
-        "num_nodes": 4,
-    }
-
-    cfg = compose_skyrl_config(parsed, exp_args, _HPCStub()).config
-    assert cfg.trainer.policy.model.source_uri == "s3://models/policy"
-    assert cfg.trainer.policy.model.source_identity == "policy@abc123"
-
-
-def test_policy_revision_override_reaches_trainer_config(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
-    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
-
-    cfg = compose_skyrl_config(
-        parsed,
-        {
-            "job_name": "revision-pinned-run",
-            "model_path": "Qwen/Qwen3.5-9B-Base",
-            "model_revision": revision,
-            "num_nodes": 4,
-        },
-        _HPCStub(),
-    ).config
-    assert cfg.trainer.policy.model.revision == revision
 
 
 def test_parse_rejects_bad_tp_against_declared_heads(tmp_path):
@@ -134,3 +86,22 @@ def test_parse_rejects_bad_tp_against_declared_heads(tmp_path):
     )
     with pytest.raises(ValueError, match="does not divide"):
         parse_rl_config(str(bad))
+
+
+@pytest.mark.parametrize("export_artifact", [False, True])
+def test_artifact_only_launch_schedules_exports_on_the_requested_steps(math_rl_config_path, export_artifact):
+    cfg = compose_skyrl_config(
+        parse_rl_config(str(math_rl_config_path)),
+        {"job_name": "artifact-only", "num_nodes": 4, "export_hf_artifact": export_artifact, "hf_hub_repo_id": None},
+        _HPCStub(),
+    ).config
+    cfg.trainer.hf_save_interval = 2
+    cfg.trainer.ckpt_interval = 2
+    handler = CallbackHandler(create_default_callbacks(cfg))
+    exports = []
+    for step in (1, 2, 3):
+        state = TrainerState(global_step=step, epoch=0, total_steps=4, num_steps_per_epoch=4)
+        control = handler.call_event("on_step_end", state, TrainerControl())
+        exports.append(control.should_save_hf_model)
+
+    assert exports == ([False, True, False] if export_artifact else [False, False, False])

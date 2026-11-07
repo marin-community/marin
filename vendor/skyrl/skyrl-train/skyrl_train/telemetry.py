@@ -13,17 +13,8 @@ from loguru import logger
 from marinskyrl.environment_contract import TRAINING_TYPE_ENV, TrainingType
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
 
-try:
-    from rigging import telemetry
-    from rigging.telemetry.serialization import EventBody
-except ImportError as error:
-    # An installed rigging without the telemetry submodule raises ImportError, not
-    # ModuleNotFoundError; the name check still keeps a failure inside rigging visible.
-    if error.name != "rigging":
-        raise
-    from skyrl_train import inert_telemetry as telemetry
-    from skyrl_train.inert_telemetry import EventBody
-
+from rigging import telemetry
+from rigging.telemetry.serialization import EventBody
 
 # A process that forwards a foreign system's metrics publishes under that system's name; this one
 # covers everything MarinSkyRL measures about itself.

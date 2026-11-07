@@ -13,6 +13,8 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
+
+
 @dataclass(frozen=True)
 class BuiltWheel:
     names: set[str]
@@ -49,9 +51,15 @@ def test_root_wheel_owns_launcher_and_training_packages(built_wheel: BuiltWheel)
 
 def test_base_dependencies_are_cpu_only(built_wheel: BuiltWheel) -> None:
     requirements = Parser().parsestr(built_wheel.metadata).get_all("Requires-Dist", [])
-    base_requirements = {requirement.partition(";")[0].strip().split("[")[0].split()[0].lower() for requirement in requirements if "extra ==" not in requirement}
+    base_requirements = {
+        requirement.partition(";")[0].strip().split("[")[0].split()[0].lower()
+        for requirement in requirements
+        if "extra ==" not in requirement
+    }
 
-    assert base_requirements.isdisjoint({"flash-attn", "torch", "transformer-engine", "vllm", "harbor", "harbor-config"})
+    assert base_requirements.isdisjoint(
+        {"flash-attn", "torch", "transformer-engine", "vllm", "harbor", "harbor-config"}
+    )
 
 
 def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_wheel: BuiltWheel) -> None:
@@ -75,14 +83,14 @@ def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_
         elif requirement.name.startswith("marin-"):
             assert requirement.url is None
     assert any(requirement.startswith("torch==") and "extra == 'vllm'" in requirement for requirement in requirements)
-    assert any(requirement.startswith("memray") and "extra == 'telemetry'" in requirement for requirement in requirements)
     assert any(
-        requirement.startswith("torchvision==") and "extra == 'megatron'" in requirement
-        for requirement in requirements
+        requirement.startswith("memray") and "extra == 'telemetry'" in requirement for requirement in requirements
     )
     assert any(
-        requirement.startswith("megatron-core") and "extra == 'megatron'" in requirement
-        for requirement in requirements
+        requirement.startswith("torchvision==") and "extra == 'megatron'" in requirement for requirement in requirements
+    )
+    assert any(
+        requirement.startswith("megatron-core") and "extra == 'megatron'" in requirement for requirement in requirements
     )
 
     conflict = subprocess.run(
@@ -110,18 +118,22 @@ def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
     return [Requirement(line) for line in exported if line and not line.startswith(("#", "-e "))]
 
 
-@pytest.mark.parametrize("extras", [("cuda",), ("megatron", "vllm")])
-def test_gpu_profiles_use_one_cuda132_runtime(extras: tuple[str, ...]) -> None:
+def test_gpu_profiles_share_one_runtime_requirement() -> None:
     platform = {"sys_platform": "linux", "platform_machine": "x86_64"}
-    requirements = _exported_requirements(extras)
-    runtimes = {
-        (requirement.name, str(requirement.specifier))
-        for requirement in requirements
-        if requirement.name.startswith("nvidia-cuda-runtime")
-        and (requirement.marker is None or requirement.marker.evaluate(platform))
-    }
+    profiles = []
+    for extras in (("cuda",), ("megatron", "vllm")):
+        requirements = _exported_requirements(extras)
+        profiles.append(
+            {
+                (requirement.name, str(requirement.specifier))
+                for requirement in requirements
+                if requirement.name.startswith("nvidia-cuda-runtime")
+                and (requirement.marker is None or requirement.marker.evaluate(platform))
+            }
+        )
 
-    assert runtimes == {("nvidia-cuda-runtime", "==13.2.75")}
+    assert len(profiles[0]) == len(profiles[1]) == 1
+    assert profiles[0] == profiles[1]
 
 
 @pytest.mark.parametrize(

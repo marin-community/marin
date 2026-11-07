@@ -35,7 +35,7 @@ def inference_engine_kwargs_from_config(
     *,
     engine_init_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Combine shared generator settings with explicit role geometry and ownership."""
+    """Combine generator settings and role geometry; tokenizer is unused."""
     kwargs = {
         "num_inference_engines": role.num_inference_engines,
         "tensor_parallel_size": role.tensor_parallel_size,
@@ -55,7 +55,6 @@ def inference_engine_kwargs_from_config(
         "inference_engine_enable_sleep": role.inference_engine_enable_sleep,
         "max_num_batched_tokens": cfg.generator.max_num_batched_tokens,
         "max_num_seqs": cfg.generator.max_num_seqs,
-        "tokenizer": tokenizer,
         "backend": role.backend,
         "vllm_attention_backend": cfg.generator.get("vllm_attention_backend", None),
         "engine_init_kwargs": engine_init_kwargs,

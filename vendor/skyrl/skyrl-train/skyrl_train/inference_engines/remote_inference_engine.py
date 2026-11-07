@@ -15,7 +15,7 @@ class RemoteWeightLoader(WeightLoader):
     """Loads weights into remote inference engine via HTTP.
 
     This loader coordinates weight updates with remote inference servers
-    (vLLM or SGLang) via their HTTP APIs.
+    through vLLM's HTTP API.
     """
 
     def __init__(self, url: str, engine_backend: str) -> None:
@@ -23,7 +23,7 @@ class RemoteWeightLoader(WeightLoader):
 
         Args:
             url: Base URL of the remote inference server.
-            engine_backend: Backend type ("vllm" or "sglang").
+            engine_backend: The vLLM backend ("vllm").
         """
         self._url = url
         self._engine_backend = engine_backend
@@ -52,7 +52,7 @@ class RemoteWeightLoader(WeightLoader):
         Returns:
             Response from the remote server.
         """
-        path = "/init_weights_update_group" if self._engine_backend == "sglang" else "/init_weight_update_communicator"
+        path = "/init_weight_update_communicator"
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self._url}{path}",
@@ -82,8 +82,6 @@ class RemoteWeightLoader(WeightLoader):
         """
         if self._engine_backend == "vllm":
             weight_update_method = "update_weights"
-        elif self._engine_backend == "sglang":
-            weight_update_method = "update_weights_from_distributed"
         else:
             raise ValueError(f"Invalid engine backend: {self._engine_backend}")
 
@@ -195,14 +193,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
                 payload["model"] = self.model_name
                 payload["prompt"] = prompt_token_ids
                 request_url = f"{self.url}/v1/completions"
-            elif self.engine_backend == "sglang":
-                # SGLang supports /generate, works exactly like its Python `async_generate()` method
-                # and can do batch generation.
-                payload = {
-                    "input_ids": prompt_token_ids,
-                    "sampling_params": sampling_params,
-                }
-                request_url = f"{self.url}/generate"
             else:
                 raise ValueError(f"Invalid engine backend: {self.engine_backend}")
             async with session.post(request_url, json=payload, headers=headers) as resp:
@@ -224,15 +214,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
                 # returning token IDs via HTTP requests. Fix after this vLLM PR is merged:
                 # https://github.com/vllm-project/vllm/pull/22587
                 output_ids.append(self.tokenizer.encode(text, add_special_tokens=False))
-        elif self.engine_backend == "sglang":
-            # since prompt_token_ids is a list of lists, response is a list of dicts
-            for output in response:
-                cur_output_ids = output["output_ids"]
-                output_ids.append(cur_output_ids)
-                # SGLang only returns tokens not text when skip_tokenizer_init is True, so
-                # we manually decode it.
-                outputs.append(self.tokenizer.decode(cur_output_ids, skip_special_tokens=True))
-                finish_reasons.append(output["meta_info"]["finish_reason"]["type"])
         else:
             raise ValueError(f"Invalid engine backend: {self.engine_backend}")
 
@@ -271,8 +252,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
 
     async def sleep(self, *args: Any, **kwargs: Any):
         async with aiohttp.ClientSession() as session:
-            # TODO(Charlie): this is vLLM's API, not SGLang (which uses tags). Fix when need to
-            # support sleeping with remote engines.
             resp = await session.post(f"{self.url}/sleep", json={"level": kwargs.get("level", 1)})
             return await resp.json()
 
@@ -303,8 +282,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
     async def reset_prefix_cache(self):
         if self.engine_backend == "vllm":
             reset_prefix_cache_method = "reset_prefix_cache"
-        elif self.engine_backend == "sglang":
-            reset_prefix_cache_method = "flush_cache"
         else:
             raise ValueError(f"Invalid engine backend: {self.engine_backend}")
 
