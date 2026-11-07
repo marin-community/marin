@@ -13,6 +13,7 @@ import base64
 import json
 import shlex
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -35,13 +36,14 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import thread_container_scope
 from iris.version import client_revision_date
+from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
 from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET, SharedGrantConfig
 from rigging.timing import Duration, ExponentialBackoff
 from sqlalchemy import select
 
 from infra.auth.proof_fga import free_port
 from infra.auth.proof_http import serve
-from infra.auth.prove_loom import IsolatedLoom, isolated_loom
+from infra.auth.prove_loom import IsolatedLoom, isolated_loom, prepare_loom_profile
 from infra.auth.service import LoomConfig, ServiceConfig, create_service
 
 TASK_NAMESPACE = "marin-auth-task-staging"
@@ -85,7 +87,12 @@ def execution_controller(directory: Path, config: ExecutionConfig) -> Iterator[E
     backend = K8sTaskProvider(
         descriptor=BackendDescriptor(backend_id=DEFAULT_BACKEND_ID, kind=BackendKind.KUBERNETES),
         kubectl=k8s,
-        pods=PodConfig(namespace=TASK_NAMESPACE, default_image=config.task_image, local_queue=config.local_queue),
+        pods=PodConfig(
+            namespace=TASK_NAMESPACE,
+            default_image=config.task_image,
+            local_queue=config.local_queue,
+            sandbox_runtime_class="iris-ci-gvisor-cpu",
+        ),
         cluster_scan_interval=0.1,
     )
     controller_config = ControllerConfig(
@@ -209,43 +216,6 @@ def execution_agent_command(
     return f"node {shlex.quote(str(wrapper))}", result_file
 
 
-def prepare_execution_profile(
-    loom: IsolatedLoom, config: ExecutionConfig, *, template_name: str, credentials_url: str
-) -> None:
-    """Pin a synthetic ACP profile to the local proof broker's credential callback."""
-    stock = loom.post("profiles/get", {"name": "github_comment"})
-    excluded = {"env", "revision", "lifetime", "created_at", "updated_at"}
-    profile = {key: value for key, value in stock.items() if key not in excluded}
-    profile.update(name=template_name, model="fake-fast", mcp_access={"mode": "none", "groups": []})
-    loom.post("profiles/create", profile)
-    preview = loom.post("sessions/launches/resolve", {"selection": {"profile": template_name, "overrides": {}}})
-    loom.post(
-        "settings/patch",
-        {
-            "changes": {
-                "auth.trust_loopback": False,
-                "auth.shared_grants": json.dumps(
-                    {
-                        "issuer": config.trust.issuer,
-                        "public_keys": list(config.trust.public_keys),
-                        "ca_bundle": str(config.authority_ca_file),
-                        "authorize_url": config.trust.authority_url + "/v1/authorize",
-                        "credentials_url": credentials_url,
-                        "callback_token_file": str(loom.callback_token_file),
-                        "profiles": {
-                            template_name: {
-                                "cwd": str(loom.repo),
-                                "revision": preview["profile_revision"],
-                                "resolver_revision": preview["resolver_revision"],
-                            }
-                        },
-                    }
-                ),
-            }
-        },
-    )
-
-
 def run_execution_proof(
     runtime: ExecutionRuntime,
     loom: IsolatedLoom,
@@ -299,6 +269,7 @@ def run_execution_proof(
             captured.update(
                 pod_name=pod_name,
                 attempt_uid=pod["metadata"]["labels"]["iris.attempt_uid"],
+                runtime_class=pod["spec"]["runtimeClassName"],
                 token=base64.b64decode(secret["data"][SHARED_GRANT_TOKEN_SECRET]).decode(),
             )
             return True
@@ -355,6 +326,7 @@ def run_execution_proof(
             "loom_grant_id": run["grant_id"],
             "attempt_expires_at": attempt_expiry,
             "namespace": TASK_NAMESPACE,
+            "runtime_class": captured["runtime_class"],
             "outcome": outcome,
             "executed_cpu_task": True,
             "outside_action_denied": True,
@@ -395,6 +367,7 @@ def main() -> None:
         expected_canary_sha256=args.expected_canary_sha256,
     )
     evidence = []
+    invocation_id = uuid.uuid4().hex[:12]
     for outcome in ("success", "cancel"):
         case_directory = args.output_dir / outcome
         case_directory.mkdir()
@@ -404,7 +377,7 @@ def main() -> None:
                 fixture=args.loom_source / "crates/loom/tests/fixtures/fake-acp-agent.mjs",
                 runtime=runtime,
                 config=config,
-                job_name=f"/proof/execution-{outcome}",
+                job_name=f"/proof/execution-{outcome}-{invocation_id}",
             )
             with isolated_loom(
                 case_directory / "loom",
@@ -424,9 +397,9 @@ def main() -> None:
                 )
                 app, authority = create_service(local_config)
                 with serve(app, free_port()) as broker_url:
-                    prepare_execution_profile(
+                    prepare_loom_profile(
                         loom,
-                        config,
+                        trust=config.trust,
                         template_name=args.template_name,
                         credentials_url=broker_url + "/v1/loom/credentials",
                     )
@@ -465,8 +438,8 @@ def main() -> None:
                             token_response = client.post(
                                 "/oauth/token",
                                 data={
-                                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                                    "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                                    "grant_type": TOKEN_EXCHANGE_GRANT,
+                                    "subject_token_type": JWT_TOKEN_TYPE,
                                     "subject_token": identity,
                                     "grant_id": grant_id,
                                     "audience": audience,

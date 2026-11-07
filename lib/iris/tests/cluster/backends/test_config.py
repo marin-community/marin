@@ -41,10 +41,14 @@ from iris.cluster.config import (
 )
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.controller.backend import DirectReconcileRequest
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
-from iris.testing.k8s import k8s_backend_descriptor
+from iris.rpc import job_pb2
+from iris.testing.k8s import k8s_backend_descriptor, make_run_req
 from rigging.timing import Duration
 
 
@@ -1955,3 +1959,32 @@ def test_k8s_backend_uses_canonical_default_task_image():
 
     assert isinstance(backend, K8sTaskProvider)
     assert backend.pods.default_image == "registry.example/iris-task:abc1234"
+
+
+@pytest.mark.parametrize(
+    "profile,expected_runtime",
+    [(job_pb2.CONTAINER_PROFILE_SANDBOX, "iris-ci-gvisor-cpu"), (job_pb2.CONTAINER_PROFILE_DEFAULT, None)],
+)
+def test_configured_sandbox_runtime_reaches_only_sandbox_pods(monkeypatch, profile, expected_runtime):
+    kubernetes = InMemoryK8sService(namespace="iris")
+    monkeypatch.setattr("iris.cluster.composer.CloudK8sService", lambda **_kwargs: kubernetes)
+    config = IrisClusterConfig.model_validate(
+        {
+            "kubernetes_provider": {
+                "namespace": "iris",
+                "sandbox_runtime_class": "iris-ci-gvisor-cpu",
+                "kueue": {"cluster_queue": "iris-cq"},
+            }
+        }
+    )
+    backend = make_task_backend(config, descriptor=k8s_backend_descriptor())
+    request = make_run_req("/proof/runtime/0", attempt_uid="0123456789abcdef")
+    request.container_profile = profile
+    try:
+        backend.reconcile(DirectReconcileRequest(tasks_to_run=[request]))
+        (pod,) = kubernetes.list_json(K8sResource.PODS)
+        assert pod["spec"].get("runtimeClassName") == expected_runtime
+        if profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+            assert pod["spec"]["automountServiceAccountToken"] is False
+    finally:
+        backend.close()

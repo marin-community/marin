@@ -295,7 +295,9 @@ verified. Unset `BAO_TOKEN` when finished.
 Enable the broker only after OpenBao is initialized and the external broker
 and storage identity tokens have been installed. Set `broker_image` to the
 digest-pinned image built from `infra/auth/Dockerfile` with the `marin-auth`
-runtime dependencies. It runs `python -m infra.auth.service` from `/app`.
+runtime dependencies. It runs `python -P -m infra.auth.service` from `/app`,
+with the canonical image setting `PYTHONPATH=/app` explicitly. The safe-path
+flag prevents the working directory from selecting a stale service module.
 With this key set, all broker configuration is required;
 there is no generated identity or in-memory ledger fallback.
 

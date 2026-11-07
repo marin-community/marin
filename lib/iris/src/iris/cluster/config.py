@@ -37,6 +37,7 @@ from rigging.shared_grants import SharedGrantConfig
 from rigging.timing import Duration
 
 from iris.cluster.egress import parse_egress_rules
+from iris.cluster.platforms.k8s.constants import DEFAULT_SANDBOX_RUNTIME_CLASS
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
@@ -753,6 +754,7 @@ class KubernetesProviderConfig(_Config):
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     service_account: str = ""
     host_network: bool = False
+    sandbox_runtime_class: str = Field(default=DEFAULT_SANDBOX_RUNTIME_CLASS, min_length=1)
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
     node_health: NodeHealthConfig | None = None

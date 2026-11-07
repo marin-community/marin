@@ -17,6 +17,7 @@ from urllib.parse import quote
 import httpx
 import requests
 from rigging.grants import Grant
+from rigging.shared_grants import SharedGrantConfig
 
 from infra.auth.loom import LoomGrantService
 
@@ -170,18 +171,14 @@ def isolated_loom(
                 process.wait(timeout=10)
 
 
-def run_loom_proof(
+def prepare_loom_profile(
     loom: IsolatedLoom,
     *,
-    client: httpx.Client,
-    grants: LoomGrantService,
-    loom_token: str,
-    grant: Grant,
-    auth_url: str,
-    public_keys: tuple[str, ...],
+    trust: SharedGrantConfig,
     template_name: str,
-) -> dict[str, str | bool]:
-    """Exercise the real broker launch, native callback, and background cleanup."""
+    credentials_url: str,
+) -> None:
+    """Pin the synthetic ACP profile and its authenticated credential callback."""
     stock = loom.post("profiles/get", {"name": "github_comment"})
     excluded = {"env", "revision", "lifetime", "created_at", "updated_at"}
     profile = {key: value for key, value in stock.items() if key not in excluded}
@@ -195,10 +192,11 @@ def run_loom_proof(
                 "auth.trust_loopback": False,
                 "auth.shared_grants": json.dumps(
                     {
-                        "issuer": auth_url,
-                        "public_keys": list(public_keys),
-                        "authorize_url": auth_url + "/v1/authorize",
-                        "credentials_url": auth_url + "/v1/loom/credentials",
+                        "issuer": trust.issuer,
+                        "public_keys": list(trust.public_keys),
+                        "ca_file": trust.ca_bundle,
+                        "authorize_url": trust.authority_url + "/v1/authorize",
+                        "credentials_url": credentials_url,
                         "callback_token_file": str(loom.callback_token_file),
                         "profiles": {
                             template_name: {
@@ -211,6 +209,26 @@ def run_loom_proof(
                 ),
             }
         },
+    )
+
+
+def run_loom_proof(
+    loom: IsolatedLoom,
+    *,
+    client: httpx.Client,
+    grants: LoomGrantService,
+    loom_token: str,
+    grant: Grant,
+    auth_url: str,
+    public_keys: tuple[str, ...],
+    template_name: str,
+) -> dict[str, str | bool]:
+    """Exercise the real broker launch, native callback, and background cleanup."""
+    prepare_loom_profile(
+        loom,
+        trust=SharedGrantConfig(issuer=auth_url, public_keys=public_keys, authority_url=auth_url),
+        template_name=template_name,
+        credentials_url=auth_url + "/v1/loom/credentials",
     )
     response = client.post(
         "/v1/loom/launch",

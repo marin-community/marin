@@ -24,7 +24,9 @@ def main() -> None:
         and config.require("kubernetes_context") != "marin_US-WEST-04A"
     ):
         raise ValueError("Synthetic auth staging is restricted to the approved CW cluster")
-    provider = k8s.Provider("management", kubeconfig="", context=config.require("kubernetes_context"))
+    provider = k8s.Provider(
+        "management", kubeconfig="", context=config.require("kubernetes_context"), enable_config_map_mutable=True
+    )
     namespace = config.require("namespace")
     service = OpenBao(
         "openbao",

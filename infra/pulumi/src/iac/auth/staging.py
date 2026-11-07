@@ -8,6 +8,7 @@ import pulumi_kubernetes as k8s
 
 from iac.auth.broker import BROKER_LABELS
 from iac.auth.openbao import APP_LABELS, dns_egress
+from iac.auth.openfga import FGA_LABELS
 
 AUTH_NAMESPACE = "marin-auth-staging"
 TASK_NAMESPACE = "marin-auth-task-staging"
@@ -132,6 +133,16 @@ def staging_permissions(
     )
     proof_peer = {"pod_selector": {"match_labels": PROOF_LABELS}}
     k8s.networking.v1.NetworkPolicy(
+        "auth-staging-proof-fga",
+        metadata={"namespace": AUTH_NAMESPACE},
+        spec={
+            "pod_selector": {"match_labels": FGA_LABELS},
+            "policy_types": ["Ingress"],
+            "ingress": [{"from": [proof_peer], "ports": [{"protocol": "TCP", "port": 8443}]}],
+        },
+        opts=options,
+    )
+    k8s.networking.v1.NetworkPolicy(
         "auth-staging-proof-bao",
         metadata={"namespace": AUTH_NAMESPACE},
         spec={
@@ -164,6 +175,7 @@ def staging_permissions(
                 },
                 {"to": [{"ip_block": {"cidr": cidr}} for cidr in api_cidrs], "ports": [{"port": 443}, {"port": 6443}]},
                 dns_egress(dns_cidrs),
+                {"to": [{"pod_selector": {"match_labels": FGA_LABELS}}], "ports": [{"protocol": "TCP", "port": 8443}]},
             ],
         },
         opts=options,

@@ -112,11 +112,7 @@ def with_shared_attempt_credentials(
     broker: AttemptBroker | None,
     job_prefix: str,
 ) -> job_pb2.RunTaskRequest | None:
-    """Stamp a shared attempt, returning None for a native job.
-
-    The outbox precedes issuance so response loss, process death and job deletion
-    cannot lose the retirement request. Bearer credentials never enter the DB.
-    """
+    """Stamp a shared attempt, returning None for a native job."""
     job_id, _ = JobName.from_wire(request.task_id).require_task()
     with db.read_snapshot() as tx:
         grant_id = tx.execute(select(jobs_table.c.shared_grant_id).where(jobs_table.c.job_id == job_id)).scalar()
@@ -125,6 +121,7 @@ def with_shared_attempt_credentials(
     if broker is None or not job_prefix or not request.attempt_uid:
         raise GrantDenied("Shared attempts require an explicit credential broker")
     resource = job_prefix + job_id.to_wire() + "/"
+    # Persist retirement intent before issuance so a lost response cannot orphan authority.
     with db.transaction() as tx:
         existing = tx.execute(
             select(shared_attempt_grants_table).where(shared_attempt_grants_table.c.attempt_uid == request.attempt_uid)

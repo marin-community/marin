@@ -121,13 +121,19 @@ the proof does not modify that ClusterQueue or request GPUs.
 
 The proof Pod must explicitly mount its ServiceAccount token and carry labels
 `app.kubernetes.io/name=auth-staging-proof` and
-`marin.dev/auth-client=true`. Its network permits the broker, OpenBao,
-staging PostgreSQL, approved DNS, and the observed Kubernetes API addresses.
+`marin.dev/auth-client=true`. Its network permits the broker, OpenBao, the
+OpenFGA Check gateway, staging PostgreSQL, approved DNS, and the observed
+Kubernetes API addresses.
 Tasks run without a ServiceAccount token. The task namespace denies ingress and
 egress by default. The sole task exception selects `iris.managed=true`,
 `iris.runtime=iris-kubernetes`, and `iris.egress=internet`; it permits DNS and
 TCP 8090 to broker pods in the auth namespace. Both namespaces enforce
 restricted Pod Security; task images need a numeric non-root user.
+
+The CPU execution proof selects the existing `iris-ci-gvisor-cpu` RuntimeClass,
+whose handler and node selector target CoreWeave's CPU gVisor runtime. Other
+Iris deployments retain the `gvisor` default unless
+`kubernetes_provider.sandbox_runtime_class` is explicitly configured.
 
 ## Execution proof image
 

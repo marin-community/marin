@@ -153,7 +153,7 @@ class GrantBroker(pulumi.ComponentResource):
                             {
                                 "name": "broker",
                                 "image": args.image,
-                                "command": ["python", "-m", "infra.auth.service"],
+                                "command": ["python", "-P", "-m", "infra.auth.service"],
                                 "working_dir": "/app",
                                 "args": [
                                     "--config",

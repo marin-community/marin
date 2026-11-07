@@ -33,6 +33,7 @@ from marina.applets import AppletStore, package_applet, read_applet_package
 from marina.database_setup import ensure_applet_provisioning
 from marina.db import UrlDatabase
 from marina.server import MCP_PATH, MarinaConfig, create_app
+from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
 from rigging.shared_grants import SharedGrantConfig
 
 from infra.auth.proof_fga import free_port
@@ -167,8 +168,8 @@ def grant_token(client: httpx.Client, caller: str, permissions: list[dict]) -> s
     token = client.post(
         "/oauth/token",
         data={
-            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "grant_type": TOKEN_EXCHANGE_GRANT,
+            "subject_token_type": JWT_TOKEN_TYPE,
             "subject_token": caller,
             "audience": permissions[0]["service"],
             "grant_id": grant.json()["id"],

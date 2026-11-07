@@ -70,6 +70,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_SANDBOX_RUNTIME_CLASS,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
@@ -552,6 +553,7 @@ class PodConfig:
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     host_network: bool = False
+    sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
@@ -1183,10 +1185,11 @@ def _build_pod_manifest(
         **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
-    # gVisor isolates the whole pod via a node RuntimeClass; the container
-    # securityContext stays at the DEFAULT posture (see _security_context).
+    # The RuntimeClass isolates the whole pod independently of container security settings.
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
-        spec["runtimeClassName"] = "gvisor"
+        if not config.sandbox_runtime_class:
+            raise PodManifestError("Sandbox tasks require a RuntimeClass")
+        spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False

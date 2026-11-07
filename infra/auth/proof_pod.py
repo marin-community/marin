@@ -42,6 +42,7 @@ def proof_pod(image: str, identity_secret: str) -> dict:
                     "image": image,
                     "workingDir": "/opt/marin-source",
                     "command": ["sleep", "3600"],
+                    "env": [{"name": "HOME", "value": "/proof"}],
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
                         "readOnlyRootFilesystem": True,

@@ -18,14 +18,14 @@ config:
   marin-auth:ingress_pod_labels:
     marin.dev/auth-client: 'true'
   marin-auth:operator_groups:
-  - marin-auth-staging-operators
+    - marin-auth-staging-operators
   marin-auth:dns_cidrs:
-  - 10.16.0.10/32
-  - 10.16.1.203/32
-  - 10.16.0.30/32
+    - 10.16.0.10/32
+    - 10.16.1.203/32
+    - 10.16.0.30/32
   marin-auth:kubernetes_api_cidrs:
-  - 100.124.1.94/32
-  - 10.16.0.1/32
+    - 100.124.1.94/32
+    - 10.16.0.1/32
   marin-auth:https_egress_cidrs: []
   marin-auth:database_namespace: marin-auth-db-staging
   marin-auth:openfga_database_secret: openfga-database
@@ -46,9 +46,9 @@ config:
     marin.dev/auth-client: 'true'
   marin-auth:broker_https_egress_cidrs: []
   marin-auth:broker_token_secrets:
-  - broker-token
-  - openfga-token
-  - task-canary-token
+    - broker-token
+    - openfga-token
+    - task-canary-token
   marin-auth:broker_policy:
     broker_token_file: /var/run/marin-auth/broker-token/token
     subjects:
@@ -60,20 +60,20 @@ config:
       model_id: 01M6TF6SCCPDJVRQPPW8Q2K81H
       token_file: /var/run/marin-auth/openfga-token/token
       principals:
-      - principal: launcher
-        owner: proof-owner
-        max_ttl: 3600
-        delegation_depth: 2
-      - principal: other-session
-        owner: other-owner
-        max_ttl: 3600
-        delegation_depth: 0
+        - principal: launcher
+          owner: proof-owner
+          max_ttl: 3600
+          delegation_depth: 2
+        - principal: other-session
+          owner: other-owner
+          max_ttl: 3600
+          delegation_depth: 0
     storage: []
     secrets:
-    - name: task-canary
-      mount: auth-proof
-      path: task-canary
-      token_file: /var/run/marin-auth/task-canary-token/token
+      - name: task-canary
+        mount: auth-proof
+        path: task-canary
+        token_file: /var/run/marin-auth/task-canary-token/token
     max_token_ttl: 60
     loom: null
     signing_key_version: 1
@@ -85,18 +85,19 @@ config:
       controller_clusters:
         service:iris-staging: isolated-proof
       permissions:
-      - service: openbao
-        actions:
-        - secret.read
-        resource: /secrets/task-canary/
+        - service: openbao
+          actions:
+            - secret.read
+          resource: /secrets/task-canary/
       audience: openbao
       max_attempt_ttl: 60
   marin-auth:grant_public_keys:
-  - '-----BEGIN PUBLIC KEY-----
+    - '-----BEGIN PUBLIC KEY-----
 
-    MCowBQYDK2VwAyEA+6VqHUPVEvlPWb6EBUk0NcXhMr4Bu/qt+lxf4/1TCwY=
+      MCowBQYDK2VwAyEA+6VqHUPVEvlPWb6EBUk0NcXhMr4Bu/qt+lxf4/1TCwY=
 
-    -----END PUBLIC KEY-----
+      -----END PUBLIC KEY-----
 
-    '
+'
+  marin-auth:broker_image: ghcr.io/marin-community/iris-worker@sha256:da939c3cd88413c77a96aef881f3f79968b4acbdcbd6de20459486ffac7e7e81
 encryptedkey: CiQAKk3j6e+rOX4XT9+gTXNtlIGecuXIpFiNF7M09p5/Lf6HTCwSSQCdtF6i+JMObDm1gq81PamkbidHXSbKdyoCKCf/XzQ7wsD7553BWvGvDv34gUMlgmd5cux8apzm+ORjQGcDlfPB6qjFbC593Zs=

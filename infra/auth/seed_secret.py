@@ -57,7 +57,7 @@ def seed_canary(client: OperatorClient, *, token_file: Path, ttl: int) -> Canary
         },
     )
     token_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with token_file.open("x", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
+    with open(token_file, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
         output.write(result["auth"]["client_token"])
     reader = OpenBaoClient(client.address, token_file, ca_bundle=client.ca_file or True)
     if reader.request("GET", f"/{KV_MOUNT}/data/{CANARY_NAME}")["data"]["data"] != data:
