@@ -50,8 +50,8 @@ FRESH_SEED = 7
 FRESH_MIXTURES = 20
 MIXTURE_COLUMNS = ["bucket", "continuous_weight", "runtime_count", "runtime_weight", "materialized_epochs"]
 UNCHEATABLE_HELDOUT_EXPOSURES = 408
-# The refit repeats the released laws' fit on the same runs (measured gap 0); the margin is for floating-point
-# differences between platforms.
+# On the platform that fitted the released laws (conftest.OLMIX_FIT_PLATFORM), the refit repeats their fit on the same
+# runs (measured gap 0); the margin is for rounding.
 LAW_TOLERANCE = 1e-9
 BASELINE_TOLERANCE = 1e-15  # rounding: the designs repeat the released rows' arithmetic, 5.8e-16 apart at most
 BASELINES = ["baseline_proportional", "baseline_unimax", "baseline_stratified"]
@@ -329,7 +329,7 @@ def test_cli_fit_and_optimize_rederive_trained_mariner_mixture(snapshot, tmp_pat
 
 @pytest.mark.data_integration
 @pytest.mark.timeout(300)
-def test_cli_olmix_refits_released_laws_and_rederives_trained_mixture(snapshot, tmp_path):
+def test_cli_olmix_refits_released_laws_and_rederives_trained_mixture(released_olmix_platform, snapshot, tmp_path):
     trained = TRAINED_OLMIX["uncheatable"]
     out = tmp_path / "olmix.csv"
     command = ["olmix", "--data", str(snapshot), "--swarm", MAIN_SWARM, "--objective", "uncheatable"]

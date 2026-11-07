@@ -604,7 +604,13 @@ def argument_parser() -> argparse.ArgumentParser:
     command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")
     command.set_defaults(run=run_evaluate)
 
-    command = commands.add_parser("olmix", help="fit the Olmix baseline to a swarm and propose its mixture")
+    command = commands.add_parser(
+        "olmix",
+        help="fit the Olmix baseline to a swarm and propose its mixture",
+        description="Fit the Olmix baseline's per-task laws to a swarm and propose its mixture. The multistart fit's"
+        " optimum depends on floating-point details: on the released main swarm it reproduces the released laws, and"
+        " the paper's Olmix mixtures, only on macOS arm64; elsewhere it can reach other optima of nearly equal loss.",
+    )
     add_swarm_arguments(command)
     command.add_argument("--objective", required=True, metavar="NAME", help=OBJECTIVE_HELP)
     command.add_argument(
@@ -681,7 +687,8 @@ def argument_parser() -> argparse.ArgumentParser:
     command.add_argument(
         "--refit-olmix",
         action="store_true",
-        help="refit the Olmix laws instead of reading the released ones (about 10 more minutes)",
+        help="refit the Olmix laws instead of reading the released ones (about 10 more minutes); the released laws"
+        " reproduce the paper's Olmix mixtures on any platform, a refit only on macOS arm64",
     )
     command.set_defaults(run=run_self_test)
     return parser

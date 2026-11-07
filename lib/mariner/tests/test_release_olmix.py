@@ -19,8 +19,8 @@ from mariner.data import (
 )
 from mariner.olmix import LogLinearLaw, OlmixProposal, fit_laws, propose
 
-# The refit repeats the released laws' fit on the same runs (measured gap 0); the margin is for floating-point
-# differences between platforms.
+# On the platform that fitted the released laws (conftest.OLMIX_FIT_PLATFORM), the refit repeats their fit on the same
+# runs (measured gap 0); the margin is for rounding.
 LAW_TOLERANCE = 1e-9
 
 
@@ -46,7 +46,7 @@ def test_released_laws_reproduce_trained_olmix_mixture(snapshot, objective):
 @pytest.mark.data_integration
 @pytest.mark.timeout(1200)  # the OlmoBaseEval Easy laws take about 9 minutes
 @pytest.mark.parametrize("objective", ["uncheatable", "obe_easy"])
-def test_refit_laws_equal_released_laws_and_trained_mixture(snapshot, objective):
+def test_refit_laws_equal_released_laws_and_trained_mixture(released_olmix_platform, snapshot, objective):
     target = objective_from_tasks(release_tasks(snapshot), objective)
     laws = fit_laws(release_swarm(snapshot, MAIN_SWARM, objective), target)
     released = law_parameters(released_olmix_laws(snapshot, objective))
