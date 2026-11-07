@@ -20,7 +20,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.belay.config import TRACKS, Track
 from experiments.belay.submit import track_command
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
-from experiments.data_belay.judge import HARM_LIMITS, judge
+from experiments.data_belay.judge import HARM_LIMITS, judge, ladder_step
 from experiments.data_belay.prepare import CACHE_PATH, PreparedCache, build_cache, plan_cache
 from experiments.data_belay.results import CONTROL_SEEDS, arm_metrics, control_run_id, run_exists, treatment_run_id
 from experiments.grug.fast_track import belay_tracks
@@ -198,15 +198,12 @@ def train(rung: str, seed: int, mix_cache: str | None, num_steps: int | None, su
     help="Compare with this candidate's runs (same seeds) instead of the control: e.g. filtered against unfiltered.",
 )
 def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
-    """Verdict and per-group BPB change of a candidate against the shared control or another candidate."""
+    """Verdict and per-group BPB change of a candidate against the shared control or another candidate, and the
+    ladder's next step after the verdicts at this rung and the rungs below it."""
     seed_list = [int(s) for s in seeds.split(",")]
-    if against is None:
-        baseline_name = "control"
-        baseline = arm_metrics([control_run_id(rung, s) for s in CONTROL_SEEDS[rung]])
-    else:
-        baseline_name = against
-        baseline = arm_metrics([treatment_run_id(rung, against, s) for s in seed_list])
-    treatment = arm_metrics([treatment_run_id(rung, candidate, s) for s in seed_list])
+    baseline_name = against or "control"
+    baseline_ids, treatment_ids = _arm_run_ids(rung, candidate, seed_list, against)
+    baseline, treatment = arm_metrics(baseline_ids), arm_metrics(treatment_ids)
     verdict, deltas = judge(baseline, treatment, HARM_LIMITS)
     click.echo(f"{candidate} against {baseline_name} at {rung}: {verdict}")
     click.echo(f"| group | {baseline_name} BPB | {candidate} BPB | Δ | 95% interval | harm limit | call |")
@@ -217,6 +214,26 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
             f"| {d.group} | {sum(b) / len(b):.4f} | {sum(t) / len(t):.4f} | {d.delta:+.2%} | "
             f"[{d.low:+.2%}, {d.high:+.2%}] | {d.harm_limit:.1%} | {d.call} |"
         )
+    verdicts = []
+    for lower in DATA_BELAY_RUNGS[: DATA_BELAY_RUNGS.index(rung)]:
+        lower_baseline, lower_treatment = _arm_run_ids(lower, candidate, seed_list, against)
+        compared = lower_treatment if against is None else [*lower_baseline, *lower_treatment]
+        if not all(run_exists(run_id) for run_id in compared):
+            click.echo(f"ladder: no {lower} runs for {candidate}; apply the ladder rule in the README by hand")
+            return
+        verdicts.append(judge(arm_metrics(lower_baseline), arm_metrics(lower_treatment), HARM_LIMITS)[0])
+    verdicts.append(verdict)
+    rungs = ", ".join(f"{r} {v}" for r, v in zip(DATA_BELAY_RUNGS, verdicts, strict=False))
+    click.echo(f"ladder: {rungs} -> {ladder_step(verdicts, len(DATA_BELAY_RUNGS))}")
+
+
+def _arm_run_ids(rung: str, candidate: str, seeds: list[int], against: str | None) -> tuple[list[str], list[str]]:
+    """Run ids of the baseline arm (the shared control, or ``against``) and of the candidate at ``rung``."""
+    if against is None:
+        baseline = [control_run_id(rung, s) for s in CONTROL_SEEDS[rung]]
+    else:
+        baseline = [treatment_run_id(rung, against, s) for s in seeds]
+    return baseline, [treatment_run_id(rung, candidate, s) for s in seeds]
 
 
 @cli.command()

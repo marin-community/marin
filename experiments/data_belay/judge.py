@@ -17,6 +17,10 @@ The verdict:
 * ``helps``: some group is better, and every other group is better or neutral.
 * ``trade-off``: some group is better, and some other group is unresolved.
 * ``no gain``: no group is better and none is worse.
+
+A candidate climbs the ladder of rungs until two consecutive rungs say no (``hurts`` or ``no gain``). A yes is
+``helps`` or ``trade-off``: a gain on one of the evals. At the top rung the answer is yes when it and the rung below
+both say yes, and mixed when they disagree.
 """
 
 import dataclasses
@@ -71,6 +75,17 @@ class Verdict(StrEnum):
     HURTS = "hurts"
     TRADE_OFF = "trade-off"
     NO_GAIN = "no gain"
+
+    @property
+    def is_yes(self) -> bool:
+        return self in (Verdict.HELPS, Verdict.TRADE_OFF)
+
+
+class LadderStep(StrEnum):
+    NEXT_RUNG = "run the next rung"
+    STOP = "stop: no at two consecutive rungs"
+    YES = "yes at the top two rungs"
+    MIXED = "mixed: the top two rungs disagree"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -128,3 +143,12 @@ def judge(
     """Verdict and group deltas from each arm's per-seed BPB, keyed by group."""
     deltas = [group_delta(g, control[g], treatment[g], harm_limits[g]) for g in GROUP_METRICS]
     return verdict(deltas), deltas
+
+
+def ladder_step(verdicts: Sequence[Verdict], rungs: int) -> LadderStep:
+    """The next step after ``verdicts``, one per rung from the bottom, on a ladder of ``rungs`` rungs."""
+    if len(verdicts) >= 2 and not verdicts[-1].is_yes and not verdicts[-2].is_yes:
+        return LadderStep.STOP
+    if len(verdicts) < rungs:
+        return LadderStep.NEXT_RUNG
+    return LadderStep.YES if verdicts[-1].is_yes and verdicts[-2].is_yes else LadderStep.MIXED

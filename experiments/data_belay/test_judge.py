@@ -3,7 +3,7 @@
 
 import pytest
 
-from experiments.data_belay.judge import GROUP_METRICS, Verdict, judge
+from experiments.data_belay.judge import GROUP_METRICS, LadderStep, Verdict, judge, ladder_step
 
 CONTROL = [1.000, 1.002, 0.998, 1.001]
 LIMITS = {group: 0.01 for group in GROUP_METRICS}
@@ -41,3 +41,25 @@ def test_a_gain_with_a_possible_harm_is_a_trade_off():
     treatment["paloma"] = [0.97, 1.03, 1.01]
     verdict, _ = judge(control, treatment, LIMITS)
     assert verdict is Verdict.TRADE_OFF
+
+
+H, T, N, X = Verdict.HELPS, Verdict.TRADE_OFF, Verdict.NO_GAIN, Verdict.HURTS
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "expected"),
+    [
+        # Every candidate gets a second rung, whatever the first says.
+        ((X,), LadderStep.NEXT_RUNG),
+        ((N, X), LadderStep.STOP),
+        # One no is not enough to stop: a d512 gain that d768 does not hold goes to d1024.
+        ((T, X), LadderStep.NEXT_RUNG),
+        ((X, T), LadderStep.NEXT_RUNG),
+        ((T, X, N), LadderStep.STOP),
+        ((N, T, H), LadderStep.YES),
+        ((T, T, X), LadderStep.MIXED),
+        ((X, T, N), LadderStep.MIXED),
+    ],
+)
+def test_ladder_stops_only_after_two_consecutive_nos(verdicts, expected):
+    assert ladder_step(verdicts, rungs=3) is expected

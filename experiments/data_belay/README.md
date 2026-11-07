@@ -79,9 +79,24 @@ group is `better` (interval below 0), `worse` (interval above its harm limit), `
 | `hurts` | a group is worse |
 | `no gain` | no group is better and none is worse |
 
-`uv run data-belay noise --rung d512` prints the control's seed spread. Confirm a d512 result at d768: at 20%,
-OpenCoder's synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable
-+2.7%), while FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024. See [`judge.py`](judge.py).
+`uv run data-belay noise --rung d512` prints the control's seed spread. See [`judge.py`](judge.py).
+
+## Ladder
+
+A candidate climbs d512, d768, d1024 until two consecutive rungs say no:
+
+| Verdicts so far | Next step |
+|---|---|
+| any one rung | run the next rung |
+| no at two consecutive rungs | stop: the answer is no |
+| a yes at either of the last two rungs, below the top | run the next rung |
+| yes at d768 and d1024 | the answer is yes |
+| d768 and d1024 disagree | mixed: report both |
+
+A yes is `helps` or `trade-off`, a gain on one of the evals; a no is `hurts` or `no gain`. `report` prints the step
+when the candidate's runs at the rungs below share its label. One rung is not enough either way: at 20%, OpenCoder's
+synthetic code was a `trade-off` at d512 (code −9.1%) and `hurts` at d768 (Paloma +2.4%, Uncheatable +2.7%), while
+FineMath's math gain grew from −12.2% at d512 to −16.7% at d1024.
 
 ## Validation runs (2026-11-06)
 
