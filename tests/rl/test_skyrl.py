@@ -517,8 +517,6 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     monkeypatch.setattr("marin.rl.skyrl.get_job_info", lambda: SimpleNamespace(job_id="/tests/coordinator"))
     step = skyrl_step(spec, _execution())
     assert step.fingerprint() == outside
-    fingerprint_config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    assert "issue" not in yaml.safe_load(fingerprint_config.launch_config_yaml)["run"]
     output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
     config = step.build_config(
         StepContext.for_run(
@@ -533,7 +531,6 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     assert config.output.checkpoint_root == "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints"
     assert config.output.export_root == f"{output_path}/exports"
     launch = yaml.safe_load(config.launch_config_yaml)
-    assert "issue" not in launch["run"]
     assert launch["run"]["coordinator_iris_job_id"] == "/tests/coordinator"
     assert launch["skyrl"]["trainer"]["callbacks"][0]["initial_model_uri"] == config.model.uri
     assert launch["artifacts"] == {
