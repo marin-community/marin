@@ -74,7 +74,11 @@ Seventeen other tasks have repeated identical nonreference candidates but are
 not yet independently adjudicated. See
 [OPENROUTER_FIRST_WAVE_REVIEW.md](OPENROUTER_FIRST_WAVE_REVIEW.md) for task IDs,
 independent arithmetic, and separate path/format findings. The two earlier
-verified v1 fixes and all frozen scores are unchanged.
+verified v1 fixes and all frozen scores are unchanged. The four confirmed
+corrections and the separate path/submission contract are frozen as **new
+v3 TaskSpecs**, not edits to v1/v2. The 17 additional consensus leads remain
+excluded from v3 calibration pending independent review; see
+[OPENROUTER_V3_RESULTS.md](OPENROUTER_V3_RESULTS.md).
 
 ## Required before recalibration or IRT
 
