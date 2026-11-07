@@ -5,7 +5,7 @@ import json
 
 from marin.datakit.chat_normalize import validate_chat_messages, validate_tool_definitions
 from marin.datakit.chat_render import render_chat_record
-from marin.datakit.download.open_swe_traces import row_to_chat_doc
+from marin.datakit.download.open_swe_traces import restore_solution_originality, row_to_chat_doc
 from openai_harmony import Message
 
 
@@ -61,3 +61,30 @@ def test_open_swe_traces_renders_prompt_reasoning_and_parallel_tool_calls():
     assert rendered.index("TEST_OUTPUT_SENTINEL") < rendered.index("SOURCE_OUTPUT_SENTINEL")
     assert '<tool_call>\n{"name": "bash"' in rendered
     assert "I fixed the assertion." in rendered
+
+
+def test_open_swe_qwen38_task_gets_solution_originality_section_back():
+    task = (
+        "<instructions>\nFix the failing test.\n"
+        "<CRITICAL>\n- Submit in a separate command.\n</CRITICAL>\n</instructions>"
+    )
+    row = {
+        "trajectory_id": "trajectory-1",
+        "resolved": 1,
+        "tools": [],
+        "messages": [
+            {"role": "system", "content": "Use the bash tool."},
+            {"role": "user", "content": task},
+            {"role": "assistant", "content": "Implemented the fix."},
+        ],
+    }
+    [doc] = row_to_chat_doc(restore_solution_originality(row))
+    rendered = render_chat_record(doc)["text"]
+
+    assert (
+        "- Submit in a separate command.\n</CRITICAL>\n\n## Solution Originality\n\n"
+        "Implement your own original solution to the task.\n"
+    ) in rendered
+    assert "your solution will be DISCARDED regardless of its correctness!\n</instructions>" in rendered
+    assert rendered.count("## Solution Originality") == 1
+    assert "Implemented the fix." in rendered
