@@ -580,7 +580,7 @@ def _load_run(
             try:
                 with rl_cli.iris_client() as client:
                     job = client.job_status(terminal.result.iris_job_id)
-                seconds = (job.finished_at.epoch_ms - job.started_at.epoch_ms) / 1000
+                seconds = (job.finished_at.epoch_ms() - job.started_at.epoch_ms()) / 1000
                 hours = seconds * preset.recipe.layout.role_plan.num_nodes * 8 / 3600
                 if hours > 0:
                     values[primary.name + "/family_mean/gain_per_h100_hour"] = gain / hours
