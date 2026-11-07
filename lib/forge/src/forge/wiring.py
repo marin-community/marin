@@ -84,13 +84,13 @@ class RelayEndpoint(EndpointSource):
         return GlmEndpoint(url if url.endswith("/v1") else f"{url}/v1", self.token, self.pool)
 
 
-def endpoint_source(base_url: str | None, relay_job: str | None, token: str, model: str) -> EndpointSource:
+def endpoint_source(base_url: str | None, relay_job: str | None, token: str, model: str, pool: str) -> EndpointSource:
     if bool(base_url) == bool(relay_job):
         raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
     if relay_job:
-        return RelayEndpoint(relay_job, token, Pool.BULK, model)
+        return RelayEndpoint(relay_job, token, Pool(pool), model)
     assert base_url is not None
-    return FixedEndpoint(GlmEndpoint(base_url, token, Pool.BULK))
+    return FixedEndpoint(GlmEndpoint(base_url, token, Pool(pool)))
 
 
 def install(ctx: Context, resources: Resources) -> None:
@@ -265,7 +265,7 @@ async def runtime(
     provider_fields = {
         key.removeprefix("provider."): value
         for key, value in policy.entries.items()
-        if key.startswith("provider.") and key != "provider.unavailable_wait"
+        if key.startswith("provider.") and key not in ("provider.unavailable_wait", "provider.pool")
     }
     # The wrapper owns both busy retries and empty-pool waits under one deadline.
     provider_fields.update(max_attempts=1, hold_timeout=0)

@@ -61,7 +61,7 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     monkeypatch.setattr(httpx.AsyncClient, "send", unexpected)
     policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
-    source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3")
+    source = wiring.endpoint_source("http://fake/v1", None, "fake", "glm-5.3", policy.setting("provider.pool", str))
     async with wiring.runtime(policy, "S", source, "fake") as (_, resources):
         assert set(resources.factories) == {"gvisor", "shellsim"}
         factory = resources.factories["gvisor"]
@@ -71,7 +71,8 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
         assert factory.scheduling_timeout == 600
 
 
-def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("pool", ["high", "bulk"])
+def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: pytest.MonkeyPatch, pool: str) -> None:
     class Resolver:
         def __init__(self) -> None:
             self.url = "http://first:8000"
@@ -89,18 +90,21 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         return resolver
 
     monkeypatch.setattr(wiring, "iris_ctx", lambda: SimpleNamespace(client=SimpleNamespace(resolver_for_job=for_job)))
-    source = wiring.endpoint_source(None, "/muchanem/relay", "secret-token", "glm-5.3")
-    assert source.current().base_url == "http://first:8000/v1"
+    source = wiring.endpoint_source(None, "/muchanem/relay", "secret-token", "glm-5.3", pool)
+    endpoint = source.current()
+    assert endpoint.base_url == "http://first:8000/v1"
+    assert endpoint.pool.value == pool
     resolver.url = "http://replacement:8000/v1/"
     assert source.current().base_url == "http://replacement:8000/v1"
     assert jobs == ["/muchanem/relay", "/muchanem/relay"]
     assert resolver.models == ["glm-5.3", "glm-5.3"]
+    assert wiring.endpoint_source("http://fixed/v1", None, "secret-token", "glm-5.3", pool).current().pool.value == pool
     assert "secret-token" not in repr(source)
     assert (
-        wiring.endpoint_source("http://fixed/v1", None, "secret-token", "glm-5.3").current().base_url
+        wiring.endpoint_source("http://fixed/v1", None, "secret-token", "glm-5.3", pool).current().base_url
         == "http://fixed/v1"
     )
     with pytest.raises(ValueError, match="exactly one"):
-        wiring.endpoint_source("http://fixed/v1", "/muchanem/relay", "secret-token", "glm-5.3")
+        wiring.endpoint_source("http://fixed/v1", "/muchanem/relay", "secret-token", "glm-5.3", pool)
     with pytest.raises(ValueError, match="exactly one"):
-        wiring.endpoint_source(None, None, "secret-token", "glm-5.3")
+        wiring.endpoint_source(None, None, "secret-token", "glm-5.3", pool)

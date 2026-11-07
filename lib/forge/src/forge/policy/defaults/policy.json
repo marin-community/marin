@@ -25,6 +25,7 @@
   "solver.context_tokens": 262144,
   "adversary.model": "glm-5.3",
   "adversary.context_tokens": 262144,
+  "provider.pool": "high",
   "provider.unavailable_wait": 3600.0,
   "provider.backoff_initial": 1.0,
   "provider.backoff_maximum": 60.0,

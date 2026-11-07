@@ -136,6 +136,7 @@ async def one(args: argparse.Namespace) -> None:
                 os.environ.get("GLM_RELAY_JOB"),
                 os.environ["GLM_API_KEY"],
                 policy.setting("author.model", str),
+                policy.setting("provider.pool", str),
             )
             async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
