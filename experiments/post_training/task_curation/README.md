@@ -13,7 +13,7 @@ The recipe names the source IDs, assigns them to selection families, sets
 family quotas and pins the complete heldout source in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
-See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
+See the [Snowball RL experiments](../../../docs/recipes/snowball-rl.md) for the current
 selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.

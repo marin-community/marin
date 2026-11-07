@@ -7,6 +7,7 @@ description: Define, validate, submit, or restart a Marin SkyRL experiment throu
 
 Use the experiment's artifact graph as the launch interface. For the configuration model, role
 arithmetic, and ownership boundaries, read [RL launching](../../../docs/references/rl-launching.md).
+For a Snowball RL preset run through `snowball_rl`, including train-long, use `run-snowball-rl` instead.
 
 ## Define the experiment
 
