@@ -188,11 +188,7 @@ def create_server(manifest: PointManifest, output: Path, launch: IrisVllmLaunch 
         compilation_cache_mode=VllmCompilationCacheMode.MANAGED,
         collect_metrics=series["collect_marin_metrics"],
         collect_nccl=series["collect_nccl"],
-        router=(
-            VllmRouterConfig(data_parallel_size=profile["hosts"] * profile["gpus"])
-            if manifest["profile"] == "gb200" and (launch is None or launch.is_leader)
-            else None
-        ),
+        router=(VllmRouterConfig() if manifest["profile"] == "gb200" and (launch is None or launch.is_leader) else None),
         wait_for_ready=False,
     )
 

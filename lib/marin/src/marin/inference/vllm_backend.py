@@ -3,7 +3,6 @@
 
 """vLLM local inference backend."""
 
-import argparse
 import contextlib
 import os
 import tempfile
@@ -164,18 +163,6 @@ class VllmBackend:
         extra_args: Sequence[str],
     ) -> list[str]:
         loader_args = (*self.config.extra_args, *extra_args)
-        if self.config.router is not None:
-            parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-            parser.add_argument("--data-parallel-size", type=int)
-            parser.add_argument("--data-parallel-hybrid-lb", action="store_true")
-            parser.add_argument("--data-parallel-external-lb", action="store_true")
-            topology, _ = parser.parse_known_args(loader_args)
-            if topology.data_parallel_hybrid_lb or topology.data_parallel_external_lb:
-                raise ValueError("session routing requires vLLM's global internal DP load balancer")
-            if topology.data_parallel_size is None:
-                loader_args = (*loader_args, "--data-parallel-size", str(self.config.router.data_parallel_size))
-            elif topology.data_parallel_size != self.config.router.data_parallel_size:
-                raise ValueError("router DP size must match vLLM's data parallel size")
         if (
             self.config.launcher is not VllmLauncherType.TPU
             and _is_object_store_path(spec.weights)

@@ -38,6 +38,7 @@ from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.broker import InferenceBroker
 from marin.inference.chat_template_protocol import protocol_for_chat_template
 from marin.inference.config import (
+    VLLM_DATA_PARALLEL_SIZE_FLAGS,
     BrokerConfig,
     EffectiveServing,
     IrisConfig,
@@ -307,6 +308,13 @@ def _prepared_local_inference(
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
     resolved_engine = _resolved_engine(engine, iris)
+    geometry = iris.serving_geometry
+    if isinstance(resolved_engine, VllmEngineConfig) and resolved_engine.router is not None and geometry is not None:
+        # Single-host geometry can use this local path instead of the gang launcher.
+        resolved_engine = replace(
+            resolved_engine,
+            extra_args=(*resolved_engine.extra_args, "--data-parallel-size", str(geometry.data_parallel_size)),
+        )
     with _staged_model(resolved_model) as prepared_model:
         with local_inference(prepared_model, resolved_engine, num_chips=num_chips) as session:
             yield session
@@ -375,12 +383,9 @@ def _effective_serving(
     instances: int = 1,
 ) -> EffectiveServing:
     geometry = iris.serving_geometry
-    data_parallel_size = geometry.data_parallel_size if geometry else 1
-    if geometry is None and isinstance(engine, VllmEngineConfig) and engine.router is not None:
-        data_parallel_size = engine.router.data_parallel_size
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
-    parser.add_argument("--data-parallel-size", type=int, default=data_parallel_size)
+    parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=geometry.data_parallel_size if geometry else 1)
     parser.add_argument("--max-model-len", default=model.max_model_len)
     options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
     context = options.max_model_len
