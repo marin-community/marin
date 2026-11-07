@@ -73,6 +73,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
+from levanter.fp32_fields import check_fp32_fields, with_fp32_fields
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -341,8 +342,8 @@ class Trainer:
 
     @property
     def mp(self) -> jmp.Policy:
-        """Returns the mixed precision policy"""
-        return self.config.mp
+        """Returns the mixed precision policy, with ``fp32_fields`` kept in float32"""
+        return self.config.precision_policy
 
     @property
     def num_train_steps(self) -> int:
@@ -475,6 +476,7 @@ class Trainer:
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
+            check_fp32_fields(model, self.config.fp32_fields)
             # only force trainable params to param precision. Other params are cast to compute precision
             state = TrainerState.init(
                 self.optimizer,
@@ -688,7 +690,6 @@ class Trainer:
 
             @eqx.filter_jit
             def eval_loss(model, *batch, **batch_kwargs):
-                model = self.mp.cast_to_compute(model)
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
@@ -875,6 +876,11 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
+    fp32_fields: tuple[str, ...] = ()
+    """Model attribute names, matched at any depth (e.g. ``router_bias``), that stay float32 everywhere.
+
+    ``mp`` never casts them: not on load, not in the trainer state, not in the compute view and not in HF exports.
+    """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 
@@ -906,6 +912,11 @@ class TrainerConfig:
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
     because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
     """
+
+    @property
+    def precision_policy(self) -> jmp.Policy:
+        """``mp`` with ``fp32_fields`` kept in float32."""
+        return with_fp32_fields(self.mp, self.fp32_fields)
 
     @property
     def batch_axis_name(self) -> str | None:

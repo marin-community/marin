@@ -23,6 +23,8 @@ import os
 from dataclasses import dataclass
 
 import draccus
+import haliax
+import jax
 import jax.numpy as jnp
 from haliax.partitioning import named_jit
 
@@ -110,6 +112,38 @@ def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
         return None
 
 
+def _install_full_model_export_hook(
+    *,
+    trainer,
+    converter: HFCheckpointConverter | None,
+    export: AdaptorExportConfig,
+) -> None:
+    """Register the HF export of a complete model; the trainer's fp32 fields are exported in float32."""
+    if export.peft_save_path is not None or export.merged_hf_save_path is not None:
+        raise ValueError("peft_save_path and merged_hf_save_path require adapter.type: lora.")
+
+    if export.hf_save_path is None or export.hf_save_steps is None:
+        return
+
+    if converter is None:
+        raise ValueError("hf_save_path requires a HF-compatible model configuration.")
+
+    full_save_path = _expanded_export_path(export.hf_save_path, trainer)
+    save_dtype = _parse_hf_save_dtype(export.hf_save_dtype)
+    trainer.add_hook(
+        save_hf_checkpoint_callback(
+            full_save_path,
+            converter,
+            upload_to_hf=export.hf_upload or False,
+            save_dtype=save_dtype,
+            generation_config=export.generation_config,
+            chat_template=export.chat_template,
+            fp32_fields=trainer.config.fp32_fields,
+        ),
+        every=export.hf_save_steps,
+    )
+
+
 @AdaptorConfig.register_subclass("none")
 @dataclass(frozen=True)
 class NoAdaptorConfig(AdaptorConfig):
@@ -134,29 +168,61 @@ class NoAdaptorConfig(AdaptorConfig):
         export: AdaptorExportConfig,
     ) -> None:
         del tokenizer
+        _install_full_model_export_hook(trainer=trainer, converter=converter, export=export)
 
-        if export.peft_save_path is not None or export.merged_hf_save_path is not None:
-            raise ValueError("peft_save_path and merged_hf_save_path require adapter.type: lora.")
 
-        if export.hf_save_path is None or export.hf_save_steps is None:
-            return
+@AdaptorConfig.register_subclass("frozen_parameters")
+@dataclass(frozen=True)
+class FrozenParameterAdaptorConfig(AdaptorConfig):
+    """Train a full model except named fields, exporting the complete model.
 
-        if converter is None:
-            raise ValueError("hf_save_path requires a HF-compatible model configuration.")
+    Frozen fields match exact model attribute names at any depth.
+    Native checkpoints omit frozen fields; resume requires the same pinned base.
+    """
 
-        full_save_path = _expanded_export_path(export.hf_save_path, trainer)
-        save_dtype = _parse_hf_save_dtype(export.hf_save_dtype)
-        trainer.add_hook(
-            save_hf_checkpoint_callback(
-                full_save_path,
-                converter,
-                upload_to_hf=export.hf_upload or False,
-                save_dtype=save_dtype,
-                generation_config=export.generation_config,
-                chat_template=export.chat_template,
-            ),
-            every=export.hf_save_steps,
+    frozen_field_names: tuple[str, ...]
+    hf_config_overrides: dict | None = None
+
+    def apply(self, model, *, key, axis_mapping=None):
+        del key, axis_mapping
+        return model
+
+    def trainable_filter(self, policy_model) -> FilterTree:
+        matched = set()
+
+        def trainable(path, leaf):
+            del leaf
+            fields = {key.name for key in path if isinstance(key, jax.tree_util.GetAttrKey)}
+            frozen = fields.intersection(self.frozen_field_names)
+            matched.update(frozen)
+            return not frozen
+
+        result = jax.tree_util.tree_map_with_path(
+            trainable, policy_model, is_leaf=lambda leaf: isinstance(leaf, haliax.NamedArray)
         )
+        missing = set(self.frozen_field_names) - matched
+        if missing:
+            raise ValueError(f"Frozen fields not found in model: {sorted(missing)}")
+        return result
+
+    def base_model_view(self, policy_model) -> LmHeadModel | None:
+        del policy_model
+        return None
+
+    def install_export_hooks(
+        self,
+        *,
+        trainer,
+        converter: HFCheckpointConverter | None,
+        tokenizer,
+        export: AdaptorExportConfig,
+    ) -> None:
+        del tokenizer
+        if self.hf_config_overrides is not None:
+            if converter is None:
+                raise ValueError("HF config overrides require an HF checkpoint converter")
+            converter = converter.with_config_overrides(self.hf_config_overrides)
+        _install_full_model_export_hook(trainer=trainer, converter=converter, export=export)
 
 
 @AdaptorConfig.register_subclass("lora")
