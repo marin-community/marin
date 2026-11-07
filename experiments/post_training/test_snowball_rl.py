@@ -111,7 +111,11 @@ from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_eva
 
 class InferenceService:
     model_name = "fixture"
-    tokenizer = SimpleNamespace(eos_token_id=99, decode=lambda *args, **kwargs: "answer")
+    tokenizer = SimpleNamespace(
+        eos_token_id=99,
+        decode=lambda *args, **kwargs: "answer",
+        encode=lambda *args, **kwargs: [1, 2],
+    )
 
     def __init__(self, overrides, validate):
         self.overrides, self.validate = overrides, validate
@@ -298,12 +302,12 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": ExpectedHashes(config="770b2ac4", envelope="0335d15c", fingerprint="2093a4fd"),
-        "data-short": ExpectedHashes(config="f2cb9dae", envelope="729855c5", fingerprint="50e0b730"),
-        "speed-medium": ExpectedHashes(config="f8e77acd", envelope="72953642", fingerprint="340dd45e"),
-        "learning-medium": ExpectedHashes(config="796fdf74", envelope="60fd95c3", fingerprint="7af0ece3"),
-        "speed-long": ExpectedHashes(config="5a20d9a8", envelope="f9d97e72", fingerprint="0b72b45a"),
-        "learning-long": ExpectedHashes(config="022a124e", envelope="b6d4063b", fingerprint="057c27c9"),
+        "speed-short": ExpectedHashes(config="33f5aec9", envelope="b136610e", fingerprint="de01edf3"),
+        "data-short": ExpectedHashes(config="b8840d08", envelope="3e208b52", fingerprint="236d57f8"),
+        "speed-medium": ExpectedHashes(config="e268a2c8", envelope="6058675a", fingerprint="e27eee7a"),
+        "learning-medium": ExpectedHashes(config="934e55eb", envelope="9cd4ff51", fingerprint="263564e0"),
+        "speed-long": ExpectedHashes(config="5b99bc3f", envelope="92f1d33d", fingerprint="a6e2c92e"),
+        "learning-long": ExpectedHashes(config="5314c52b", envelope="b499db8d", fingerprint="2db00d46"),
     }
     paths = []
     for name in expected:

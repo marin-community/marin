@@ -840,6 +840,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         fingerprint=built.runs[0].fingerprint(),
         metrics=timers,
     )
+    built = replace(built, gate=gate.completed_gate(presets.PRESETS[preset], built.runs, built.gate))
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
     timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
     assert {key: row["run"] for key, row in timer_rows.items()} == timers
@@ -882,7 +883,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     receipt = json.loads((source / "terminal.json").read_text())
     linked_receipt = receipt | {
         "config": {
-            "run": {"id": "run / id?x=1&y=2"},
+            "run": {**receipt["config"]["run"], "id": "run / id?x=1&y=2"},
             "runtime": {"training_type": "sync"},
             "iris": {"wandb_entity": "receipt-team"},
         }
@@ -1167,8 +1168,10 @@ def test_evaluation_protocol_compares_optimizer_changes_and_rejects_sampling_cha
         else:
             config["generator"]["eval_sampling_params"]["temperature"] = 0.5
 
+    source = recorded_runs(preset, "users/test/protocol-changed")
+    edit(training_only)
     edit(sampling_change)
-    changed = rescore(preset, "--candidate", "users/test/protocol")
+    changed = rescore(preset, "--candidate", "users/test/protocol-changed")
     assert changed["verdict"] == "invalid" and "evaluation protocol" in changed["reason"], changed
 
 
@@ -1189,16 +1192,21 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name
     _json(source / "terminal.json", document)
     _json(source / "resolved-launch.yaml", {"config": document["config"]})
     assert rescore(preset, "--candidate", "users/test/task-content")["verdict"] == "pass"
+    changed_source = recorded_runs(preset, "users/test/task-content-changed")
+    changed_document = json.loads((changed_source / "terminal.json").read_text())
+    changed_document["config"]["inputs"]["validation_data"][0]["uri"] = str(copied)
+    _json(changed_source / "terminal.json", changed_document)
+    _json(changed_source / "resolved-launch.yaml", {"config": changed_document["config"]})
     task = json.loads(rows[0]["task_spec"])
     task["context"]["events"][0]["content"] = "Return dog."
     rows[0]["task_spec"] = json.dumps(task)
     pq.write_table(pa.Table.from_pylist(rows), path)
     assert scoring.task_set_sha256(document["config"], "test_panel") != original
-    report = rescore(preset, "--candidate", "users/test/task-content")
+    report = rescore(preset, "--candidate", "users/test/task-content-changed")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
 
-def test_issue_metadata_preserves_native_run_identity_and_reaches_receipt_status(recorded_runs, tmp_path):
+def test_issue_metadata_preserves_native_run_identity_and_reaches_receipt_status(recorded_runs):
     preset = presets.PRESETS["learning-medium"]
     controls(recorded_runs, preset.name)
     first = snowball.build_run(preset, issue=73).runs[0]

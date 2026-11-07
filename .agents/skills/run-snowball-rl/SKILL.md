@@ -106,7 +106,7 @@ you need and read under the run's `output` path:
   `--tasks` selection, in 10–15 minutes on 8 H100. Use
   `--tasks snowball-100k@<version from the dry run>` to sample the default training tasks.
 
-Named panels use seeded greedy decoding and natural replies up to `EVAL_REPLY_TOKENS` (8,192).
+Named panels use greedy decoding and natural replies up to `EVAL_REPLY_TOKENS` (8,192).
 `--require` accepts any key the gate computes for control r0: a step-file metric over the measured
 window, or a panel slice. It refuses other keys before launch.
 
@@ -136,8 +136,7 @@ window, or a panel slice. It refuses other keys before launch.
   default evaluation artifact; the dry run prints its version. It has 1,500 full tasks and a
   100-task fast subset, with source parts in its recipe and manifest. learning-medium and
   data-medium use the full panel; train-long uses the fast subset.
-  Its recipe pins the initializer pass-rate artifact used for difficulty and reference-score rows;
-  the standalone `snowball_pass_rates` command measures the development panel.
+  Its recipe pins the initializer pass-rate artifact used for difficulty and reference-score rows.
 - `--preset learning-medium --init NAME@VERSION` selects the initial weights. The report's
   "initial weights" Breakdown table holds the update-0 scores; long presets report gain on `test_panel_100`.
 - Gate on a slice of the panel:
