@@ -84,9 +84,11 @@ def test_compute_equivalence_rests_on_the_ladder(out, plotted):
     for (objective, baseline), rows in equivalence.groupby(["objective", "baseline"]):
         tolerance = RECOMPUTED_TOLERANCE[objective]
         means = {
-            method: plotted[(plotted.method == method) & plotted.proposal_objective.isin([objective, "none"])]
-            .groupby("compute_flops")[f"bpb__{objective}"]
-            .mean()
+            method: (
+                plotted[(plotted.method == method) & plotted.proposal_objective.isin([objective, "none"])]
+                .groupby("compute_flops")[f"bpb__{objective}"]
+                .mean()
+            )
             for method in ("mariner", baseline)
         }
         assert np.allclose(rows.mariner_bpb, means["mariner"].loc[rows.compute_flops], rtol=0, atol=tolerance)
@@ -153,15 +155,16 @@ def test_3e18_rows_copy_their_runs(plotted, validation_table, swarm_table):
     assert rung.components_available.sum() == len(rung) - 2
 
 
-def test_june_proportional_run_has_the_figures_components(out):
-    t = out["ladder"]
-    june = t[t.compute_flops == 3e18].iloc[0]
-    assert june.components_available
-    # The figure's input lists the June run among the eleven proportional runs; its seven components are the run's.
-    source = tables.read_csv(PROPORTIONAL_UNCHEATABLE)
-    source = source.set_index("run").loc[june.observation_id]
+def test_proportional_3e18_runs_have_the_figures_components(plotted):
+    # The scaling figure's proportional point at 3e18 and Figure 11's Uncheatable baseline average the eleven runs of
+    # this file: the June run, which only the ladder holds, and the swarm's ten repeats. They are the rung's
+    # proportional runs, with the file's seven components.
+    source = tables.read_csv(PROPORTIONAL_UNCHEATABLE).set_index("run")
+    rung = plotted[(plotted.method == "proportional") & (plotted.compute_flops == 3e18)].set_index("observation_id")
+    assert sorted(rung.index) == sorted(source.index) and rung.components_available.all()
     for task in naming.TASKS[:7]:
-        assert june[f"bpb__{task}"] == source[f"eval/uncheatable_eval/{task.removeprefix('uncheatable/')}/bpb"]
+        column = f"eval/uncheatable_eval/{task.removeprefix('uncheatable/')}/bpb"
+        assert (rung.loc[source.index, f"bpb__{task}"] == source[column]).all(), task
 
 
 def test_accuracy_table(out):

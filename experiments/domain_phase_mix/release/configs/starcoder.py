@@ -102,16 +102,23 @@ seed 20260910.
 
 `starcoder_weight` is the nominal StarCoder fraction. `starcoder_epochs` are the materialized epochs that Figure 2's top
 axes print: the StarCoder sequences that the mixture allocator draws (the design's allocation audit, or the follow-up's
-plan) over the sequences of the run's pool. `compute_flops` is the design's 3 F D with the TinyLlama vocabulary, the
-2.49e16 and 6.66e18 FLOPs of Figure 2's titles. `programming_languages_bpb` is the BPB that Figure 2 plots, on Paloma's
-programming-languages set (`eval/paloma/dolma_100_programing_languages-tpp10`) at the final step: total loss bits over
-total scored bytes (BPB schema 2), from the final evaluation's mean loss per scored token in nats
-(`programming_languages_loss`) as loss x 11,612,631 / (28,741,166 ln 2), the set's scored tokens and bytes. 97 of the
-102 grid runs logged BPB with the legacy evaluator, which averaged per-batch BPB and reads 0.012 to 0.049 higher, so the
-logged values are not exported; the six schema-2 values that the runs logged agree with the reconstruction within 2e-7.
-The two weight-0 runs of trainer seed 20260910 are also FineMath's weight-0 rows of `domain_sweeps`, which holds the
-sources' only other evaluations of these runs; its `paloma_bpb`, from a later evaluation of the same checkpoints, differs
-from `programming_languages_bpb` by at most 1.3e-6. Observation ids are the runs' W&B run ids, their run names.
+plan) over the sequences of the run's pool. `web_pool_tokens` is the Nemotron-CC pool from which a run drew its web
+text, 3,639,928,832 tokens for every run: the launcher (`launch_starcoder_tpp10.training_step`) gives each arm and the
+follow-up the same six web caches, which hold the design's `web_sequences` (each component's share of 1.2 times the
+target's tokens plus one 2,048-sequence block, 1,777,309 sequences of 2,048 tokens in all), and the cache audit that
+each launch verified (TPP10_CACHE_AUDIT) records those lengths. A run's web epochs, (1 - `starcoder_weight`) x
+`train_tokens` / `web_pool_tokens`, stay under one: per unit weight they are 0.0456 for the proxies, the Nemotron-CC
+epochs at which Figure 1's surrogate panel fits MARINER, and 0.8276 for the target. `compute_flops` is the design's
+3 F D with the TinyLlama vocabulary, the 2.49e16 and 6.66e18 FLOPs of Figure 2's titles. `programming_languages_bpb` is
+the BPB that Figure 2 plots, on Paloma's programming-languages set (`eval/paloma/dolma_100_programing_languages-tpp10`)
+at the final step: total loss bits over total scored bytes (BPB schema 2), from the final evaluation's mean loss per
+scored token in nats (`programming_languages_loss`) as loss x 11,612,631 / (28,741,166 ln 2), the set's scored tokens
+and bytes. 97 of the 102 grid runs logged BPB with the legacy evaluator, which averaged per-batch BPB and reads 0.012 to
+0.049 higher, so the logged values are not exported; the six schema-2 values that the runs logged agree with the
+reconstruction within 2e-7. The two weight-0 runs of trainer seed 20260910 are also FineMath's weight-0 rows of
+`domain_sweeps`, which holds the sources' only other evaluations of these runs; its `paloma_bpb`, from a later
+evaluation of the same checkpoints, differs from `programming_languages_bpb` by at most 1.3e-6. Observation ids are the
+runs' W&B run ids, their run names.
 """
 
 import gzip
@@ -126,6 +133,7 @@ import pandas as pd
 
 from experiments.domain_phase_mix import launch_starcoder_wsd80_transition_ramp as ramp_launch
 from experiments.domain_phase_mix.release import paths, run_names, tables
+from experiments.domain_phase_mix.starcoder_epoch_matching import canonical_sha256
 
 ATLAS = paths.RO / "starcoder_all_tied_curves_canonical_dsp_20260902"
 INVENTORY = paths.RO / "starcoder_single_phase_curve_inventory_20260902/curve_inventory.csv"
@@ -171,6 +179,15 @@ TPP10_METRICS = TPP10 / "live/consistent_bpb_20260912/metric_provenance.json"
 TPP10_ANALYSIS = TPP10 / "live/consistent_bpb_20260912/analysis.json"
 TPP10_FOLLOWUP_PLAN = TPP10 / "mean_selection_20260913/plan.json"
 TPP10_FOLLOWUP_RESULT = TPP10 / "mean_selection_20260913/result.json"
+# The audit of the sweep's data caches (prepare_starcoder_tpp10.verify_caches, which requires each cache to hold exactly
+# its design length). Each stage's release records its canonical SHA-256, which the launcher required a fresh audit to
+# match before training, and the follow-up's receipts hold the audit beside the follow-up's plan.
+TPP10_CACHE_AUDIT = TPP10 / "live/canary_cache_audit.json"
+TPP10_RELEASES = (
+    TPP10 / "live/calibration_release.json",
+    *(TPP10 / "releases" / f"{stage}.json" for stage in ("canary", "pilot", "refinement")),
+)
+TPP10_FOLLOWUP_RECEIPTS = TPP10 / "mean_selection_20260913/live_receipts.json"
 TPP10_METRIC = "scored_byte_bpb_from_token_loss_v1"  # loss bits over scored bytes, from the final mean token loss
 TPP10_GRID_RUNS = 102
 TPP10_LOSS = "eval/paloma/dolma_100_programing_languages-tpp10/loss"
@@ -188,6 +205,7 @@ EPOCH_MATCHING_COLUMNS = [
     "starcoder_weight",
     "starcoder_epochs",
     "starcoder_subset_tokens",
+    "web_pool_tokens",
     "total_parameters",
     "train_tokens",
     "compute_flops",
@@ -289,6 +307,9 @@ def required_sources() -> list[Path]:
         TPP10_ANALYSIS,
         TPP10_FOLLOWUP_PLAN,
         TPP10_FOLLOWUP_RESULT,
+        TPP10_CACHE_AUDIT,
+        *TPP10_RELEASES,
+        TPP10_FOLLOWUP_RECEIPTS,
     ]
     repeat_noise = [REPEAT_NOISE / "collected_train_only_metrics_live.csv", REPEAT_NOISE / "training_manifest.csv"]
     return [
@@ -505,6 +526,26 @@ def _epoch_matching_followup(design: dict, population: dict) -> dict:
     }
 
 
+def _epoch_matching_web_pool(design: dict) -> int:
+    """The tokens of the Nemotron-CC pool from which every run of the sweep drew its web text.
+
+    `launch_starcoder_tpp10.training_step` gives every run, of each arm and the follow-up, the same six web caches, one
+    per component, of the design's `web_sequences`. Raises unless the cache audit that every launch verified records
+    those lengths.
+    """
+    audit = json.loads(paths.require(TPP10_CACHE_AUDIT).read_text())
+    web = {name: audit["caches"][name]["tokens"] for name in design["web_sequences"]}
+    planned = {name: sequences * SEQUENCE_LENGTH for name, sequences in design["web_sequences"].items()}
+    if (audit["design_sha256"], audit["status"], web) != (design["design_sha256"], "passed", planned):
+        raise ValueError(f"{TPP10_CACHE_AUDIT.name} is not a passed audit of the web caches of {TPP10_DESIGN.name}")
+    released = {json.loads(paths.require(path).read_text())["cache_audit_sha256"] for path in TPP10_RELEASES}
+    receipts = json.loads(paths.require(TPP10_FOLLOWUP_RECEIPTS).read_text())
+    followup_plan = json.loads(paths.require(TPP10_FOLLOWUP_PLAN).read_text())
+    if released != {canonical_sha256(audit)} or (receipts["cache_audit"], receipts["plan"]) != (audit, followup_plan):
+        raise ValueError(f"a launch of the sweep verified other caches than {TPP10_CACHE_AUDIT.name} records")
+    return sum(web.values())
+
+
 def _epoch_matching() -> pd.DataFrame:
     """Figure 2's sweep, one row per run: the 102 grid runs, whose BPB must be the values that the figure's analysis
     plots, and the follow-up target run."""
@@ -551,6 +592,7 @@ def _epoch_matching() -> pd.DataFrame:
         raise ValueError(f"a run's tokens differ from those of its arm's model in {TPP10_DESIGN.name}")
     table["starcoder_epochs"] = table.starcoder_sequences / table.pool_sequences
     table["starcoder_subset_tokens"] = table.pool_sequences * SEQUENCE_LENGTH
+    table["web_pool_tokens"] = _epoch_matching_web_pool(design)
     table["total_parameters"] = models.parameters.to_numpy()
     table["compute_flops"] = models.training_flops.to_numpy()
     rank = {arm: index for index, arm in enumerate(TPP10_ARMS)}

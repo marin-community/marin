@@ -200,6 +200,8 @@ NOTES = {
         "The two weight-0 runs of trainer seed 20260910 are also FineMath's weight-0 rows of domain_sweeps under the "
         "same observation ids. Its paloma_bpb, from a later evaluation of the same final checkpoints, differs from "
         "programming_languages_bpb by at most 1.3e-6.",
+        "Every run, of each arm, drew its Nemotron-CC text from the same pool of 1,777,309 sequences of 2,048 tokens "
+        "(web_pool_tokens), so a run's web epochs are (1 - starcoder_weight) x train_tokens / web_pool_tokens.",
     ],
     "domain_sweeps": [
         "These models use the TinyLlama tokenizer named in `tokenizer`, not the tokenizer of the tasks table, which "

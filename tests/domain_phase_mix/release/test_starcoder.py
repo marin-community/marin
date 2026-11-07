@@ -243,6 +243,17 @@ def test_epoch_matching_reproduces_figure2(out):
     assert flops.nunique().eq(1).all() and [f"{f:.2e}" for f in flops.first()] == ["2.49e+16", "6.66e+18"]
 
 
+def test_epoch_matching_web_pool_gives_figure1s_web_epochs(out):
+    # Figure 1's surrogate panel fits MARINER with Nemotron-CC at its finite-pool epochs, (1 - share) x tokens / pool;
+    # its builder records 0.04558802099128514 epochs per unit weight for the proxies. The design sized the pool for the
+    # target, so no run trains on it for a whole epoch.
+    sweep = out["starcoder_epoch_matching"]
+    assert sweep.web_pool_tokens.dtype == np.int64
+    proxies = sweep[sweep.arm != "target"]
+    assert np.allclose(proxies.train_tokens / proxies.web_pool_tokens, 0.04558802099128514, rtol=0, atol=1e-15)
+    assert ((1 - sweep.starcoder_weight) * sweep.train_tokens).lt(sweep.web_pool_tokens).all()
+
+
 @pytest.mark.skipif(
     not all(path.exists() for path in domain_sweeps.required_sources()), reason="domain sweep sources absent"
 )
