@@ -13,7 +13,7 @@ from enum import Enum
 
 import haliax as hax
 
-from levanter.layers.stacked import ArrayStacked
+from levanter.layers.stacked import ArrayStacked, layer_in_axes
 
 
 def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
@@ -32,14 +32,7 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None =
         if isinstance(node, ArrayStacked):
             bodies = (node.stacked, *[other.stacked for other in others])
             in_axes = tuple(
-                jax.tree.map(
-                    lambda leaf: (
-                        0
-                        if isinstance(leaf, jax.Array) and leaf.ndim > 0 and leaf.shape[0] == node.num_layers
-                        else None
-                    ),
-                    body,
-                )
+                layer_in_axes(body, node.num_layers, is_array_like=lambda leaf: isinstance(leaf, jax.Array))
                 for body in bodies
             )
             inner = jax.vmap(mapped_fn, in_axes=in_axes)(*bodies)
