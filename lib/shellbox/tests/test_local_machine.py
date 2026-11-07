@@ -192,6 +192,22 @@ def python_environment(tmp_path_factory) -> PythonEnvironment:
         pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
 
 
+def test_a_python_environment_builds_under_a_callers_python_preference(tmp_path, monkeypatch):
+    """A caller that sets UV_PYTHON_PREFERENCE=only-system, as Iris jobs do to avoid a cached CPython, still gets
+    an environment with its own managed interpreter."""
+    monkeypatch.setenv("UV_PYTHON_PREFERENCE", "only-system")
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(LOCK)
+    try:
+        environment = build_python_environment(tmp_path / "root", lock, PYTHON_VERSION)
+    except UvError as error:
+        if not str(error).startswith("uv python install") or "Failed to download" not in str(error):
+            raise
+        pytest.skip(f"uv could not download a managed CPython {PYTHON_VERSION}: {error}")
+
+    assert environment.python.resolve().is_relative_to((tmp_path / "root").resolve())
+
+
 @pytest.fixture
 def python_factory(python_environment) -> LocalMachineFactory:
     """A factory whose commands find python3 in a self-contained environment that it mounts read-only."""

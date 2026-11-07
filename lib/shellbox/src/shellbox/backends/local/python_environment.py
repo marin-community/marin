@@ -52,13 +52,19 @@ class UvError(RuntimeError):
     """A uv command failed; the message holds the command and uv's error output."""
 
 
+IGNORED_UV_SETTINGS = frozenset({"UV_PYTHON_PREFERENCE"})
+"""Settings of the caller that would override the interpreter choice of a build: a root always has its own
+uv-managed CPython, and uv refuses ``--managed-python`` beside a ``UV_PYTHON_PREFERENCE``."""
+
+
 def _uv(*args: str, environment: dict[str, str] | None = None) -> None:
     command = ["uv", *args]
+    inherited = {name: value for name, value in os.environ.items() if name not in IGNORED_UV_SETTINGS}
     result = subprocess.run(
         command,
         stderr=subprocess.PIPE,
         text=True,
-        env=None if environment is None else {**os.environ, **environment},
+        env={**inherited, **(environment or {})},
         check=False,
     )
     if result.returncode != 0:
