@@ -1,5 +1,12 @@
 # CloudNativePG authorization prototype
 
+The `us-west4-staging` stack keeps an independent synthetic auth foundation in
+`marin-auth-db-staging`, with separate `openfga` and `grants` owners and dedicated
+recovery databases. Its namespace and database resources are protected and
+retained. Follow [synthetic CW staging](../auth/STAGING.md) for bootstrap, recovery,
+limits, and retirement. The disposable `us-west4` experiment below remains a
+separate lifecycle.
+
 This Pulumi project owns a disposable PostgreSQL experiment on CW
 `marin_US-WEST-04A`. It installs CloudNativePG 1.30.1 from Helm chart 0.29.1,
 three PostgreSQL 17 instances, and an optional authorization failover Job.
@@ -72,8 +79,9 @@ resource before inspecting recovery.
 
 This is an operator and database failover experiment. OpenFGA and OpenBao share
 one disposable database owner for the proof; production needs separate
-databases and least-privilege identities. The Marin runtime grant ledger still
-uses one local SQLite database and is not replicated by CloudNativePG.
+databases and least-privilege identities. This disposable failover proof uses
+one local SQLite grant ledger; the persistent staging stack instead gives
+replicated brokers a separate PostgreSQL grant/lifecycle database.
 
 Production adoption also needs independent failure domains, qualified storage,
 off-cluster backups and WAL archiving, restore drills, monitoring and alerting,

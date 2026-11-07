@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 
 import pytest
+from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
 
 
@@ -28,7 +29,7 @@ def authorities():
 
 @pytest.fixture
 def store(tmp_path, authorities, grant_policy, clock):
-    database = GrantStore(tmp_path / "grants.db", authorities, grant_policy, now=lambda: clock[0])
+    database = GrantStore(SqliteGrantDatabase(tmp_path / "grants.db"), authorities, grant_policy, now=lambda: clock[0])
     yield database
     database.close()
 
@@ -141,7 +142,7 @@ def test_revocation_survives_restart_and_invalidates_descendants(
     tmp_path, authorities, grant_permissions, grant_policy, clock
 ):
     path = tmp_path / "grants.db"
-    database = GrantStore(path, authorities, grant_policy, now=lambda: clock[0])
+    database = GrantStore(SqliteGrantDatabase(path), authorities, grant_policy, now=lambda: clock[0])
     try:
         parent = database.create(
             "user:alice", actor="loom:one", permissions=grant_permissions, expires_at=clock[0] + 300
@@ -156,7 +157,7 @@ def test_revocation_survives_restart_and_invalidates_descendants(
         database.revoke(parent.id, principal="user:alice")
     finally:
         database.close()
-    reopened = GrantStore(path, authorities, grant_policy, now=lambda: clock[0])
+    reopened = GrantStore(SqliteGrantDatabase(path), authorities, grant_policy, now=lambda: clock[0])
     try:
         with pytest.raises(GrantDenied):
             reopened.authorize(child.id, actor="iris:job", service="iris", action="job.submit", resource="/alice/train")
@@ -234,12 +235,14 @@ def test_reduced_standing_authority_invalidates_existing_grants(
     tmp_path, authorities, grant_permissions, grant_policy, clock, change
 ):
     path = tmp_path / "grants.db"
-    database = GrantStore(path, authorities, grant_policy, now=lambda: clock[0])
+    database = GrantStore(SqliteGrantDatabase(path), authorities, grant_policy, now=lambda: clock[0])
     try:
         grant = database.create("user:alice", actor="loom:one", permissions=grant_permissions, expires_at=clock[0] + 300)
     finally:
         database.close()
-    reopened = GrantStore(path, [replace(authorities[0], **change)], grant_policy, now=lambda: clock[0])
+    reopened = GrantStore(
+        SqliteGrantDatabase(path), [replace(authorities[0], **change)], grant_policy, now=lambda: clock[0]
+    )
     try:
         with pytest.raises(GrantDenied):
             reopened.active(grant.id)

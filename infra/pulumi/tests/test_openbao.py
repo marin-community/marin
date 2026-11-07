@@ -70,6 +70,12 @@ def test_openbao_exposes_only_verification_endpoints_and_retains_sealed_raft_ser
         network = resources["kubernetes:networking.k8s.io/v1:NetworkPolicy"]["spec"]
         assert set(network["policyTypes"]) == {"Ingress", "Egress"}
         assert all("podSelector" in peer for rule in network["ingress"] for peer in rule["from"])
+        dns = next(rule for rule in network["egress"] if {port["port"] for port in rule["ports"]} == {53})
+        assert {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
+            "podSelector": {"matchLabels": {"k8s-app": "node-local-dns"}},
+        } in dns["to"]
+        assert all(port["port"] == 53 for port in dns["ports"])
         role = resources["kubernetes:rbac.authorization.k8s.io/v1:Role"]
         assert {(tuple(rule["resources"]), tuple(rule["verbs"])) for rule in role["rules"]} == {
             (("pods",), ("get", "list", "watch")),
@@ -88,7 +94,7 @@ def broker_args():
         "ca_bundle": "/var/run/marin-auth/ca/ca.crt",
         "bao_issuer": "https://auth.example.org/v1/identity/oidc",
         "issuer": "https://marin-auth.management.svc:8090",
-        "database": "/var/lib/marin-auth/grants.db",
+        "database": {"backend": "sqlite", "path": "/var/lib/marin-auth/grants.db"},
         "broker_token_file": "/var/run/marin-auth/broker-token/token",
         "signing_key_version": 1,
         "subjects": {"entity-id": "human:alice"},
@@ -104,10 +110,19 @@ def broker_args():
                 ],
             }
         ],
+        "secrets": [
+            {
+                "name": "task-canary",
+                "mount": "auth-proof",
+                "path": "task-canary",
+                "token_file": "/var/run/marin-auth/canary-token/token",
+            }
+        ],
         "max_token_ttl": 300,
         "loom": {
             "base_url": "https://loom.sessions.svc:8000",
             "observer_token_file": "/var/run/marin-auth/loom-token/token",
+            "callback_token_file": "/var/run/marin-auth/callback-token/token",
         },
     }
     return GrantBrokerArgs(
@@ -116,7 +131,14 @@ def broker_args():
         storage_class="block",
         storage_size="1Gi",
         policy=policy,
-        token_secret_names=("broker-token", "loom-token", "storage-token", "fga-token"),
+        token_secret_names=(
+            "broker-token",
+            "loom-token",
+            "storage-token",
+            "fga-token",
+            "canary-token",
+            "callback-token",
+        ),
         listener_tls_secret="broker-tls",
         ca_secret="combined-trust-bundle",
         client_namespace="sessions",
@@ -147,7 +169,7 @@ def test_grant_broker_publishes_runtime_policy_and_keeps_credentials_in_external
         pod = stateful["template"]["spec"]
         assert pod["automountServiceAccountToken"] is False
         mounts = {mount["name"]: mount for mount in pod["containers"][0]["volumeMounts"]}
-        assert config["database"].startswith(mounts["data"]["mountPath"] + "/")
+        assert config["database"]["path"].startswith(mounts["data"]["mountPath"] + "/")
         assert config["broker_token_file"].startswith(mounts["token-0"]["mountPath"] + "/")
         assert mounts["token-0"]["readOnly"] is True
         volumes = {volume["name"]: volume for volume in pod["volumes"]}
@@ -210,6 +232,42 @@ def test_grant_broker_rejects_reusing_credentials_across_trust_boundaries(record
 
 
 @pulumi.runtime.test
+def test_postgres_brokers_mount_private_database_reference_without_a_shared_ledger_pvc(recording_mocks, broker_args):
+    pulumi.runtime.set_mocks(recording_mocks, project="marin-auth", stack="test", preview=False)
+    policy = {
+        **broker_args.policy,
+        "database": {
+            "backend": "postgres",
+            "url_file": "/var/run/marin-auth/database/url",
+            "ca_file": "/var/run/marin-auth/ca/ca.crt",
+        },
+    }
+    broker = GrantBroker(
+        "postgres-broker",
+        replace(
+            broker_args, policy=policy, replicas=2, database_secret="grants-database", database_namespace="auth-database"
+        ),
+        k8s_provider=k8s.Provider("postgres-broker-test", kubeconfig="", context="test"),
+    )
+
+    def check(_values):
+        resources = {resource.typ: resource.inputs for resource in recording_mocks.resources}
+        stateful = resources["kubernetes:apps/v1:StatefulSet"]["spec"]
+        network = resources["kubernetes:networking.k8s.io/v1:NetworkPolicy"]["spec"]
+        pod = stateful["template"]["spec"]
+        assert stateful["replicas"] == 2
+        assert not stateful.get("volumeClaimTemplates")
+        assert all(mount["name"] != "data" for mount in pod["containers"][0]["volumeMounts"])
+        volumes = {volume["name"]: volume for volume in pod["volumes"]}
+        assert volumes["database"]["secret"]["secretName"] == "grants-database"
+        assert volumes["database"]["secret"]["items"] == [{"key": "url", "path": "url"}]
+        assert any(rule["ports"] == [{"port": 5432}] for rule in network["egress"])
+        assert not any(resource.typ == "kubernetes:core/v1:Secret" for resource in recording_mocks.resources)
+
+    return pulumi.Output.all(broker.stateful_set.spec, broker.network_policy.spec).apply(check)
+
+
+@pulumi.runtime.test
 def test_openfga_exposes_check_gateway_and_keeps_model_and_tuple_apis_on_loopback(recording_mocks):
     mocks = recording_mocks
     pulumi.runtime.set_mocks(mocks, project="marin-auth", stack="test", preview=False)
@@ -220,6 +278,7 @@ def test_openfga_exposes_check_gateway_and_keeps_model_and_tuple_apis_on_loopbac
             image="openfga/openfga@sha256:" + "a" * 64,
             proxy_image="nginxinc/nginx-unprivileged@sha256:" + "b" * 64,
             database_secret="postgres-connection",
+            database_ca_secret="postgres-ca",
             token_secret="fga-token",
             tls_secret="fga-tls",
             store_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",

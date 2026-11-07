@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from rigging.grant_database import PostgresGrantDatabase
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 
 
 @pytest.fixture
@@ -43,3 +49,28 @@ def openfga_http(tmp_path):
         finally:
             server.shutdown()
             thread.join()
+
+
+@pytest.fixture
+def postgres_database_url():
+    """Use an explicitly supplied disposable PostgreSQL instance for replica tests."""
+    admin_url = make_url(os.environ["MARIN_AUTH_TEST_POSTGRES_URL"])
+    name = "auth_test_" + uuid.uuid4().hex
+    engine = create_engine(admin_url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
+        yield admin_url.set(database=name).render_as_string(hide_password=False)
+    finally:
+        with engine.connect() as connection:
+            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        engine.dispose()
+
+
+@pytest.fixture
+def postgres_auth_database(postgres_database_url):
+    database = PostgresGrantDatabase(postgres_database_url, ssl_context=None)
+    try:
+        yield database
+    finally:
+        database.close()

@@ -20,6 +20,7 @@ from rigging.server_auth import VerifiedIdentity
 from rigging.token_authority import JwksVerifier
 
 SHARED_GRANT_ROLE = "shared-grant"
+SHARED_GRANT_TOKEN_SECRET = "MARIN_GRANT_TOKEN"
 
 
 def authority_origin(url: str) -> str:

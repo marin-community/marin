@@ -4,6 +4,7 @@
 import json
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,7 +12,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import requests
 from rigging.auth import StaticTokenProvider
+from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from infra.auth.loom import LoomLauncher
 
@@ -21,6 +25,7 @@ class GrantService:
         self.store = store
         self.grant = grant
         self.token = "synthetic-shared-grant-bearer"
+        self.active_gate = None
 
     def authorize(self, token, *, audience, action, resource):
         if token != self.token:
@@ -30,6 +35,11 @@ class GrantService:
         )
 
     def active(self, grant_id, actor):
+        if self.active_gate is not None and self.active_gate[0] == grant_id:
+            _, started, release = self.active_gate
+            self.active_gate = None
+            started.set()
+            assert release.wait(10)
         try:
             return self.store.active(grant_id).actor == actor
         except GrantDenied:
@@ -60,7 +70,7 @@ def grant_service(tmp_path):
     permission = Permission("loom", frozenset({"session.create"}), "/review/")
     with closing(
         GrantStore(
-            tmp_path / "grants.sqlite",
+            SqliteGrantDatabase(tmp_path / "grants.sqlite"),
             [PrincipalAuthority("owner", "owner", 300, 1, "1")],
             LaunchPolicy(permission),
             now=lambda: 1000,
@@ -81,6 +91,8 @@ class LoomBoundary:
     drop_response: bool = False
     unavailable: bool = False
     get_responses: dict = field(default_factory=dict)
+    get_started: threading.Event | None = None
+    release_get: threading.Event | None = None
     authority_at_request: list = field(default_factory=list)
 
 
@@ -128,6 +140,10 @@ def loom_api(grant_service):
                 self.respond({**result, **state.metadata_override})
             elif operation == "runs/get":
                 status, result = state.get_responses.get(payload["id"], (200, state.runs.get(payload["id"])))
+                if state.get_started is not None and not state.get_started.is_set():
+                    result = dict(result)
+                    state.get_started.set()
+                    assert state.release_get.wait(15)
                 self.respond(result, status=status)
             elif operation == "runs/list":
                 self.respond(list(state.runs.values()))
@@ -159,11 +175,16 @@ def loom_api(grant_service):
             thread.join()
 
 
-@pytest.fixture
-def launcher(tmp_path, grant_service, loom_api):
+@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
+def launcher(request, tmp_path, grant_service, loom_api):
+    database = (
+        SqliteGrantDatabase(tmp_path / "runs.sqlite")
+        if request.param == "sqlite"
+        else request.getfixturevalue("postgres_auth_database")
+    )
     with requests.Session() as session:
         yield LoomLauncher(
-            tmp_path / "runs.sqlite",
+            database,
             base_url=loom_api.base_url,
             observer_tokens=StaticTokenProvider("lifecycle-observer"),
             grants=grant_service,
@@ -192,7 +213,9 @@ def test_native_launch_uses_shared_bearer_and_preserves_run_metadata(launcher, g
     )
     assert loom_api.runs[run.run_id]["shared_grant_id"] == run.grant_id
     assert launcher.launch(grant_service.token, template="review", title="Review", goal="Read change") == run
-    assert grant_service.token.encode() not in launcher.database.read_bytes()
+    with launcher.database.transaction() as db:
+        records = db.execute(text("SELECT * FROM loom_grant_runs")).mappings().all()
+    assert grant_service.token not in repr(records)
 
 
 @pytest.mark.parametrize("field", ["shared_grant_id", "actor_subject", "profile"])
@@ -259,7 +282,9 @@ def test_direct_native_launch_is_observed_and_revoked_on_completion(launcher, gr
     )
     response.raise_for_status()
     native = response.json()
-    launcher.observe(grant_service.grant, "review")
+    loom_api.runs[native["id"]].update(status="creating")
+    launcher.observe(grant_service.grant, "review", native["id"], native["session_id"])
+    loom_api.runs[native["id"]].update(status="running", session_id=native["session_id"])
     observed = launcher.reconcile()
     assert (observed[0].run_id, observed[0].grant_id) == (native["id"], grant_service.grant.id)
     assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
@@ -280,7 +305,10 @@ def test_observed_credential_without_native_run_is_revoked_after_binding_deadlin
         session=launcher.session,
         now=lambda: clock[0],
     )
-    observer.observe(grant_service.grant, "review")
+    loom_api.unavailable = True
+    with pytest.raises(requests.HTTPError):
+        observer.launch(grant_service.token, template="review", title="Pending", goal="Read change")
+    loom_api.unavailable = False
     observer.reconcile()
     assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
     clock[0] += 61
@@ -335,8 +363,9 @@ def test_unbound_deadline_revokes_authority_during_total_loom_outage(launcher, g
         session=launcher.session,
         now=lambda: clock[0],
     )
-    observer.observe(grant_service.grant, "review")
     loom_api.unavailable = True
+    with pytest.raises(requests.HTTPError):
+        observer.launch(grant_service.token, template="review", title="Pending", goal="Read change")
     observer.reconcile()
     assert grant_service.active(grant_service.grant.id, grant_service.grant.actor)
     clock[0] += 61
@@ -348,3 +377,91 @@ def test_unbound_deadline_revokes_authority_during_total_loom_outage(launcher, g
     loom_api.unavailable = False
     observer.reconcile()
     assert {run.grant_id for run in observer.reconcile()} == {first.grant_id}
+
+
+@pytest.mark.integration
+def test_stale_worker_cannot_resurrect_cleaned_run_after_losing_leadership(
+    postgres_auth_database, grant_service, loom_api
+):
+    with requests.Session() as session:
+        launcher = LoomLauncher(
+            postgres_auth_database,
+            base_url=loom_api.base_url,
+            observer_tokens=StaticTokenProvider("lifecycle-observer"),
+            grants=grant_service,
+            session=session,
+        )
+        run = launcher.launch(grant_service.token, template="review", title="Review", goal="Read change")
+        loom_api.get_started, loom_api.release_get = threading.Event(), threading.Event()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            stale = executor.submit(launcher.reconcile)
+            try:
+                assert loom_api.get_started.wait(10)
+                # A primary failover drops advisory-lock sessions while a remote reply is in flight.
+                with postgres_auth_database.engine.connect() as connection:
+                    connection.execute(
+                        text(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() "
+                            "AND pid != pg_backend_pid() "
+                            "AND pid IN (SELECT pid FROM pg_locks WHERE locktype = 'advisory')"
+                        )
+                    )
+                    connection.commit()
+                loom_api.runs[run.run_id]["status"] = "completed"
+                restarted_launcher(launcher).reconcile()
+            finally:
+                loom_api.release_get.set()
+            try:
+                stale.result(timeout=15)
+            except SQLAlchemyError:
+                pass  # The disconnected worker can fail when releasing its former session lock.
+        with postgres_auth_database.transaction() as connection:
+            status = connection.execute(
+                text("SELECT status FROM loom_grant_runs WHERE grant_id = :id"), {"id": run.grant_id}
+            ).scalar_one()
+        assert status == "cleaned"
+        assert not grant_service.active(run.grant_id, run.actor)
+        assert launcher.reconcile() == []
+
+
+@pytest.mark.integration
+def test_retry_binding_between_retirement_phases_does_not_revoke_live_run(
+    postgres_auth_database, grant_service, loom_api
+):
+    clock = [1000]
+    with requests.Session() as session:
+        observer = LoomLauncher(
+            postgres_auth_database,
+            base_url=loom_api.base_url,
+            observer_tokens=StaticTokenProvider("lifecycle-observer"),
+            grants=grant_service,
+            session=session,
+            now=lambda: clock[0],
+        )
+        pending = grant_service.grant
+        loom_api.unavailable = True
+        with pytest.raises(requests.HTTPError):
+            observer.launch(grant_service.token, template="review", title="Retry", goal="Read change")
+        loom_api.unavailable = False
+        blocker = grant_service.store.create(
+            "owner", actor="other-runtime", permissions=pending.permissions, expires_at=1200
+        )
+        grant_service.grant = blocker
+        clock[0] = 1001
+        observer.launch(grant_service.token, template="review", title="Other", goal="Read other change")
+        started, release = threading.Event(), threading.Event()
+        grant_service.active_gate = (blocker.id, started, release)
+        clock[0] = 1059
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            reconciliation = executor.submit(observer.reconcile)
+            try:
+                assert started.wait(10)
+                clock[0] = 1061
+                grant_service.grant = pending
+                run = observer.launch(grant_service.token, template="review", title="Retry", goal="Read change")
+            finally:
+                release.set()
+            reconciliation.result(timeout=15)
+        assert run.session_id
+        assert grant_service.active(pending.id, pending.actor)
+        assert observer.reconcile()

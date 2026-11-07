@@ -1134,6 +1134,29 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
 
 
+def test_shared_grant_sandbox_pod_uses_restricted_admission_and_only_explicit_credentials():
+    req = make_run_req("/research/proof/0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+    req.environment.secrets["MARIN_GRANT_TOKEN"] = "synthetic-attempt-credential"
+    req.task_token = "native-token-must-not-reach-the-sandbox"
+    manifest = _build_pod_manifest(req, pod_config(task_env={"CLUSTER_SECRET": "withheld"}))
+    spec = manifest["spec"]
+    task = spec["containers"][0]
+    security = task["securityContext"]
+    assert security["runAsNonRoot"] is True
+    assert security["allowPrivilegeEscalation"] is False
+    assert security["capabilities"] == {"drop": ["ALL"]}
+    assert security["seccompProfile"] == {"type": "RuntimeDefault"}
+    assert spec["automountServiceAccountToken"] is False
+    assert spec["initContainers"] == []
+    env = {entry["name"]: entry.get("value") for entry in task["env"]}
+    assert "IRIS_TASK_TOKEN" not in env
+    assert "CLUSTER_SECRET" not in env
+    assert "IRIS_CONTROLLER_ADDRESS" not in env
+    assert [volume["name"] for volume in spec["volumes"] if "secret" in volume] == ["job-secrets"]
+
+
 def _allowlist_request(
     num_tasks: int = 1, gpus: int = 0, rules: Sequence[str] = (), attempt_uid: str = "0123456789abcdef"
 ) -> job_pb2.RunTaskRequest:

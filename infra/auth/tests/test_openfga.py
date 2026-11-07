@@ -5,9 +5,11 @@ import time
 from contextlib import closing
 
 import pytest
-from rigging.grants import GrantStore, Permission
+from rigging.grant_database import SqliteGrantDatabase
+from rigging.grants import GrantDenied, GrantStore, Permission
 
 from infra.auth.openfga import AuthorizationUnavailable, OpenFGAPolicy, ProviderIdentity
+from infra.auth.secret_bindings import SecretBinding
 
 
 @pytest.fixture
@@ -52,7 +54,9 @@ def test_checks_use_pinned_model_current_relationships_and_server_derived_ancest
 @pytest.mark.parametrize("status,allowed", [(503, True), (302, True), (200, "true"), (200, None)])
 def test_missing_or_invalid_openfga_decision_cannot_authorize_a_grant(policy, openfga_http, status, allowed):
     openfga_http["state"].update(status=status, allowed=allowed)
-    with closing(GrantStore(openfga_http["token_file"].parent / "grants.db", policy.authorities, policy)) as store:
+    with closing(
+        GrantStore(SqliteGrantDatabase(openfga_http["token_file"].parent / "grants.db"), policy.authorities, policy)
+    ) as store:
         with pytest.raises(AuthorizationUnavailable):
             store.create(
                 "researcher",
@@ -77,3 +81,27 @@ def test_unknown_actions_and_noncanonical_application_paths_cannot_inherit_permi
     assert not policy.check("researcher", "iris", "job.submit", "/research/../other/")
     assert not policy.check("researcher", "iris", "job.submit", "s3://logs/incidents/")
     assert not policy.check("unknown", "iris", "job.submit", "/research/")
+
+
+def test_secret_binding_remap_invalidates_persisted_grants(openfga_http, tmp_path):
+    config = {
+        **{key: value for key, value in openfga_http.items() if key != "state"},
+        "principals": [{"principal": "researcher", "owner": "researcher", "max_ttl": 600, "delegation_depth": 2}],
+        "providers": [],
+    }
+    first = OpenFGAPolicy(**config, secrets=[SecretBinding("task-canary", "proof", "first", "https://bao.example")])
+    path = tmp_path / "secrets.db"
+    with closing(GrantStore(SqliteGrantDatabase(path), first.authorities, first)) as store:
+        grant = store.create(
+            "researcher",
+            actor="task",
+            expires_at=time.time() + 300,
+            permissions=(Permission("openbao", frozenset({"secret.read"}), "/secrets/task-canary/"),),
+        )
+        assert store.active(grant.id).id == grant.id
+    changed = OpenFGAPolicy(
+        **config, secrets=[SecretBinding("task-canary", "proof", "different", "https://bao.example")]
+    )
+    with closing(GrantStore(SqliteGrantDatabase(path), changed.authorities, changed)) as store:
+        with pytest.raises(GrantDenied):
+            store.active(grant.id)

@@ -10,16 +10,16 @@ writes the runtime database; it never changes standing policy or provider IAM.
 import json
 import math
 import re
-import sqlite3
-import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
+
+from sqlalchemy import Connection, RowMapping, text
+
+from rigging.grant_database import GrantDatabase
 
 
 class GrantDenied(ValueError):
@@ -141,7 +141,7 @@ def _decode_permissions(encoded: str) -> tuple[Permission, ...]:
     )
 
 
-def _grant_from_row(row: sqlite3.Row) -> Grant:
+def _grant_from_row(row: RowMapping) -> Grant:
     return Grant(
         id=row["id"],
         owner=row["owner"],
@@ -158,16 +158,11 @@ def _grant_from_row(row: sqlite3.Row) -> Grant:
 
 
 class GrantStore:
-    """SQLite runtime grants; ancestor revocation applies on every decision.
-
-    All grant mutations and decisions are serialized in transactions. A single
-    local service can reopen the database after restart without losing grants
-    or revocations. This store is not a replicated multi-host database.
-    """
+    """Durable runtime grants with serialized checks and ancestor revocation."""
 
     def __init__(
         self,
-        path: Path,
+        database: GrantDatabase,
         authorities: Sequence[PrincipalAuthority],
         policy: GrantPolicy,
         *,
@@ -178,58 +173,47 @@ class GrantStore:
             raise ValueError("Principal authorities must be unique")
         self._policy = policy
         self._now = now
-        self._lock = threading.RLock()
-        self._connection = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
-        self._connection.execute("PRAGMA journal_mode = WAL")
-        self._connection.execute(
-            """CREATE TABLE IF NOT EXISTS grants (
-                id TEXT PRIMARY KEY,
-                owner TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                permissions TEXT NOT NULL,
-                parent_id TEXT REFERENCES grants(id),
-                created_by TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                expires_at REAL NOT NULL,
-                delegation_depth INTEGER NOT NULL,
-                revoked_at REAL,
-                policy_revision TEXT NOT NULL
-            )"""
-        )
-        self._connection.execute(
-            """CREATE TABLE IF NOT EXISTS grant_requests (
-                principal TEXT NOT NULL,
-                request_key TEXT NOT NULL,
-                grant_id TEXT NOT NULL REFERENCES grants(id),
-                PRIMARY KEY (principal, request_key)
-            )"""
-        )
+        self.database = database
+        with database.transaction() as connection:
+            connection.execute(
+                text(
+                    """CREATE TABLE IF NOT EXISTS grants (
+                    id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    permissions TEXT NOT NULL,
+                    parent_id TEXT REFERENCES grants(id),
+                    created_by TEXT NOT NULL,
+                    created_at DOUBLE PRECISION NOT NULL,
+                    expires_at DOUBLE PRECISION NOT NULL,
+                    delegation_depth INTEGER NOT NULL,
+                    revoked_at DOUBLE PRECISION,
+                    policy_revision TEXT NOT NULL
+                )"""
+                )
+            )
+            connection.execute(
+                text(
+                    """CREATE TABLE IF NOT EXISTS grant_requests (
+                    principal TEXT NOT NULL,
+                    request_key TEXT NOT NULL,
+                    grant_id TEXT NOT NULL REFERENCES grants(id),
+                    PRIMARY KEY (principal, request_key)
+                )"""
+                )
+            )
 
     def close(self) -> None:
-        self._connection.close()
+        self.database.close()
 
-    @contextmanager
-    def _transaction(self):
-        with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            try:
-                yield
-            except BaseException:
-                self._connection.rollback()
-                raise
-            else:
-                self._connection.commit()
-
-    def _get(self, grant_id: str) -> Grant:
-        row = self._connection.execute("SELECT * FROM grants WHERE id = ?", (grant_id,)).fetchone()
+    def _get(self, connection: Connection, grant_id: str) -> Grant:
+        row = connection.execute(text("SELECT * FROM grants WHERE id = :id"), {"id": grant_id}).mappings().first()
         if row is None:
             raise GrantDenied("Unknown grant")
         return _grant_from_row(row)
 
-    def _active(self, grant_id: str, now: float) -> tuple[Grant, Grant]:
-        grant = self._get(grant_id)
+    def _active(self, connection: Connection, grant_id: str, now: float) -> tuple[Grant, Grant]:
+        grant = self._get(connection, grant_id)
         ancestor = grant
         chain: list[Grant] = []
         while True:
@@ -238,7 +222,7 @@ class GrantStore:
             chain.append(ancestor)
             if ancestor.parent_id is None:
                 break
-            ancestor = self._get(ancestor.parent_id)
+            ancestor = self._get(connection, ancestor.parent_id)
         authority = self._authorities.get(ancestor.created_by)
         if (
             authority is None
@@ -253,14 +237,30 @@ class GrantStore:
 
     def active(self, grant_id: str) -> Grant:
         """Read an active grant, rejecting any expired or revoked ancestor."""
-        with self._transaction():
-            grant, _ = self._active(grant_id, self._now())
+        with self.database.transaction() as connection:
+            grant, _ = self._active(connection, grant_id, self._now())
             return grant
+
+    def grant_for_request(self, *, parent_id: str, idempotency_key: str) -> Grant | None:
+        """Find a delegated request for retirement, including expired or revoked grants."""
+        with self.database.transaction() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT grants.* FROM grants JOIN grant_requests ON grants.id = grant_requests.grant_id "
+                        "WHERE grants.parent_id = :parent_id AND grant_requests.request_key = :key"
+                    ),
+                    {"parent_id": parent_id, "key": idempotency_key},
+                )
+                .mappings()
+                .first()
+            )
+            return None if row is None else _grant_from_row(row)
 
     def authority_principal(self, grant_id: str) -> str:
         """Return the standing principal behind an active grant's delegation chain."""
-        with self._transaction():
-            _, root = self._active(grant_id, self._now())
+        with self.database.transaction() as connection:
+            _, root = self._active(connection, grant_id, self._now())
             return root.created_by
 
     def create(
@@ -283,17 +283,21 @@ class GrantStore:
             raise GrantDenied("A grant needs an actor and permissions")
         if idempotency_key is not None and not 1 <= len(idempotency_key) <= 128:
             raise GrantDenied("Idempotency keys require 1-128 characters")
-        with self._transaction():
+        with self.database.transaction() as connection:
             now = self._now()
             if not math.isfinite(expires_at) or expires_at <= now:
                 raise GrantDenied("Grant lifetime has ended")
             if idempotency_key is not None:
-                row = self._connection.execute(
-                    "SELECT grant_id FROM grant_requests WHERE principal = ? AND request_key = ?",
-                    (principal, idempotency_key),
-                ).fetchone()
+                row = (
+                    connection.execute(
+                        text("SELECT grant_id FROM grant_requests WHERE principal = :principal AND request_key = :key"),
+                        {"principal": principal, "key": idempotency_key},
+                    )
+                    .mappings()
+                    .first()
+                )
                 if row is not None:
-                    existing, _ = self._active(row["grant_id"], now)
+                    existing, _ = self._active(connection, row["grant_id"], now)
                     if (
                         existing.actor != actor
                         or existing.parent_id != parent_id
@@ -317,7 +321,7 @@ class GrantStore:
                         raise GrantDenied("Standing authority does not allow delegation")
                     depth -= 1
             else:
-                parent, root = self._active(parent_id, now)
+                parent, root = self._active(connection, parent_id, now)
                 if principal != parent.actor:
                     raise GrantDenied("Only the parent grant's actor may delegate it")
                 if parent.delegation_depth == 0:
@@ -340,33 +344,37 @@ class GrantStore:
                 revoked_at=None,
                 policy_revision=revision,
             )
-            self._connection.execute(
-                "INSERT INTO grants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    grant.id,
-                    grant.owner,
-                    grant.actor,
-                    _encode_permissions(grant.permissions),
-                    grant.parent_id,
-                    grant.created_by,
-                    grant.created_at,
-                    grant.expires_at,
-                    grant.delegation_depth,
-                    grant.revoked_at,
-                    grant.policy_revision,
+            connection.execute(
+                text(
+                    "INSERT INTO grants VALUES (:id, :owner, :actor, :permissions, :parent_id, :created_by, "
+                    ":created_at, :expires_at, :delegation_depth, :revoked_at, :policy_revision)"
                 ),
+                {
+                    "id": grant.id,
+                    "owner": grant.owner,
+                    "actor": grant.actor,
+                    "permissions": _encode_permissions(grant.permissions),
+                    "parent_id": grant.parent_id,
+                    "created_by": grant.created_by,
+                    "created_at": grant.created_at,
+                    "expires_at": grant.expires_at,
+                    "delegation_depth": grant.delegation_depth,
+                    "revoked_at": grant.revoked_at,
+                    "policy_revision": grant.policy_revision,
+                },
             )
             if idempotency_key is not None:
-                self._connection.execute(
-                    "INSERT INTO grant_requests VALUES (?, ?, ?)", (principal, idempotency_key, grant.id)
+                connection.execute(
+                    text("INSERT INTO grant_requests VALUES (:principal, :key, :grant_id)"),
+                    {"principal": principal, "key": idempotency_key, "grant_id": grant.id},
                 )
             return grant
 
     def authorize(self, grant_id: str, *, actor: str, service: str, action: str, resource: str) -> Grant:
         """Authorize one concrete service operation against current grant state."""
         _validate_resource(resource, prefix=False)
-        with self._transaction():
-            grant, root = self._active(grant_id, self._now())
+        with self.database.transaction() as connection:
+            grant, root = self._active(connection, grant_id, self._now())
             if actor != grant.actor or not permissions_allow(
                 grant.permissions, service=service, action=action, resource=resource
             ):
@@ -377,10 +385,11 @@ class GrantStore:
 
     def revoke(self, grant_id: str, *, principal: str) -> None:
         """Stop authority and future refresh for this grant and its descendants."""
-        with self._transaction():
-            grant = self._get(grant_id)
+        with self.database.transaction() as connection:
+            grant = self._get(connection, grant_id)
             if principal not in (grant.owner, grant.created_by, grant.actor):
                 raise GrantDenied("Principal cannot revoke this grant")
-            self._connection.execute(
-                "UPDATE grants SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?", (self._now(), grant_id)
+            connection.execute(
+                text("UPDATE grants SET revoked_at = COALESCE(revoked_at, :now) WHERE id = :id"),
+                {"now": self._now(), "id": grant_id},
             )

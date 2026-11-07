@@ -33,6 +33,7 @@ from rigging.secrets import (
     secret_file_environment,
     validate_secret_name,
 )
+from rigging.shared_grants import SHARED_GRANT_TOKEN_SECRET
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.k8s.output_contract import (
@@ -1033,6 +1034,16 @@ def _build_pod_manifest(
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
+    if (
+        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+        and SHARED_GRANT_TOKEN_SECRET in run_req.environment.secrets
+    ):
+        container["securityContext"] = {
+            "capabilities": {"drop": ["ALL"]},
+            "allowPrivilegeEscalation": False,
+            "runAsNonRoot": True,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
 
     if resources:
         container["resources"] = resources

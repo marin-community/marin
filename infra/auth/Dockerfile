@@ -13,6 +13,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
-COPY infra/auth/service.py infra/auth/loom.py infra/auth/openfga.py /app/infra/auth/
+COPY infra/auth/service.py infra/auth/loom.py infra/auth/openfga.py infra/auth/iris.py infra/auth/secret_bindings.py /app/infra/auth/
 USER 1000:1000
 CMD ["python", "-m", "infra.auth.service", "--config", "/etc/marin-auth/policy.yaml", "--host", "0.0.0.0", "--port", "8090"]

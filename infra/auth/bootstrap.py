@@ -53,6 +53,7 @@ class OperatorClient:
             raise ValueError("The OpenBao operator API address must use HTTPS")
         self.address = address.rstrip("/")
         self.token = token
+        self.ca_file = ca_file
         context = ssl.create_default_context(cafile=ca_file)
         self.opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), RejectRedirects())
 

@@ -4,19 +4,18 @@
 """Launch through Loom's shared-grant API and reconcile runtime grant lifetime."""
 
 import logging
-import sqlite3
-import threading
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 import requests
 from rigging.auth import TokenProvider
+from rigging.grant_database import GrantDatabase
 from rigging.grants import Grant, GrantDenied
 from rigging.shared_grants import authority_origin
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class LoomGrantService(Protocol):
@@ -56,7 +55,7 @@ class LoomLauncher:
 
     def __init__(
         self,
-        database: Path,
+        database: GrantDatabase,
         *,
         base_url: str,
         observer_tokens: TokenProvider,
@@ -72,25 +71,17 @@ class LoomLauncher:
         self.session = session
         self.timeout = timeout
         self._now = now
-        self._lock = threading.RLock()
-        with self._connect() as db:
+        with self.database.transaction() as db:
             db.execute(
-                "CREATE TABLE IF NOT EXISTS loom_grant_runs ("
-                "grant_id TEXT PRIMARY KEY, actor TEXT NOT NULL, principal TEXT NOT NULL, "
-                "template TEXT NOT NULL, title TEXT NOT NULL, goal TEXT NOT NULL, requested_at REAL NOT NULL, "
-                "run_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '', "
-                "status TEXT NOT NULL DEFAULT 'pending')"
+                text(
+                    "CREATE TABLE IF NOT EXISTS loom_grant_runs ("
+                    "grant_id TEXT PRIMARY KEY, actor TEXT NOT NULL, principal TEXT NOT NULL, "
+                    "template TEXT NOT NULL, title TEXT NOT NULL, goal TEXT NOT NULL, "
+                    "requested_at DOUBLE PRECISION NOT NULL, "
+                    "run_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '', "
+                    "status TEXT NOT NULL DEFAULT 'pending')"
+                )
             )
-
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        db = sqlite3.connect(self.database, timeout=self.timeout)
-        db.row_factory = sqlite3.Row
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
 
     def _post(self, operation: str, payload: dict, *, token: str | None = None):
         bearer = token if token is not None else self.observer_tokens.get_token()
@@ -110,20 +101,34 @@ class LoomLauncher:
 
     def launch(self, token: str, *, template: str, title: str, goal: str) -> LoomRun:
         """Authorize before delivery; Loom rechecks the signed grant before launch."""
-        with self._lock:
-            grant = self.grants.authorize(token, audience="loom", action="session.create", resource=f"/{template}/")
-            with self._connect() as db:
-                db.execute("BEGIN IMMEDIATE")
+        grant = self.grants.authorize(token, audience="loom", action="session.create", resource=f"/{template}/")
+        with self.database.serialize(f"loom-grant:{grant.id}"):
+            with self.database.transaction() as db:
                 db.execute(
-                    "INSERT OR IGNORE INTO loom_grant_runs "
-                    "(grant_id, actor, principal, template, title, goal, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (grant.id, grant.actor, grant.created_by, template, title, goal, self._now()),
+                    text(
+                        "INSERT INTO loom_grant_runs "
+                        "(grant_id, actor, principal, template, title, goal, requested_at) "
+                        "VALUES (:id, :actor, :principal, :template, :title, :goal, :now) "
+                        "ON CONFLICT (grant_id) DO NOTHING"
+                    ),
+                    {
+                        "id": grant.id,
+                        "actor": grant.actor,
+                        "principal": grant.created_by,
+                        "template": template,
+                        "title": title,
+                        "goal": goal,
+                        "now": self._now(),
+                    },
                 )
-                row = db.execute("SELECT * FROM loom_grant_runs WHERE grant_id = ?", (grant.id,)).fetchone()
+                row = (
+                    db.execute(text("SELECT * FROM loom_grant_runs WHERE grant_id = :id"), {"id": grant.id})
+                    .mappings()
+                    .one()
+                )
                 run = LoomRun(**dict(row))
                 if (run.template, run.title, run.goal, run.actor) != (template, title, goal, grant.actor):
                     raise ValueError("A grant already belongs to a different Loom launch")
-                db.commit()
             if run.status != "pending":
                 return run
             result = self._post(
@@ -138,25 +143,71 @@ class LoomLauncher:
             )
             return self._record_result(run, result)
 
-    def observe(self, grant: Grant, template: str) -> None:
-        """Register a native launch before issuing its runtime credential."""
-        # Do not take the HTTP session lock: the launch thread may be waiting
+    def observe(self, grant: Grant, template: str, run_id: str, session_id: str) -> None:
+        """Bind credentials to an actual, authenticated native launch reservation."""
+        try:
+            result = self._post("runs/get", {"id": run_id})
+        except requests.HTTPError as error:
+            if error.response.status_code == 404:
+                raise GrantDenied("Loom has no matching launch reservation") from None
+            raise
+        expected = {
+            "id": run_id,
+            "shared_grant_id": grant.id,
+            "actor_subject": grant.actor,
+            "profile": template,
+            "status": "creating",
+            "session_id": session_id,
+        }
+        if (
+            not run_id
+            or not session_id
+            or not isinstance(result, dict)
+            or any(result.get(key) != value for key, value in expected.items())
+        ):
+            raise GrantDenied("Loom has no matching launch reservation")
+        # Do not take the launch operation lock: the launch thread may be waiting
         # for Loom, which calls this endpoint before returning that response.
-        with self._connect() as db:
+        with self.database.transaction() as db:
             db.execute(
-                "INSERT OR IGNORE INTO loom_grant_runs "
-                "(grant_id, actor, principal, template, title, goal, requested_at) VALUES (?, ?, ?, ?, '', '', ?)",
-                (grant.id, grant.actor, grant.created_by, template, self._now()),
+                text(
+                    "INSERT INTO loom_grant_runs "
+                    "(grant_id, actor, principal, template, title, goal, requested_at) "
+                    "VALUES (:id, :actor, :principal, :template, '', '', :now) ON CONFLICT (grant_id) DO NOTHING"
+                ),
+                {
+                    "id": grant.id,
+                    "actor": grant.actor,
+                    "principal": grant.created_by,
+                    "template": template,
+                    "now": self._now(),
+                },
             )
-            row = db.execute("SELECT * FROM loom_grant_runs WHERE grant_id = ?", (grant.id,)).fetchone()
-            if (row["actor"], row["principal"], row["template"]) != (grant.actor, grant.created_by, template):
+            row = (
+                db.execute(text("SELECT * FROM loom_grant_runs WHERE grant_id = :id"), {"id": grant.id}).mappings().one()
+            )
+            if (
+                (row["actor"], row["principal"], row["template"]) != (grant.actor, grant.created_by, template)
+                or (row["run_id"] and row["run_id"] != run_id)
+                or (row["session_id"] and row["session_id"] != session_id)
+                or row["status"] == "cleaned"
+            ):
                 raise GrantDenied("The grant is already bound to a different Loom launch")
+            db.execute(
+                text(
+                    "UPDATE loom_grant_runs SET run_id = :run_id, session_id = :session_id, status = 'creating' "
+                    "WHERE grant_id = :id"
+                ),
+                {"run_id": run_id, "session_id": session_id, "id": grant.id},
+            )
 
     def _record_result(self, run: LoomRun, result: dict) -> LoomRun:
         fields = ("shared_grant_id", "actor_subject", "profile", "id", "session_id", "status")
         if not isinstance(result, dict) or any(not isinstance(result.get(name), str) for name in fields):
             raise InvalidLoomRun("Loom returned malformed run metadata")
-        if not all(result[name] for name in fields):
+        if not all(result[name] for name in fields if name != "session_id") or (
+            not result["session_id"] and result["status"] not in {"creating", "failed", "cancelled"}
+        ):
             raise InvalidLoomRun("Loom returned incomplete run metadata")
         if result["status"] not in _NATIVE_STATUS:
             raise InvalidLoomRun("Loom returned an unknown run status")
@@ -168,38 +219,88 @@ class LoomLauncher:
             raise InvalidLoomRun("Loom returned a run belonging to another grant, actor, or profile")
         if (run.run_id and result["id"] != run.run_id) or (run.session_id and result["session_id"] != run.session_id):
             raise InvalidLoomRun("Loom changed the recorded run or session identity")
-        with self._connect() as db:
-            db.execute(
-                "UPDATE loom_grant_runs SET run_id = ?, session_id = ?, status = ? WHERE grant_id = ?",
-                (result["id"], result["session_id"], result["status"], run.grant_id),
+        with self.database.transaction() as db:
+            current = (
+                db.execute(text("SELECT * FROM loom_grant_runs WHERE grant_id = :id"), {"id": run.grant_id})
+                .mappings()
+                .one()
             )
-            row = db.execute("SELECT * FROM loom_grant_runs WHERE grant_id = ?", (run.grant_id,)).fetchone()
+            if current["status"] == "cleaned":
+                return LoomRun(**dict(current))
+            if (current["run_id"] and current["run_id"] != result["id"]) or (
+                current["session_id"] and current["session_id"] != result["session_id"]
+            ):
+                raise InvalidLoomRun("Loom changed the recorded run or session identity")
+            status = current["status"] if current["status"] in _TERMINAL else result["status"]
+            db.execute(
+                text(
+                    "UPDATE loom_grant_runs SET run_id = :run_id, session_id = :session_id, status = :status "
+                    "WHERE grant_id = :id"
+                ),
+                {"run_id": result["id"], "session_id": result["session_id"], "status": status, "id": run.grant_id},
+            )
+            row = (
+                db.execute(text("SELECT * FROM loom_grant_runs WHERE grant_id = :id"), {"id": run.grant_id})
+                .mappings()
+                .one()
+            )
         return LoomRun(**dict(row))
 
     def reconcile(self) -> list[LoomRun]:
-        """Revoke finished grants and archive revoked runs, including after restart."""
-        with self._lock:
-            with self._connect() as db:
-                rows = db.execute("SELECT * FROM loom_grant_runs WHERE status != 'cleaned'").fetchall()
+        """Revoke finished grants and archive runs under one replica's leadership."""
+        with self.database.leadership("loom-lifecycle") as leader:
+            if not leader:
+                return []
+            with self.database.transaction() as db:
+                rows = (
+                    db.execute(
+                        text("SELECT * FROM loom_grant_runs WHERE status != 'cleaned' ORDER BY requested_at, grant_id")
+                    )
+                    .mappings()
+                    .all()
+                )
             pending = []
             for row in rows:
-                run = LoomRun(**dict(row))
-                try:
-                    self._retire_local_authority(run)
-                    pending.append(run)
-                except (ValueError, KeyError, TypeError, OSError, sqlite3.Error):
-                    logger.exception("Loom local retirement failed for grant %s; retrying later", run.grant_id)
+                with self.database.serialize(f"loom-grant:{row['grant_id']}"):
+                    with self.database.transaction() as db:
+                        current = (
+                            db.execute(
+                                text("SELECT * FROM loom_grant_runs WHERE grant_id = :id"), {"id": row["grant_id"]}
+                            )
+                            .mappings()
+                            .one()
+                        )
+                    run = LoomRun(**dict(current))
+                    if run.status == "cleaned":
+                        continue
+                    try:
+                        self._retire_local_authority(run)
+                        pending.append(run)
+                    except (ValueError, KeyError, TypeError, OSError, SQLAlchemyError):
+                        logger.exception("Loom local retirement failed for grant %s; retrying later", run.grant_id)
             observed = []
             for run in pending:
-                try:
-                    observed.append(self._reconcile_run(run))
-                except (requests.RequestException, ValueError, KeyError, TypeError, OSError, sqlite3.Error):
-                    logger.exception("Loom lifecycle reconciliation failed for grant %s", run.grant_id)
+                with self.database.serialize(f"loom-grant:{run.grant_id}"):
+                    with self.database.transaction() as db:
+                        row = (
+                            db.execute(text("SELECT * FROM loom_grant_runs WHERE grant_id = :id"), {"id": run.grant_id})
+                            .mappings()
+                            .one()
+                        )
+                    run = LoomRun(**dict(row))
+                    if run.status == "cleaned":
+                        continue
+                    try:
+                        observed.append(self._reconcile_run(run))
+                    except (requests.RequestException, ValueError, KeyError, TypeError, OSError, SQLAlchemyError):
+                        logger.exception("Loom lifecycle reconciliation failed for grant %s", run.grant_id)
             return observed
 
     def _retire_local_authority(self, run: LoomRun) -> bool:
         """Revoke local authority if retirement is due; return whether cleanup is needed."""
-        unbound = not run.run_id and self._now() - run.requested_at >= UNBOUND_GRANT_TTL
+        unbound = (not run.session_id or run.status in {"pending", "creating"}) and (
+            self._now() - run.requested_at >= UNBOUND_GRANT_TTL
+        )
         retiring = unbound or run.status in _TERMINAL or not self.grants.active(run.grant_id, run.actor)
         if retiring:
             # Credential authority must end even while discovery or archival is unavailable.
@@ -244,5 +345,5 @@ class LoomLauncher:
             except requests.HTTPError as error:
                 if error.response.status_code != 404:
                     raise
-        with self._connect() as db:
-            db.execute("UPDATE loom_grant_runs SET status = 'cleaned' WHERE grant_id = ?", (run.grant_id,))
+        with self.database.transaction() as db:
+            db.execute(text("UPDATE loom_grant_runs SET status = 'cleaned' WHERE grant_id = :id"), {"id": run.grant_id})

@@ -65,9 +65,11 @@ non-secret standing-policy ConfigMap. Runtime session grants belong to the
 broker database. CoreWeave storage identity policies remain in `infra/buckets`;
 job and session launches do not update Pulumi.
 
-`infra/postgres` owns a disposable CloudNativePG authorization prototype on CW,
-including its operator installation and database. Its lifecycle is independent
-of `infra/auth`; it is not the production database deployment.
+`infra/postgres` owns isolated CloudNativePG authorization prototypes on CW,
+including their operator installation and databases. The disposable trial and
+retained synthetic auth staging use separate stacks and namespaces. Their
+lifecycle is independent of `infra/auth`; neither is a production database
+deployment.
 
 A small internal web app (a browser UI over a database or an API, used by the
 team) does not need its own project at all: keep its source under

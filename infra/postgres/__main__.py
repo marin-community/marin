@@ -6,8 +6,6 @@
 import pulumi
 import pulumi_kubernetes as k8s
 
-NAMESPACE = "marin-pg-trial"
-CLUSTER = "auth-postgres"
 CHART_VERSION = "0.29.1"
 OPERATOR_IMAGE = "1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07"
 POSTGRES_IMAGE = (
@@ -27,6 +25,11 @@ def scope_operator(resource: dict, _options: pulumi.ResourceOptions) -> None:
 
 
 config = pulumi.Config("marin-postgres-trial")
+NAMESPACE = config.get("namespace") or "marin-pg-trial"
+CLUSTER = config.get("cluster") or "auth-postgres"
+if NAMESPACE not in {"marin-pg-trial", "marin-auth-db-staging"}:
+    raise ValueError("Only isolated trial and auth staging namespaces are supported")
+retained = NAMESPACE == "marin-auth-db-staging"
 context = config.require("kubernetes_context")
 if context != "marin_US-WEST-04A":
     raise ValueError("The PostgreSQL prototype is restricted to the approved us-west4 cluster")
@@ -40,7 +43,7 @@ namespace = k8s.core.v1.Namespace(
         "name": NAMESPACE,
         "labels": {"pod-security.kubernetes.io/enforce": "restricted", "app.kubernetes.io/part-of": NAMESPACE},
     },
-    opts=pulumi.ResourceOptions(provider=provider),
+    opts=pulumi.ResourceOptions(provider=provider, protect=retained, retain_on_delete=retained),
 )
 scoped = pulumi.ResourceOptions(provider=provider, depends_on=[namespace])
 network = k8s.networking.v1.NetworkPolicy(
@@ -70,6 +73,24 @@ network = k8s.networking.v1.NetworkPolicy(
     },
     opts=scoped,
 )
+if retained:
+    k8s.networking.v1.NetworkPolicy(
+        "auth-database-clients",
+        metadata={"namespace": NAMESPACE},
+        spec={
+            "pod_selector": {"match_labels": {"cnpg.io/cluster": CLUSTER}},
+            "policy_types": ["Ingress"],
+            "ingress": [
+                {
+                    "from": [
+                        {"namespace_selector": {"match_labels": {"kubernetes.io/metadata.name": "marin-auth-staging"}}}
+                    ],
+                    "ports": [{"protocol": "TCP", "port": 5432}],
+                }
+            ],
+        },
+        opts=scoped,
+    )
 admission = k8s.networking.v1.NetworkPolicy(
     "admission",
     metadata={"namespace": NAMESPACE},
@@ -88,7 +109,7 @@ operator = k8s.helm.v3.Chart(
         namespace=NAMESPACE,
         fetch_opts=k8s.helm.v3.FetchOpts(repo="https://cloudnative-pg.github.io/charts"),
         values={
-            "fullnameOverride": "marin-pg-trial",
+            "fullnameOverride": NAMESPACE,
             "config": {"clusterWide": False},
             "image": {"tag": OPERATOR_IMAGE},
             "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "512Mi"}},
@@ -107,6 +128,23 @@ database = k8s.apiextensions.CustomResource(
         "imageName": POSTGRES_IMAGE,
         "enableSuperuserAccess": False,
         "bootstrap": {"initdb": {"database": "authproof", "owner": "authproof"}},
+        **(
+            {
+                "managed": {
+                    "roles": [
+                        {
+                            "name": name,
+                            "ensure": "present",
+                            "login": True,
+                            "passwordSecret": {"name": f"{name}-database"},
+                        }
+                        for name in ("openfga", "grants")
+                    ]
+                }
+            }
+            if retained
+            else {}
+        ),
         "storage": {"storageClass": storage_class, "size": "5Gi"},
         "resources": {"requests": {"cpu": "500m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "1Gi"}},
         "affinity": {
@@ -130,8 +168,20 @@ database = k8s.apiextensions.CustomResource(
             "pg_hba": ["hostnossl all all 0.0.0.0/0 reject", "hostnossl all all ::/0 reject"],
         },
     },
-    opts=pulumi.ResourceOptions(provider=provider, depends_on=operator.ready),
+    opts=pulumi.ResourceOptions(
+        provider=provider, depends_on=operator.ready, protect=retained, retain_on_delete=retained
+    ),
 )
+if retained:
+    for name in ("openfga", "grants", "openfga-recovery", "grants-recovery"):
+        k8s.apiextensions.CustomResource(
+            f"{name}-database",
+            api_version="postgresql.cnpg.io/v1",
+            kind="Database",
+            metadata={"name": name, "namespace": NAMESPACE},
+            spec={"name": name, "owner": name.removesuffix("-recovery"), "cluster": {"name": CLUSTER}},
+            opts=pulumi.ResourceOptions(provider=provider, depends_on=[database], protect=True, retain_on_delete=True),
+        )
 pulumi.export("namespace", NAMESPACE)
 pulumi.export("cluster", CLUSTER)
 pulumi.export("primary_service", f"{CLUSTER}-rw.{NAMESPACE}.svc")

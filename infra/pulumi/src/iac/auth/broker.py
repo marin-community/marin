@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deployment-owned grant policy and a singleton broker with a durable runtime ledger."""
+"""Deployment-owned grant policy and brokers sharing a durable runtime ledger."""
 
 import hashlib
 from dataclasses import dataclass
@@ -45,6 +45,10 @@ class GrantBrokerArgs:
     client_pod_labels: dict[str, str]
     dns_cidrs: tuple[str, ...]
     https_egress_cidrs: tuple[str, ...]
+    database_secret: str | None = None
+    database_cidrs: tuple[str, ...] = ()
+    replicas: int = 1
+    database_namespace: str | None = None
 
 
 class GrantBroker(pulumi.ComponentResource):
@@ -65,8 +69,15 @@ class GrantBroker(pulumi.ComponentResource):
             raise ValueError("Grant broker requires explicit client pod labels")
         if {"ca", "tls"} & set(args.token_secret_names):
             raise ValueError("Token Secret names ca and tls conflict with broker TLS mounts")
-        if args.policy["database"] != DATABASE_PATH:
-            raise ValueError("Grant broker must store its runtime ledger on the retained PVC")
+        database = args.policy["database"]
+        postgres = database["backend"] == "postgres"
+        if postgres:
+            if not args.database_secret or not (args.database_cidrs or args.database_namespace):
+                raise ValueError("PostgreSQL brokers require external database credentials and destination CIDRs")
+            if database["url_file"] != f"{TOKEN_DIRECTORY}/database/url":
+                raise ValueError("The database URL must use the private external Secret mount")
+        elif database != {"backend": "sqlite", "path": DATABASE_PATH} or args.replicas != 1:
+            raise ValueError("SQLite requires the retained PVC and exactly one broker")
         if args.policy["ca_bundle"] != f"{TOKEN_DIRECTORY}/ca/ca.crt":
             raise ValueError("Grant broker must verify service TLS using the mounted CA bundle")
         expected_paths = {f"{TOKEN_DIRECTORY}/{secret}/token" for secret in args.token_secret_names}
@@ -74,13 +85,16 @@ class GrantBroker(pulumi.ComponentResource):
             args.policy["broker_token_file"],
             args.policy["openfga"]["token_file"],
             *(binding["token_file"] for binding in args.policy["storage"]),
+            *(binding["token_file"] for binding in args.policy.get("secrets", [])),
         ]
         if args.policy["loom"] is not None:
-            configured_paths.append(args.policy["loom"]["observer_token_file"])
+            configured_paths.extend(
+                (args.policy["loom"]["observer_token_file"], args.policy["loom"]["callback_token_file"])
+            )
         if len(set(configured_paths)) != len(configured_paths):
-            raise ValueError("Broker signing, storage, and Loom observer tokens require distinct files")
+            raise ValueError("Broker signing, storage, secret and Loom observer tokens require distinct files")
         if set(configured_paths) != expected_paths:
-            raise ValueError("Every broker/storage token file must correspond to an explicit external Secret mount")
+            raise ValueError("Every broker/provider token file must correspond to an explicit external Secret mount")
         child = pulumi.ResourceOptions(parent=self, provider=k8s_provider)
         policy_json = pulumi.Output.json_dumps(args.policy, sort_keys=True)
         config = k8s.core.v1.ConfigMap(
@@ -111,7 +125,8 @@ class GrantBroker(pulumi.ComponentResource):
             metadata={"name": "marin-auth", "namespace": args.namespace},
             spec={
                 "service_name": "marin-auth",
-                "replicas": 1,
+                "replicas": args.replicas,
+                "pod_management_policy": "Parallel",
                 "update_strategy": {"type": "RollingUpdate"},
                 "persistent_volume_claim_retention_policy": {"when_deleted": "Retain", "when_scaled": "Retain"},
                 "selector": {"match_labels": BROKER_LABELS},
@@ -167,7 +182,18 @@ class GrantBroker(pulumi.ComponentResource):
                                 },
                                 "liveness_probe": {"tcp_socket": {"port": "https"}, "initial_delay_seconds": 30},
                                 "volume_mounts": [
-                                    {"name": "data", "mount_path": "/var/lib/marin-auth"},
+                                    *([] if postgres else [{"name": "data", "mount_path": "/var/lib/marin-auth"}]),
+                                    *(
+                                        [
+                                            {
+                                                "name": "database",
+                                                "mount_path": f"{TOKEN_DIRECTORY}/database",
+                                                "read_only": True,
+                                            }
+                                        ]
+                                        if postgres
+                                        else []
+                                    ),
                                     {"name": "policy", "mount_path": "/etc/marin-auth", "read_only": True},
                                     {"name": "ca", "mount_path": f"{TOKEN_DIRECTORY}/ca", "read_only": True},
                                     {"name": "tls", "mount_path": f"{TOKEN_DIRECTORY}/tls", "read_only": True},
@@ -187,20 +213,38 @@ class GrantBroker(pulumi.ComponentResource):
                             },
                             {"name": "tls", "secret": {"secret_name": args.listener_tls_secret, "default_mode": 0o440}},
                             {"name": "tmp", "empty_dir": {}},
+                            *(
+                                [
+                                    {
+                                        "name": "database",
+                                        "secret": {
+                                            "secret_name": args.database_secret,
+                                            "default_mode": 0o440,
+                                            "items": [{"key": "url", "path": "url"}],
+                                        },
+                                    }
+                                ]
+                                if postgres
+                                else []
+                            ),
                             *token_volumes,
                         ],
                     },
                 },
-                "volume_claim_templates": [
-                    {
-                        "metadata": {"name": "data"},
-                        "spec": {
-                            "access_modes": ["ReadWriteOnce"],
-                            "storage_class_name": args.storage_class,
-                            "resources": {"requests": {"storage": args.storage_size}},
-                        },
-                    }
-                ],
+                "volume_claim_templates": (
+                    []
+                    if postgres
+                    else [
+                        {
+                            "metadata": {"name": "data"},
+                            "spec": {
+                                "access_modes": ["ReadWriteOnce"],
+                                "storage_class_name": args.storage_class,
+                                "resources": {"requests": {"storage": args.storage_size}},
+                            },
+                        }
+                    ]
+                ),
             },
             opts=pulumi.ResourceOptions(parent=self, provider=k8s_provider, protect=True, retain_on_delete=True),
         )
@@ -229,6 +273,32 @@ class GrantBroker(pulumi.ComponentResource):
                         "ports": [{"port": 8443}],
                     },
                     dns_egress(args.dns_cidrs),
+                    *(
+                        [
+                            {
+                                "to": [
+                                    *({"ip_block": {"cidr": cidr}} for cidr in args.database_cidrs),
+                                    *(
+                                        [
+                                            {
+                                                "namespace_selector": {
+                                                    "match_labels": {
+                                                        "kubernetes.io/metadata.name": args.database_namespace
+                                                    }
+                                                },
+                                                "pod_selector": {"match_labels": {"cnpg.io/podRole": "instance"}},
+                                            }
+                                        ]
+                                        if args.database_namespace
+                                        else []
+                                    ),
+                                ],
+                                "ports": [{"port": 5432}],
+                            }
+                        ]
+                        if postgres
+                        else []
+                    ),
                     *(
                         [
                             {

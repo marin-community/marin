@@ -7,7 +7,6 @@ import pulumi
 import pulumi_kubernetes as k8s
 from iac.auth.broker import (
     BROKER_LABELS,
-    DATABASE_PATH,
     TOKEN_DIRECTORY,
     GrantBroker,
     GrantBrokerArgs,
@@ -15,10 +14,16 @@ from iac.auth.broker import (
 )
 from iac.auth.openbao import OpenBao, OpenBaoArgs
 from iac.auth.openfga import OpenFGA, OpenFGAArgs
+from iac.auth.staging import staging_permissions
 
 
 def main() -> None:
     config = pulumi.Config("marin-auth")
+    if (
+        config.require("namespace") == "marin-auth-staging"
+        and config.require("kubernetes_context") != "marin_US-WEST-04A"
+    ):
+        raise ValueError("Synthetic auth staging is restricted to the approved CW cluster")
     provider = k8s.Provider("management", kubeconfig="", context=config.require("kubernetes_context"))
     namespace = config.require("namespace")
     service = OpenBao(
@@ -40,12 +45,21 @@ def main() -> None:
             dns_cidrs=tuple(config.require_object("dns_cidrs")),
             https_egress_cidrs=tuple(config.require_object("https_egress_cidrs")),
             replicas=config.require_int("replicas"),
+            anti_affinity=config.get("anti_affinity") or "required",
+            discovery_mode=config.get("discovery_mode") or "ingress",
         ),
         k8s_provider=provider,
     )
     pulumi.export("issuer", service.issuer)
     pulumi.export("private_api_address", service.api_address)
     pulumi.export("namespace", config.require("namespace"))
+    if namespace == "marin-auth-staging":
+        staging_permissions(
+            provider,
+            dns_cidrs=tuple(config.require_object("dns_cidrs")),
+            api_cidrs=tuple(config.require_object("kubernetes_api_cidrs")),
+            namespace_dependency=service,
+        )
     fga = OpenFGA(
         "openfga",
         OpenFGAArgs(
@@ -53,11 +67,13 @@ def main() -> None:
             image=config.require("openfga_image"),
             proxy_image=config.require("openfga_proxy_image"),
             database_secret=config.require("openfga_database_secret"),
+            database_ca_secret=config.require("openfga_database_ca_secret"),
             token_secret=config.require("openfga_token_secret"),
             tls_secret=config.require("openfga_tls_secret"),
             store_id=config.require("openfga_store_id"),
             dns_cidrs=tuple(config.require_object("dns_cidrs")),
             database_cidrs=tuple(config.require_object("openfga_database_cidrs")),
+            database_namespace=config.get("database_namespace"),
         ),
         k8s_provider=provider,
         opts=pulumi.ResourceOptions(depends_on=[service]),
@@ -74,9 +90,10 @@ def main() -> None:
             "max_token_ttl",
             "loom",
             "signing_key_version",
+            "database",
         }
-        if set(policy) != expected_fields:
-            raise ValueError(f"broker_policy must contain exactly {sorted(expected_fields)}")
+        if not expected_fields <= set(policy) or set(policy) - expected_fields - {"secrets", "iris"}:
+            raise ValueError(f"broker_policy requires {sorted(expected_fields)} and accepts optional secrets and iris")
         pulumi.export("coreweave_identities", coreweave_identity_metadata(policy["storage"]))
         if policy["openfga"]["store_id"] != config.require("openfga_store_id"):
             raise ValueError("The broker and OpenFGA gateway must use the same store")
@@ -86,7 +103,6 @@ def main() -> None:
             ca_bundle=f"{TOKEN_DIRECTORY}/ca/ca.crt",
             bao_issuer=service.issuer,
             issuer=f"https://marin-auth.{namespace}.svc:8090",
-            database=DATABASE_PATH,
         )
         broker = GrantBroker(
             "grant-broker",
@@ -103,6 +119,10 @@ def main() -> None:
                 client_pod_labels=config.require_object("broker_client_pod_labels"),
                 dns_cidrs=tuple(config.require_object("dns_cidrs")),
                 https_egress_cidrs=tuple(config.require_object("broker_https_egress_cidrs")),
+                database_secret=config.get("broker_database_secret"),
+                database_cidrs=tuple(config.get_object("broker_database_cidrs") or []),
+                replicas=config.get_int("broker_replicas") or 1,
+                database_namespace=config.get("database_namespace"),
             ),
             k8s_provider=provider,
             opts=pulumi.ResourceOptions(depends_on=[service, fga]),

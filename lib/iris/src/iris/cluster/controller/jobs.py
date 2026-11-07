@@ -491,6 +491,7 @@ class LaunchIdentity:
     received_handoff: bool
     submitting_user: str
     budget_user: str
+    shared_grant_id: str = ""
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
@@ -582,21 +583,25 @@ def _launch_identity(
     received_handoff = request.HasField("federation")
     _authorize_launch(dependencies, identity, request, context, requested_job_id, received_handoff)
     job_id = _launch_job_id(dependencies, identity, requested_job_id, received_handoff)
+    shared_grant_id = ""
     if identity is not None and identity.role == SHARED_GRANT_ROLE:
         if received_handoff:
             raise ConnectError(Code.PERMISSION_DENIED, "Shared grants cannot submit federation handoffs")
-        authorize_shared_operation(
+        access = authorize_shared_operation(
             dependencies.auth,
             context,
             action="job.submit",
             resource=job_id.to_wire(),
         )
+        assert access is not None
+        shared_grant_id = access.grant_id
     submitting_user = _launch_submitting_user(dependencies, identity, request, job_id)
     return LaunchIdentity(
         job_id=job_id,
         received_handoff=received_handoff,
         submitting_user=submitting_user,
         budget_user=job_id.user,
+        shared_grant_id=shared_grant_id,
     )
 
 
@@ -651,6 +656,8 @@ def _validate_launch_profile(
     if identity is not None and identity.role == SHARED_GRANT_ROLE:
         if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
             raise ConnectError(Code.PERMISSION_DENIED, "Shared-grant jobs require sandbox isolation")
+        if request.entrypoint.workdir_files or request.entrypoint.workdir_file_refs:
+            raise ConnectError(Code.PERMISSION_DENIED, "Shared-grant jobs require a self-contained task image")
     # Backends treat an unrecognized profile as DEFAULT, which would silently drop
     # the isolation a newer client asked for.
     if resolve_container_profile(request.container_profile) not in CONTAINER_PROFILE_VALUES:
@@ -1004,6 +1011,12 @@ def _insert_local_job(
             priority_band=priority_band,
             submitting_user=launch.submitting_user,
         )
+        if launch.shared_grant_id:
+            cur.execute(
+                jobs_table.update()
+                .where(jobs_table.c.job_id == launch.job_id)
+                .values(shared_grant_id=launch.shared_grant_id)
+            )
     dependencies.runtime.wake()
 
     with dependencies.db.read_snapshot() as snapshot:
@@ -1030,6 +1043,8 @@ def launch_job(
 
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
+    if launch.shared_grant_id and plan.disposition != SubmitDisposition.LOCAL:
+        raise ConnectError(Code.PERMISSION_DENIED, "Shared-grant jobs require local cluster execution")
     if plan.disposition == SubmitDisposition.LOCAL:
         _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)

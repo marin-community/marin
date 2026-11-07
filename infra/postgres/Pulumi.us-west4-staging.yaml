@@ -1,0 +1,9 @@
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+config:
+  marin-postgres-trial:kubernetes_context: marin_US-WEST-04A
+  marin-postgres-trial:namespace: marin-auth-db-staging
+  marin-postgres-trial:cluster: auth-postgres
+  marin-postgres-trial:storage_class: shared-vast
+  marin-postgres-trial:kubernetes_api_cidrs: [100.124.1.94/32, 10.16.0.1/32]
+  marin-postgres-trial:dns_cidrs: [10.16.0.10/32, 10.16.1.203/32, 10.16.0.30/32]
+encryptedkey: CiQAKk3j6YiFpk1nWuXuXIm9zyf+usAsZ0v9r4a7sBvwLt/BBAcSSQCdtF6i7+/FQ2H6nrT1BzKv7B8O8fHiSahhPjw8/8nKUykZlXQ85Za5qPtMffUdYqiqxaFEvNv2kbV5AoYdRiBGzj7YxKV5LVo=

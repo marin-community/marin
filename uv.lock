@@ -6226,6 +6226,7 @@ version = "0.0.0"
 source = { virtual = "infra/auth" }
 dependencies = [
     { name = "marin-rigging" },
+    { name = "pg8000" },
     { name = "uvicorn" },
 ]
 
@@ -6242,6 +6243,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "pg8000", specifier = ">=1.31" },
     { name = "uvicorn", specifier = ">=0.23.0" },
 ]
 
@@ -7507,6 +7509,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "s3fs" },
+    { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "zstandard" },
 ]
@@ -7561,6 +7564,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "starlette", specifier = ">=0.40" },
     { name = "zstandard", specifier = ">=0.22" },
 ]

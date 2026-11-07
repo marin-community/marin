@@ -129,7 +129,7 @@ def prove() -> dict:
                 issuer=origin,
                 broker_token_file=token_file,
                 signing_key_version=1,
-                database=directory / "grants.db",
+                database={"backend": "sqlite", "path": directory / "grants.db"},
                 subjects={subject: "launcher"},
                 openfga=fga_config,
                 storage=(),

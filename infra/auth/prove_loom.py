@@ -5,6 +5,7 @@
 
 import json
 import os
+import secrets
 import shlex
 import subprocess
 import time
@@ -24,6 +25,7 @@ from infra.auth.loom import LoomGrantService
 class IsolatedLoom:
     base_url: str
     observer_token_file: Path
+    callback_token_file: Path
     repo: Path
     storage_marker: Path | None
     session: requests.Session = field(repr=False)
@@ -49,11 +51,15 @@ def isolated_loom(
     executable: Path,
     source: Path,
     verify_storage_binding: str | None = None,
+    agent_command: str | None = None,
 ):
     """Yield a private Loom server, then archive its sessions and stop it on exit."""
     directory.mkdir(parents=True, exist_ok=False)
     home = directory / "home"
     repo = directory / "repo"
+    callback_token_file = directory / "callback.token"
+    callback_token_file.touch(mode=0o600, exist_ok=False)
+    callback_token_file.write_text(secrets.token_urlsafe(32))
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(
         [
@@ -75,7 +81,7 @@ def isolated_loom(
     if not fixture.is_file():
         raise FileNotFoundError(fixture)
     marker = directory / "storage-proof.json"
-    command = f"node {shlex.quote(str(fixture))}"
+    command = agent_command or f"node {shlex.quote(str(fixture))}"
     if verify_storage_binding is not None:
         wrapper = directory / "credential-agent.mjs"
         wrapper.write_text(
@@ -134,7 +140,12 @@ def isolated_loom(
             if not base_url:
                 raise TimeoutError(f"isolated Loom did not become ready: {log_path.read_text()}")
             fixture = IsolatedLoom(
-                base_url, home / "loom-token", repo, marker if verify_storage_binding is not None else None, session
+                base_url,
+                home / "loom-token",
+                callback_token_file,
+                repo,
+                marker if verify_storage_binding is not None else None,
+                session,
             )
             observer_token = fixture.post(
                 "auth/tokens/create", {"name": "isolated lifecycle observer", "expires_in_days": 1}
@@ -188,6 +199,7 @@ def run_loom_proof(
                         "public_keys": list(public_keys),
                         "authorize_url": auth_url + "/v1/authorize",
                         "credentials_url": auth_url + "/v1/loom/credentials",
+                        "callback_token_file": str(loom.callback_token_file),
                         "profiles": {
                             template_name: {
                                 "cwd": str(loom.repo),

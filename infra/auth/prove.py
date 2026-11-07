@@ -222,7 +222,7 @@ def prove(
                     "issuer": auth_url,
                     "broker_token_file": broker_file,
                     "signing_key_version": 1,
-                    "database": directory / "grants.db",
+                    "database": {"backend": "sqlite", "path": directory / "grants.db"},
                     "subjects": {subject: "launcher", other_subject: "other-session"},
                     "openfga": fga_config,
                     "storage": [
@@ -239,6 +239,7 @@ def prove(
                         {
                             "base_url": loom.base_url,
                             "observer_token_file": loom.observer_token_file,
+                            "callback_token_file": loom.callback_token_file,
                         }
                         if loom is not None
                         else None

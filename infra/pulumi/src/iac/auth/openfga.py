@@ -22,11 +22,13 @@ class OpenFGAArgs:
     image: str
     proxy_image: str
     database_secret: str
+    database_ca_secret: str
     token_secret: str
     tls_secret: str
     store_id: str
     dns_cidrs: tuple[str, ...]
     database_cidrs: tuple[str, ...]
+    database_namespace: str | None = None
 
 
 class OpenFGA(pulumi.ComponentResource):
@@ -50,7 +52,7 @@ class OpenFGA(pulumi.ComponentResource):
             raise ValueError("OpenFGA and its gateway require digest-pinned images")
         if not re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", args.store_id):
             raise ValueError("OpenFGA store_id must be an explicit ULID")
-        if not args.database_cidrs:
+        if not args.database_cidrs and not args.database_namespace:
             raise ValueError("OpenFGA requires explicit PostgreSQL destination CIDRs")
         child = pulumi.ResourceOptions(parent=self, provider=k8s_provider)
         gateway = f"""pid /tmp/nginx.pid;
@@ -60,6 +62,9 @@ http {{
   access_log off;
   client_body_temp_path /tmp/client;
   proxy_temp_path /tmp/proxy;
+  fastcgi_temp_path /tmp/fastcgi;
+  uwsgi_temp_path /tmp/uwsgi;
+  scgi_temp_path /tmp/scgi;
   server {{
     listen 8443 ssl;
     ssl_certificate /tls/tls.crt;
@@ -88,6 +93,7 @@ http {{
                 "value_from": {"secret_key_ref": {"name": args.database_secret, "key": "uri"}},
             },
         ]
+        database_ca_mount = {"name": "database-ca", "mount_path": "/var/run/postgres/ca", "read_only": True}
         security = {
             "allow_privilege_escalation": False,
             "read_only_root_filesystem": True,
@@ -119,6 +125,7 @@ http {{
                                 "image": args.image,
                                 "args": ["migrate"],
                                 "env": datastore,
+                                "volume_mounts": [database_ca_mount],
                                 "security_context": security,
                             }
                         ],
@@ -142,6 +149,7 @@ http {{
                                     },
                                 ],
                                 "security_context": security,
+                                "volume_mounts": [database_ca_mount],
                                 "resources": {
                                     "requests": {"cpu": "100m", "memory": "128Mi"},
                                     "limits": {"cpu": "1", "memory": "512Mi"},
@@ -177,6 +185,13 @@ http {{
                             },
                         ],
                         "volumes": [
+                            {
+                                "name": "database-ca",
+                                "secret": {
+                                    "secret_name": args.database_ca_secret,
+                                    "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                                },
+                            },
                             {"name": "gateway", "config_map": {"name": config.metadata["name"]}},
                             {"name": "tls", "secret": {"secret_name": args.tls_secret, "default_mode": 0o440}},
                             {"name": "tmp", "empty_dir": {}},
@@ -201,7 +216,24 @@ http {{
                 "ingress": [{"from": [{"pod_selector": {"match_labels": BROKER_LABELS}}], "ports": [{"port": 8443}]}],
                 "egress": [
                     dns_egress(args.dns_cidrs),
-                    {"to": [{"ip_block": {"cidr": cidr}} for cidr in args.database_cidrs], "ports": [{"port": 5432}]},
+                    {
+                        "to": [
+                            *({"ip_block": {"cidr": cidr}} for cidr in args.database_cidrs),
+                            *(
+                                [
+                                    {
+                                        "namespace_selector": {
+                                            "match_labels": {"kubernetes.io/metadata.name": args.database_namespace}
+                                        },
+                                        "pod_selector": {"match_labels": {"cnpg.io/podRole": "instance"}},
+                                    }
+                                ]
+                                if args.database_namespace
+                                else []
+                            ),
+                        ],
+                        "ports": [{"port": 5432}],
+                    },
                 ],
             },
             opts=child,

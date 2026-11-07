@@ -33,6 +33,7 @@ adapters, so relationship removal applies to the next protected operation.
 | Iris | `auth.shared_grants` in cluster YAML | `job.submit`, `job.read`, `job.cancel` against `/clusters/NAME/jobs/namespace/job/` |
 | Marina | `MarinaConfig.shared_grants`, or a JSON file named by `MARINA_SHARED_GRANTS_CONFIG` | `app.read`, `app.release` against `/apps/UUID/` |
 | Finelog | A `shared_grants` entry in `auth` / `--auth-policy` | `logs.query` against the server's configured `/instances/NAME/` |
+| OpenBao KV-v2 | Fixed `secrets` bindings in broker policy | `secret.read` against `/secrets/NAME/` |
 | Grafana alert bridge | A JSON file named by `LOOM_ALERT_AUTH_CONFIG` | Authenticate through OpenBao, obtain one bounded grant per alert, then launch a pinned Loom profile |
 
 Iris derives `NAME` from the controller's configured cluster name, so a grant
@@ -41,12 +42,47 @@ shared callers only on launch, individual/batch job-status and
 cancellation RPCs. It denies other RPCs and endpoint proxies. Shared launches
 require the sandbox container profile, which withholds native Iris task
 credentials. Shared callers cannot submit a job handed off from another cluster.
-Removing a grant stops
-subsequent operations, but does not itself terminate an already submitted job.
-An operator can still cancel that job using native authority. The initial Iris
-adapter does not persist the grant ID on the job or bind task
-credentials to it. Shared submission of ordinary task profiles and delegation
-from a running Loom session need that lifecycle integration before rollout.
+Removing a grant stops subsequent operations and further attempt credential
+issuance, but does not itself terminate an already submitted job. An operator
+can still cancel that job using native authority.
+
+Shared jobs persist their submitting grant ID. Execution requires an explicit
+controller workload identity and the broker's deployment-selected task profile:
+
+```yaml
+# Iris controller configuration
+auth:
+  shared_grants:
+    issuer: https://auth.example
+    public_keys: ["<pinned public PEM>"]
+    authority_url: https://auth.example
+  shared_attempts:
+    identity_token_file: /run/controller-identity/token
+```
+
+The broker's optional `iris` configuration maps each authenticated controller
+principal to one cluster, selects `permissions` and their single `audience`, and
+sets `max_attempt_ttl` to at most 60 seconds. It checks the parent's exact
+`iris/job.submit` resource before delegating those permissions. Delegation
+depth, current standing policy and ancestor revocation still apply. Requests
+cannot select another actor, task profile or cluster.
+
+Each exact attempt receives its own child grant through the
+`MARIN_GRANT_TOKEN` secret file, with `MARIN_GRANT_ID`, `MARIN_AUTH_URL` and
+`IRIS_ATTEMPT_UID` in its environment. No native Iris task token is minted.
+Kubernetes shared sandboxes require a non-root image and restricted container
+security; shared submissions accept no workspace bundle or staged workdir files.
+Private broker access requires a deployment-owned NetworkPolicy that selects
+only the intended task pods and broker destination and port.
+
+Completion, cancellation and retries retire attempt grants through a durable
+controller outbox. Broker tombstones prevent retired attempt identities from
+being reissued, including after restart or a lost issuance response. Retirement
+does not revoke the enclosing Loom grant. If a controller or broker is down,
+retirement can be delayed; existing attempt authority expires within its fixed
+60-second maximum, and refresh cannot extend that deadline. This path supports
+short CPU tasks. Queueing time counts against the bound; long-running or delayed
+tasks need a separately designed renewable attempt lease before rollout.
 
 Marina resolves named routes to stable app UUIDs and filters its app directory
 through the same checks. Release grants can update a specified UUID, including
@@ -97,14 +133,14 @@ JWKS endpoints. The API remains a ClusterIP service.
 
 The separate [CloudNativePG prototype](../postgres/README.md) exercises CW
 PostgreSQL with OpenFGA and OpenBao, including synchronous replication and
-authorization during failover. It does not replicate the broker's SQLite grant
-ledger or qualify production storage, backups, or management isolation.
+authorization during failover. Production storage, backups and management
+isolation require separate qualification.
 
-This is a deployment program, not evidence that a staging service exists.
-`Pulumi.staging.yaml` records only the namespace, capacity and shared KMS secrets
-provider. An operator must supply the environment-specific inputs below before
-preview. No service, WIF registration, or live storage exchange has been applied
-or verified by adding this program.
+`Pulumi.staging.yaml` configures a persistent synthetic auth foundation on the
+approved CW cluster. Its separate database stack, fixed synthetic identities,
+private TLS, scoped task permissions, and recovery procedures are described in
+[synthetic CW staging](STAGING.md). This shared-cluster setup does not establish
+production management isolation, publicly registered WIF, or live storage access.
 
 ## Deployment prerequisites
 
@@ -267,25 +303,30 @@ there is no generated identity or in-memory ledger fallback.
 | --- | --- |
 | `broker_storage_class` | Storage class suitable for a persistent SQLite ledger |
 | `broker_storage_size` | Explicit ledger volume capacity |
+| `broker_database_secret` | PostgreSQL mode: external Secret containing a `url` key with a `postgresql+pg8000` URL |
+| `broker_database_cidrs` / `database_namespace` | PostgreSQL destinations on TCP 5432, by explicit CIDRs or isolated CNPG namespace |
+| `broker_replicas` | Replica count; more than one requires PostgreSQL |
 | `broker_tls_secret` | External TLS Secret valid for `marin-auth.NAMESPACE.svc` and operator `localhost` access |
 | `broker_ca_secret` | Existing Secret with `ca.crt` combining internal OpenBao/Loom roots and public roots |
 | `broker_token_secrets` | Array of external Secret names, each with a `token` key |
 | `broker_client_namespace` | Namespace of isolated Loom sessions or other approved clients |
 | `broker_client_pod_labels` | Exact approved client pod labels |
 | `broker_https_egress_cidrs` | HTTPS egress destinations for public OpenBao discovery/JWKS |
-| `broker_policy` | Object with exactly the seven fields below |
+| `broker_policy` | Standing policy and database configuration described below |
 
 `broker_policy` supplies `broker_token_file`, `subjects`, `openfga`, `storage`
 and `max_token_ttl`, plus explicit `loom` (`null` or a configured Loom binding)
-and `signing_key_version` (the reviewed Transit key version);
-their exact schema is
+and `signing_key_version` (the reviewed Transit key version), plus explicit
+`database` configuration. Optional `iris` and `secrets` configure task attempts
+and fixed secret bindings. Their exact schema is
 [`ServiceConfig`](service.py). Token files must be
 `/var/run/marin-auth/SECRET-NAME/token`, matching `broker_token_secrets`. The
 signing, storage identity and Loom observer tokens must use pairwise distinct
 files and Secrets.
-When `loom` is enabled, its `observer_token_file` must also correspond to a
-listed external Secret mount containing a native Loom operator token. The
-observer rejects OpenBao credentials before making a request to Loom.
+When `loom` is enabled, `observer_token_file` and `callback_token_file` require
+separate external Secret mounts. The observer uses a native Loom operator token;
+the callback credential is a separate random secret shared only with the Loom
+server. The observer rejects OpenBao credentials before making a request to Loom.
 `subjects` maps authenticated OpenBao entity UUIDs to stable principals.
 `openfga` contains `api_url`, `store_id`, `model_id`, `token_file`, and trusted
 `principals` (`principal`, `owner`, `max_ttl`, `delegation_depth`). The stack
@@ -303,11 +344,10 @@ provider policies and the runtime's capability checks use the same declaration.
 
 Pulumi manages the remaining `ServiceConfig` fields: the actual private
 OpenBao service address and public issuer, `ca_bundle` pointing to a CA-only
-projection from `broker_ca_secret`, the retained database path
-`/var/lib/marin-auth/grants.db`, and issuer
+projection from `broker_ca_secret`, and issuer
 `https://marin-auth.NAMESPACE.svc:8090`. It publishes this policy in a ConfigMap
 and mounts external Secret files without reading their values. Runtime grant
-creation, attenuation and revocation update only SQLite. They cannot alter the
+creation, attenuation and revocation update only the selected runtime database. They cannot alter the
 ConfigMap, OpenBao ACLs or provider policies.
 
 The combined CA bundle must verify the private OpenBao listener, public OpenBao
@@ -315,11 +355,11 @@ issuer/JWKS endpoint and private Loom TLS proxy. A listener-only private CA
 cannot verify the public issuer certificate. The broker uses this same explicit
 bundle for observer requests to Loom; no TLS verification is disabled.
 
-The broker is a restricted, single-replica StatefulSet. Its PVC and ledger
-survive a process restart; do not scale it above one or share this SQLite file
-across broker processes. Configuration changes update a pod-template hash and
-trigger a singleton `RollingUpdate`: Kubernetes stops the old process before
-starting its replacement on the same PVC. Changing the pinned OpenFGA model ID,
+The broker is a restricted StatefulSet. PostgreSQL mode mounts the external URL
+Secret and verified CA, without a ledger PVC; multiple replicas share the grant
+and lifecycle tables. SQLite mode uses the retained `/var/lib/marin-auth/grants.db`
+PVC and requires exactly one replica. Configuration changes update a pod-template
+hash and trigger a `RollingUpdate`. Changing the pinned OpenFGA model ID,
 provider mappings, or principal limits changes the revision. Standing relationship
 changes are checked live and do not themselves change the revision. A rollout
 with a new bundle invalidates **all existing grants**. The lifecycle reconciler
@@ -429,7 +469,8 @@ A scope object contains the service, action, and canonical resource path. Thus
 are different objects. The double slash separates the action from an absolute
 resource path. The adapter's action space is `loom.session.create`,
 `iris.job.submit`, `iris.job.read`, `iris.job.cancel`, `finelog.logs.query`, `finelog.logs.ingest`,
-`marina.app.read`, `marina.app.release`, and `cw_s3.credentials.issue`.
+`marina.app.read`, `marina.app.release`, `cw_s3.credentials.issue`, and
+`openbao.secret.read`.
 Unknown actions and malformed resources deny access. The application adapter
 table above lists the handlers currently protected by
 shared grants. Other actions remain unavailable to shared callers.
@@ -478,12 +519,28 @@ node is not a proof about every descendant of that node.
 Pulumi deploys OpenFGA and publishes the pinned store/model references, trusted
 OpenBao principal mappings and provider mappings. The operator reconciles
 reviewed standing relationships using the native OpenFGA API. `POST /v1/grants` authenticates its bearer as an OpenBao
-identity and writes the approved runtime grant to SQLite. Owner comes from
+identity and writes the approved runtime grant to the configured database. Owner comes from
 trusted principal data. A child grant can reduce actions, prefixes, lifetime and
 delegation depth and must still pass current policy. Live checks require the
 entire ancestor chain to remain active. They query OpenFGA using the original
 granting principal and enforce the current actor's grant ceiling separately;
 an attribution owner does not confer that owner's permissions.
+
+The service selects its runtime database explicitly:
+
+```yaml
+database:
+  backend: postgres
+  url_file: /var/run/marin-auth/database/url
+  ca_file: /var/run/marin-auth/ca/ca.crt
+```
+
+The private file contains a `postgresql+pg8000://` URL; the service verifies the
+server certificate and hostname against `ca_file` (or system roots if omitted).
+Grant records, idempotency keys and Loom launch intent share this database.
+PostgreSQL transaction locks serialize issuance, ancestor checks and revocation
+across replicas. Local operation selects `database: {backend: sqlite, path: /private/grants.db}`
+and runs one broker. Existing SQLite ledgers are not imported automatically.
 
 `POST /oauth/token` follows [OAuth Token Exchange](https://www.rfc-editor.org/rfc/rfc8693.html):
 form fields name the subject token, token type, exact audience and grant ID.
@@ -499,24 +556,38 @@ For an operation, the receiving handler constructs its action and resource and
 calls `POST /v1/authorize` with the presented bearer. The broker checks token
 bounds, live grant state, current OpenFGA permissions and revision. A successful
 decision returns matching grant/actor/owner metadata; it grants no authority to
-other operations. Iris, Finelog and Marina have schema entries but do not yet
-enforce these grants in their existing handlers.
+other operations.
 
 Enable Loom lifecycle integration with an explicit `loom` policy object
-containing `base_url` and `observer_token_file`. Set `loom: null` to disable
+containing `base_url`, `observer_token_file` and `callback_token_file`. Set `loom: null` to disable
 Loom launch and runtime credential issuance.
 `POST /v1/loom/launch` accepts only a Loom-audience grant token and the chosen
 template, title and goal. It forwards the original shared token to native Loom.
 Loom verifies that token, pins a restricted, strict, environment-cleared profile
 and repository from its own configuration, and obtains runtime credentials from
-`POST /v1/loom/credentials`. Credential injection is an internal launch step;
-callers cannot supply environment values, repository paths or profile overrides.
+`POST /v1/loom/credentials`. This callback requires the separate
+`X-Marin-Loom-Callback` service credential and the reserved native `run_id`, as
+well as the launch bearer. The broker verifies the exact creating run through
+its observer before issuing credentials; a launch bearer alone cannot exchange
+runtime authority. The callback secret never enters the agent environment.
+Callers cannot supply environment values, repository paths or profile overrides.
 Loom creates one run per grant, records its shared grant ID, and keeps bearer
 credentials out of its stored request and profile. Shared-auth mode requires
 credentials for loopback administration too.
 
-Run/session IDs and launch intent live in a separate SQLite ledger on the same
-retained volume. Repeated delivery uses one durable idempotency key. A five-second
+The broker creates one idempotent runtime child per launch grant, acting as
+`loom:GRANT-ID`, with only approved Iris, CoreWeave and OpenBao secret permissions. Loom injects
+its audience tokens as `MARIN_IRIS_TOKEN` and `MARIN_GRANT_TOKEN` after clearing
+profile environment values. Revoking the launch grant also invalidates this
+child and its task descendants. The initial Iris token expires after
+`max_token_ttl` (60 seconds in the proof); it cannot refresh. The proof submits
+within that window. Long-running Loom identity renewal remains unimplemented.
+
+Run/session IDs and launch intent share the grant database. Named session locks
+coordinate lifecycle passes and per-grant operations across PostgreSQL replicas.
+A lost connection releases leadership; idempotent remote calls and monotonic
+terminal records prevent a stale worker from reviving a cleaned run.
+Repeated delivery uses one durable idempotency key. A five-second
 reconciler checks actual Loom state and revokes completed grants. Native calls
 register their intent before credential issuance, so bypassing the launch
 front door does not bypass lifecycle tracking. An intent that never produces
@@ -530,10 +601,39 @@ the affected grant; cleanup uses only its previously verified session ID.
 Revoking a grant immediately prevents further broker issuance; archiving its
 Loom session and discovering a late run depend on successful reconciliation.
 Unavailable requests are logged and retried, so a Loom outage can delay session
-cleanup. SQLite targets a single broker instance; running replicas against
-independent ledgers is unsupported.
-A fatal background-task or ledger failure makes `/healthz` return 503,
+cleanup. A fatal background-task or ledger failure makes `/healthz` return 503,
 allowing Kubernetes probes to restart the broker.
+
+Secret reads use a fixed KV-v2 binding and a separate native OpenBao credential:
+
+```yaml
+secrets:
+  - name: task-canary
+    mount: auth-proof
+    path: task-canary
+    token_file: /var/run/marin-auth/canary-token/token
+```
+
+`POST /v1/secrets/task-canary` requires an `openbao` token with `secret.read` on
+`/secrets/task-canary/`. It reads only `auth-proof/data/task-canary`, rechecks
+authority before delivery, and returns `{data: {...}}` with `no-store` headers.
+The request cannot select a provider URL or KV path. The native credential must
+have only read permission on that exact KV path; keep its token file distinct
+from signing, storage and observer credentials. Changing a binding invalidates
+existing grants. Provider errors return a sanitized 503 response.
+
+For a disposable proof instance, the operator can create a synthetic canary and
+its read-only credential without displaying either value:
+
+```bash
+uv run --no-sync python -m infra.auth.seed_secret --address "$BAO_ADDR" \
+  --ca-file "$BAO_CACERT" --token-file /private/task-canary.token --ttl 900
+```
+
+The helper uses `BAO_TOKEN`, writes the credential with mode 0600, checks denials
+on another KV path and Transit, and outputs only binding references and a hash
+for the task's canary check. Mount the private file as the binding's external
+Secret; it expires after the supplied lifetime.
 
 Storage issuance requires an OpenFGA permit on the complete configured provider
 identity, such as `principal:service:grafana accessor
@@ -575,6 +675,14 @@ docker run --rm --network none --read-only marin-auth:staging \
 
 Publish only a reviewed image, then set its registry digest as `broker_image`.
 The Docker build installs the `marin-auth` closure from the repository lock.
+
+Against a disposable local PostgreSQL server, run the replica and lifecycle
+checks with a role allowed to create and drop test databases:
+
+```bash
+MARIN_AUTH_TEST_POSTGRES_URL='postgresql+pg8000://postgres@127.0.0.1:15432/postgres' \
+  uv run --no-sync pytest infra/auth/tests/test_postgres.py infra/auth/tests/test_loom.py -m integration
+```
 
 Run the repeatable local proof with OpenBao, OpenFGA, Loom and its sibling
 Tapestry executable, plus the matching Loom checkout containing its scripted ACP fixture:
@@ -632,9 +740,11 @@ renewal or Raft join.
 
 Provide these additional stack inputs: `openfga_image`, `openfga_proxy_image`
 (both pinned by digest), `openfga_store_id`, `openfga_database_secret`
-(key `uri`, a PostgreSQL URI with verified TLS), `openfga_token_secret`
+(key `uri`, a PostgreSQL URI with verified TLS), `openfga_database_ca_secret`
+(key `ca.crt`, mounted at `/var/run/postgres/ca/ca.crt`), `openfga_token_secret`
 (key `token`), `openfga_tls_secret` (`tls.crt`, `tls.key`), and
-`openfga_database_cidrs` (only the database destinations on port 5432).
+`openfga_database_cidrs` (only the database destinations on port 5432), or an
+isolated CNPG `database_namespace` with an explicit empty CIDR list.
 Secret values are provisioned outside Pulumi and never enter its arguments or
 state. PostgreSQL needs independent backups and restoration checks.
 
@@ -659,6 +769,10 @@ runtime grant records. Publish a new model to a new store and drain old grants
 before switching model references.
 
 ## Bounded CoreWeave proof
+
+For a persistent synthetic deployment with separate PostgreSQL owners,
+replicated grant brokers, fixed deployment identities, scoped Iris task access,
+and recovery drills, follow [synthetic CW staging](STAGING.md).
 
 [trial/](trial/Pulumi.yaml) runs the real OpenFGA, TLS/Raft OpenBao, broker, and
 native Loom session proof as one bounded Kubernetes Job in `marin-auth-trial`

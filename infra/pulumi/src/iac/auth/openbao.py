@@ -17,11 +17,21 @@ APP_LABELS = {"app.kubernetes.io/name": "openbao"}
 
 
 def dns_egress(cidrs: tuple[str, ...]) -> dict:
-    """Allow only the explicitly approved resolver host addresses."""
+    """Allow approved resolver addresses and the observed node-local DNS pods.
+
+    Cilium can enforce Service-DNAT traffic against the resolver's pod identity
+    rather than the original Service address.
+    """
     if not cidrs or any(ip_network(cidr).num_addresses != 1 for cidr in cidrs):
         raise ValueError("DNS egress requires explicit resolver /32 or /128 CIDRs")
     return {
-        "to": [{"ip_block": {"cidr": cidr}} for cidr in cidrs],
+        "to": [
+            *({"ip_block": {"cidr": cidr}} for cidr in cidrs),
+            {
+                "namespace_selector": {"match_labels": {"kubernetes.io/metadata.name": "kube-system"}},
+                "pod_selector": {"match_labels": {"k8s-app": "node-local-dns"}},
+            },
+        ],
         "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
     }
 
@@ -44,6 +54,8 @@ class OpenBaoArgs:
     dns_cidrs: tuple[str, ...]
     https_egress_cidrs: tuple[str, ...]
     replicas: int = 3
+    anti_affinity: str = "required"
+    discovery_mode: str = "ingress"
 
 
 def openbao_config(args: OpenBaoArgs) -> dict:
@@ -92,6 +104,12 @@ class OpenBao(pulumi.ComponentResource):
         super().__init__("marin:auth:OpenBao", name, None, opts)
         if args.replicas < 3 or args.replicas % 2 == 0:
             raise ValueError("OpenBao Raft requires an odd number of at least three replicas")
+        if args.anti_affinity not in {"required", "preferred"}:
+            raise ValueError("OpenBao anti_affinity must be required or preferred")
+        if args.anti_affinity == "preferred" and args.namespace != "marin-auth-staging":
+            raise ValueError("Shared-host Raft placement is restricted to synthetic staging")
+        if args.discovery_mode not in {"ingress", "private"}:
+            raise ValueError("OpenBao discovery mode must be ingress or private")
         if not args.operator_groups or not args.client_pod_labels or not args.ingress_pod_labels:
             raise ValueError("OpenBao requires explicit operator groups and client/ingress pod selectors")
         if "@sha256:" not in args.image:
@@ -200,11 +218,25 @@ class OpenBao(pulumi.ComponentResource):
                         },
                         "affinity": {
                             "pod_anti_affinity": {
-                                "required_during_scheduling_ignored_during_execution": [
-                                    {
-                                        "label_selector": {"match_labels": APP_LABELS},
-                                        "topology_key": "kubernetes.io/hostname",
-                                    }
+                                (
+                                    "required_during_scheduling_ignored_during_execution"
+                                    if args.anti_affinity == "required"
+                                    else "preferred_during_scheduling_ignored_during_execution"
+                                ): [
+                                    (
+                                        {
+                                            "label_selector": {"match_labels": APP_LABELS},
+                                            "topology_key": "kubernetes.io/hostname",
+                                        }
+                                        if args.anti_affinity == "required"
+                                        else {
+                                            "weight": 100,
+                                            "pod_affinity_term": {
+                                                "label_selector": {"match_labels": APP_LABELS},
+                                                "topology_key": "kubernetes.io/hostname",
+                                            },
+                                        }
+                                    )
                                 ]
                             }
                         },
@@ -320,6 +352,11 @@ class OpenBao(pulumi.ComponentResource):
             },
             opts=child,
         )
+        if args.discovery_mode == "private":
+            self.issuer = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200{OIDC_PATH}")
+            self.api_address = pulumi.Output.from_input(f"https://openbao.{args.namespace}.svc:8200")
+            self.register_outputs({"issuer": self.issuer, "api_address": self.api_address})
+            return
         transport = k8s.apiextensions.CustomResource(
             f"{name}-transport",
             api_version="traefik.io/v1alpha1",

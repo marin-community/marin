@@ -19,6 +19,7 @@ from rigging.grant_auth import (
     create_app,
     verified_grant_token,
 )
+from rigging.grant_database import SqliteGrantDatabase
 from rigging.grants import GrantDenied, GrantStore, Permission, PrincipalAuthority
 from rigging.shared_grants import SHARED_GRANT_ROLE, SharedGrantClient, SharedGrantConfig, SharedGrantUnavailable
 from rigging.token_authority import JwksVerifier, generate_ed25519_keypair
@@ -74,7 +75,7 @@ def refresh_audiences():
 def auth(tmp_path, grant_permissions, grant_policy, refresh_audiences):
     clock = [time.time()]
     store = GrantStore(
-        tmp_path / "grants.db",
+        SqliteGrantDatabase(tmp_path / "grants.db"),
         [PrincipalAuthority("user:alice", "user:alice", 600, 2, "policy-v1")],
         grant_policy,
         now=lambda: clock[0],

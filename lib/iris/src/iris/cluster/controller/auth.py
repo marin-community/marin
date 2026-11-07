@@ -36,6 +36,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.auth import RefreshingTokenProvider, TokenProvider
+from rigging.grant_auth import GrantAccess
 from rigging.grants import GrantDenied, Permission
 from rigging.server_auth import (
     ANONYMOUS_ADMIN,
@@ -62,6 +63,7 @@ from rigging.token_authority import (
 )
 
 from iris.cluster.config import AuthConfig, PeerConfig
+from iris.cluster.controller.shared_attempts import AttemptBroker, SharedAttemptClient
 from iris.cluster.types import JobName
 from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_resource_owner
 
@@ -534,6 +536,7 @@ class ControllerAuth:
     federation_keys: dict[str, str] = dataclasses.field(default_factory=dict)
     shared_grants: SharedGrantClient | None = None
     shared_job_prefix: str = ""
+    shared_attempts: AttemptBroker | None = None
 
     @property
     def worker_token(self) -> str | None:
@@ -554,11 +557,11 @@ class _NativeOrSharedVerifier:
 
 def authorize_shared_operation(
     auth: ControllerAuth, context: RequestContext | None, *, action: str, resource: str
-) -> None:
+) -> GrantAccess | None:
     """Recheck a shared caller's operation; native callers retain Iris policy."""
     identity = get_verified_identity()
     if identity is None or identity.role != SHARED_GRANT_ROLE:
-        return
+        return None
     token = extract_bearer_token(dict(context.request_headers())) if context is not None else None
     if auth.shared_grants is None or token is None or not auth.shared_job_prefix:
         raise ConnectError(Code.PERMISSION_DENIED, "Shared authorization is required")
@@ -566,6 +569,7 @@ def authorize_shared_operation(
         access = auth.shared_grants.authorize(token, action=action, resource=auth.shared_job_prefix + resource + "/")
         if access.actor != identity.user_id:
             raise GrantDenied("Request identity does not match its grant")
+        return access
     except ValueError as error:
         raise ConnectError(Code.PERMISSION_DENIED, "Grant does not authorize this operation") from error
     except SharedGrantUnavailable as error:
@@ -736,6 +740,11 @@ def create_controller_auth(
             federation_keys=federation_peers,
             shared_grants=shared,
             shared_job_prefix=shared_job_prefix,
+            shared_attempts=(
+                SharedAttemptClient(auth_config.shared_grants, auth_config.shared_attempts)
+                if auth_config.shared_attempts is not None
+                else None
+            ),
         )
 
     # Null-auth: no login-provider arm and no trusted CIDRs. The anonymous/loopback

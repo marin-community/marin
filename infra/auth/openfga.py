@@ -6,7 +6,7 @@
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import pairwise
 from pathlib import Path
 from urllib.parse import quote
@@ -14,6 +14,8 @@ from urllib.parse import quote
 import requests
 from rigging.grants import Permission, PrincipalAuthority, permissions_allow, permissions_cover
 from rigging.shared_grants import authority_origin
+
+from infra.auth.secret_bindings import SecretBinding
 
 ACTIONS = frozenset(
     {
@@ -26,6 +28,7 @@ ACTIONS = frozenset(
         ("marina", "app.read"),
         ("marina", "app.release"),
         ("cw_s3", "credentials.issue"),
+        ("openbao", "secret.read"),
     }
 )
 
@@ -85,6 +88,7 @@ class OpenFGAPolicy:
         principals: Sequence[dict],
         providers: Sequence[ProviderIdentity],
         ca_bundle: str | bool = True,
+        secrets: Sequence[SecretBinding] = (),
     ):
         self._url = f"{authority_origin(api_url)}/stores/{quote(store_id, safe='')}/check"
         self._model_id = model_id
@@ -94,6 +98,7 @@ class OpenFGAPolicy:
             "store_id": store_id,
             "model_id": model_id,
             "principals": list(principals),
+            "secrets": [asdict(binding) for binding in secrets],
             "providers": [
                 {
                     "name": provider.name,
