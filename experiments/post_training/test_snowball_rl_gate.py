@@ -852,7 +852,16 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     assert gain["run"] == pytest.approx((0.495 - (0.2 if preset == "learning-medium" else 0.3)) / 40)
     assert gain["control"] == pytest.approx((0.505 - 0.3) / 40)
     printed_report = status(preset, argv)
-    assert printed_report["objectives"] == report["objectives"]
+    gain_line = (
+        "0.005125 -> 0.007375; +43.9%; noise +/-22.4%; better"
+        if preset == "learning-medium"
+        else "0.005125 -> 0.004875; -4.9%; noise +/-22.4%; same"
+    )
+    assert printed_report["objectives"] == [
+        "test_panel/family_mean: 0.505 -> 0.495; -2.0%; noise +/-9.1%; same",
+        "test_panel/family_mean/gain_per_h100_hour: " + gain_line,
+    ]
+    assert "r0 planned_updates: 25 (required 25); within bound" in printed_report["constraints"]
     assert (
         list(printed_report).index("objectives")
         < list(printed_report).index("constraints")
@@ -1015,6 +1024,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
         _json(source / "terminal.json", receipt)
+    built = replace(built, gate=gate.completed_gate(preset, built.runs, built.gate))
     if case not in {"missing", "control"}:
         run(built.gate)
     if case == "parent-early":
