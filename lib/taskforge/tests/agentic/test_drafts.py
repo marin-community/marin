@@ -18,10 +18,10 @@ from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUs
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import ResourceGroups, ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
+from taskcompendium.models import Boxed, ResourceGroups, ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import JudgeSpec, NumericSpec, spec_from_table
+from verifyit.spec import ExactSpec, JudgeSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic import example_build
 from taskforge.agentic.drafts import DRAFT_MAX_ANSWER_SHARE, DraftConfig, DraftProposal, DraftTools, draft_task
@@ -262,7 +262,25 @@ def tolerance_of_a_whole_unit() -> TaskSpec:
     return task.model_copy(update={"grader": verifyit_package(dataclasses.replace(spec, tolerance_abs=0.01)).grader})
 
 
+def choice_with_an_answer_line() -> TaskSpec:
+    task = EXAMPLES["choice"]("example")
+    return _with_prompt(task, _prompt(task).replace("alone.", "and end with a line 'Answer: <letter>'."))
+
+
+def exact_with_alternatives() -> TaskSpec:
+    task = EXAMPLES["exact"]("example")
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    assert isinstance(spec, ExactSpec)
+    [word] = spec.expected
+    alternatives = (f"{word}, reversed", f"reversed: {word}")
+    return task.model_copy(update={"grader": verifyit_package(ExactSpec(expected=alternatives)).grader})
+
+
 DEFECTS = {
+    "exact entries meant as alternatives, which make a list": (exact_with_alternatives, "not a set of alternatives"),
+    "exact answer on an Answer line that plain_text compares whole": (choice_with_an_answer_line, "its own grader"),
     "checklist with more criteria than judge calls allow": (long_checklist, "criteria"),
     "tolerance that passes the neighbors of the rounded answer": (tolerance_of_a_whole_unit, "decimals"),
     "script file staged under tests/tests": (nested_script_files, "stages no file there"),
@@ -283,6 +301,16 @@ def test_submit_refuses_the_defects_that_validation_found(defect: str):
     problems = tools.problems(build())
 
     assert len(problems) == 1 and problem in problems[0], problems
+
+
+def test_submit_accepts_a_boxed_answer_with_a_boxed_format():
+    task = EXAMPLES["choice"]("example")
+    boxed = _with_prompt(task, _prompt(task).replace("alone.", "in \\\\boxed{<letter>}.")).model_copy(
+        update={"answer_format": Boxed()}
+    )
+    tools = DraftTools(proposal(solver_machine="none"), config(ScriptedAgent([])))
+
+    assert tools.problems(boxed) == []
 
 
 def test_submit_refuses_a_task_without_the_machine_of_the_proposal():

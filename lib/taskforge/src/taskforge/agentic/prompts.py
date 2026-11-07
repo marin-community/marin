@@ -210,6 +210,10 @@ that gives it, in the prompt or in the solver's files.
 from, and never type a value twice: a prompt whose data differs from the key's fails every careful solver.
 - Define in the prompt every string that the grader compares exactly: list each allowed value of an enum with \
 its meaning, and give the format of times, dates and ids, for example "day4_0900".
+- An exact or mcq grader with answer_format plain_text compares the whole final message, so a right answer after \
+prose, on an "Answer:" line or in \\boxed{{}} fails. Either ask for the bare answer alone, or use answer_format boxed \
+and ask for the answer in \\boxed{{}}. For a list, give expected one entry per item. submit grades the reference \
+written the way the prompt asks.
 - Write format examples with placeholders such as "<tier>" or with values that are not in the answer: a solver \
 copies an example's values.
 - A judge's reference is the answer, never the task's text, which the solver sees. A judge question gives no \

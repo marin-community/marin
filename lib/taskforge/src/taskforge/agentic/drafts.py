@@ -24,12 +24,16 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import Model, Rollout, RolloutInterrupted, RolloutLimits, TaskRolloutSpec, TraceMode
 from shellbox.machine import Backend, Machine, MachineFactory, PackageSpec
+from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
     AnswerType,
+    Boxed,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     FunctionDefinition,
     Grader,
+    GradingAttempt,
     NoGrader,
     PlainText,
     ProviderRequirement,
@@ -47,7 +51,10 @@ from verifyit.numeric import numeric_literal
 from verifyit.spec import (
     RUBRIC_CHECKLIST,
     RUBRIC_LABELS,
+    ExactSpec,
     JudgeSpec,
+    MathSpec,
+    McqSpec,
     NumericSpec,
     StructuredExactSpec,
     spec_from_table,
@@ -76,7 +83,7 @@ from taskforge.agentic.tools import (
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "4"
+DRAFT_REVISION = "5"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -103,6 +110,10 @@ OWN_SCALE = re.compile(
 """Words of a judge question that set its own scale or reply format: a ``reference`` or ``checklist`` judge must end
 with verifyit's ``SCORE`` line, so such a question leaves every answer ungraded."""
 MAX_CHECKLIST_CRITERIA = 8
+# The ways a prompt asks a solver to mark its final answer, and the prose a solver writes before it.
+BOXED_ASKED = re.compile(r"\\boxed")
+ANSWER_LINE_ASKED = re.compile(r"\banswer:", re.IGNORECASE)
+ANSWER_PROSE = "I worked through the problem above."
 """The criteria of a checklist judge: each is one judge call, in sequence, so a long checklist grades one answer in
 minutes."""
 NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8}
@@ -298,6 +309,7 @@ def draft_task_problems(task: TaskSpec, solver_machine: SolverMachine) -> list[s
         *unpinned_package_problems(task),
         *leaked_reference_problems(task),
         *example_answer_problems(task),
+        *answer_form_problems(task),
     ]
 
 
@@ -434,6 +446,64 @@ def leaked_reference_problems(task: TaskSpec) -> list[str]:
     return [
         "A judge reference is a passage of the prompt or of the solver's files, so the solver sees it. The reference "
         "must be the answer, which the solver does not see, not the task's text"
+    ]
+
+
+def _reference_text(spec: object) -> str | None:
+    """The reference answer of a spec that compares a text answer without a model, as a solver would write it."""
+    if isinstance(spec, ExactSpec):
+        return ", ".join(spec.expected)
+    if isinstance(spec, McqSpec | NumericSpec | MathSpec):
+        return spec.expected
+    return None
+
+
+def _answer_forms(task: TaskSpec, reference: str) -> list[str]:
+    """The reference alone, and the reference written each way the prompt asks for: after prose, in ``\\boxed{}``
+    or on a last ``Answer:`` line."""
+    prompt = " ".join(str(event.content) for event in task.context.events if isinstance(event, TextMessage))
+    forms = [reference]
+    if BOXED_ASKED.search(prompt):
+        forms.append(f"{ANSWER_PROSE}\n\n\\boxed{{{reference}}}")
+    if ANSWER_LINE_ASKED.search(prompt):
+        forms.append(f"{ANSWER_PROSE}\n\nAnswer: {reference}")
+    return forms
+
+
+def answer_form_problems(task: TaskSpec) -> list[str]:
+    """The reference fails its own grader when written the way the prompt asks. An exact or mcq grader on a
+    plain_text answer compares the whole final message, so it fails a right answer after prose or in a box."""
+    grader = task.grader
+    if (
+        not isinstance(grader, VerifyitGrader)
+        or grader.environment is not None
+        or task.answer_type not in (AnswerType.TEXT, AnswerType.NUMBER)
+        or not isinstance(task.answer_format, PlainText | Boxed)
+    ):
+        return []
+    reference = _reference_text(spec_from_table({"mode": grader.mode, **grader.parameters}))
+    if reference is None:
+        return []
+    failing = []
+    for form in _answer_forms(task, reference):
+        attempt = GradingAttempt(
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=form)))
+        )
+        if grade_answer(task, attempt).reward != 1:
+            failing.append(form)
+    if not failing:
+        return []
+    if failing[0] == reference:
+        return [
+            f"The reference {reference!r} fails its own grader. Several expected entries of an exact grader make the "
+            "answer a list of that many items, split on commas and newlines, not a set of alternatives: for one "
+            "answer, give one entry and define its format in the prompt"
+        ]
+    return [
+        f"The reference fails its own grader when written as {failing[0]!r}, which the prompt asks for. With "
+        f"answer_format {task.answer_format.kind}, an exact or mcq grader compares the whole final message. Use "
+        "answer_format boxed and ask for \\boxed{...}, or ask for the bare answer alone. For a list, give expected "
+        "one entry per item"
     ]
 
 
