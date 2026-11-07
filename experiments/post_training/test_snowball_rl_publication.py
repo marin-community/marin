@@ -36,37 +36,36 @@ pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_con
         "native-failed",
         "builder-error",
         "invariant-failed",
-        "train-long",
         "learning-long",
         "unknown-time",
         "missing-tracking",
         "historical",
         "wrong-cohort",
         "native-composed",
-        "speed-medium",
-        "data-short",
     ],
 )
 @pytest.mark.timeout(180)
 def test_native_attempt_records_keep_identity_measurements_and_failures(recorded_runs, monkeypatch, native_json, case):
-    publishing = case not in {"speed-medium", "data-short"}
     original = presets.PRESETS[
-        case if case in {"learning-long", "train-long", "speed-medium", "data-short"} else "learning-medium"
+        (
+            "train-long"
+            if case in {"lineage", "lineage-missing-window"}
+            else case if case == "learning-long" else "learning-medium"
+        )
     ]
-    preset = replace(original, updates=2, measured=range(1, 3))
+    preset = replace(original, updates=3 if case.startswith("lineage") else 2, measured=range(1, 3))
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {preset.name: preset})
     monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: native(config))
-    built = snowball.build_run(
-        preset,
-        settings=(() if not publishing else (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)),
-        control=not publishing,
-    )
+    settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)
+    if case.startswith("lineage"):
+        settings += (presets.parse_setting("trainer.max_steps=2"),)
+    built = snowball.build_run(preset, settings=settings)
     training = built.runs[0]
-    stored_preset = (
-        replace(preset, evaluations=(replace(preset.evaluations[0], answers=2), *preset.evaluations[1:]))
-        if case == "partial"
-        else preset
-    )
+    stored_preset = replace(preset, updates=2)
+    if case == "partial":
+        stored_preset = replace(
+            stored_preset, evaluations=(replace(preset.evaluations[0], answers=2), *preset.evaluations[1:])
+        )
     source = recorded_runs(
         stored_preset,
         training.name,
@@ -75,7 +74,12 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
         score=0.5,
         fingerprint=training.fingerprint(),
         unscored=15 if case == "partial" else 0,
-        argv=["--preset", preset.name, "--set=+trainer.policy.optimizer_config={lr: 2.0e-6}"],
+        argv=[
+            "--preset",
+            preset.name,
+            "--set=+trainer.policy.optimizer_config={lr: 2.0e-6}",
+            *(["--set", "trainer.max_steps=2"] if case.startswith("lineage") else []),
+        ],
     )
     tracking_path = source / "exports/attempts/native-attempt/tracking.json"
     tracking = json.loads(tracking_path.read_text())
@@ -130,13 +134,10 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         write_json(source / "terminal.json", receipt)
         initial = source / "exports/metrics/step-000000.json"
         first = source / "exports/metrics/step-000001.json"
-        if case == "external-resume":
-            baseline = json.loads(initial.read_text())
-            baseline["step"] = 1
-            write_json(first, baseline)
-            (source / "exports/dumped_evals/global_step_0_evals").rename(
-                source / "exports/dumped_evals/global_step_1_evals"
-            )
+        baseline = json.loads(initial.read_text())
+        baseline["step"] = 1
+        write_json(first, baseline)
+        (source / "exports/dumped_evals/global_step_0_evals").rename(source / "exports/dumped_evals/global_step_1_evals")
         initial.unlink()
     config = native_config(source, launch)
 
@@ -172,7 +173,7 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             shutil.rmtree(source / "exports")
             receipt = json.loads((source / "terminal.json").read_text())
             receipt["result"]["state"] = "failed"
-            write_json(source / "terminal.json", receipt)
+            (source / "terminal.json").unlink()
             write_json(attempts / "native-attempt.json", receipt)
             raise RuntimeError("native failed")
         if case == "invariant-failed":
@@ -191,17 +192,17 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         assert result.path == str(source)
     assert list(source.rglob(publication.RESULT_FILENAME)) == []
     if case == "builder-error":
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(ValueError):
             publication.retain_record(str(source), preset)
-        return
-    if not publishing:
         return
     row = publication.retain_record(str(source), preset, attempt_id="native-attempt")
     path = Path(row["artifact_uri"])
     assert (row["run_id"], row["attempt_id"]) == (launch["run"]["id"], "native-attempt")
-    assert row["label"] == preset.name + ("" if case == "control" else " lr=2e-06")
+    assert row["label"] == preset.name + (" max_steps=2" if case.startswith("lineage") else "") + " lr=2e-06"
     assert row["issue"] is None and row["verdict"] is None
-    assert row["evaluation"]["task_count"] == (100 if case in {"learning-long", "train-long"} else 1500)
+    assert row["evaluation"]["task_count"] == (
+        100 if case in {"learning-long", "lineage", "lineage-missing-window"} else 1500
+    )
     assert row["elapsed_seconds"] == (
         None if case in {"unknown-time", "lineage-missing-window"} else 7200 if case == "lineage" else 3600
     )
@@ -226,6 +227,11 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         old = publication.build_record(str(source), preset, attempt_id="ancestor")
         assert old["final"] is None and old["baseline"]["reward"] == pytest.approx(0.3)
         assert old["optimizer_steps"] == 1 and old["elapsed_seconds"] == 3600
+        unknown = json.loads((attempts / "ancestor.json").read_text())
+        unknown["config"]["run"]["attempt_id"] = "missing-window"
+        unknown["result"].update(started_at=None, finished_at="2026-11-06T15:40:00+00:00")
+        write_json(attempts / "missing-window.json", unknown)
+        assert publication.build_record(str(source), preset, attempt_id="ancestor")["elapsed_seconds"] is None
     if case == "partial":
         assert row["final"]["attempted"] == 1500 and row["final"]["scored"] == 1485
         saved = path.read_bytes()

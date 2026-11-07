@@ -114,8 +114,9 @@ def build_record(
     if receipt is None:
         raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
     launch, result = receipt.config, receipt.result
-    if result.state not in {"succeeded", "failed", "cancelled", "killed", "error", "terminated"}:
+    if result.state not in {"succeeded", "failed"}:
         raise ValueError("A progress record requires a terminal native attempt")
+    preset = replace(preset, updates=launch["skyrl"]["trainer"]["max_steps"])
     native = launch["run"]
     attempt_id = native["attempt_id"]
     destination = record_path(run_output, attempt_id)
@@ -144,7 +145,12 @@ def build_record(
         last_step = max(selected_steps, default=-1)
         metrics = {step: row for step, row in metrics.items() if step <= last_step and row.get("attempt_id") in lineage}
     baseline_step = None if options.resume_from else 0
-    invariants = gate.training_invariants(preset, metrics)
+    checked_metrics = (
+        metrics
+        if baseline_step is not None
+        else {step: row for step, row in metrics.items() if "policy/policy_update_steps" in row}
+    )
+    invariants = gate.training_invariants(preset, checked_metrics)
     planned = (
         next(fact.holds for fact in invariants if fact.name == "planned_updates") if baseline_step is not None else None
     )
@@ -164,7 +170,10 @@ def build_record(
         for key in lineage_ids
     ]
     elapsed = None
-    if all(start is not None and finish is not None for start, finish in windows):
+    uncertain_order = not latest and any(
+        value.result.started_at is None for key, value in attempts.items() if key != attempt_id
+    )
+    if not uncertain_order and all(start is not None and finish is not None for start, finish in windows):
         durations = [presets.utc_millis(finish) - presets.utc_millis(start) for start, finish in windows]
         if any(value < 0 for value in durations):
             raise ValueError("Native completion precedes its recorded start")
@@ -323,7 +332,8 @@ def publish_run(
         attempts = {}
         result["unserved_records"].append(path)
         result["errors"].append(str(error))
-    current_id = next(iter(attempts), None)
+    current = read_stored_skyrl_receipt(path) if attempts else None
+    current_id = current.config["run"]["attempt_id"] if current is not None else None
     for attempt_id in attempts:
         destination = record_path(path, attempt_id)
         try:

@@ -40,7 +40,7 @@ def comparison_fields(run: RunSummary) -> dict:
     updates_known = run.resume_from is None or run.planned_updates_valid is not None
     gain = (
         (run.final.reward - run.baseline.reward) / run.elapsed_seconds * 3600
-        if run.elapsed_seconds is not None and timed and run.final is not None and run.baseline is not None
+        if run.elapsed_seconds and run.final is not None and run.baseline is not None
         else None
     )
     if gain is not None and not math.isfinite(gain):

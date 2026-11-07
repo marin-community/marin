@@ -53,26 +53,19 @@ def publish_result(record: dict[str, Any], service_url: str | None = None) -> di
 
 
 @click.command()
-@click.argument("summary_path", required=False, type=click.Path(path_type=Path, exists=True, dir_okay=False))
-@click.option("--preset", "preset_name", help="Preset whose pinned controls to publish.")
+@click.option("--preset", "preset_name", required=True, help="Preset whose pinned controls to publish.")
 @click.option("--controls", is_flag=True, help="Publish every pinned control from its stored native outputs.")
 @click.option("--url", help="Marina origin (defaults to the Marina service).")
-def main(summary_path: Path | None, preset_name: str | None, controls: bool, url: str | None) -> None:
-    """Publish a persisted JSON SUMMARY_PATH or a preset's pinned controls."""
-    if controls:
-        if not preset_name or summary_path is not None:
-            raise click.UsageError("Use --preset NAME --controls without SUMMARY_PATH")
-        from experiments.post_training import snowball_rl_publication  # noqa: PLC0415
+def main(preset_name: str, controls: bool, url: str | None) -> None:
+    """Publish a preset's pinned controls from their stored native outputs."""
+    if not controls:
+        raise click.UsageError("Use --preset NAME --controls")
+    from experiments.post_training import snowball_rl_publication  # noqa: PLC0415
 
-        result = snowball_rl_publication.publish_controls(preset_name, service_url=url)
-        click.echo(json.dumps(result))
-        if result["unserved_records"]:
-            raise click.exceptions.Exit(1)
-        return
-    if preset_name is not None or summary_path is None:
-        raise click.UsageError("Supply SUMMARY_PATH or --preset NAME --controls")
-    record = json.loads(summary_path.read_text())
-    click.echo(json.dumps(publish_result(record, url)))
+    result = snowball_rl_publication.publish_controls(preset_name, service_url=url)
+    click.echo(json.dumps(result))
+    if result["unserved_records"]:
+        raise click.exceptions.Exit(1)
 
 
 if __name__ == "__main__":

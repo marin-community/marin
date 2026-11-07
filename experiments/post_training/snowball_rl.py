@@ -618,7 +618,9 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
         )
         progress_url = None
         if receipt is not None and attempt:
-            publication_path = StoragePath(path) / "publication" / attempt / snowball_rl_publication.PUBLICATION_FILENAME
+            publication_path = (
+                snowball_rl_publication.publication_path(path, attempt) / snowball_rl_publication.PUBLICATION_FILENAME
+            )
             if presets.exists(publication_path):
                 published = json.loads(presets.read_text(publication_path))
                 native = receipt.config["run"]
@@ -753,10 +755,14 @@ def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
         receipt = read_stored_skyrl_receipt(path)
         if receipt is None or receipt.result.state != "succeeded":
             return False
-        for attempt_id in snowball_rl_publication.stored_attempts(path):
-            missing_publication |= not presets.exists(
-                snowball_rl_publication.publication_path(path, attempt_id) / snowball_rl_publication.PUBLICATION_FILENAME
-            )
+        try:
+            for attempt_id in snowball_rl_publication.stored_attempts(path):
+                missing_publication |= not presets.exists(
+                    snowball_rl_publication.publication_path(path, attempt_id)
+                    / snowball_rl_publication.PUBLICATION_FILENAME
+                )
+        except (OSError, ValueError, KeyError):
+            return False
     completed = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     return missing_publication and (
         completed is None or presets.exists(StoragePath(completed.path(prefix)) / snowball_rl_gate.GATE_REPORT_FILENAME)

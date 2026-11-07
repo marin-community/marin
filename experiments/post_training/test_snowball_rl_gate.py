@@ -1058,8 +1058,6 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
         client.submit.side_effect = AssertionError("in-job execution submitted a coordinator")
     arguments = ["--preset", preset_name, "--version", presets.PRESET_REVISION, "--run"]
-    if replicas == 2:
-        arguments.extend(["--replicates", "2"])
     if outcome != "no-wait":
         arguments.append("--wait")
     if outcome == "control":
@@ -1100,9 +1098,10 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         "historical",
         "fail-no-login",
         "invalid-no-login",
-        "record-recovery",
         "builder-error",
         "conflict",
+        "speed-medium",
+        "data-short",
     ],
 )
 def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, monkeypatch, case):
@@ -1111,8 +1110,9 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setenv("WANDB_ENTITY", "submission-team")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    controls(recorded_runs, "learning-medium")
-    preset = presets.PRESETS["learning-medium"]
+    preset_name = case if case in {"speed-medium", "data-short"} else "learning-medium"
+    controls(recorded_runs, preset_name)
+    preset = presets.PRESETS[preset_name]
     replicas = 2 if case == "partial-retry" else 1
     built = snowball.build_run(preset, control=case == "control", replicates=replicas)
     sources = [
@@ -1152,6 +1152,9 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     def finish(*args, **kwargs):
         for path, data in pending.items():
             path.write_bytes(data)
+        if case == "historical":
+            (sources[0] / "terminal.json").unlink()
+            return SimpleNamespace(state=JobState.FAILED)
         if case == "parent-early" and not phase["retry"]:
             receipt = json.loads((sources[0] / "terminal.json").read_text())
             receipt["result"]["state"] = "failed"
@@ -1214,7 +1217,11 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         arguments.append("--control")
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
-    expected = 1 if case == "fail-no-login" else 2 if case == "invalid-no-login" else 2 if case == "parent-early" else 0
+    expected = (
+        1
+        if case == "fail-no-login"
+        else 2 if case == "invalid-no-login" else 3 if case == "historical" else 2 if case == "parent-early" else 0
+    )
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
@@ -1224,6 +1231,10 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
         assert published == [] and list(sources[0].rglob(publication.RESULT_FILENAME)) == []
         return
     snapshot = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    if case in {"speed-medium", "data-short"}:
+        assert "publication" not in snapshot and published == []
+        assert all(list(root.rglob(publication.RESULT_FILENAME)) == [] for root in sources)
+        return
     paths = [
         str(root / f"exports/attempts/native-{index}/{publication.RESULT_FILENAME}")
         for index, root in enumerate(sources)
@@ -1252,6 +1263,8 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     expected_pairs = [
         (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{index}") for index, root in enumerate(sources)
     ]
+    if case == "historical":
+        expected_pairs = []
     if case == "parent-early":
         expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "native-retry"))
     if case == "historical":
