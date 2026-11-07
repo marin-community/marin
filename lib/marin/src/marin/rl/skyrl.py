@@ -40,7 +40,6 @@ from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_r
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
-_ISSUE = "issue"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
@@ -51,7 +50,7 @@ IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
 TERMINAL_MANIFEST_FILENAME = "terminal.json"
 # Shared with marinskyrl.checkpoint_paths.TRACKING_FILENAME.
-TRACKING_FILENAME = "tracking.json"
+_TRACKING_FILENAME = "tracking.json"
 GENERATE_ENTRYPOINT = "generate"
 BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
@@ -483,11 +482,12 @@ class SkyRLSpec:
         names = [name for name, _ in self.evaluation_data]
         if len(names) != len(set(names)):
             raise ValueError("duplicate evaluation data names")
+        profiles = named_evaluation_profiles(_parsed_config(self.config_yaml))
         for name, _ in self.evaluation_data:
-            profiles = named_evaluation_profiles(_parsed_config(self.config_yaml), name)
-            if not profiles:
+            profile = profiles.get(name)
+            if profile is None:
                 raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-            if any(profile.get("data_files") is not None for profile in profiles):
+            if profile.get("data_files") is not None:
                 raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
 
 
@@ -557,14 +557,13 @@ def _parsed_config(config_yaml: str) -> dict[str, object]:
     return config
 
 
-def named_evaluation_profiles(config: Mapping[str, Any], name: str) -> list[dict]:
-    return [
-        profile
+def named_evaluation_profiles(config: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        name: profile
         for callback in config.get("trainer", {}).get("callbacks") or []
         if callback.get("type") == "evaluation"
-        for profile_name, profile in (callback.get("additional_evaluations") or {}).items()
-        if profile_name == name
-    ]
+        for name, profile in (callback.get("additional_evaluations") or {}).items()
+    }
 
 
 def declared_config_value(config: dict[str, object], dotted_key: str) -> object:
@@ -713,7 +712,6 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
-    issue: int | None = None
 
 
 class SkyRLRun(Artifact):
@@ -743,7 +741,8 @@ class SkyRLLaunchResponse(BaseModel):
     iris_job_id: str | None = None
     failure: str | None = None
     provenance: dict | None = None
-    run_id: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
     model: _SkyRLTerminalModel | None = None
 
 
@@ -760,6 +759,13 @@ def read_skyrl_launch_config(run_output: str) -> dict:
     """Read the native resolved-launch envelope's compiled configuration."""
     fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
     return yaml.safe_load(fs.cat(key))["config"]
+
+
+def read_skyrl_attempt_tracking(run_output: str, attempt_id: str) -> dict:
+    """Read one native attempt's startup metadata and W&B link, or return an empty mapping."""
+    fs, key = filesystem_for(prefix_join(run_output, f"exports/attempts/{attempt_id}/{_TRACKING_FILENAME}"))
+    record = json.loads(fs.cat(key)) if fs.exists(key) else {}
+    return record if record.get("attempt_id") == attempt_id else {}
 
 
 def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
@@ -961,20 +967,14 @@ def _launch_config_yaml(
     evaluation_data: tuple[tuple[str, tuple[ResolvedDataSource, ...]], ...],
     output: SkyRLOutputPaths,
     coordinator_iris_job_id: str | None,
-    issue: int | None,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     if spec.topology.role_plan.generate_only:
         recipe["entrypoint"] = GENERATE_ENTRYPOINT
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
-    callbacks = recipe.get("trainer", {}).get("callbacks", [])
-    for index, callback in enumerate(callbacks):
+    for callback in recipe.get("trainer", {}).get("callbacks") or []:
         if callback["type"] == BEST_CHECKPOINT_CALLBACK:
-            callbacks[index] = {
-                "type": callback["type"],
-                "initial_model_uri": model.uri,
-                **{key: value for key, value in callback.items() if key not in {"type", "initial_model_uri"}},
-            }
+            callback["initial_model_uri"] = model.uri
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
@@ -988,7 +988,6 @@ def _launch_config_yaml(
             "submission": "wait",
             "export_hf": export_hf,
             **({"coordinator_iris_job_id": coordinator_iris_job_id} if coordinator_iris_job_id is not None else {}),
-            **({"issue": issue} if issue is not None else {}),
         },
         "runtime": {
             "profile": declared_config_value(recipe, "trainer.strategy"),
@@ -1054,7 +1053,6 @@ def skyrl_step(
     execution: IrisSkyRLExecution,
     *,
     export_hf: bool = False,
-    issue: int | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     """Build a versioned SkyRL training artifact."""
     step_name = spec.name
@@ -1104,7 +1102,6 @@ def skyrl_step(
         execution = (
             _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
         )
-        issue = None if ctx.is_fingerprint else cast(int | None, ctx.runtime_arg(_ISSUE))
         coordinator = None if ctx.is_fingerprint else get_job_info()
         return SkyRLRunConfig(
             launch_config_yaml=_launch_config_yaml(
@@ -1119,7 +1116,6 @@ def skyrl_step(
                 evaluation_data=evaluation_data,
                 output=output,
                 coordinator_iris_job_id=str(coordinator.job_id) if coordinator is not None else None,
-                issue=issue,
             ),
             run_id=run_id,
             attempt_id=attempt_id,
@@ -1127,7 +1123,6 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            issue=issue,
         )
 
     return ArtifactStep(
@@ -1137,5 +1132,5 @@ def skyrl_step(
         run=run_skyrl,
         build_config=build_config,
         deps=deps,
-        runtime_args={_EXECUTION: execution, _ISSUE: issue},
+        runtime_args={_EXECUTION: execution},
     )

@@ -95,7 +95,6 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     expected_env = {
-        "WANDB_ENTITY": "test-team",
         "DAYTONA_RL_API_KEY": "test-rl-key",
         "DAYTONA_EVAL_API_KEY": "test-eval-key",
         "DAYTONA_API_KEY": "test-other-key",
@@ -132,10 +131,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
-    assert {
-        name: value for name, value in expected_env.items() if name != "WANDB_ENTITY"
-    }.items() <= environment.env_vars.items()
-    assert "WANDB_ENTITY" not in environment.env_vars
+    assert expected_env.items() <= environment.env_vars.items()
     assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
 
 
