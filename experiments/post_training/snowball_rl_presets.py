@@ -511,7 +511,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.TRAIN,
                 duration=Duration.LONG,
-                recipe=replace(_LEARNING, staleness=2, estimator={**_ESTIMATOR, "off_policy_correction": "tis"}),
+                recipe=_ASYNC_P40,
                 updates=100,
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
