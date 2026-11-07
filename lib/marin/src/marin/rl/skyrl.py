@@ -768,25 +768,49 @@ def read_skyrl_attempt_tracking(run_output: str, attempt_id: str) -> dict:
     return record if record.get("attempt_id") == attempt_id else {}
 
 
-def read_stored_skyrl_receipt(run_output: str, attempt_id: str | None = None) -> SkyRLLaunchReceipt | None:
-    """Read a saved native receipt for the requested attempt, or return None without querying Iris."""
+def _stored_skyrl_receipt(
+    run_output: str, attempt_id: str | None = None
+) -> tuple[SkyRLLaunchReceipt | None, dict | None]:
     fs, key = filesystem_for(prefix_join(run_output, TERMINAL_MANIFEST_FILENAME))
     if fs.exists(key):
         receipt = SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
         if attempt_id is None or receipt.config["run"]["attempt_id"] == attempt_id:
-            return receipt
+            return receipt, receipt.config
     fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
     if not fs.exists(key):
-        return None
+        return None, None
     config = read_skyrl_launch_config(run_output)
-    attempt = prefix_join(config["artifacts"]["attempts_root"], f"{attempt_id or config['run']['attempt_id']}.json")
+    requested = attempt_id or config["run"]["attempt_id"]
+    attempt = prefix_join(config["artifacts"]["attempts_root"], f"{requested}.json")
     fs, key = filesystem_for(attempt)
-    if not fs.exists(key):
-        return None
-    receipt = SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
-    if attempt_id is not None and receipt.config["run"]["attempt_id"] != attempt_id:
-        raise ValueError("Stored receipt belongs to another native attempt")
-    return receipt
+    if fs.exists(key):
+        receipt = SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
+        if receipt.config["run"]["attempt_id"] == requested:
+            return receipt, config
+    return None, config
+
+
+def read_stored_skyrl_receipt(run_output: str, attempt_id: str | None = None) -> SkyRLLaunchReceipt | None:
+    """Read a saved native receipt for the requested attempt, or return None without querying Iris."""
+    return _stored_skyrl_receipt(run_output, attempt_id)[0]
+
+
+def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, SkyRLLaunchReceipt]]:
+    """Read the current native attempt ID and each matching stored receipt without querying Iris."""
+    receipt, config = _stored_skyrl_receipt(run_output)
+    if config is None:
+        return None, {}
+    current = config["run"]["attempt_id"]
+    attempts = {current: receipt} if receipt is not None else {}
+    fs, key = filesystem_for(prefix_join(config["artifacts"]["attempts_root"], "*.json"))
+    for path in fs.glob(key):
+        attempt_id = path.rsplit("/", 1)[-1].removesuffix(".json")
+        if attempt_id in attempts:
+            continue
+        saved = SkyRLLaunchReceipt.model_validate_json(fs.cat(path))
+        if saved.config["run"]["attempt_id"] == attempt_id:
+            attempts[attempt_id] = saved
+    return current, attempts
 
 
 def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
@@ -795,13 +819,11 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
     Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
     controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
     """
-    receipt = read_stored_skyrl_receipt(run_output)
+    receipt, config = _stored_skyrl_receipt(run_output)
     if receipt is not None:
         return receipt
-    fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
-    if not fs.exists(key):
+    if config is None:
         return None
-    config = read_skyrl_launch_config(run_output)
     name = config["iris"]["job_name"]
     info = get_job_info()
     with ExitStack() as stack:
