@@ -427,3 +427,23 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     assert sorted(pairs) == sorted(
         (read_skyrl_launch_config(str(root))["run"]["id"], f"pinned-{index}") for index, root in enumerate(controls)
     )
+
+    historical = recorded_runs(
+        preset, "tests/missing-current-history", attempt_id="unpublished-history", initial_score=0.3, score=0.5
+    )
+    receipt = json.loads((historical / "terminal.json").read_text())
+    receipt["result"]["state"] = "failed"
+    write_json(Path(receipt["config"]["artifacts"]["attempts_root"]) / "unpublished-history.json", receipt)
+    current = json.loads(json.dumps(receipt["config"]))
+    current["run"]["attempt_id"] = "missing-current"
+    write_json(historical / "resolved-launch.yaml", {"config": current})
+    (historical / "terminal.json").unlink()
+    handle = replace(training, name="tests/missing-current-history", override_path=str(historical))
+    recovered = publication.publish_run(handle, preset, gate_path=second_gate, issue=74, service_url="http://localhost")
+    assert recovered["unserved_records"] == [] and len(recovered["served_records"]) == 1
+    stored = next(
+        row
+        for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]
+        if row["attempt_id"] == "unpublished-history"
+    )
+    assert stored["issue"] is None and stored["gate"] is None and stored["verdict"] is None

@@ -1114,7 +1114,12 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     controls(recorded_runs, preset_name)
     preset = presets.PRESETS[preset_name]
     replicas = 2 if case == "partial-retry" else 1
-    built = snowball.build_run(preset, control=case == "control", replicates=replicas)
+    built = snowball.build_run(
+        preset,
+        control=case == "control",
+        replicates=replicas,
+        tasks=presets.default_selection() if case == "data-short" else None,
+    )
     sources = [
         recorded_runs(
             preset,
@@ -1152,9 +1157,6 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     def finish(*args, **kwargs):
         for path, data in pending.items():
             path.write_bytes(data)
-        if case == "historical":
-            (sources[0] / "terminal.json").unlink()
-            return SimpleNamespace(state=JobState.FAILED)
         if case == "parent-early" and not phase["retry"]:
             receipt = json.loads((sources[0] / "terminal.json").read_text())
             receipt["result"]["state"] = "failed"
@@ -1215,13 +1217,11 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     arguments = ["--preset", preset.name, "--version", presets.PRESET_REVISION, "--run", "--wait", "--issue", "73"]
     if case == "control":
         arguments.append("--control")
+    if case == "data-short":
+        arguments.extend(["--tasks", f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"])
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
-    expected = (
-        1
-        if case == "fail-no-login"
-        else 2 if case == "invalid-no-login" else 3 if case == "historical" else 2 if case == "parent-early" else 0
-    )
+    expected = 1 if case == "fail-no-login" else 2 if case == "invalid-no-login" else 2 if case == "parent-early" else 0
     try:
         result = CliRunner().invoke(snowball.main, arguments)
     finally:
@@ -1263,8 +1263,6 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     expected_pairs = [
         (read_skyrl_launch_config(str(root))["run"]["id"], f"native-{index}") for index, root in enumerate(sources)
     ]
-    if case == "historical":
-        expected_pairs = []
     if case == "parent-early":
         expected_pairs.append((read_skyrl_launch_config(str(sources[0]))["run"]["id"], "native-retry"))
     if case == "historical":
