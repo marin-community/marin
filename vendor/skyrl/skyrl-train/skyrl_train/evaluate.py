@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.io import io
+from skyrl_train.partial_evaluation import PartialEvaluationRecorder
 from marinskyrl.resource_locator import join_resource_path
 
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -28,6 +29,7 @@ from skyrl_train.trajectory_runners.base import (
 from skyrl_train.utils.trainer_utils import (
     calculate_per_dataset_metrics,
     dump_per_dataset_eval_results,
+    evaluation_result_entries,
     evaluation_response_metrics,
 )
 from skyrl_train.trajectory_runners.trajectory_processing import validate_trajectory_batch
@@ -113,15 +115,28 @@ async def _collect_evaluation_rollouts(
     val_set_name: str | None,
     accumulator: _EvaluationAccumulator,
     pool: EvaluationPool,
+    tokenizer: AutoTokenizer,
 ) -> _EvaluationRollouts:
     """Collect every selected row and repetition within the shared evaluation pool."""
     trajectory_batches: List[TrajectoryBatch] = []
     last_request = None
     last_batch = None
     pbar = None
+    recorder = None
     try:
         rows = [row for prompts in eval_dataloader for row in prompts]
         pbar = tqdm(total=len(rows) * cfg.generator.eval_n_samples_per_prompt, initial=0, desc="Evaluation Progress")
+        if cfg.trainer.dump_eval_results:
+            dump_dir = evaluation_dump_dir(str(cfg.trainer.export_path), global_step)
+            try:
+                recorder = PartialEvaluationRecorder(
+                    target_prefix=join_resource_path(dump_dir, "partial"),
+                    expected_rollouts=len(rows) * cfg.generator.eval_n_samples_per_prompt,
+                    source=val_set_name,
+                    upload=io.upload_file,
+                )
+            except Exception:
+                logger.exception("Partial evaluation staging failed; evaluation continues")
 
         async def collect(row, repetition):
             nonlocal last_request, last_batch
@@ -148,7 +163,20 @@ async def _collect_evaluation_rollouts(
             trajectory_batches.append(batch)
             last_request, last_batch = request, batch
 
+            first = len(accumulator.uids)
             accumulator.record(request, batch, uids)
+            if recorder is not None:
+                try:
+                    entries = evaluation_result_entries(
+                        tokenizer,
+                        batch,
+                        accumulator.data_sources[first:],
+                        accumulator.env_classes[first:],
+                        accumulator.uids[first:],
+                    )
+                    recorder.append(entries, repetition)
+                except Exception:
+                    logger.exception("Partial evaluation serialization failed; evaluation continues")
             pbar.update(1)
 
         async with asyncio.TaskGroup() as tasks:
@@ -158,6 +186,11 @@ async def _collect_evaluation_rollouts(
     finally:
         if pbar is not None:
             pbar.close()
+        if recorder is not None:
+            try:
+                await asyncio.to_thread(recorder.close)
+            except Exception:
+                logger.exception("Partial evaluation final backup failed; evaluation continues")
 
     if last_request is None or last_batch is None:
         raise ValueError("evaluation dataloader produced no batches")
@@ -281,7 +314,7 @@ async def evaluate(
         )
         async with session as pool:
             rollouts = await _collect_evaluation_rollouts(
-                eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool
+                eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool, tokenizer
             )
         concatenated_batch = rollouts.batch
         concat_data_sources = rollouts.data_sources
@@ -344,7 +377,7 @@ async def evaluate_step_wise(
     )
     async with session as pool:
         rollouts = await _collect_evaluation_rollouts(
-            eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool
+            eval_dataloader, trajectory_runner, cfg, global_step, val_set_name, accumulator, pool, tokenizer
         )
     concatenated_batch = rollouts.batch
     concat_data_sources = rollouts.data_sources
