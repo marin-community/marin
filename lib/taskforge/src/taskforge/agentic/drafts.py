@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "9"
+DRAFT_REVISION = "10"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -119,9 +119,23 @@ OWN_SCALE = re.compile(
 """Words of a judge question that set its own scale or reply format: a ``reference`` or ``checklist`` judge must end
 with verifyit's ``SCORE`` line, so such a question leaves every answer ungraded."""
 MAX_CHECKLIST_CRITERIA = 8
+PROMPT_NUMBER = re.compile(r"(?<![\w.])[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?!\w|\.\d)")
+"""A number of a prompt, in plain or scientific notation."""
+MIN_LEAKED_DIGITS = 3
+"""The significant digits from which a number of the prompt that the reference accepts counts as the answer given
+away: a short number such as 2 or 0.5 is often data that matches the answer by chance."""
+MIN_LEAKED_EXPRESSION_CHARS = 4
+PROMPT_EXPRESSION = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:\s*[*/]\s*\d+(?:\.\d+)?)+(?!\w|\.\d)")
+"""A product or quotient of numbers in a prompt, such as 8*40/9: an exact form of a value."""
+LEAKED_EXPRESSION_DIGITS = 4
+EXAMPLE_CUE = re.compile(r"\be\.g\.|\bfor example\b|\bsuch as\b|\bfor instance\b|\bexample\b|\blike\b", re.IGNORECASE)
+"""Words that introduce a format example in a prompt."""
+EXAMPLE_CUE_CHARS = 60
+"""How far after a cue a number still counts as its example."""
+"""The significant digits at which an exact form of the prompt is compared with the reference."""
 MAX_SHIFTED_NUMBERS = 12
 """The most numbers of a right answer that ``submit`` moves, one at a time: each is one grader run."""
-ANSWER_NUMBER = re.compile(r"(?<![\w.])[+-]?\d+(?:\.\d+)?(?![\w.])")
+ANSWER_NUMBER = re.compile(r"(?<![\w.])[+-]?\d+(?:\.\d+)?(?!\w|\.\d)")
 """A plain decimal of an answer, whose last digit gives its precision; not part of a name or of 1e-3."""
 # The ways a prompt asks a solver to mark its final answer, and the prose a solver writes before it.
 BOXED_ASKED = re.compile(r"\\boxed")
@@ -397,6 +411,7 @@ def draft_task_problems(task: TaskSpec, solver_machine: SolverMachine) -> list[s
         *leaked_reference_problems(task),
         *example_answer_problems(task),
         *answer_form_problems(task),
+        *answer_in_prompt_problems(task),
     ]
 
 
@@ -485,6 +500,99 @@ def precision_problems(task: TaskSpec) -> list[str]:
         f"The prompt asks for {decimals} decimals, so only {float(rounded)} may pass: set tolerance_abs to "
         f"0.5 * 10**-{decimals} around the unrounded value and tolerance_rel to 0 (now {spec.tolerance_abs} and "
         f"{spec.tolerance_rel})"
+    ]
+
+
+def _significant_digits(literal: str) -> int:
+    """The significant digits of a decimal literal, without the zeros that only place it."""
+    digits = Decimal(literal).normalize().as_tuple().digits
+    return len(digits)
+
+
+def _prompt_values(prompt: str, examples_only: bool) -> Iterator[tuple[str, Fraction, int]]:
+    """Each number of ``prompt`` and each product or quotient of numbers, such as 8*40/9, with its value and the
+    significant digits that it gives; with ``examples_only``, only those shortly after a cue such as "e.g."."""
+
+    def wanted(start: int) -> bool:
+        return not examples_only or EXAMPLE_CUE.search(prompt[max(0, start - EXAMPLE_CUE_CHARS) : start]) is not None
+
+    for match in PROMPT_NUMBER.finditer(prompt):
+        # In an example, an integer is often a unit or a definition, such as "annual = 365", not an answer.
+        integer = match.group().lstrip("+-").isdigit()
+        if wanted(match.start()) and not (examples_only and integer):
+            yield match.group(), Fraction(match.group()), _significant_digits(match.group())
+    for match in PROMPT_EXPRESSION.finditer(prompt):
+        if not wanted(match.start()):
+            continue
+        numbers = [Fraction(number) for number in re.findall(r"\d+(?:\.\d+)?", match.group())]
+        value = numbers[0]
+        for operator, number in zip(re.findall(r"[*/]", match.group()), numbers[1:], strict=True):
+            if operator == "/" and number == 0:
+                break
+            value = value * number if operator == "*" else value / number
+        else:
+            yield match.group(), value, LEAKED_EXPRESSION_DIGITS
+
+
+def _rounded(value: Fraction, digits: int) -> Decimal:
+    return Decimal(f"{float(value):.{digits - 1}e}")
+
+
+def _reference_numbers(task: TaskSpec) -> list[Fraction]:
+    """The numeric answers of the grader with enough significant digits to identify them: a numeric or math
+    reference, or the numbers of a script grader's expected JSON."""
+    grader = task.grader
+    literals: list[str] = []
+    if isinstance(grader, VerifyitGrader):
+        spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+        if isinstance(spec, NumericSpec | MathSpec) and PROMPT_NUMBER.fullmatch(spec.expected.strip()):
+            literals.append(spec.expected.strip())
+    else:
+        literals += [
+            repr(scalar)
+            for value in _reference_values(task)
+            for scalar in _scalars(value)
+            if isinstance(scalar, int | float) and math.isfinite(scalar)
+        ]
+    return [Fraction(literal) for literal in literals if _significant_digits(literal) >= MIN_LEAKED_DIGITS]
+
+
+def _scalars(value: object) -> Iterator[object]:
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _scalars(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _scalars(item)
+    elif not isinstance(value, bool):
+        yield value
+
+
+def answer_in_prompt_problems(task: TaskSpec) -> list[str]:
+    """A prompt that gives a numeric answer of the grader, often as a format example: a number of the prompt, or a
+    product such as 8*40/9, that is the reference rounded to the digits it shows. A math reference that is not a
+    number counts when the prompt contains it."""
+    prompt = " ".join(str(event.content) for event in task.context.events if isinstance(event, TextMessage))
+    references = _reference_numbers(task)
+    given = [
+        text
+        # A script grader's expected files often hold the task's inputs too, so only its format examples count.
+        for text, value, digits in _prompt_values(prompt, examples_only=isinstance(task.grader, ScriptGrader))
+        if digits >= MIN_LEAKED_DIGITS
+        and any(_rounded(reference, digits) == _rounded(value, digits) for reference in references)
+    ]
+    grader = task.grader
+    if not given and isinstance(grader, VerifyitGrader):
+        spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+        if isinstance(spec, MathSpec) and not PROMPT_NUMBER.fullmatch(spec.expected.strip()):
+            reference = "".join(spec.expected.split()).lower()
+            if len(reference) >= MIN_LEAKED_EXPRESSION_CHARS and reference in "".join(prompt.split()).lower():
+                given = [spec.expected]
+    if not given:
+        return []
+    return [
+        f"The prompt contains {given[0]!r}, which is the reference answer at the digits it shows, so the solver can "
+        "copy it. Write format examples with placeholders or with values that are not the answer"
     ]
 
 

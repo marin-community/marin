@@ -285,7 +285,26 @@ def exact_with_alternatives() -> TaskSpec:
     return task.model_copy(update={"grader": verifyit_package(ExactSpec(expected=alternatives)).grader})
 
 
+def _numeric(tolerance: float) -> tuple[TaskSpec, str]:
+    """The numeric example with ``tolerance``, and its right answer to the 2 decimals that its prompt asks for."""
+    task = EXAMPLES["numeric"]("example")
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    assert isinstance(spec, NumericSpec)
+    task = task.model_copy(
+        update={"grader": verifyit_package(dataclasses.replace(spec, tolerance_abs=tolerance)).grader}
+    )
+    return task, f"{float(spec.expected):.2f}"
+
+
+def format_example_with_the_answer() -> TaskSpec:
+    task, right = _numeric(0.005)
+    return _with_prompt(task, f"{_prompt(task)} Write a plain decimal, for example {right}.")
+
+
 DEFECTS = {
+    "numeric format example that is the answer": (format_example_with_the_answer, "reference answer at the digits"),
     "exact entries meant as alternatives, which make a list": (exact_with_alternatives, "not a set of alternatives"),
     "exact answer on an Answer line that plain_text compares whole": (choice_with_an_answer_line, "its own grader"),
     "checklist with more criteria than judge calls allow": (long_checklist, "criteria"),
@@ -326,19 +345,6 @@ def test_submit_refuses_a_task_without_the_machine_of_the_proposal():
     assert tools.problems(EXAMPLES["numeric"]("example")) == [
         "The proposal's solver_machine is shellsim: the task must give the solver that machine"
     ]
-
-
-def _numeric(tolerance: float) -> tuple[TaskSpec, str]:
-    """The numeric example with ``tolerance``, and its right answer to the 2 decimals that its prompt asks for."""
-    task = EXAMPLES["numeric"]("example")
-    grader = task.grader
-    assert isinstance(grader, VerifyitGrader)
-    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
-    assert isinstance(spec, NumericSpec)
-    task = task.model_copy(
-        update={"grader": verifyit_package(dataclasses.replace(spec, tolerance_abs=tolerance)).grader}
-    )
-    return task, f"{float(spec.expected):.2f}"
 
 
 async def test_submit_grades_the_right_answer_and_its_shifted_numbers():
