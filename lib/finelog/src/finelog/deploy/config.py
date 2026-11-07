@@ -17,6 +17,7 @@ with. A server's own key pair is its identity: the hub records rows under the
 """
 
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib.resources import files
@@ -31,6 +32,8 @@ K8S_APP_LABEL = "app"
 K8S_CONTAINER_NAME = "finelog"
 K8S_ENV_SECRET_SUFFIX = "-env"
 SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
+# A cluster name lands on the GCE bootstrap's shell line and in SQL string literals.
+CLUSTER_NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,62}")
 
 
 class TelemetryMigrationMode(StrEnum):
@@ -261,8 +264,18 @@ class FinelogConfig:
     # fills the disk on a busy hub; set it on any server with a bounded disk.
     object_cache_gb: int | None = None
     telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
+    # This server's own cluster name. When set, the server stores every row whose
+    # writer leaves `cluster` empty under this name. Unset leaves those rows empty.
+    cluster: str | None = None
 
     def __post_init__(self) -> None:
+        if self.cluster is not None and not CLUSTER_NAME_RE.fullmatch(self.cluster):
+            raise ValueError(f"cluster must match {CLUSTER_NAME_RE.pattern}; got {self.cluster!r}")
+        if self.cluster is not None and self.forwarding is not None and self.cluster != self.forwarding.cluster:
+            raise ValueError(
+                f"cluster {self.cluster!r} differs from forwarding.cluster {self.forwarding.cluster!r}; "
+                "the forwarder would treat this server's own rows as foreign"
+            )
         if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
             raise ValueError("query_metadata_cache_mb must be > 0")
         if self.query_index_cache_mb is not None and self.query_index_cache_mb <= 0:
@@ -416,6 +429,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         ),
         object_cache_gb=(None if raw.get("object_cache_gb") is None else int(raw["object_cache_gb"])),
         telemetry_migration_mode=TelemetryMigrationMode(raw.get("telemetry_migration_mode", "normal")),
+        cluster=raw.get("cluster"),
     )
 
 

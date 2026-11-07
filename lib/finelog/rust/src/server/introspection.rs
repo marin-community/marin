@@ -108,6 +108,8 @@ struct ProcessInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoreInfo {
+    /// This server's own cluster name; empty when none is configured.
+    cluster: String,
     data_dir: String,
     remote_log_dir: String,
     namespaces: usize,
@@ -342,6 +344,7 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
             vm_size_bytes: read_proc_self_status_kb("VmSize") as i64 * 1024,
         },
         store: StoreInfo {
+            cluster: store.local_cluster().to_string(),
             data_dir: store
                 .data_dir()
                 .map(|d| d.display().to_string())

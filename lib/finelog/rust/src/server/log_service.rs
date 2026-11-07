@@ -627,8 +627,14 @@ impl LogService for LogServiceImpl {
 
         // Every ingested row is tagged with its origin cluster, so a global finelog
         // that collects pushes from many federated clusters can namespace them by
-        // origin. The value is bound to the writer's credential.
+        // origin. The value is bound to the writer's credential; a local push that
+        // names no cluster is this server's own.
         let cluster = authorized_cluster(&ctx, request.cluster.unwrap_or(""))?;
+        let cluster = if cluster.is_empty() {
+            self.store.local_cluster()
+        } else {
+            cluster
+        };
 
         let key = request.key.unwrap_or("");
         let rows = request

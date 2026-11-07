@@ -31,10 +31,11 @@ pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
 pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
 
 /// Origin-cluster column, added to every registered table that does not declare
-/// one (see [`with_implicit_cluster`]). Local writers leave it empty; the
-/// cross-cluster forwarder stamps it with the origin cluster on the way to a hub
-/// finelog, so a hub that collects rows from many federated clusters can filter or
-/// group them by the cluster that produced them.
+/// one (see [`with_implicit_cluster`]). It names the cluster that produced the row.
+/// A server configured with its own cluster name fills it on every local write that
+/// leaves it empty (see [`fill_empty_cluster_column`]); a hub binds forwarded rows to
+/// the forwarding credential's cluster (see [`stamp_cluster_column`]). A server with
+/// no cluster name stores local rows with it empty.
 pub const IMPLICIT_CLUSTER_COLUMN: &str = "cluster";
 
 /// Max bytes per WriteRows request body.
@@ -1448,6 +1449,48 @@ pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {
     aligned.arrays[i] = stamped;
 }
 
+/// Fill the aligned batch's origin `cluster` column with `local` on every row
+/// that leaves it NULL or empty, keeping any value the writer supplied. No-op
+/// when the namespace's schema has no cluster column.
+///
+/// This is the local-write counterpart of [`stamp_cluster_column`]: a writer
+/// admitted by a trusted network carries no per-writer identity, so a row it
+/// leaves blank is this server's own, and a row it names keeps that name.
+pub fn fill_empty_cluster_column(
+    aligned: &mut AlignedBatch,
+    local: &str,
+) -> Result<(), StatsError> {
+    let Some(i) = aligned
+        .fields
+        .iter()
+        .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+    else {
+        return Ok(());
+    };
+    let current = cast(&aligned.arrays[i], &DataType::Utf8)
+        .map_err(|e| StatsError::Internal(format!("cast cluster column to utf8: {e}")))?;
+    let current = current
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| StatsError::Internal("cluster column is not a string column".into()))?;
+    if current.iter().all(|v| v.is_some_and(|v| !v.is_empty())) {
+        return Ok(());
+    }
+    let filled: StringArray = current
+        .iter()
+        .map(|v| match v {
+            Some(v) if !v.is_empty() => Some(v),
+            _ => Some(local),
+        })
+        .collect();
+    let filled: ArrayRef = cast(&filled, aligned.fields[i].data_type())
+        .map_err(|e| StatsError::Internal(format!("cast filled cluster column: {e}")))?;
+    let old_size = array_buffer_size(&aligned.arrays[i]);
+    aligned.byte_size += array_buffer_size(&filled) - old_size;
+    aligned.arrays[i] = filled;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2108,6 +2151,65 @@ mod tests {
             vec![Some("cw-rno2a"), Some("cw-rno2a")],
             "the credential's cluster overrides the caller-supplied value"
         );
+    }
+
+    #[test]
+    fn fill_empty_cluster_column_names_blank_rows_and_keeps_named_ones() {
+        // A local writer that leaves `cluster` blank wrote this server's own row; one
+        // that names a cluster keeps it. NULL (column omitted) and '' both count as blank.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("cluster", DataType::Utf8, true),
+            ],
+            vec![
+                Arc::new(StringArray::from(vec!["e1", "e2", "e3"])),
+                Arc::new(StringArray::from(vec![None, Some(""), Some("marin-dev")])),
+            ],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        fill_empty_cluster_column(&mut aligned, "marin").unwrap();
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        let filled = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            filled.iter().collect::<Vec<_>>(),
+            vec![Some("marin"), Some("marin"), Some("marin-dev")],
+        );
+    }
+
+    #[test]
+    fn fill_empty_cluster_column_fills_a_batch_that_omits_the_column() {
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1", "e2"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        fill_empty_cluster_column(&mut aligned, "marin").unwrap();
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        let filled = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(filled.iter().collect::<Vec<_>>(), vec![Some("marin"), Some("marin")]);
     }
 
     #[test]

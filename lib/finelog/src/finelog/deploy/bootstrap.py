@@ -160,6 +160,7 @@ def render_bootstrap(
     query_index_cache_mb: int | None,
     object_cache_gb: int | None = None,
     telemetry_migration_mode: str = "normal",
+    cluster: str | None = None,
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -186,6 +187,8 @@ def render_bootstrap(
     if object_cache_gb is not None:
         query_env += f"-e FINELOG_OBJECT_CACHE_GB={object_cache_gb} "
     migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
+    if cluster is not None:
+        migration_env += f"-e FINELOG_CLUSTER={cluster} "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,

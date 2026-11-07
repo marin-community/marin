@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::SchemaRef;
@@ -47,10 +47,10 @@ use crate::store::object_store::{
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_managed_schema, merge_schemas, resolve_key_column, schema_from_proto_view,
-    schema_to_proto_owned, stamp_cluster_column, stored_form, validate_and_align_batch,
-    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
-    IMPLICIT_SEQ_COLUMN, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
+    fill_empty_cluster_column, merge_managed_schema, merge_schemas, resolve_key_column,
+    schema_from_proto_view, schema_to_proto_owned, stamp_cluster_column, stored_form,
+    validate_and_align_batch, validate_and_align_forwarded_batch, validate_index_policies,
+    AlignedBatch, Column, Schema, IMPLICIT_SEQ_COLUMN, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::state_store::object::ObjectTableStateStore;
 use crate::store::state_store::tree::catalogs_equal;
@@ -211,6 +211,9 @@ pub struct Store {
     /// The process's only maintenance cadence owner.
     scheduler: Arc<MaintenanceScheduler>,
     policies: PolicyRegistry,
+    /// This server's own cluster name, set once at startup. When set, every
+    /// local write that leaves the origin `cluster` column empty is filled with it.
+    local_cluster: OnceLock<String>,
     _store_lock: Option<File>,
 }
 
@@ -375,6 +378,7 @@ impl Store {
             tables,
             scheduler,
             policies: PolicyRegistry::new(telemetry_root_write_mode),
+            local_cluster: OnceLock::new(),
             _store_lock: store_lock,
         };
         // Register/evolve the privileged `log` schema in the catalog BEFORE
@@ -1240,6 +1244,24 @@ impl Store {
         self.append_routed_batches(rows_written, routed, origin_cluster, BatchAlignment::Strict)
     }
 
+    /// Bind each row's origin `cluster`. An authenticated origin (a forwarding
+    /// credential) overwrites every row; otherwise a configured local cluster
+    /// fills the rows the writer left empty.
+    fn stamp_origin(
+        &self,
+        aligned: &mut AlignedBatch,
+        origin_cluster: Option<&str>,
+    ) -> Result<(), StatsError> {
+        if let Some(origin) = origin_cluster {
+            stamp_cluster_column(aligned, origin);
+            return Ok(());
+        }
+        match self.local_cluster.get() {
+            Some(local) => fill_empty_cluster_column(aligned, local),
+            None => Ok(()),
+        }
+    }
+
     fn append_routed_batches(
         &self,
         rows_written: i64,
@@ -1253,9 +1275,7 @@ impl Store {
             let destination = partition.destination.logical_namespace;
             let table = self.tables.require_writable(&destination)?;
             let (mut aligned, ignored) = alignment.align(&partition.batch, table.schema())?;
-            if let Some(origin) = origin_cluster {
-                stamp_cluster_column(&mut aligned, origin);
-            }
+            self.stamp_origin(&mut aligned, origin_cluster)?;
             ignored_columns.extend(ignored);
             prepared_partitions.push((destination, table, aligned));
         }
@@ -1292,9 +1312,7 @@ impl Store {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
         let table = self.tables.require_writable(name)?;
         let mut aligned = validate_and_align_batch(&batch, table.schema())?;
-        if let Some(origin) = origin_cluster {
-            stamp_cluster_column(&mut aligned, origin);
-        }
+        self.stamp_origin(&mut aligned, origin_cluster)?;
         let n = aligned.num_rows as i64;
         let last_seq = self.tables.append(name, &aligned)?;
         debug_assert_eq!(table.name(), name);
@@ -1474,6 +1492,28 @@ impl Store {
     pub fn configure_relay(&self) {
         self.tables
             .set_maintenance_profile(MaintenanceProfile::Relay);
+    }
+
+    /// Name this server's own cluster. From then on every local write that leaves
+    /// the origin `cluster` column empty is stored with `cluster`. Called once at
+    /// startup, before the server accepts writes.
+    pub fn configure_local_cluster(&self, cluster: String) -> Result<(), StatsError> {
+        if cluster.is_empty() {
+            return Err(StatsError::SchemaValidation(
+                "local cluster name must not be empty".to_string(),
+            ));
+        }
+        self.local_cluster.set(cluster).map_err(|rejected| {
+            StatsError::Internal(format!(
+                "local cluster is already configured as {:?}; refusing {rejected:?}",
+                self.local_cluster()
+            ))
+        })
+    }
+
+    /// This server's own cluster name, or `""` when none is configured.
+    pub fn local_cluster(&self) -> &str {
+        self.local_cluster.get().map_or("", String::as_str)
     }
 
     /// Select the recovery authority an ingest acknowledgement must reach.
