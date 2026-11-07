@@ -5,21 +5,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import Counter
 from dataclasses import replace
-from datetime import datetime
-from itertools import pairwise
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl import skyrl
-from marin.rl.rl_progress import RunSummary
-from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, read_skyrl_launch_config, run_skyrl
+from marin.rl.rl_progress import RunSummary, membership_sha256, protocol_sha256
+from marin.rl.skyrl import read_skyrl_launch_config, read_stored_skyrl_receipt
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import publish_rl_progress
@@ -27,7 +23,7 @@ from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 
-RESULT_FILENAME = "loop-result.json"
+RESULT_FILENAME = "progress-record.json"
 PUBLICATION_FILENAME = "publication.json"
 
 
@@ -37,23 +33,6 @@ def publishes(preset: presets.Preset) -> bool:
         presets.Focus.DATA,
         presets.Focus.TRAIN,
     )
-
-
-def _json_observation(path: StoragePath, evidence: list[str]) -> dict | None:
-    try:
-        with path.open("rb") as source:
-            value = source.read(2 * 1024 * 1024 + 1)
-        if len(value) > 2 * 1024 * 1024:
-            raise ValueError("Attempt observation exceeds its read limit")
-        row = json.loads(value)
-        if not isinstance(row, dict):
-            raise ValueError("Attempt observation must be an object")
-        return row
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as error:
-        evidence.append(f"Could not read {path}: {type(error).__name__}.")
-        return None
 
 
 def _phase_result(
@@ -82,7 +61,7 @@ def _phase_result(
         observation.get(prefix + "all/num_attempted") != len(rows)
         or observation.get(prefix + "all/num_scored") != scored
     ):
-        evidence.append(f"Evaluation step {step} lacks matching current-attempt counters.")
+        evidence.append(f"Evaluation step {step} lacks matching lineage counters.")
         return None
     values = scoring.evaluation_statistics(table)
     reward = values.get(evaluation.name + "/family_mean")
@@ -93,19 +72,33 @@ def _phase_result(
     return {"reward": reward, "attempted": len(counts), "scored": len(scored_tasks)}
 
 
-def _stored_receipt(run_output: str, attempt_id: str | None) -> dict:
-    root = StoragePath(run_output)
-    terminal = root / "terminal.json"
-    receipt = json.loads(presets.read_text(terminal)) if presets.exists(terminal) else None
-    if receipt is None or (attempt_id is not None and receipt["config"]["run"]["attempt_id"] != attempt_id):
-        launch = read_skyrl_launch_config(run_output)
-        path = StoragePath(launch["artifacts"]["attempts_root"]) / f"{attempt_id or launch['run']['attempt_id']}.json"
-        receipt = json.loads(presets.read_text(path))
-    if attempt_id is not None and receipt["config"]["run"]["attempt_id"] != attempt_id:
-        raise ValueError("Stored receipt belongs to another native attempt")
-    if receipt["result"]["state"] not in {"succeeded", "failed", "cancelled", "killed", "error", "terminated"}:
-        raise ValueError("A progress record requires a terminal native attempt")
-    return receipt
+def record_path(run_output: str, attempt_id: str) -> StoragePath:
+    return StoragePath(run_output) / "exports/attempts" / attempt_id / RESULT_FILENAME
+
+
+def publication_path(run_output: str, attempt_id: str) -> StoragePath:
+    return StoragePath(run_output) / "publication" / attempt_id
+
+
+def stored_attempts(run_output: str) -> dict[str, skyrl.SkyRLLaunchReceipt]:
+    """Discover native attempts from their stored receipts, including attempts with no progress record."""
+    current = read_stored_skyrl_receipt(run_output)
+    try:
+        launch = current.config if current is not None else read_skyrl_launch_config(run_output)
+    except FileNotFoundError:
+        return {}
+    attempts = {current.config["run"]["attempt_id"]: current} if current is not None else {}
+    for path in scoring.paths(StoragePath(launch["artifacts"]["attempts_root"]) / "*.json"):
+        attempt_id = path.name.removesuffix(".json")
+        receipt = read_stored_skyrl_receipt(run_output, attempt_id)
+        if receipt is not None:
+            attempts[attempt_id] = receipt
+    return attempts
+
+
+def label(preset: presets.Preset, inputs: gate.GateInputs) -> str:
+    settings = (text.split("=", 1) for text in inputs.settings)
+    return " ".join([preset.name, *(f"{key.rsplit('.', 1)[-1]}={json.loads(value)}" for key, value in settings)])
 
 
 def build_record(
@@ -113,57 +106,90 @@ def build_record(
     preset: presets.Preset,
     *,
     attempt_id: str | None = None,
-    label: str | None = None,
 ) -> dict:
     """Build a terminal progress record from stored native outputs without launching or live lookups."""
     if not publishes(preset):
         raise ValueError("Progress publication requires a trained-panel preset")
-    receipt = _stored_receipt(run_output, attempt_id)
-    launch, result = receipt["config"], receipt["result"]
+    receipt = read_stored_skyrl_receipt(run_output, attempt_id)
+    if receipt is None:
+        raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
+    launch, result = receipt.config, receipt.result
+    if result.state not in {"succeeded", "failed"}:
+        raise ValueError("A progress record requires a terminal native attempt")
+    preset = replace(preset, updates=launch["skyrl"]["trainer"]["max_steps"])
     native = launch["run"]
     attempt_id = native["attempt_id"]
-    preset = replace(preset, updates=launch["skyrl"]["trainer"]["max_steps"])
-    root = StoragePath(run_output)
-    export = root / "exports"
-    destination = export / "attempts" / attempt_id / RESULT_FILENAME
+    destination = record_path(run_output, attempt_id)
     evidence = []
+    provenance = result.provenance or {}
+    options = gate.recorded_run_options(provenance.get("command_line", []))
     tracking = skyrl.read_skyrl_attempt_tracking(run_output, attempt_id)
-    metrics = {}
-    for path in scoring.paths(export / "metrics/step-*.json"):
-        row = _json_observation(path, evidence)
-        if row is not None and row.get("attempt_id") == attempt_id:
-            metrics[row["step"]] = row
-    invariants = gate.training_invariants(preset, metrics)
-    failed = [fact.name for fact in invariants if not fact.holds]
-    if result["state"] != "succeeded":
+    attempts = stored_attempts(run_output)
+    current = read_stored_skyrl_receipt(run_output)
+    latest = current is not None and current.config["run"]["attempt_id"] == attempt_id
+    started, finished = result.started_at, result.finished_at
+    lineage = {
+        key: value
+        for key, value in attempts.items()
+        if key == attempt_id
+        or latest
+        or (
+            started is not None
+            and value.result.started_at is not None
+            and presets.utc_millis(value.result.started_at) <= presets.utc_millis(started)
+        )
+    }
+    metrics = gate.read_metrics(StoragePath(run_output))
+    if not latest:
+        selected_steps = [step for step, row in metrics.items() if row.get("attempt_id") == attempt_id]
+        last_step = max(selected_steps, default=-1)
+        metrics = {step: row for step, row in metrics.items() if step <= last_step and row.get("attempt_id") in lineage}
+    baseline_step = None if options.resume_from else 0
+    checked_metrics = (
+        metrics
+        if baseline_step is not None
+        else {step: row for step, row in metrics.items() if "policy/policy_update_steps" in row}
+    )
+    invariants = gate.training_invariants(preset, checked_metrics)
+    planned = (
+        next(fact.holds for fact in invariants if fact.name == "planned_updates") if baseline_step is not None else None
+    )
+    failed = [
+        fact.name for fact in invariants if not fact.holds and (fact.name != "planned_updates" or planned is not None)
+    ]
+    if baseline_step is None:
+        evidence.append("The resume step is not stored; baseline and planned-update validation remain unknown.")
+    if result.state != "succeeded":
         failed.insert(0, "native_attempt")
     optimizer_steps = sum(
         int(row.get("policy/policy_update_steps", 0)) for step, row in metrics.items() if 0 < step <= preset.updates
     )
-    started, finished = result.get("started_at"), result.get("finished_at")
+    lineage_ids = set(lineage) | {row["attempt_id"] for row in metrics.values() if row.get("attempt_id")}
+    windows = [
+        (lineage[key].result.started_at, lineage[key].result.finished_at) if key in lineage else (None, None)
+        for key in lineage_ids
+    ]
     elapsed = None
-    if started is not None and finished is not None:
-        elapsed = (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
-        if elapsed < 0:
+    uncertain_order = not latest and any(
+        value.result.started_at is None for key, value in attempts.items() if key != attempt_id
+    )
+    if not uncertain_order and all(start is not None and finish is not None for start, finish in windows):
+        durations = [presets.utc_millis(finish) - presets.utc_millis(start) for start, finish in windows]
+        if any(value < 0 for value in durations):
             raise ValueError("Native completion precedes its recorded start")
+        elapsed = sum(durations) / 1000
     else:
-        evidence.append("Native start or finish time is unavailable; elapsed time remains unknown.")
-    evaluation = preset.evaluations[0]
+        evidence.append("A lineage attempt's native time window is unavailable; elapsed time remains unknown.")
+    gain = next(
+        (metric.key.split("/", 1)[0] for metric in preset.objectives if "/gain" in metric.key),
+        preset.evaluations[0].name,
+    )
+    evaluation = next(item for item in preset.evaluations if item.name == gain)
     sources = scoring.recorded_sources(launch, evaluation.name)
-    task_ids = []
-    for source in sources:
-        with (StoragePath(source["uri"]) / source["relative_path"]).open("rb") as stream:
-            task_ids.extend(
-                json.loads(value)["id"]
-                for value in pq.read_table(stream, columns=["task_spec"])["task_spec"].to_pylist()
-            )
-    if not task_ids or len(set(task_ids)) != len(task_ids):
-        raise ValueError("Recorded evaluation inputs must contain distinct task IDs")
+    panel = scoring.read_recorded_panel(launch, evaluation.name)
+    task_ids = list(panel.task_ids)
     protocol = scoring.evaluation_protocol(launch, evaluation.name)
     evaluation = replace(evaluation, answers=protocol["n_samples_per_prompt"])
-    protocol_hash = hashlib.sha256(
-        json.dumps(protocol, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    ).hexdigest()
     phases = [None, None]
     try:
         scores = scoring.panel_scores(evaluation, run_output)
@@ -177,38 +203,22 @@ def build_record(
                 set(task_ids),
                 evidence,
             )
-            for step in (0, preset.updates)
+            for step in (baseline_step, preset.updates)
         ]
     except scoring.InvalidComparison as error:
         evidence.append(f"Evaluation measurements unavailable: {error}")
     if phases[0] is None and phases[1] is not None:
         evidence.append("Final gain lacks an attributable baseline measurement.")
         phases[1] = None
-    provenance = result.get("provenance") or {}
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
-    if label is None:
-        arguments = provenance.get("command_line") or ()
-        overrides = [value for previous, value in pairwise(arguments) if previous == "--set"]
-        overrides.extend(value.partition("=")[2] for value in arguments if value.startswith("--set="))
-        label = " ".join(
-            [
-                preset.name,
-                *(
-                    value.split("=", 1)[0].rsplit(".", 1)[-1] + "=" + value.split("=", 1)[1]
-                    for value in overrides
-                    if "=" in value
-                ),
-            ]
-        )
     record = {
         "run_id": native["id"],
         "attempt_id": attempt_id,
-        "label": label,
+        "label": label(preset, options.inputs),
         "campaign": None,
         "series": preset.name,
         "issue": None,
-        "layout": preset.recipe.layout.name,
         "verdict": None,
         "gate": None,
         "min_scored_fraction": presets.MINIMUM_PANEL_COVERAGE,
@@ -217,11 +227,14 @@ def build_record(
         "started_at": started,
         "completed_at": finished,
         "elapsed_seconds": elapsed,
-        "timing_scope": "native_job_start_to_finish",
+        "timing_scope": "checkpoint_lineage_native_jobs",
         "status": "failed" if failed else "succeeded",
         "failed_facts": failed,
         "optimizer_steps": optimizer_steps,
-        "iris_job_id": result.get("iris_job_id"),
+        "resume_from": options.resume_from,
+        "baseline_step": baseline_step,
+        "planned_updates_valid": planned,
+        "iris_job_id": result.iris_job_id,
         "wandb_url": tracking.get("wandb_url"),
         "engine": tracking.get("engine"),
         "source_revision": (
@@ -233,12 +246,10 @@ def build_record(
             "name": evaluation.name,
             "version": "; ".join(source["identity"] for source in sources),
             "task_count": len(task_ids),
-            "task_set_sha256": scoring.task_set_sha256(launch, evaluation.name),
-            "membership_sha256": (
-                hashlib.sha256(json.dumps(sorted(task_ids), separators=(",", ":")).encode()).hexdigest()
-            ),
+            "task_set_sha256": panel.task_set_sha256,
+            "membership_sha256": membership_sha256(task_ids),
             "protocol": protocol,
-            "protocol_sha256": protocol_hash,
+            "protocol_sha256": protocol_sha256(protocol),
         },
         "baseline": phases[0],
         "final": phases[1],
@@ -249,73 +260,136 @@ def build_record(
     return record
 
 
-def retain_record(
-    run_output: str, preset: presets.Preset, *, attempt_id: str | None = None, label: str | None = None
-) -> dict:
+def retain_record(run_output: str, preset: presets.Preset, *, attempt_id: str | None = None) -> dict:
     """Build and retain one terminal record from its stored native outputs."""
-    record = build_record(run_output, preset, attempt_id=attempt_id, label=label)
+    record = build_record(run_output, preset, attempt_id=attempt_id)
     destination = StoragePath(record["artifact_uri"])
     destination.parent.mkdirs()
     destination.write_text(json.dumps(record, allow_nan=False, indent=2))
     return record
 
 
-def run_loop(config: SkyRLRunConfig, preset: presets.Preset, label: str) -> SkyRLRun:
-    """Run native training and retain the terminal attempt before returning or raising."""
-    try:
-        native = run_skyrl(config)
-    except Exception as training_error:
-        try:
-            retain_record(
-                str(StoragePath(config.output.export_root).parent), preset, attempt_id=config.attempt_id, label=label
-            )
-        except Exception as recording_error:
-            raise ExceptionGroup(
-                "Native execution and record persistence failed", [training_error, recording_error]
-            ) from None
-        raise
-    retain_record(str(StoragePath(config.output.export_root).parent), preset, attempt_id=config.attempt_id, label=label)
-    return native
-
-
-def retained_records(training_path: str) -> list[str]:
-    """Find terminal records retained under every native attempt of one run."""
-    return [str(path) for path in scoring.paths(StoragePath(training_path) / "exports/attempts/*" / RESULT_FILENAME)]
-
-
-def _publish_attempt(record_path: str, gate_path: str | None, issue: int | None, output: str) -> Artifact:
+def _publish_attempt(record: dict, service_url: str | None, output: str) -> Artifact:
     root = StoragePath(output)
     frozen = root / RESULT_FILENAME
     if not presets.exists(frozen):
-        record = json.loads(presets.read_text(record_path))
-        record["issue"] = issue
-        gate_record = (
-            presets.artifact_record(gate_path)
-            if gate_path is not None and presets.exists(StoragePath(gate_path) / RECORD_FILENAME)
-            else None
-        )
-        if gate_record is not None:
-            record.update(gate=gate_record.name, verdict=gate_record.result["verdict"])
         RunSummary.model_validate(record)
         root.mkdirs()
         frozen.write_text(json.dumps(record, allow_nan=False, indent=2))
-    receipt = publish_rl_progress.publish_result(json.loads(presets.read_text(frozen)))
+    receipt = publish_rl_progress.publish_result(json.loads(presets.read_text(frozen)), service_url)
     (root / PUBLICATION_FILENAME).write_text(json.dumps(receipt, indent=2))
     return Artifact(path=output)
 
 
 def publication_step(
-    training: ArtifactStep, record_path: str, *, gate_path: str | None = None, issue: int | None = None
+    training: ArtifactStep,
+    record: dict,
+    *,
+    gate_path: str | None = None,
+    issue: int | None = None,
+    service_url: str | None = None,
 ) -> ArtifactStep[Artifact]:
-    """Publish one native pair using its first retained publication payload."""
-    record = RunSummary.model_validate_json(presets.read_text(record_path))
+    """Publish one native pair using its first retained publication payload and executor lock."""
+    record = dict(record, issue=issue)
+    gate_record = (
+        presets.artifact_record(gate_path)
+        if gate_path is not None and presets.exists(StoragePath(gate_path) / RECORD_FILENAME)
+        else None
+    )
+    if gate_record is not None:
+        record.update(gate=gate_record.name, verdict=gate_record.result["verdict"])
+    summary = RunSummary.model_validate(record)
     step = apply(
-        f"{training.name}/publication/{record.attempt_id}",
+        f"{training.name}/publication/{summary.attempt_id}",
         _publish_attempt,
         version=training.version,
-        record_path=record_path,
-        gate_path=gate_path,
-        issue=issue,
+        record=record,
+        service_url=service_url,
         output=OUT,
     )
-    return replace(step, override_path=str(StoragePath(training.path()) / "publication" / record.attempt_id))
+    return replace(step, override_path=str(publication_path(training.path(), summary.attempt_id)))
+
+
+def publish_run(
+    training: ArtifactStep,
+    preset: presets.Preset,
+    *,
+    gate_path: str | None = None,
+    issue: int | None = None,
+    service_url: str | None = None,
+) -> dict:
+    """Build and publish terminal attempts on the caller, isolating each publication failure."""
+    from marin.execution.lazy import run  # noqa: PLC0415
+    from rigging.auth import IapCredentialsUnavailable, IapLoginRequired  # noqa: PLC0415
+
+    result = {"served_records": [], "unserved_records": [], "errors": []}
+    path = training.path()
+    try:
+        attempts = stored_attempts(path)
+        if not attempts:
+            raise FileNotFoundError(f"No stored native receipt at {path}")
+    except Exception as error:
+        attempts = {}
+        result["unserved_records"].append(path)
+        result["errors"].append(str(error))
+    current = read_stored_skyrl_receipt(path) if attempts else None
+    current_id = current.config["run"]["attempt_id"] if current is not None else None
+    for attempt_id in attempts:
+        destination = record_path(path, attempt_id)
+        try:
+            record = (
+                json.loads(presets.read_text(destination))
+                if presets.exists(destination)
+                else retain_record(path, preset, attempt_id=attempt_id)
+            )
+            step = publication_step(
+                training,
+                record,
+                gate_path=gate_path if attempt_id == current_id else None,
+                issue=issue if attempt_id == current_id else record.get("issue"),
+                service_url=service_url,
+            )
+            run(step, max_concurrent=1)
+            result["served_records"].append(str(destination))
+        except Exception as error:
+            causes = []
+            cause = error
+            while cause is not None:
+                causes.append(str(cause))
+                if isinstance(cause, (IapCredentialsUnavailable, IapLoginRequired)):
+                    result["login"] = "iris login"
+                cause = cause.__cause__
+            result["unserved_records"].append(str(destination))
+            result["errors"].append(": ".join(dict.fromkeys(causes)))
+    if result["unserved_records"]:
+        result["retry"] = "Repeat the original command with --wait."
+    return result
+
+
+def publish_controls(preset_name: str, *, service_url: str | None = None) -> dict:
+    """Publish the exact pinned control paths using the same frozen payloads as the launcher."""
+    preset = presets.PRESETS[preset_name]
+    result = {"served_records": [], "unserved_records": [], "errors": []}
+    if not publishes(preset):
+        return result
+    for pin in gate.control_pins(preset_name):
+        for index in range(pin.runs):
+            path = gate.control_path(preset, pin, index)
+            training = ArtifactStep(
+                name=presets.control_name(pin.preset, pin.main_commit, index),
+                version=pin.revision,
+                artifact_type=Artifact,
+                build_config=lambda _context: None,
+                run=Artifact.raw_load,
+                override_path=path,
+            )
+            published = publish_run(training, presets.PRESETS[pin.preset], service_url=service_url)
+            for key in ("served_records", "unserved_records", "errors"):
+                result[key].extend(published[key])
+            if "login" in published:
+                result["login"] = published["login"]
+    if result["unserved_records"]:
+        result["retry"] = (
+            f"Repeat python -m experiments.post_training.publish_rl_progress --preset {preset_name} --controls."
+        )
+    return result

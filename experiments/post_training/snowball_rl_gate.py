@@ -323,7 +323,8 @@ def _verdict(
     return verdict, Label.REGRESSION if worse else Label.NO_CHANGE, None
 
 
-def _metrics(root: StoragePath) -> dict[int, dict]:
+def read_metrics(root: StoragePath) -> dict[int, dict]:
+    """Read the saved per-update metrics in the run's checkpoint lineage."""
     return {
         int(path.name.removeprefix("step-").removesuffix(".json")): json.loads(presets.read_text(path))
         for path in scoring.paths(root / "exports/metrics/step-*.json")
@@ -493,7 +494,7 @@ def _load_run(
         raise InvalidComparison(native_failure_reason(terminal.result.state, terminal.result.iris_job_id))
     if terminal.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
-    metrics = _metrics(StoragePath(path))
+    metrics = read_metrics(StoragePath(path))
     generating = preset.recipe.layout.role_plan.generate_only
     training = [
         row for step, row in sorted(metrics.items()) if (step == 0 if generating else 1 <= step <= preset.updates)
@@ -506,7 +507,11 @@ def _load_run(
     try:
         identities = {
             evaluation.name: (
-                scoring.task_set_sha256(launch, evaluation.name) if evaluation.file != scoring.TRAIN_STEM else None,
+                (
+                    scoring.read_recorded_panel(launch, evaluation.name).task_set_sha256
+                    if evaluation.file != scoring.TRAIN_STEM
+                    else None
+                ),
                 scoring.evaluation_protocol(launch, evaluation.name),
             )
             for evaluation in preset.evaluations
@@ -1096,7 +1101,18 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
         raise InvalidComparison(f"cannot recover recorded command options for {path}: {error}") from error
     if receipt is None:
         raise InvalidComparison(f"no launch receipt at {path}")
-    argv = (receipt.result.provenance or {}).get("command_line", [])
+    options = recorded_run_options((receipt.result.provenance or {}).get("command_line", []))
+    return options.preset_name, options.inputs
+
+
+class RecordedRunOptions(BaseModel):
+    preset_name: str | None
+    inputs: GateInputs
+    resume_from: str | None
+
+
+def recorded_run_options(argv: Sequence[str]) -> RecordedRunOptions:
+    """Parse stored launcher arguments into the gate inputs and preset name."""
     context = presets.run_command()(lambda **kwargs: ()).make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
@@ -1104,12 +1120,16 @@ def _recorded_run(path: str) -> tuple[str | None, GateInputs]:
     settings = tuple(
         leaf for text in params.get("settings", ()) for leaf in presets.setting_leaves(presets.parse_setting(text))
     )
-    return params.get("preset_name"), gate_inputs(
-        settings,
-        params.get("tasks_name"),
-        params.get("init_name"),
-        params.get("requirements", ()),
-        params.get("baselines", ()),
+    return RecordedRunOptions(
+        preset_name=params.get("preset_name"),
+        inputs=gate_inputs(
+            settings,
+            params.get("tasks_name"),
+            params.get("init_name"),
+            params.get("requirements", ()),
+            params.get("baselines", ()),
+        ),
+        resume_from=params.get("resume_name"),
     )
 
 

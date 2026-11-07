@@ -95,6 +95,7 @@ from marin.rl.skyrl import (
     artifact_identity,
     read_skyrl_attempt_tracking,
     read_skyrl_launch_receipt,
+    read_stored_skyrl_receipt,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -391,22 +392,6 @@ def _refuse_judged(summary: dict, filename: str) -> None:
         raise click.BadParameter("Snowball selections must contain no AI-judge-graded tasks")
 
 
-def _recorded_step(
-    step: ArtifactStep[SkyRLRun], preset: presets.Preset, settings: tuple[presets.Setting, ...]
-) -> ArtifactStep[SkyRLRun]:
-    if not snowball_rl_publication.publishes(preset):
-        return step
-    overrides = [
-        f"{leaf.key.rsplit('.', 1)[-1]}={leaf.value}" for setting in settings for leaf in presets.setting_leaves(setting)
-    ]
-    label = " ".join((preset.name, *overrides))
-
-    def launch(config):
-        return snowball_rl_publication.run_loop(config, preset, label)
-
-    return replace(step, run=launch)
-
-
 def build_run(
     preset: presets.Preset,
     *,
@@ -537,7 +522,7 @@ def build_run(
             wandb_entity=wandb_entity,
             checkpoint_root=checkpoint_root,
         )
-        runs.append(_recorded_step(run, preset, settings))
+        runs.append(run)
     gate = (
         snowball_rl_gate.gate_step(
             preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements, baselines)
@@ -609,7 +594,12 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
-            receipt = read_skyrl_launch_receipt(path)
+            context = click.get_current_context(silent=True)
+            receipt = (
+                read_stored_skyrl_receipt(path)
+                if context and context.params.get("do_run")
+                else read_skyrl_launch_receipt(path)
+            )
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
@@ -628,7 +618,9 @@ def _status(run: SnowballRun, preset: presets.Preset, *, issue: int | None = Non
         )
         progress_url = None
         if receipt is not None and attempt:
-            publication_path = StoragePath(path) / "publication" / attempt / snowball_rl_publication.PUBLICATION_FILENAME
+            publication_path = (
+                snowball_rl_publication.publication_path(path, attempt) / snowball_rl_publication.PUBLICATION_FILENAME
+            )
             if presets.exists(publication_path):
                 published = json.loads(presets.read_text(publication_path))
                 native = receipt.config["run"]
@@ -740,68 +732,40 @@ def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | N
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     gate_path = completed_gate.path(prefix) if completed_gate is not None else None
-    served, unserved, errors = [], [], []
+    result = {"served_records": [], "unserved_records": [], "errors": []}
     for training in run.runs:
-        training = replace(training, override_path=training.path(prefix))
-        receipt = read_skyrl_launch_receipt(training.path())
-        native = receipt.config["run"] if receipt is not None else {}
-        records = snowball_rl_publication.retained_records(training.path())
-        if receipt is not None and receipt.result.state in {"succeeded", *_FAILED_RUN_STATES}:
-            current_record = str(
-                StoragePath(training.path())
-                / "exports/attempts"
-                / native["attempt_id"]
-                / snowball_rl_publication.RESULT_FILENAME
-            )
-            if current_record not in records:
-                try:
-                    snowball_rl_publication.retain_record(training.path(), preset, attempt_id=native["attempt_id"])
-                    records.append(current_record)
-                except Exception as error:
-                    unserved.append(current_record)
-                    errors.append(str(error))
-        for record_path in records:
-            try:
-                record = json.loads(presets.read_text(record_path))
-                current = (record["run_id"], record["attempt_id"]) == (native.get("id"), native.get("attempt_id"))
-                publication = snowball_rl_publication.publication_step(
-                    training, record_path, gate_path=gate_path if current else None, issue=issue
-                )
-                build_artifacts(publication, max_concurrent=1)
-                served.append(record_path)
-            except Exception as error:
-                unserved.append(record_path)
-                errors.append(str(error))
-    result = {"served_records": served, "unserved_records": unserved}
-    if unserved:
-        result.update(errors=errors, login="iris login", retry="Repeat the original command with --wait.")
+        published = snowball_rl_publication.publish_run(
+            replace(training, override_path=training.path(prefix)), preset, gate_path=gate_path, issue=issue
+        )
+        for key, value in published.items():
+            if isinstance(value, list):
+                result[key].extend(value)
+            else:
+                result[key] = value
     return result
 
 
 def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
     if not snowball_rl_publication.publishes(preset):
         return False
-    failed = False
-    recovery = False
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
+    missing_publication = False
     for training in run.runs:
         path = training.path(prefix)
-        receipt = read_skyrl_launch_receipt(path)
-        if receipt is None or receipt.result.state not in {"succeeded", *_FAILED_RUN_STATES}:
+        receipt = read_stored_skyrl_receipt(path)
+        if receipt is None or receipt.result.state != "succeeded":
             return False
-        failed |= receipt.result.state in _FAILED_RUN_STATES
-        attempt = receipt.config["run"]["attempt_id"]
-        record_path = StoragePath(path) / "exports/attempts" / attempt / snowball_rl_publication.RESULT_FILENAME
-        status_path = get_status_path(path)
-        recovery |= not presets.exists(record_path) or (
-            presets.exists(status_path) and presets.read_text(status_path).strip() == "FAILED"
-        )
-    completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
-    return (
-        failed
-        or recovery
-        or completed_gate is None
-        or presets.exists(StoragePath(completed_gate.path(prefix)) / snowball_rl_gate.GATE_REPORT_FILENAME)
+        try:
+            for attempt_id in snowball_rl_publication.stored_attempts(path):
+                missing_publication |= not presets.exists(
+                    snowball_rl_publication.publication_path(path, attempt_id)
+                    / snowball_rl_publication.PUBLICATION_FILENAME
+                )
+        except (OSError, ValueError, KeyError):
+            return False
+    completed = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
+    return missing_publication and (
+        completed is None or presets.exists(StoragePath(completed.path(prefix)) / snowball_rl_gate.GATE_REPORT_FILENAME)
     )
 
 
@@ -813,22 +777,7 @@ def _finish_run(
     issue: int | None = None,
 ) -> None:
     run = _from_handles(handles)
-    try:
-        publication = _publish_records(run, preset, issue=issue)
-    except Exception as error:
-        publication = {
-            "error": str(error),
-            "login": "iris login",
-            "retry": "Repeat the original command with --wait.",
-            "unserved_records": [
-                str(
-                    StoragePath(training.path(presets.artifact_prefix(preset.recipe.layout.cluster)))
-                    / "exports/attempts/*"
-                    / snowball_rl_publication.RESULT_FILENAME
-                )
-                for training in run.runs
-            ],
-        }
+    publication = _publish_records(run, preset, issue=issue)
     snapshot = _status(run, preset, issue=issue)
     if publication:
         snapshot["publication"] = publication

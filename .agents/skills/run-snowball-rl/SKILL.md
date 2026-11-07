@@ -184,11 +184,7 @@ The run's own update-0 dump supplies its baseline; the pass-rate artifact suppli
 statistics by slice. `--baseline` compares separate completed runs in the gate report.
 Every preset uses FLASH_ATTN, prefix caching on and batch invariance off.
 
-Learning and data training presets, their controls, and train-long retain every native attempt and
-publish from the launcher after `--run --wait`, using the caller's Marina login. Status adds
-`rl_progress_url` after verification. If publication fails, read the unserved paths and `iris login`
-hint, then repeat the original command with `--wait` from the same source and inputs. This reuses
-terminal native work and the first publication payload; the experiment exit code is preserved. See the
+For dashboard publication, retries and pinned controls, follow the
 [publication rules](../../../docs/recipes/snowball-rl.md#dashboard-publication).
 
 ## Record the experiment

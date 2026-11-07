@@ -34,18 +34,10 @@ needs this table and synthetic records loaded through the maintained Marina data
 commands against the printed local origin. Never load a partial snapshot over the
 production table.
 
-Each record retains its run/attempt identity, label, status, UTC submission/start/
-completion timestamps, timing scope, elapsed seconds, optimizer count, source/data/
-initializer identities, evaluation identity, baseline/final reward and attempted/
-scored counts, artifact URI, and evidence. `GET api/runs` adds coverage and
-comparison fields and a `skipped_records` list for malformed rows. Structural validation
-is shared with the publisher through `marin.rl.rl_progress`. The publisher command is
-`python -m experiments.post_training.publish_rl_progress <summary_path>`. The stored
-evaluation request protocol has its own hash. Engine facts are retained separately
-and do not split comparison groups. Absent evaluation identity remains null. Names do not define a
-comparison group. Use `wandb_url` for an exact W&B run link when recorded.
-Missing native timestamps keep elapsed time unknown; those attempts retain their
-observed rewards and participate in descriptive views without gain or ranking.
+The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` adds coverage and
+comparison fields and lists malformed rows in `skipped_records`. See the
+[Snowball publication rules](../../../../../docs/recipes/snowball-rl.md#dashboard-publication)
+for record semantics, retries and publishing pinned controls.
 
 ## Validate and release
 

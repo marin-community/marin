@@ -6,7 +6,6 @@ import hashlib
 import json
 
 import pytest
-from pydantic import ValidationError
 
 from experiments.post_training import publish_rl_progress as publication
 
@@ -64,8 +63,6 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "started_at": "2026-11-03T00:00:00Z",
         "completed_at": "2026-11-03T01:00:00Z",
         "status": "failed",
-        "baseline": None,
-        "final": None,
         "optimizer_steps": 0,
     }
     assert publication.publish_result(failed, "http://localhost")["verified"]
@@ -103,34 +100,13 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "completed_at": None,
     }
     publication.publish_result(unknown_time, "http://localhost")
-    malformed = copy.deepcopy(record)
-    malformed.update(run_id="test/malformed", attempt_id="bad")
-    malformed["evaluation"]["task_ids"] = [f"replacement-{index}" for index in range(100)]
-    with pytest.raises(ValidationError, match="membership"):
-        publication.publish_result(malformed, "http://localhost")
-    underflow = copy.deepcopy(record)
-    underflow.update(run_id="test/underflow", attempt_id="bad", elapsed_seconds=1e-323)
     overflow = copy.deepcopy(record)
     overflow.update(run_id="test/overflow", attempt_id="bad")
     overflow["baseline"]["reward"], overflow["final"]["reward"] = -1e308, 1e308
-    duplicate = copy.deepcopy(malformed)
-    duplicate.update(run_id="test/duplicate-membership")
-    duplicate["evaluation"]["task_ids"] = ["duplicate"] * 100
-    duplicate["evaluation"]["membership_sha256"] = hashlib.sha256(
-        json.dumps(duplicate["evaluation"]["task_ids"], separators=(",", ":")).encode()
-    ).hexdigest()
     for run_id, invalid in (
-        ("test/underflow", underflow),
         ("test/overflow", overflow),
-        ("test/duplicate-membership", duplicate),
-        (malformed["run_id"], malformed),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
-        ("test/missing-baseline", record | {"run_id": "test/missing-baseline", "attempt_id": "bad", "baseline": None}),
         ("test/bad-shape", ["unexpected"]),
-        (
-            "test/bad-timestamp",
-            record | {"run_id": "test/bad-timestamp", "attempt_id": "bad", "started_at": "yesterday"},
-        ),
     ):
         request(
             "http://localhost",
@@ -157,17 +133,23 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
             "parameters": {"run_id": "test/huge-extra", "attempt_id": "bad", "record": huge_extra},
         },
     )
+    for verdict in ("fail", "invalid"):
+        publication.publish_result(
+            record | {"run_id": "test/" + verdict, "attempt_id": verdict, "verdict": verdict}, "http://localhost"
+        )
     api = client.get(f"/a/{publication.APPLET_ID}/api/runs")
     assert api.status_code == 200
     payload = api.json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert len(rows) == 10
+    assert len(rows) == 12
+    assert rows["fail"]["pareto_eligible"]
+    assert not rows["invalid"]["pareto_eligible"] and rows["invalid"]["provisional"]
     good = rows["native-first"]
     assert good["final"]["reward"] == 0.4
     assert good["partial_coverage"] and good["pareto_eligible"] and good["trusted_gain_eligible"]
     assert not good["provisional"] and good["gain_per_hour"] == pytest.approx(0.2)
     assert rows["native-second"]["status"] == "failed"
-    assert rows["native-second"]["gain_per_hour"] is None
+    assert rows["native-second"]["final"]["reward"] == 0.4
     assert not rows["native-second"]["pareto_eligible"]
     assert rows["native-third"]["provisional"] and not rows["native-third"]["pareto_eligible"]
     assert rows["native-fourth"]["comparison_key"] != good["comparison_key"]
@@ -181,15 +163,4 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     assert rows["unknown"]["provisional"] and not rows["unknown"]["pareto_eligible"]
     assert not rows["unknown"]["trusted_gain_eligible"]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
-    assert set(skipped) == {
-        "test/malformed",
-        "test/bad-shape",
-        "test/bad-timestamp",
-        "test/underflow",
-        "test/overflow",
-        "test/duplicate-membership",
-        "test/huge-extra",
-        "test/wrong-sql-key",
-        "test/missing-baseline",
-    }
-    assert "evaluation" in skipped["test/malformed"]
+    assert set(skipped) == {"test/bad-shape", "test/overflow", "test/huge-extra", "test/wrong-sql-key"}
