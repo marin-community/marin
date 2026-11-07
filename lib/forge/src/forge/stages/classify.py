@@ -27,6 +27,7 @@ TASK_DEFECTS = frozenset(
         Cause.GRADER_INVALID_REWARD,
         Cause.GRADER_INVALID_CHECKS,
         Cause.GRADER_TIMEOUT,
+        Cause.GRADER_EXECUTION,
         Cause.GRADER_REWARD_RANGE,
         Cause.INVALID_TASK,
         Cause.VERIFIER_SKIPPED,

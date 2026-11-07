@@ -24,7 +24,7 @@ from forge.model.review import (
     ValidationResult,
 )
 from forge.model.workpiece import Workpiece
-from forge.stages.classify import TASK_DEFECTS, grade_cause
+from forge.stages.classify import TASK_DEFECTS
 
 
 def passed(grade: GradeResult) -> bool:
@@ -44,8 +44,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
     decision = assess(result, band)
     if isinstance(decision, Incomplete):
         retryable = [
-            t.cause or (grade_cause(t.grade) if t.grade is not None else Cause.NO_GRADE)
-            for t in (*result.solver, *result.controls)
+            t.cause or (Cause.NO_GRADE if t.grade is None else None) for t in (*result.solver, *result.controls)
         ]
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
         cause = next((cause for cause in retryable if cause in TRANSIENT_CAUSES), None)
@@ -69,15 +68,8 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
         return Incomplete((f"Lowering failed: {result.lowering_error}",))
     if not result.solver or not result.controls:
         return Incomplete(("Required solver or control evidence is absent",))
-    causes = Counter(
-        trial.cause or (Cause.NO_GRADE if trial.grade is None else grade_cause(trial.grade))
-        for trial in (*result.solver, *result.controls)
-    )
-    causes.update(
-        finding.cause or (Cause.NO_GRADE if finding.grade is None else grade_cause(finding.grade))
-        for adversary in result.adversary
-        for finding in adversary.findings
-    )
+    trials = (*result.solver, *result.controls, *(f for a in result.adversary for f in a.findings))
+    causes = Counter(t.cause or (Cause.NO_GRADE if t.grade is None else None) for t in trials)
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
@@ -98,7 +90,15 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     )
     findings += tuple(f"{count} ungraded trial(s): {cause}" for cause, count in causes.items() if cause in TASK_DEFECTS)
     findings += tuple(
-        f"{trial.name}: {finding.claim}" for trial in result.adversary for finding in trial.findings if finding.met
+        f"{trial.grade.error or trial.cause}\n{trial.grade.diagnostics.get('stderr', '')}"
+        for trial in trials
+        if trial.cause in TASK_DEFECTS and trial.grade is not None
+    )
+    findings += tuple(
+        f"{trial.name}: {finding.claim}"
+        for trial in result.adversary
+        for finding in trial.findings
+        if finding.met or finding.cause in TASK_DEFECTS
     )
     if findings:
         return Modify(findings)

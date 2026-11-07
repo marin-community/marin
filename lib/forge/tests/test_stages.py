@@ -646,3 +646,46 @@ def test_grader_process_failure_is_distinct_from_infrastructure(
     assert replayable_grade(Resolved(event, (), grade, False)) is (
         cause in (Cause.GRADER_EXECUTION, Cause.GRADER_TIMEOUT)
     )
+
+
+@pytest.mark.parametrize("cause", [Cause.GRADER_EXECUTION, Cause.GRADER_TIMEOUT])
+def test_adversary_grader_failure_requests_repair_with_evidence(workpiece: Workpiece, cause: Cause) -> None:
+    assert workpiece.submission is not None
+    traceback = (
+        'Traceback (most recent call last):\n  File "/tests/grader.py", line 105, in is_number\n'
+        "OverflowError: int too large to convert to float"
+    )
+    crash = cause is Cause.GRADER_EXECUTION
+    error = "Grader command failed: exited, exit=1" if crash else "Grader command timed out"
+    crashed = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        error,
+        diagnostics={"stderr": traceback if crash else "", "exit_code": 1 if crash else 124},
+        failure=GradingFailure.GRADER_EXIT if crash else GradingFailure.GRADER_TIMEOUT,
+    )
+    finding = AdversaryFinding(
+        "Huge integer breaks the grader",
+        Candidate('{"target_value":' + "9" * 400 + "}"),
+        RewardBand(Outcome.GRADED, 0, 0),
+        crashed,
+        False,
+        cause,
+    )
+    good = GradeResult(Outcome.GRADED, 1)
+    evidence = ValidationResult(
+        workpiece.submission.digest,
+        (TrialResult(0, good),),
+        (ControlResult(0, good, True),),
+        (AdversaryResult("adversary", True, (finding,)),),
+    )
+    current = workpiece.with_(evidence=(evidence,), session=Conversation((Message(Role.SYSTEM, "author"),), ()))
+    setup = config()
+    decision = default_review(current, setup.band, setup.budget)
+    assert isinstance(decision, Modify)
+    revised = decided(current, Decided(decision), budget=setup.budget, policy=setup.policy)
+    assert revised.session is not None and revised.round == 1 and revised.terminal is None
+    assert finding.claim in revised.session.messages[-1].content
+    assert error in revised.session.messages[-1].content
+    if crash:
+        assert traceback in revised.session.messages[-1].content
