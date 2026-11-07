@@ -107,9 +107,8 @@ jobs:
             overview comment and optionally creating one new top-level
             comment with new or materially changed actionable findings. Run
             review-pr in holistic mode with --comment. Within this review,
-            follow its bounded search of relevant originating and stacked PRs
-            and prior maintainer reviews, synthesize and cite reusable themes,
-            and check evidence at real boundaries where fakes can hide drift.
-            Publish a typed result.
+            assess responsibility, cohesion, abstractions, and agreement across
+            contracts. Support structural findings with consequences, concrete
+            replacements, and evidence. Publish a typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}

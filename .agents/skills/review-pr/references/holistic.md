@@ -45,17 +45,7 @@ requests; they are the population where structural findings concentrate.
    (`git show <merge-base>:<path>`), the callers of each changed interface
    (`git grep -n <symbol> <merge-base>`), and the recent history of the
    touched paths (`git log --oneline -15 <merge-base> -- <path>`). Read each
-   issue and pull request that the body or the commits link. When relevant
-   to changed interfaces, read maintainer feedback from originating PRs,
-   stacked PRs, and prior reviews. Fetch issue comments, inline comments,
-   and submitted reviews with pagination. Start with linked PRs and this
-   path history; expand only to resolve a concrete design question.
-   Separate human feedback from agent comments, including `🤖` comments
-   posted under a maintainer's account.
-   Synthesize the relevant reusable themes and cite their review/comment
-   URLs in the walkthrough or findings. Check them against current code and
-   explicit requirements; prior feedback is context, not a new defect by
-   itself. Reuse this context on re-review unless new evidence changes it.
+   issue and pull request that the body or the commits link.
 7. List open pull requests that touch the same paths. `gh pr list --search`
    matches titles and bodies only, so list the open PRs with their files and
    filter on paths:
@@ -72,10 +62,11 @@ without a named replacement.
    existing repository concept that could carry it. Search `lib/*/src`, the
    nearest `AGENTS.md`, and sibling modules. Cite the existing `def` or class
    by path. Respect dependency direction: `iris`/`haliax` to
-   `levanter`/`zephyr` to `marin`. Check that experiments wire reusable work
-   implemented in the owning libraries. Keep dataset-family parsing, prompts,
-   and graders cohesive; use existing typed contracts, enums, and execution
-   infrastructure where appropriate.
+   `levanter`/`zephyr` to `marin`. Check responsibility and cohesion: entry
+   points should compose reusable work implemented by its owning library.
+   Code that changes for the same reason should have a clear owner; flag
+   scattered case handling or modules that mix unrelated responsibilities
+   when they force callers to understand or coordinate those details.
 2. **Better abstraction.** Name one construct that deletes surface the PR
    added and cite the lines it deletes. The recurring shapes are an enum plus
    a wrapper that re-derives what the type already decides, an always-truthy
@@ -83,11 +74,14 @@ without a named replacement.
    replaces, an alias or re-export, a helper duplicated with one branch
    changed, boolean dispatch where separate classes fit, a compatibility shim
    where the callers are all in-repo, and parameters threaded through layers
-   that only forward them. Trace dataset/checkpoint-family switches across
-   readers, protocol construction, and graders: generic execution should
-   consume explicit metadata and typed contracts. Distinguish necessary
-   source-format adapters and explicitly requested historical compatibility
-   from dataset-specific policy leaking into generic mechanisms.
+   that only forward them. Check whether changing one supported behavior
+   requires coordinated edits across unrelated layers. Generic code that
+   recognizes individual callers or cases can signal a missing concept in
+   its input contract. Identify where explicit typed inputs or the
+   responsible component could carry that policy;
+   replacing conditionals with a table alone may leave the same coupling.
+   Distinguish necessary boundary adapters and explicitly requested
+   compatibility from exceptions embedded throughout generic mechanisms.
 3. **Consequences outside the diff.** For every new config or dataclass
    instance, read the base defaults and ask whether a critical parameter
    (memory, timeout, user, network, version, region) is satisfied by a silent
@@ -96,10 +90,12 @@ without a named replacement.
    is encoded as a legitimate value (zero reward, empty result, `None`, a
    default) that a caller cannot distinguish from a real outcome. For every
    new environment read, check whether planning or dry-run paths reach it.
-   Trace planning, persistence/resume, execution, and aggregation contracts:
-   do both sides agree on identity, configuration ownership, and metric
-   semantics? Check whether consuming pinned inputs silently rebuilds or
-   publishes artifacts, and whether names substitute for semantic types.
+   Check that producers and consumers agree on the meaning of shared data
+   and that each fact has one authoritative definition. Flag semantics
+   inferred from names or re-derived independently when they can disagree.
+   Trace hidden preparation and side effects across boundaries: does a
+   component take on work or policy that belongs to its caller or another
+   stage, changing what callers must know or control?
 4. **Hidden tests.** For every test under a skipped marker, decide whether it
    would pass. Read its parametrization, fixtures, and the code it calls.
    `uv run pytest --collect-only -q <path>` catches collection errors; the
@@ -109,13 +105,12 @@ without a named replacement.
 5. **Claims versus evidence.** For each claim and principle noted from the
    body, cite the code, test, or artifact that proves it, or state that
    nothing does. Flag identity or version bumps that rest on unproven claims
-   and code that contradicts a principle the body states. Where fake adapters
-   hide a boundary, exercise the smallest safe local path through the real
-   serializer, archive, reader, or reducer. For example, resume a real local
-   archive after changing an operational setting claimed to preserve identity,
-   or reduce known values through the native metric implementation. Follow
-   `TESTING.md` and scoped safety limits; record an unavailable check as a
-   limitation, not evidence of failure.
+   and code that contradicts a principle the body states. Check whether
+   mocks or fakes bypass the contract being claimed. Exercise the affected
+   public interfaces together through the smallest safe real implementation
+   when that can resolve a suspected mismatch. Follow `TESTING.md` and scoped
+   safety limits; record an unavailable check as a limitation, not evidence
+   of failure.
 6. **Related pull requests.** Check whether each open PR touching the same
    paths deletes, duplicates, or depends on this change. Report only a
    conflict, dependency, or overlap that requires action. Recommend folding
@@ -128,17 +123,18 @@ without a named replacement.
    matrices that one parametrized test replaces.
 8. **Scope.** Separate what the title promises from what the diff does. Flag
    evidence files nothing reads, scripts inside library packages, one-shot
-   machinery in reusable code, and unrelated changes riding along.
+   machinery in reusable code, and unrelated changes riding along. Assess
+   whether tests and documentation help establish or use the behavior:
+   inventories of declarations and implementation details can leave callers'
+   actual questions unanswered.
 
 Validate every finding against the code. Do not report style preferences,
 speculative failures, or pre-existing problems the PR did not touch. A finding
 that a hunk-scoped reviewer or the lint catalog would report belongs to them;
 report it here only when the whole-change view changes its conclusion.
-Apply relevant prior-review themes across these questions in this review;
-do not add another pass. A structural finding must show the current obstacle
-or contract violation, its consequence, a concrete replacement, and evidence
-from the affected code or a reproduction. A maintainer preference alone is
-insufficient.
+A structural finding must show the current obstacle or contract violation,
+its consequence, a concrete replacement, and evidence from the affected code
+or a reproduction. A different organization alone is not a finding.
 
 ## Review overview
 
