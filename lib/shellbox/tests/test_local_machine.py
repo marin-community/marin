@@ -131,6 +131,7 @@ def test_local_factory_reports_unsupported_host(monkeypatch):
 
 @pytest.mark.parametrize("module, name", [(os, "pidfd_open"), (signal, "pidfd_send_signal")])
 def test_local_factory_reports_missing_pidfd_support(monkeypatch, module, name):
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.delattr(module, name, raising=False)
     with pytest.raises(SandboxUnavailable, match=name):
         LocalMachineFactory()
