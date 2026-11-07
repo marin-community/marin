@@ -285,6 +285,70 @@ provenance and removed-default counts are in
 Rebuilds consume those immutable upgraded inputs through the ordinary selection
 path; they need no schema-migration curation mode.
 
+### Snowball source curation
+
+Declare new tasks through the
+[dataset-owned curation pipeline](#dataset-owned-invocation).
+Pin their source revision, converter and grader dependencies. The training pool
+comes from FULL curation's admitted `final/*.parquet` files; QUICK conversions
+and SAMPLE panels do not qualify.
+
+Use the [curation campaign procedure](#run-a-campaign)
+to review and verify the sources. For example, inside an Iris coordinator with
+the pipeline dependencies and review credentials available:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --mode full --source SOURCE_NAME \
+  --review-mode chat --model-revision "$REVIEW_MODEL_REVISION" \
+  --review-cache "$CURATION_CACHE" \
+  --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
+  --normalized-shards 32 --image-backend gvisor \
+  --worker-image "$WORKER_IMAGE" \
+  --report-path "$CAMPAIGN/full.json" \
+  --selection experiments/post_training/task_curation/recipes/snowball-100k.json
+```
+
+Repeat `--source` for every source in the selection recipe, using its invocation
+name from
+[`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py).
+For example, recipe ID `MarinSkyRL:eurus2_code` is invoked as
+`--source eurus2_code`. The CLI names differ from the stable IDs in the recipe.
+Set `REVIEW_MODEL_REVISION` to the pinned reviewer, `WORKER_IMAGE` to a
+digest-pinned worker image, and `CURATION_CACHE` and `CAMPAIGN` to retained,
+region-local storage prefixes. Build the declared
+[grader environments](#run-a-campaign) first.
+The command prints a plan; add `--run` to execute it. Successful source artifacts
+and exact review requests remain cached across campaigns.
+
+### Publish a Snowball selection
+
+If a completed FULL campaign already has the required source artifacts, reuse
+its `corpus.json` without rerunning curation:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --corpus "$CAMPAIGN/corpus.json" \
+  --selection experiments/post_training/task_curation/recipes/snowball-100k.json
+```
+
+Add `--run` to publish. The printed `task_selection` path is the artifact root
+to pass to training. Its `summary.json` records the recipe, source artifacts,
+selected counts and evaluation IDs. Check the source and family quotas there
+before launching. A source shortfall fails instead of borrowing from another
+source. Source or selection changes require a new recipe version; preserve
+published versions for comparisons.
+
+The artifact contains `train.parquet`, `validation.parquet` and
+`full_validation.parquet`. The training selection's validation panel samples 20 tasks per
+family from the original 910-task development set. All 910 are excluded from
+training by ID, public semantics and exact conversation context. Snowball presets bind the independent test panel described in the
+[experiment recipe](../recipes/snowball-rl.md#tasks-and-evaluation) for held-out quality comparisons. See [selection semantics](#final-task-selection)
+for deduplication and task serialization.
+
+
 ## Dataset-owned invocation
 
 `RlDataSource.pipeline` is one graph-building callable:
