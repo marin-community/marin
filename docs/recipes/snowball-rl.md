@@ -180,8 +180,7 @@ commit, or explains missing git metadata. This list does not affect the verdict.
 The test-panel recipe pins its qualified eight-answer, temperature-1 initializer pass-rate
 artifact. Reports check its task IDs against the panel manifest, then join easy (> 0.7),
 learnable (0.1–0.7) and hard (< 0.1) bands and reference initializer scores for reporting only.
-A new initializer needs a new panel version with its own measured pass rates. The standalone
-`snowball_pass_rates` command measures the 910-task development panel.
+A new initializer needs a new panel version with its own measured pass rates.
 
 ## Tasks and evaluation
 

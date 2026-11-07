@@ -38,6 +38,7 @@ from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl import cli as rl_cli
 from marin.rl.skyrl import (
+    TRACKING_FILENAME,
     SkyRLReceiptLookupError,
     SkyRLRun,
     read_skyrl_launch_config,
@@ -465,6 +466,27 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
     return panel
 
 
+def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
+    """Check planned update completion and finite training loss and gradient evidence."""
+    generating = preset.recipe.layout.role_plan.generate_only
+    planned = {0} if generating else set(range(1, preset.updates + 1))
+    completed = planned.intersection(metrics)
+    training = [metrics[step] for step in sorted(completed)]
+    invariants = [
+        Invariant(name="planned_updates", value=len(completed), limit=len(planned), holds=completed == planned)
+    ]
+    if not generating:
+        finite = all(
+            "policy/raw_grad_norm" in row
+            and any(key.startswith("loss/") for key in row)
+            and all(math.isfinite(row[key]) for key in row if key.startswith("loss/") or key == "policy/raw_grad_norm")
+            for row in training
+        )
+        invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
+
+    return tuple(invariants)
+
+
 def _load_run(
     path: str,
     preset: presets.Preset,
@@ -481,15 +503,13 @@ def _load_run(
     metrics = _metrics(StoragePath(path))
     generating = preset.recipe.layout.role_plan.generate_only
     planned = {0} if generating else set(range(1, preset.updates + 1))
-    completed = planned.intersection(metrics)
-    training = [metrics[step] for step in sorted(completed)]
-    invariants = [
-        Invariant(name="planned_updates", value=len(completed), limit=len(planned), holds=completed == planned)
-    ]
+    training = [metrics[step] for step in sorted(planned.intersection(metrics))]
+    training_checks = training_invariants(preset, metrics)
+    invariants = [training_checks[0]]
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
     launch = read_skyrl_launch_config(path)
     attempt = launch["run"]["attempt_id"]
-    tracking_path = StoragePath(path) / "exports" / "attempts" / attempt / "tracking.json"
+    tracking_path = StoragePath(path) / "exports" / "attempts" / attempt / TRACKING_FILENAME
     tracking = json.loads(presets.read_text(tracking_path)) if presets.exists(tracking_path) else {}
     if tracking and tracking.get("attempt_id") != attempt:
         raise InvalidComparison(f"tracking attempt differs from launch: {path}")
@@ -537,14 +557,7 @@ def _load_run(
                         answers=session.num_rows,
                     )
                 )
-    if not generating:
-        finite = all(
-            "policy/raw_grad_norm" in row
-            and any(key.startswith("loss/") for key in row)
-            and all(math.isfinite(row[key]) for key in row if key.startswith("loss/") or key == "policy/raw_grad_norm")
-            for row in training
-        )
-        invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
+    invariants.extend(training_checks[1:])
 
     invariants.append(_grader_errors(training, OUTCOME_PREFIX, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens

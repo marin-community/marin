@@ -111,7 +111,11 @@ from skyrl_train.evaluation_profiles import evaluation_profile_config, parse_eva
 
 class InferenceService:
     model_name = "fixture"
-    tokenizer = SimpleNamespace(eos_token_id=99, decode=lambda *args, **kwargs: "answer")
+    tokenizer = SimpleNamespace(
+        eos_token_id=99,
+        decode=lambda *args, **kwargs: "answer",
+        encode=lambda *args, **kwargs: [1, 2],
+    )
 
     def __init__(self, overrides, validate):
         self.overrides, self.validate = overrides, validate

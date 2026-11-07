@@ -840,6 +840,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         fingerprint=built.runs[0].fingerprint(),
         metrics=timers,
     )
+    built = replace(built, gate=gate.completed_gate(presets.PRESETS[preset], built.runs, built.gate))
     report = run(built.gate)[0].model_dump(mode="json", exclude={"path"})
     timer_rows = {row["metric"]: row for row in report["reported"] if row["metric"] in timers}
     assert {key: row["run"] for key, row in timer_rows.items()} == timers
@@ -882,7 +883,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
     receipt = json.loads((source / "terminal.json").read_text())
     linked_receipt = receipt | {
         "config": {
-            "run": {"id": "run / id?x=1&y=2"},
+            "run": {**receipt["config"]["run"], "id": "run / id?x=1&y=2"},
             "runtime": {"training_type": "sync"},
             "iris": {"wandb_entity": "receipt-team"},
         }
