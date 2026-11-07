@@ -1589,6 +1589,41 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     client.shutdown(wait=True)
 
 
+def test_shared_pool_start_retries_a_failed_coordinator(tmp_path):
+    """A shared pool whose first coordinator fails to start comes up on a retry.
+
+    A dedicated pipeline already retries a failed pool start. The shared pool
+    must too, or one slow coordinator host fails every step that shares it.
+    """
+    client = LocalClient()
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        max_execution_retries=2,
+        name=f"test-shared-start-{uuid.uuid4().hex[:8]}",
+    )
+    original_create_actor_group = client.create_actor_group
+    coordinator_starts = [0]
+
+    def flaky_create_actor_group(actor_class, *args, **kwargs):
+        if actor_class is ZephyrCoordinator:
+            coordinator_starts[0] += 1
+            if coordinator_starts[0] == 1:
+                raise TimeoutError("Only 0/1 actors ready after 900.0s")
+        return original_create_actor_group(actor_class, *args, **kwargs)
+
+    client.create_actor_group = flaky_create_actor_group
+    try:
+        with ctx:
+            results = ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)).results
+        assert sorted(results) == [2, 4, 6]
+        assert coordinator_starts[0] == 2
+    finally:
+        client.shutdown(wait=True)
+
+
 def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
     """ZephyrWorkerError (application errors) are never retried."""
     chunk_prefix = str(tmp_path / "chunks")
