@@ -43,18 +43,11 @@ class EvaluationIdentity(BaseModel):
     task_count: Annotated[StrictInt, Field(gt=0)]
     task_set_sha256: Identity | None
     protocol_sha256: Identity | None
-    task_ids: list[str] | None = None
     membership_sha256: str | None = None
     protocol: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def matching_evaluation_identity(self):
-        if self.task_ids is not None:
-            membership = membership_sha256(self.task_ids)
-            if len(set(self.task_ids)) != len(self.task_ids) or membership != self.membership_sha256:
-                raise ValueError("Evaluation membership does not match its recorded identity")
-            if self.task_count != len(self.task_ids):
-                raise ValueError("Evaluation task count disagrees with membership")
         if self.protocol is not None:
             if protocol_sha256(self.protocol) != self.protocol_sha256:
                 raise ValueError("Evaluation protocol does not match its recorded identity")

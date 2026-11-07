@@ -4,6 +4,7 @@
 import copy
 import hashlib
 import json
+from dataclasses import asdict
 
 import pytest
 
@@ -51,8 +52,14 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "evidence": [],
     }
     first = publication.publish_result(record, "http://localhost")
-    assert first["inserted"] and first["verified"]
-    assert publication.publish_result(copy.deepcopy(record), "http://localhost")["inserted"] is False
+    assert asdict(first) == {
+        "run_id": record["run_id"],
+        "attempt_id": record["attempt_id"],
+        "inserted": True,
+        "verified": True,
+        "url": f"/a/{publication.APPLET_ID}/",
+    }
+    assert publication.publish_result(copy.deepcopy(record), "http://localhost").inserted is False
     changed = copy.deepcopy(record)
     changed["final"]["reward"] = 0.9
     with pytest.raises(ValueError, match="different record"):
@@ -64,7 +71,7 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "status": "failed",
         "optimizer_steps": 0,
     }
-    assert publication.publish_result(failed, "http://localhost")["verified"]
+    assert publication.publish_result(failed, "http://localhost").verified
     below = copy.deepcopy(record)
     below.update(run_id="test/under-coverage", attempt_id="native-third")
     below["final"]["scored"] = 98

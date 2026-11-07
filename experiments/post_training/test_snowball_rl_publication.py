@@ -311,9 +311,8 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
         return request(origin, method, path, json_body=json_body)
 
     monkeypatch.setattr("marina.client.marina_request", unavailable_readback)
-    step = publication.publication_step(
-        str(source), training.name, training.version, json.loads(raw_path.read_text()), gate_path=first_gate, issue=73
-    )
+    output = publication.RunOutput(str(source), training.name, training.version)
+    step = publication.publication_step(output, json.loads(raw_path.read_text()), gate_path=first_gate, issue=73)
     with pytest.raises(RuntimeError):
         resolve(step)
     frozen = Path(step.path()) / publication.RESULT_FILENAME
@@ -322,13 +321,17 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     raw["elapsed_seconds"] = 7200
     write_json(raw_path, raw)
     monkeypatch.setattr("marina.client.marina_request", request)
-    retried = publication.publication_step(
-        str(source), training.name, training.version, json.loads(raw_path.read_text()), gate_path=second_gate, issue=74
-    )
+    retried = publication.publication_step(output, json.loads(raw_path.read_text()), gate_path=second_gate, issue=74)
     resolve(retried)
     assert frozen.read_bytes() == first_bytes
     receipt = json.loads((Path(retried.path()) / publication.PUBLICATION_FILENAME).read_text())
-    assert receipt["verified"] and receipt["inserted"] is False
+    assert receipt == {
+        "run_id": launch["run"]["id"],
+        "attempt_id": "native-one",
+        "inserted": False,
+        "verified": True,
+        "url": f"/a/{publisher.APPLET_ID}/",
+    }
     payload = client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 1
     served = payload["runs"][0]
@@ -405,11 +408,14 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     command = CliRunner().invoke(publication.main, ["--preset", "data-medium", "--url", "http://localhost"])
     assert command.exit_code == 0, (command.output, command.exception)
     published = json.loads(command.output)
-    assert published["unserved_records"] == []
-    assert sorted(published["served_records"]) == sorted(
-        str(root / f"exports/attempts/pinned-{index}/{publication.RESULT_FILENAME}")
-        for index, root in enumerate(controls)
-    )
+    assert published == {
+        "served_records": [
+            str(root / f"exports/attempts/pinned-{index}/{publication.RESULT_FILENAME}")
+            for index, root in enumerate(controls)
+        ],
+        "unserved_records": [],
+        "errors": [],
+    }
     pairs = [
         (row["run_id"], row["attempt_id"])
         for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]
@@ -431,15 +437,13 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     (historical / "terminal.json").unlink()
     handle = replace(training, name="tests/missing-current-history", override_path=str(historical))
     recovered = publication.publish_run(
-        str(historical),
-        handle.name,
-        handle.version,
+        publication.RunOutput(str(historical), handle.name, handle.version),
         preset,
         gate_path=second_gate,
         issue=74,
         service_url="http://localhost",
     )
-    assert recovered["unserved_records"] == [] and len(recovered["served_records"]) == 1
+    assert recovered.unserved_records == [] and len(recovered.served_records) == 1
     stored = next(
         row
         for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]

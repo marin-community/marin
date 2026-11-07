@@ -99,6 +99,12 @@ def marina_request(
     return response.json()
 
 
+def applet_origin(service_url: str, authenticated_url: str) -> str:
+    """Return the applet's authenticated origin, using the service for relative URLs."""
+    parsed = urlparse(authenticated_url)
+    return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+
+
 def applet_query(
     service_url: str,
     applet_id: str,
@@ -118,8 +124,7 @@ def applet_query(
         )
         assert isinstance(details, dict)
         authenticated_url = details["authenticated_url"]
-    parsed = urlparse(authenticated_url)
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+    origin = applet_origin(service_url, authenticated_url)
 
     def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         result = marina_request(

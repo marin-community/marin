@@ -729,9 +729,11 @@ def _from_handles(handles: list[ArtifactStep]) -> SnowballRun:
     )
 
 
-def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | None = None) -> dict:
+def _publish_records(
+    run: SnowballRun, preset: presets.Preset, *, issue: int | None = None
+) -> snowball_rl_publication.PublicationOutcome | None:
     if not snowball_rl_publication.publishes(preset):
-        return {}
+        return None
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     gate_path = completed_gate.path(prefix) if completed_gate is not None else None
@@ -744,25 +746,22 @@ def _publish_records(run: SnowballRun, preset: presets.Preset, *, issue: int | N
     )
 
 
-def _publication_retry(run: SnowballRun, preset: presets.Preset) -> bool:
+def _publication_needs_retry(run: SnowballRun, preset: presets.Preset) -> bool:
+    """Return whether successful current attempts need publication after any required gate completes."""
     if not snowball_rl_publication.publishes(preset):
         return False
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     missing_publication = False
     for training in run.runs:
         path = training.path(prefix)
-        try:
-            current_id, attempts = read_stored_skyrl_attempts(path)
-            receipt = attempts.get(current_id) if current_id is not None else None
-            if receipt is None or receipt.result.state != "succeeded":
-                return False
-            for attempt_id in attempts:
-                missing_publication |= not presets.exists(
-                    snowball_rl_publication.publication_path(path, attempt_id)
-                    / snowball_rl_publication.PUBLICATION_FILENAME
-                )
-        except (OSError, ValueError, KeyError):
+        current_id, attempts = read_stored_skyrl_attempts(path)
+        receipt = attempts.get(current_id) if current_id is not None else None
+        if receipt is None or receipt.result.state != "succeeded":
             return False
+        for attempt_id in attempts:
+            missing_publication |= not presets.exists(
+                snowball_rl_publication.publication_path(path, attempt_id) / snowball_rl_publication.PUBLICATION_FILENAME
+            )
     completed = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
     return missing_publication and (completed is None or snowball_rl_publication.gate_complete(completed.path(prefix)))
 
@@ -777,8 +776,8 @@ def _finish_run(
     run = _from_handles(handles)
     publication = _publish_records(run, preset, issue=issue)
     snapshot = _status(run, preset, issue=issue, stored_only=True)
-    if publication:
-        snapshot["publication"] = publication
+    if publication is not None:
+        snapshot["publication"] = publication.to_dict()
     if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
         snapshot["reason"] = coordinator_error or "required verdict unavailable"
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
@@ -821,7 +820,7 @@ def _run_command(function: Callable) -> click.Command:
             try:
                 if get_job_info() is None:
                     preset = presets.PRESETS[kwargs["preset_name"]]
-                    if wait and _publication_retry(_from_handles(handles), preset):
+                    if wait and _publication_needs_retry(_from_handles(handles), preset):
                         _finish_run(handles, preset, issue=kwargs.get("issue"))
                     job = submit_or_run(
                         "experiments.post_training.snowball_rl",
