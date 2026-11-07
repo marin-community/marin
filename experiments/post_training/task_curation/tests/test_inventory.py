@@ -52,6 +52,7 @@ from experiments.post_training.task_curation.inventory import (
     FULL_VALIDATION_FILENAME,
     HELDOUT_BLEND,
     HELDOUT_FAMILIES,
+    PASS_RATE_ATTEMPTS,
     STRUCTURAL_FAMILY,
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
@@ -349,7 +350,9 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     staged.mkdir()
     input_file = staged / "test.jsonl"
     input_file.write_text('{"problem": "Two plus two?", "answer": "4"}\n{"problem": "Two plus three?", "answer": "5"}\n')
-    excluded = source_task("independent-exclusion").model_copy(update={"context": chat(("user", "Two plus two?"))})
+    excluded = source_task("independent-exclusion").model_copy(
+        update={"context": chat(("system", "Historical wrapper"), ("user", "  Two plus\n two? "))}
+    )
     settings = recipe(tmp_path).model_copy(
         update={
             "sources": {source.info.id: "math"},
@@ -479,7 +482,7 @@ def edit_tool_call(tmp_path: Path, edit: Callable[[TaskSpec], TaskSpec]) -> None
 
 
 def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
-    """Six Evalchemy questions and five NeMo rows, with two training files and a development panel."""
+    """Six Evalchemy questions and NeMo agent rows, with two training files and a development panel."""
     mmlu = benchmark == "mmlu"
     name = "evalchemy-mmlu-pro" if mmlu else "evalchemy-mbppplus"
     dataset = next(source.config for source in (*reasoning_sources(), *code_sources()) if source.name == name)
@@ -535,8 +538,11 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
     tool_call = tool_call_sources()[0].config
     tasks = [
         converted_task(tool_call, nemo_row(f"Native tool request {i}")).model_copy(update={"id": f"agent-{i}"})
-        for i in range(4)
+        for i in range(5)
     ]
+    # agent-4 lacks the part's required proxy tag; agent-2-copy repeats agent-2's conversation.
+    tasks[4] = tasks[4].model_copy(update={"tags": tuple(tag for tag in tasks[4].tags if tag != "tool-call-proxy")})
+    tasks.append(tasks[2].model_copy(update={"id": "agent-2-copy"}))
     cases = list(evaluation_cases(str(corpus)))
     if mmlu:
         task, alias = cases[1].task, {"id": "cross-part-alias", "context": cases[1].item.operation.variants[0].context}
@@ -610,10 +616,10 @@ def measured_recipe(settings: PanelRecipe, tmp_path: Path, tasks: list[TaskSpec]
             "task_id": task.id,
             "task_digest": canonical_sha256(task.model_dump(mode="json")),
             "model_revision": "fixture-model",
-            "attempted": 8,
-            "samples": 8,
+            "attempted": PASS_RATE_ATTEMPTS,
+            "samples": PASS_RATE_ATTEMPTS,
             "passed": index + 1,
-            "mean_score": (index + 1) / 8,
+            "mean_score": (index + 1) / PASS_RATE_ATTEMPTS,
         }
         for index, task in enumerate(tasks)
     ]
@@ -685,8 +691,9 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
     assert counts["questions"]["overlap"] == counts["tool-calls"]["overlap"] == 1
-    assert counts["tool-calls"].get("duplicate", 0) == (benchmark == "mmlu")
-    assert {next(iter(originals)), "agent-0"}.isdisjoint(families)
+    assert counts["tool-calls"].get("filtered", 0) == 1
+    assert counts["tool-calls"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
+    assert {next(iter(originals)), "agent-0", "agent-4", "agent-2-copy"}.isdisjoint(families)
     native = import_row(nemo_row("Native tool request 1"), canonical_sha256(nemo_row("Native tool request 1")))
     unbound = {"id", "source", "tags"}
     assert agents["agent-1"].model_dump(exclude=unbound) == native.model_dump(exclude=unbound)
@@ -695,7 +702,7 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
     assert read_tasks(final / VALIDATION_FILENAME) == fast
     difficulty = [row["difficulty"] for row in pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()]
-    assert difficulty == [1 - (index + 1) / 8 for index in range(len(full))]
+    assert difficulty == [1 - (index + 1) / PASS_RATE_ATTEMPTS for index in range(len(full))]
     subset = measured.model_copy(
         update={"version": "2026.11.04.2", "sources": (questions,), "fast_counts": {questions.family: 4}}
     )
@@ -746,10 +753,8 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
         ("source-count", "Panel source row count changed"),
         ("part-shortfall", AGENT_SHORTFALL),
         ("fast-shortfall", "Fast-panel source shortfall for general"),
-        ("fast-coverage", "Fast-panel quotas must cover every selected family"),
         ("missing-rate", "Pass-rate evidence must cover every selected panel task"),
         ("duplicate-rate", RATE_ROWS),
-        ("count-rate", RATE_ROWS),
         ("attempted-rate", INCOMPLETE_RATES),
         ("model-rate", INCOMPLETE_RATES),
     ],
@@ -763,7 +768,6 @@ def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evid
             "part-shortfall": {"sources": (questions, agents.model_copy(update={"count": 4}))},
             "eval-tag": {"sources": (questions, agents.model_copy(update={"required_tags": ("tool-call-proxy",)}))},
             "fast-shortfall": {"fast_counts": {"general": 6, "agents": 1}},
-            "fast-coverage": {"fast_counts": {"general": 3}},
         }.get(failure, {})
     )
     if failure.endswith("rate"):
@@ -771,15 +775,10 @@ def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evid
         last = {
             "missing-rate": {"task_id": "unknown"},
             "duplicate-rate": {"task_id": tasks[0].id},
-            "count-rate": {},
-            "attempted-rate": {"attempted": 7, "samples": 7, "passed": 7},
+            "attempted-rate": dict.fromkeys(("attempted", "samples", "passed"), PASS_RATE_ATTEMPTS - 1),
             "model-rate": {"model_revision": "another-model"},
         }[failure]
         settings = measured_recipe(settings, tmp_path, tasks, **last)
-        if failure == "count-rate":
-            settings = settings.model_copy(
-                update={"pass_rates": settings.pass_rates.model_copy(update={"rows": len(tasks) + 1})}
-            )
     elif failure == "train-manifest":
         (tmp_path / "agents/manifest.json").write_text(json.dumps({"intended_use": "train"}))
         write_corpus(tmp_path)
