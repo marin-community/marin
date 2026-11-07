@@ -40,10 +40,14 @@ providers as the full run. Inspect valid-response rates, scored accuracy,
 missingness, route identities, and costs **before** full dispatch. The full
 run reuses each completed pilot output byte-for-byte and submits only the
 remaining 218 items for a model. It never re-generates already completed
-responses. A model whose pilot has no verified routed generation cannot enter
-full dispatch. Do not silently replace a failed provider/model or turn a
-failed attempt into a new sample; version the panel or explicitly record
-missingness instead.
+responses. A model whose pilot has no verified routed generation is reported as
+`PILOT_UNROUTED` and **never** enters full dispatch. The pilot found the
+pinned `meta-llama/llama-4-scout` Google Vertex endpoint BYOK-only for this
+key: all 12 attempts returned upstream 404 without a generation or API
+charge. These are retained as missing, not scored failures. Do not silently
+replace a failed provider/model or turn a failed attempt into a new sample;
+version any replacement panel separately, with no re-calls for previously
+completed model/task pairs.
 
 Private attempts and prospective snapshot root:
 

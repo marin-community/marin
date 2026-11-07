@@ -211,7 +211,8 @@ def main() -> None:
                 raise RuntimeError(f"Missing pilot: {model.model}")
         _verify_routes(completed, model, pilot_uri)
         if not any(row.get("provider_evidence") for row in completed):
-            raise RuntimeError(f"No routed generation on pilot: {model.model}")
+            print(f"PILOT_UNROUTED model={model.model} completed={len(completed)}; no full batch", flush=True)
+            continue
         print(f"PILOT model={model.model} completed={len(completed)}", flush=True)
         if args.pilot_only:
             continue
