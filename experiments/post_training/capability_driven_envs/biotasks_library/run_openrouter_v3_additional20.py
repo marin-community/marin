@@ -209,7 +209,13 @@ def main() -> None:
             completed = _read_completed(pilot_uri, pilot, model, panel_sha)
             if completed is None:
                 raise RuntimeError(f"Missing pilot: {model.model}")
-        _verify_routes(completed, model, pilot_uri)
+        try:
+            _verify_routes(completed, model, pilot_uri)
+        except RuntimeError as error:
+            if "Generation metadata still unavailable" not in str(error):
+                raise
+            print(f"PILOT_METADATA_UNAVAILABLE model={model.model}; no full batch", flush=True)
+            continue
         if not any(row.get("provider_evidence") for row in completed):
             print(f"PILOT_UNROUTED model={model.model} completed={len(completed)}; no full batch", flush=True)
             continue

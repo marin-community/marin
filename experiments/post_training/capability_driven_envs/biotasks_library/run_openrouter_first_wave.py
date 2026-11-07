@@ -203,6 +203,7 @@ def _verify_routes(rows: list[dict[str, Any]], model: PinnedModel, result_uri: s
         key = os.environ["OPENROUTER_API_KEY"]
         backfill = []
         for response_id in sorted(pending):
+            last_error: HTTPError | None = None
             for wait in (2, 5, 10, 20, 40):
                 time.sleep(wait)
                 request = Request(
@@ -214,10 +215,11 @@ def _verify_routes(rows: list[dict[str, Any]], model: PinnedModel, result_uri: s
                         metadata = json.load(response)["data"]
                     break
                 except HTTPError as error:
-                    if error.code != 404:
+                    if error.code != 404 and error.code < 500:
                         raise
+                    last_error = error
             else:
-                raise RuntimeError(f"Generation metadata still unavailable: {response_id}")
+                raise RuntimeError(f"Generation metadata still unavailable: {response_id}") from last_error
             backfill.append(
                 {
                     "response_id": response_id,

@@ -41,7 +41,9 @@ missingness, route identities, and costs **before** full dispatch. The full
 run reuses each completed pilot output byte-for-byte and submits only the
 remaining 218 items for a model. It never re-generates already completed
 responses. A model whose pilot has no verified routed generation is reported as
-`PILOT_UNROUTED` and **never** enters full dispatch. The pilot found the
+`PILOT_UNROUTED` and **never** enters full dispatch. A pilot with an
+unverifiable generation route (including persistent metadata HTTP 500) is
+`PILOT_METADATA_UNAVAILABLE` and also cannot enter full dispatch. The pilot found the
 pinned `meta-llama/llama-4-scout` Google Vertex endpoint BYOK-only for this
 key: all 12 attempts returned upstream 404 without a generation or API
 charge. These are retained as missing, not scored failures. Do not silently
