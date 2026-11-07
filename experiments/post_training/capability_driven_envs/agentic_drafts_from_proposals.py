@@ -129,6 +129,13 @@ def accepted_slots(proposals: StoragePath) -> list[Slot]:
         return [slot for slots in pool.map(read, results) for slot in slots]
 
 
+def listed_slots(path: StoragePath) -> set[Slot]:
+    """The slots that a JSONL file names, one ``{"slot": "<capability>/<n>"}`` object per line, such as a redraft
+    list from validation."""
+    lines = (json.loads(line)["slot"] for line in path.read_text().splitlines() if line.strip())
+    return {Slot(capability, int(number)) for capability, number in (line.rsplit("/", 1) for line in lines)}
+
+
 def draft_shard(slots: Sequence[Slot], settings: RunSettings) -> Iterator[dict[str, Any]]:
     """Draft the proposals of one shard, and give the summary line of each."""
     return iter(asyncio.run(_draft_all(slots, settings)))
@@ -273,6 +280,10 @@ def write_draft(
 )
 @click.option("--limit", type=click.IntRange(min=1), help="Draft only N accepted slots, for probes and ramps.")
 @click.option(
+    "--slots-from",
+    help='A JSONL file of {"slot": "<capability>/<n>"} lines: draft only these accepted slots, for redrafts.',
+)
+@click.option(
     "--stride",
     type=click.IntRange(min=1),
     default=1,
@@ -299,6 +310,7 @@ def main(
     transport: str,
     offset: int,
     limit: int | None,
+    slots_from: str | None,
     stride: int,
     workers: int,
     shard_size: int,
@@ -314,7 +326,13 @@ def main(
     """Draft tasks from the accepted proposals with GLM, on a Zephyr pool."""
     configure_logging(logging.INFO)
     output = StoragePath(output_root) / run_name
-    selected = accepted_slots(StoragePath(proposals))[::stride][offset:]
+    selected = accepted_slots(StoragePath(proposals))
+    if slots_from is not None:
+        listed = listed_slots(StoragePath(slots_from))
+        selected = [slot for slot in selected if slot in listed]
+        if len(selected) != len(listed):
+            raise ValueError(f"{len(listed) - len(selected)} slots of {slots_from} are not accepted proposals")
+    selected = selected[::stride][offset:]
     slots = selected[:limit] if limit is not None else selected
     logger.info("%d accepted slots to draft into %s", len(slots), output)
     settings = RunSettings(
