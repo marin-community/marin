@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
@@ -61,7 +62,6 @@ from skyrl_train.env_vars import NCCL_BUFFER_SIZE_ENV_VAR
 from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
-from skyrl_train.utils.algorithm_registry import AdvantageEstimator
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
@@ -129,10 +129,16 @@ from skyrl_train.utils.utils import (
     moe_router_replay_requested,
     policy_per_gpu_bundles_enabled,
     policy_force_cvd_mask_enabled,
+    num_rollout_gpus,
 )
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
+from skyrl_train.metric_names import PROMPTS_DROPPED_TOO_LONG_METRIC
+from skyrl_train.evaluation_profiles import (
+    EvaluationProfile,
+    evaluation_profile_config,
+)
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
@@ -355,7 +361,11 @@ class RayPPOTrainer:
         eval_dataset: Optional[PromptDataset] = None,
         eval_trajectory_runner: TrajectoryRunner | None = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        named_eval_datasets: Mapping[str, PromptDataset] | None = None,
     ):
+        self.named_eval_dataloaders = {
+            name: build_eval_dataloader(cfg, dataset) for name, dataset in (named_eval_datasets or {}).items()
+        }
         self.cfg = cfg
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
@@ -516,25 +526,21 @@ class RayPPOTrainer:
     async def eval(
         self,
         *,
-        sampling_params: Dict[str, Any] | None = None,
-        n_samples_per_prompt: int | None = None,
+        profile: EvaluationProfile | None = None,
         val_set_name: str | None = None,
         evaluation_pool: EvaluationPool | None = None,
     ) -> Dict[str, float]:
-        """Evaluate the current policy with optional sampling overrides and a named output directory."""
-        overrides = {"generator": {}, "trainer": {}}
-        if n_samples_per_prompt is not None:
-            overrides["generator"]["eval_n_samples_per_prompt"] = n_samples_per_prompt
-        if val_set_name is not None:
-            overrides["trainer"]["export_path"] = join_resource_path(self.cfg.trainer.export_path, val_set_name)
-        cfg = OmegaConf.merge(self.cfg, overrides)
-        for key, value in (sampling_params or {}).items():
-            OmegaConf.update(cfg, f"generator.eval_sampling_params.{key}", value, force_add=True)
+        """Evaluate the current policy with a named dataset and sampling profile."""
+        profile = profile or EvaluationProfile()
+        cfg = evaluation_profile_config(self.cfg, profile, val_set_name)
+        dataloader = (
+            self.named_eval_dataloaders[val_set_name] if profile.data_files is not None else self.eval_dataloader
+        )
         evaluator = evaluate_step_wise if cfg.trainer.step_wise_training else evaluate
         session = nullcontext(evaluation_pool) if evaluation_pool is not None else self._evaluation_session()
         async with session as pool:
             return await evaluator(
-                eval_dataloader=self.eval_dataloader,
+                eval_dataloader=dataloader,
                 trajectory_runner=self.eval_trajectory_runner,
                 cfg=cfg,
                 global_step=self.global_step,
@@ -1327,6 +1333,7 @@ class RayPPOTrainer:
                 self._restored_rollout_state = None
                 restored_data = True
 
+        self.tracker.start(resumed_step=self.global_step if self.loaded_checkpoint_path is not None else None)
         await self._start_draft_trainer()
         await self._sync_policy_for_rollouts(reason="initial")
 
@@ -1396,6 +1403,7 @@ class RayPPOTrainer:
             if self._control.should_log:
                 log_payload = {
                     **self.all_metrics,
+                    PROMPTS_DROPPED_TOO_LONG_METRIC: self.train_dataset.prompts_dropped_too_long,
                     **{f"timing/{k}": v for k, v in self.all_timings.items()},
                     **get_system_memory_metrics(),
                 }
@@ -1483,7 +1491,6 @@ class RayPPOTrainer:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
-        generator = self.cfg.generator
         consumed = consumed_work(training_input)
         self.all_metrics.update(
             async_step_metrics(
@@ -1495,12 +1502,7 @@ class RayPPOTrainer:
                 consumed_loss_tokens=consumed.loss_tokens,
                 consumed_response_tokens=consumed.response_tokens,
                 policy_gpus=placement.policy_num_nodes * placement.policy_num_gpus_per_node,
-                inference_gpus=(
-                    generator.num_inference_engines
-                    * generator.inference_engine_tensor_parallel_size
-                    * generator.inference_engine_pipeline_parallel_size
-                    * generator.inference_engine_data_parallel_size
-                ),
+                inference_gpus=num_rollout_gpus(self.cfg),
             )
         )
 
@@ -1843,13 +1845,7 @@ class RayPPOTrainer:
             num_policy_gpus = cfg.trainer.placement.policy_num_gpus_per_node * cfg.trainer.placement.policy_num_nodes
             num_critic_gpus = cfg.trainer.placement.critic_num_gpus_per_node * cfg.trainer.placement.critic_num_nodes
             num_ref_gpus = cfg.trainer.placement.ref_num_gpus_per_node * cfg.trainer.placement.ref_num_nodes
-            num_rollout_gpus = (
-                cfg.generator.num_inference_engines
-                * cfg.generator.inference_engine_tensor_parallel_size
-                * cfg.generator.inference_engine_pipeline_parallel_size
-                * cfg.generator.inference_engine_data_parallel_size
-            )
-            assert num_policy_gpus == num_rollout_gpus, (
+            assert num_policy_gpus == num_rollout_gpus(cfg), (
                 "num_policy_gpus and num_rollout_gpus must be the same when colocating all models"
             )
             pg = self.colocate_pg
@@ -2652,6 +2648,8 @@ class RayPPOTrainer:
                 lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
+                metrics=self.all_metrics,
+                pad_size=data.metadata.get("pad_size", 0),
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -2684,6 +2682,8 @@ class RayPPOTrainer:
                 exclude_from_baseline=exclude_from_baseline,
                 token_level_shaping=token_level_shaping,
                 group_advantage_invariant=self.group_advantage_invariant,
+                metrics=self.all_metrics,
+                pad_size=data.metadata.get("pad_size", 0),
             )
         data["returns"] = returns
         data["advantages"] = advantages
@@ -2692,18 +2692,14 @@ class RayPPOTrainer:
         pad_size = data.metadata.get("pad_size", 0)
         num_samples = len(token_level_rewards)
 
-        return_sums = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
-        if (
-            self.cfg.trainer.algorithm.advantage_estimator == AdvantageEstimator.GRPO
-            and not self.cfg.trainer.step_wise_training
-        ):
-            self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(
-                data.metadata["uids"][: num_samples - pad_size], return_sums
-            )
+        row_rewards = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
+        row_uids = np.asarray(data.metadata["uids"][: num_samples - pad_size])
         if self.cfg.trainer.step_wise_training:
-            avg_rewards: float = return_sums[data["is_last_step"][: num_samples - pad_size]].mean().item()
-        else:
-            avg_rewards: float = return_sums.mean().item()
+            final_steps = data["is_last_step"][: num_samples - pad_size].bool()
+            row_uids = row_uids[final_steps.cpu().numpy()]
+            row_rewards = row_rewards[final_steps]
+        self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(row_uids, row_rewards)
+        avg_rewards = row_rewards.mean().item()
 
         avg_response_length = data.metadata["avg_response_length"]
         data = data.to("cpu")

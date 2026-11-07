@@ -100,6 +100,10 @@ def _prepare_config(config: DictConfig) -> DictConfig:
     OmegaConf.set_struct(prepared, False)
     prepared.inputs.train_data = _prepared_sources(list(config.inputs.train_data))
     prepared.inputs.validation_data = _prepared_sources(list(config.inputs.validation_data))
+    if config.inputs.get("evaluation_data"):
+        prepared.inputs.evaluation_data = {
+            name: _prepared_sources(list(sources)) for name, sources in config.inputs.evaluation_data.items()
+        }
     OmegaConf.set_struct(prepared, True)
     return prepared
 

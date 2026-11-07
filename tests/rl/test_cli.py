@@ -16,6 +16,7 @@ import click
 import pytest
 from click.testing import CliRunner
 from iris.client.client import IrisClient
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import _coordinator_request, rl_build_options
@@ -90,9 +91,11 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     monkeypatch: pytest.MonkeyPatch, missing_name: str | None
 ) -> None:
     client = MagicMock(spec=IrisClient)
+    client.submit.return_value.job_id = JobName.from_wire("/atqamar/submitted-coordinator")
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     expected_env = {
+        "WANDB_ENTITY": "test-team",
         "DAYTONA_RL_API_KEY": "test-rl-key",
         "DAYTONA_EVAL_API_KEY": "test-eval-key",
         "DAYTONA_API_KEY": "test-other-key",
@@ -129,7 +132,10 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
-    assert expected_env.items() <= environment.env_vars.items()
+    assert {
+        name: value for name, value in expected_env.items() if name != "WANDB_ENTITY"
+    }.items() <= environment.env_vars.items()
+    assert "WANDB_ENTITY" not in environment.env_vars
     assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
 
 
