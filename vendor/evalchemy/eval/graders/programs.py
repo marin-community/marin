@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Sequence
 import re
 import tempfile
@@ -41,18 +42,42 @@ def program(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     )
     return Grade({"accuracy": float(bool(tests) and result["passed"])}, filtered_resps=[blocks])
 
+CRUX_CALL = re.compile(r"f\(.*?\)")
+CRUX_ANSWER_SPAN = re.compile(r"\[ANSWER\](.*?)\[/ANSWER\]", flags=re.DOTALL)
+
+
+def _crux_answer(text: str, direction: str) -> str:
+    """The graded expression in one CruxEval answer span: an input call or an output literal."""
+    call = CRUX_CALL.search(text)
+    if call is None:
+        return text
+    if direction == "input":
+        return call.group(0)
+    return text.replace(call.group(0), "").replace("=", "").replace("assert", "").strip()
+
+
+def _is_crux_candidate(span: str, answer: str, direction: str) -> bool:
+    if direction == "input":
+        return CRUX_CALL.search(span) is not None
+    try:
+        ast.parse(answer, mode="eval")
+    except SyntaxError:
+        return False
+    return True
+
+
 def crux(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     from eval.chat_benchmarks.CruxEval.execution import check_correctness
 
-    answer = str(responses[-1])
-    if "[ANSWER]" in answer and "[/ANSWER]" in answer:
-        answer = answer.split("[ANSWER]", 1)[1].split("[/ANSWER]", 1)[0].strip()
-    call = re.search(r"f\(.*?\)", answer)
-    if call is not None:
-        if spec.grader.reference["direction"] == "input":
-            answer = call.group(0)
-        else:
-            answer = answer.replace(call.group(0), "").replace("=", "").replace("assert", "").strip()
+    response = str(responses[-1])
+    direction = spec.grader.reference["direction"]
+    # Reasoning emitted as content (models served without a reasoning parser) often restates the
+    # prompt's "[ANSWER] and [/ANSWER] tags" instruction, so grade the first span holding a candidate.
+    spans = [span.strip() for span in CRUX_ANSWER_SPAN.findall(response)]
+    answers = [(span, _crux_answer(span, direction)) for span in spans] or [(response, _crux_answer(response, direction))]
+    answer = next(
+        (answer for span, answer in answers if _is_crux_candidate(span, answer, direction)), answers[0][1]
+    )
     doc = dict(spec.doc)
     doc["test_code"] = f"{doc['code']}\nassert {doc['output']} == {answer}"
     with tempfile.TemporaryDirectory(prefix="evalchemy-crux-") as directory:
