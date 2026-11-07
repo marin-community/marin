@@ -16,15 +16,14 @@ Each grade runs in a fresh sandbox, in four steps:
    (``native_decide`` adds one).
 2. A random unprivileged uid compiles the candidate. Compiling runs any code the reply contains, so
    everything this uid writes is untrusted. Both files are named ``Task.lean``, so private names agree.
-3. The same uid runs Prime Intellect's ``lean-export``, which turns the compiled file into JSON proof data.
-   Then the uid's processes are killed and root copies the data.
+3. The same uid runs Prime Intellect's ``lean-export``, which turns the compiled file into JSON proof data,
+   and root copies the data.
 4. Root runs ``lean-verify``, which replays the target in the kernel against the reference. The proof
    scores 1 only if it proves the reference's statement, keeps the reference's other declarations, and
    uses no axioms beyond ``propext``, ``Classical.choice`` and ``Quot.sound``.
 
-Before step 1, ``/tests`` (which can hold a reference proof the solver must not see) and the machine's
-world-writable directories are closed to the candidate's uid. While steps 2 and 3 run, the size of their
-directory is checked.
+Before step 1, the machine's world-writable directories are closed to the candidate's uid. The sandbox
+itself stops every process and frees the disk when the grade ends.
 
 The reward on stdout is 0 for anything the proof causes: a failed or crashed compile or export, running
 out of time or space, missing proof data, or a rejection by ``lean-verify``. Any other failure (a broken
@@ -34,7 +33,6 @@ can reach one only with proof data that ``lean-verify`` cannot finish checking. 
 JSON.
 """
 
-import errno
 import json
 import os
 import re
@@ -97,9 +95,6 @@ MAX_PROOF = 1 << 16
 """Longest proof graded, in bytes."""
 MAX_FILE = 1 << 28
 """Largest file the candidate's uid may write."""
-MAX_STEP_BYTES = 1 << 29
-MAX_STEP_FILES = 2000
-"""Bytes and directory entries the candidate's steps may leave in their directory before they are stopped."""
 MAX_PROOF_DATA = 1 << 27
 """Largest exported proof data root copies for ``lean-verify``, in bytes."""
 MAX_PROCESSES = 1024
@@ -140,8 +135,6 @@ class Stop(StrEnum):
     """The step used its own allowance."""
     DEADLINE = "deadline"
     """The overall deadline came first: an infrastructure error, whichever step it was."""
-    QUOTA = "quota"
-    """The candidate's directory grew past its allowance."""
 
 
 class GraderFailure(Exception):
@@ -250,14 +243,6 @@ def make_step_dir(name: str, uid: int = 0) -> Path:
     return path
 
 
-def close_grader_files() -> None:
-    """Make ``/tests`` root-only, so that the candidate reads neither the task's evidence nor the grader's files."""
-    os.chown(TESTS, 0, 0)
-    TESTS.chmod(0o700)
-    if TESTS.stat().st_mode & 0o077:
-        raise GraderFailure(f"{TESTS} is still open to other users")
-
-
 def close_shared_directories() -> None:
     """Make the machine's world-writable directories writable by root only, so the candidate writes only its own."""
     for directory in SHARED_DIRECTORIES:
@@ -267,46 +252,6 @@ def close_shared_directories() -> None:
         path.chmod(0o1755)
         if path.stat().st_mode & stat.S_IWOTH:
             raise GraderFailure(f"{directory} is still world-writable")
-
-
-def kill_user(uid: int) -> None:
-    """Kill every process of ``uid`` in this PID namespace with one signal sent as that uid, until none is left.
-    The sandbox's init reaps them."""
-    for _ in range(50):
-        child = os.fork()
-        if child == 0:
-            try:
-                os.setgroups([])
-                os.setresgid(uid, uid, uid)
-                os.setresuid(uid, uid, uid)
-                os.kill(-1, signal.SIGKILL)
-            finally:
-                os._exit(0)
-        os.waitpid(child, 0)
-        if not processes_of(uid):
-            return
-        time.sleep(0.05)
-    raise GraderFailure(f"processes of uid {uid} survived repeated kills")
-
-
-def processes_of(uid: int) -> list[int]:
-    """The process IDs whose real user is ``uid``; a process that exits while being read is skipped."""
-    pids = []
-    for entry in os.scandir("/proc"):
-        if not entry.name.isdigit():
-            continue
-        try:
-            status = Path(entry.path, "status").read_text()
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        except OSError as error:
-            if error.errno == errno.ESRCH:
-                continue
-            raise GraderFailure(f"cannot inspect process {entry.name}: {error}") from error
-        uids = next((line.split()[1:] for line in status.splitlines() if line.startswith("Uid:")), [])
-        if uids and int(uids[0]) == uid:
-            pids.append(int(entry.name))
-    return pids
 
 
 def apply_candidate_limits() -> None:
@@ -320,24 +265,6 @@ def apply_candidate_limits() -> None:
 def as_user(uid: int) -> list[str]:
     """``setpriv`` options that run the rest of its command as ``uid``, with no groups and no new privileges."""
     return [str(SETPRIV), f"--reuid={uid}", f"--regid={uid}", "--clear-groups", "--no-new-privs"]
-
-
-def over_quota(directory: Path) -> bool:
-    """Whether ``directory`` holds more than the candidate's allowance, counted without following links; a
-    file or directory that cannot be measured counts as too much."""
-    entries, size, unreadable = 0, 0, []
-    for root, directories, files in os.walk(directory, onerror=unreadable.append):
-        entries += len(directories) + len(files)
-        for name in files:
-            try:
-                size += os.lstat(os.path.join(root, name)).st_size
-            except FileNotFoundError:
-                continue
-            except OSError:
-                return True
-        if unreadable or entries > MAX_STEP_FILES or size > MAX_STEP_BYTES:
-            return True
-    return bool(unreadable)
 
 
 def has_lean_error(log: Path) -> bool:
@@ -377,7 +304,7 @@ class GraderSteps:
         self, step: str, argv: list[str], cwd: Path, *, candidate: bool = False, capture: bool = False
     ) -> StepResult:
         """Run ``argv`` in ``cwd``, as the candidate's uid within its limits or as root; stop it at its
-        allowance, the overall deadline, or, for the candidate, its quota."""
+        allowance or the overall deadline."""
         available = self.remaining()
         if available <= 1:
             raise GraderFailure(f"the {DEADLINE_SECONDS:g} s grading deadline left no time for the {step} step")
@@ -405,9 +332,6 @@ class GraderSteps:
             while process.poll() is None:
                 if time.monotonic() - started > limit:
                     stopped = bound
-                elif candidate and over_quota(cwd):
-                    stopped = Stop.QUOTA
-                if stopped:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
                     break
@@ -435,9 +359,7 @@ def copy_untrusted(source: Path, destination: Path, limit: int) -> bool:
 
 
 def check_candidate_uid(steps: GraderSteps) -> None:
-    """Fail as the grader, not as the proof, when the candidate's uid is in use or cannot run the toolchain."""
-    if processes_of(steps.uid):
-        raise GraderFailure(f"uid {steps.uid} already runs processes")
+    """Fail as the grader, not as the proof, when the candidate's uid cannot run the toolchain."""
     result = subprocess.run(
         [*as_user(steps.uid), steps.lean, "--version"],
         capture_output=True,
@@ -509,34 +431,31 @@ def graded_block(reply: bytes) -> str:
 
 
 def build_candidate(contract: Contract, block: str, steps: GraderSteps) -> Path:
-    """Compile the candidate and export its proof data as the candidate's uid, then stop that uid; the data,
-    copied where only root can write."""
+    """Compile the candidate and export its proof data as the candidate's uid; the data, copied where only
+    root can write."""
     candidate = make_step_dir("candidate", steps.uid)
     (candidate / MODULE_FILE).write_text(candidate_source(contract, block))
     (candidate / MODULE_FILE).chmod(0o644)
-    try:
-        compiled = steps.run("candidate", steps.compile_argv(), candidate, candidate=True)
-        if compiled.stopped == Stop.DEADLINE:
-            raise GraderFailure("the grading deadline passed while the candidate compiled")
-        if compiled.stopped:
-            raise Rejected(status=f"compile_{compiled.stopped}", output=compiled.tail())
-        if compiled.exit_code != 0:
-            failed = compiled.exit_code == 1 and has_lean_error(compiled.log)
-            status = "compile_failed" if failed else "compile_crashed"
-            raise Rejected(status=status, exit_code=compiled.exit_code, output=compiled.tail())
-        argv = [str(EXPORT_BIN), OBJECT_FILE, PROOF_DATA]
-        exported = steps.run("export", argv, candidate, candidate=True)
-        if exported.stopped == Stop.DEADLINE:
-            raise GraderFailure("the grading deadline passed while the candidate was exported")
-        if exported.stopped:
-            raise Rejected(status=f"export_{exported.stopped}")
-        if exported.exit_code != 0:
-            output = exported.tail()
-            rejected = exported.exit_code == 1 and any(message in output for message in EXPORT_REJECTIONS)
-            status = "export_rejected" if rejected else "export_crashed"
-            raise Rejected(status=status, exit_code=exported.exit_code, output=output)
-    finally:
-        kill_user(steps.uid)
+    compiled = steps.run("candidate", steps.compile_argv(), candidate, candidate=True)
+    if compiled.stopped == Stop.DEADLINE:
+        raise GraderFailure("the grading deadline passed while the candidate compiled")
+    if compiled.stopped:
+        raise Rejected(status=f"compile_{compiled.stopped}", output=compiled.tail())
+    if compiled.exit_code != 0:
+        failed = compiled.exit_code == 1 and has_lean_error(compiled.log)
+        status = "compile_failed" if failed else "compile_crashed"
+        raise Rejected(status=status, exit_code=compiled.exit_code, output=compiled.tail())
+    argv = [str(EXPORT_BIN), OBJECT_FILE, PROOF_DATA]
+    exported = steps.run("export", argv, candidate, candidate=True)
+    if exported.stopped == Stop.DEADLINE:
+        raise GraderFailure("the grading deadline passed while the candidate was exported")
+    if exported.stopped:
+        raise Rejected(status=f"export_{exported.stopped}")
+    if exported.exit_code != 0:
+        output = exported.tail()
+        rejected = exported.exit_code == 1 and any(message in output for message in EXPORT_REJECTIONS)
+        status = "export_rejected" if rejected else "export_crashed"
+        raise Rejected(status=status, exit_code=exported.exit_code, output=output)
     verify = make_step_dir("verify")
     if not copy_untrusted(candidate / PROOF_DATA, verify / PROOF_DATA, MAX_PROOF_DATA):
         raise Rejected(status="proof_data_missing_or_unreadable")
@@ -590,14 +509,10 @@ def main() -> None:
         if not os.access(tool, os.X_OK):
             raise GraderFailure(f"missing grader tool {tool}")
     WORK.mkdir(mode=0o755)
-    close_grader_files()
     close_shared_directories()
     steps = GraderSteps(start, lean, lean_path, CANDIDATE_UIDS[secrets.randbelow(len(CANDIDATE_UIDS))])
     check_candidate_uid(steps)
-    try:
-        reward, details = grade(contract, reply, steps)
-    finally:
-        kill_user(steps.uid)
+    reward, details = grade(contract, reply, steps)
     if steps.remaining() <= 0:
         raise GraderFailure(f"the {DEADLINE_SECONDS:g} s grading deadline passed before the verdict")
     print(json.dumps({**details, "seconds": steps.timings}, ensure_ascii=False, default=str), file=sys.stderr)

@@ -18,7 +18,6 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     candidate_source,
     copy_untrusted,
     declares_target,
-    over_quota,
     proof_block,
     verdict_line,
     without_comments,
@@ -213,32 +212,6 @@ def test_a_well_formed_verdict_scores_only_a_proof_with_the_standard_axioms(verd
 def test_a_malformed_verdict_is_a_grader_failure(verdict):
     with pytest.raises(GraderFailure):
         accepted(verdict, "t")
-
-
-def test_a_step_directory_too_deep_to_measure_counts_as_over_quota(tmp_path):
-    assert not over_quota(tmp_path)
-    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    for _ in range(300):
-        os.mkdir("d" * 30, dir_fd=directory)
-        deeper = os.open("d" * 30, os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
-        os.close(directory)
-        directory = deeper
-    os.close(os.open("hidden", os.O_WRONLY | os.O_CREAT, dir_fd=directory))
-    os.close(directory)
-    assert over_quota(tmp_path)
-
-
-def test_a_file_whose_path_is_too_long_to_measure_counts_as_over_quota(tmp_path):
-    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    depth = (4000 - len(str(tmp_path))) // 31
-    for _ in range(depth):
-        os.mkdir("d" * 30, dir_fd=directory)
-        deeper = os.open("d" * 30, os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
-        os.close(directory)
-        directory = deeper
-    os.close(os.open("f" * 200, os.O_WRONLY | os.O_CREAT, dir_fd=directory))
-    os.close(directory)
-    assert over_quota(tmp_path)
 
 
 def test_root_copies_only_a_regular_file_the_candidate_left_and_never_fails_as_the_grader(tmp_path):
