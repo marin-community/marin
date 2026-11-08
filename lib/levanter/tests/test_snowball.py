@@ -493,6 +493,12 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
     np.testing.assert_array_equal(low, [[[1]]])
 
 
+def test_hf_reload_keeps_router_combine_fp32():
+    requested = _tiny_config(router_combine_fp32=True)
+    reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
+    assert preserve_hf_runtime_settings(reloaded, requested).router_combine_fp32
+
+
 @pytest.mark.parametrize(
     "overrides,message",
     [
