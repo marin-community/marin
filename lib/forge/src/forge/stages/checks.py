@@ -94,14 +94,6 @@ class RuleCheck:
         return CheckResult(name=self.name, severity=self.severity, status=status, reason=reason)
 
 
-def is_null(p: TaskProposal) -> bool:
-    return p.header.null_reason is not None
-
-
-def word_count(text: str) -> int:
-    return len(text.split())
-
-
 # Keyword evidence in the grader section (and, for executable checks, a code file among the
 # resources). Expected false positives: a section that describes mechanical checks in none of the
 # EXECUTABLE_CHECK words, or a rubric only as "scored items". The vocabulary goes beyond
@@ -111,7 +103,7 @@ def word_count(text: str) -> int:
 # that parses the answer passes as code, and keywords cannot read negation ("no rubric is used").
 # A composite needs the evidence of each of its parts. Advisory for that reason.
 def grader_matches_verification(p: TaskProposal) -> Outcome:
-    if is_null(p):
+    if p.header.null_reason is not None:
         return CheckStatus.SKIP, "null proposal"
     grader = body_sections(p.body).get(GRADER_HEADING)
     if grader is None:
@@ -137,7 +129,7 @@ def grader_matches_verification(p: TaskProposal) -> Outcome:
 # documents run 20-30 KB). A FAIL on a template placeholder such as "<...>" is never a false positive.
 # Expected false negatives: long but empty prose. Null proposals SKIP: their body may be abbreviated.
 def required_sections(p: TaskProposal) -> Outcome:
-    if is_null(p):
+    if p.header.null_reason is not None:
         return CheckStatus.SKIP, "null proposal"
     sections = body_sections(p.body)
     problems: list[str] = []
@@ -147,8 +139,8 @@ def required_sections(p: TaskProposal) -> Outcome:
             problems.append(f"'## {heading}' missing")
         elif SECTION_PLACEHOLDER.fullmatch(text):
             problems.append(f"'## {heading}' is still the template placeholder {text!r}")
-        elif word_count(text) < MIN_SECTION_WORDS:
-            problems.append(f"'## {heading}' has {word_count(text)} words, fewer than {MIN_SECTION_WORDS}")
+        elif len(text.split()) < MIN_SECTION_WORDS:
+            problems.append(f"'## {heading}' has {len(text.split())} words, fewer than {MIN_SECTION_WORDS}")
     if problems:
         return CheckStatus.FAIL, "; ".join(problems)
     return CheckStatus.PASS, f"all {len(REQUIRED_HEADINGS)} required sections present with content"
@@ -163,7 +155,7 @@ def research_has_purpose(p: TaskProposal) -> Outcome:
     weak = [
         f"research[{i}]"
         for i, item in enumerate(p.header.research)
-        if VALUE_PLACEHOLDER.fullmatch(item.purpose) or word_count(item.purpose) < MIN_PURPOSE_WORDS
+        if VALUE_PLACEHOLDER.fullmatch(item.purpose) or len(item.purpose.split()) < MIN_PURPOSE_WORDS
     ]
     if weak:
         return (

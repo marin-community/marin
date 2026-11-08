@@ -25,7 +25,7 @@ from forge.model.review import (
     ValidationResult,
 )
 from forge.model.workpiece import Workpiece
-from forge.stages.classify import TASK_DEFECTS
+from forge.stages.classify import CAUSE_DECISIONS
 
 
 def passed(grade: GradeResult) -> bool:
@@ -37,9 +37,6 @@ def passed(grade: GradeResult) -> bool:
     return reward >= score_max or math.isclose(reward, score_max, rel_tol=1e-9, abs_tol=1e-9)
 
 
-TRANSIENT_CAUSES = frozenset({Cause.AGENT_TIMEOUT, Cause.GRADER_INFRA, Cause.NO_GRADE})
-
-
 def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Decision:
     result = workpiece.evidence[-1]
     decision = assess(result, band)
@@ -48,7 +45,7 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
             t.cause or (Cause.NO_GRADE if t.grade is None else None) for t in (*result.solver, *result.controls)
         ]
         retries = sum(isinstance(item, Retry) for item in workpiece.decisions)
-        cause = next((cause for cause in retryable if cause in TRANSIENT_CAUSES), None)
+        cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
         if cause is not None and retries < budget.max_validation_retries:
             return Retry(cause, retries + 1)
     # Mark's policy: one hardening attempt, then tagged acceptance; restore baseline on regression.
@@ -79,7 +76,7 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
-        if cause not in TASK_DEFECTS and cause is not Cause.BUDGET_EXHAUSTED
+        if CAUSE_DECISIONS[cause] not in (Modify, Reject)
     )
     unavailable += tuple(
         f"{trial.name}: {reason}"
@@ -94,17 +91,19 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     findings = tuple(
         f"Control {control.index} violates its expected reward" for control in result.controls if not control.met
     )
-    findings += tuple(f"{count} ungraded trial(s): {cause}" for cause, count in causes.items() if cause in TASK_DEFECTS)
+    findings += tuple(
+        f"{count} ungraded trial(s): {cause}" for cause, count in causes.items() if CAUSE_DECISIONS.get(cause) is Modify
+    )
     findings += tuple(
         f"{trial.grade.error or trial.cause}\n{trial.grade.diagnostics.get('stderr', '')}"
         for trial in trials
-        if trial.cause in TASK_DEFECTS and trial.grade is not None
+        if CAUSE_DECISIONS.get(trial.cause) is Modify and trial.grade is not None
     )
     findings += tuple(
         f"{trial.name}: {finding.claim}"
         for trial in result.adversary
         for finding in trial.findings
-        if finding.met or finding.cause in TASK_DEFECTS
+        if finding.met or CAUSE_DECISIONS.get(finding.cause) is Modify
     )
     if findings:
         return Modify(findings)
