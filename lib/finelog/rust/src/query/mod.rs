@@ -468,7 +468,7 @@ pub(crate) fn slow_query_log_ms() -> u128 {
 /// pathological query can no longer run unbounded and crash-loop the hub on
 /// memory. This bounds the SERVER independently of any client deadline, which
 /// a caller may set huge or omit entirely.
-const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Parse the `FINELOG_QUERY_TIMEOUT_MS` override: an integer millisecond budget,
 /// `0` to disable the deadline entirely (ops escape hatch for a known-heavy

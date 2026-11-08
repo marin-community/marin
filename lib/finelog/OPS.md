@@ -79,7 +79,7 @@ used by active scans; it does not acquire the global visibility lock. Object
 compaction also updates its accounting view without queuing a visibility writer.
 Legacy file replacement and table deletion still require that lock.
 
-Query and FetchLogs RPCs have a ten-second default budget covering admission,
+Query and FetchLogs RPCs have a 30-second default budget covering admission,
 visibility waits, snapshot/provider setup, execution, and response encoding. A
 shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
 ceiling. Each object snapshot carries an absolute deadline derived from that
@@ -452,7 +452,7 @@ local rebuild investigation. A time bound remains the fastest containment:
 telemetry namespaces are keyed on `timestamp_ms`, so bounded queries can prune
 before any secondary method runs.
 
-`finelog query` applies a client deadline just past the server's own 10s one.
+`finelog query` applies a client deadline just past the server's own 30s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
 

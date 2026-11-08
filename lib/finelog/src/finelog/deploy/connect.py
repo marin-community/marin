@@ -24,9 +24,9 @@ from finelog.deploy.config import FinelogConfig, tunnel_target_for
 
 logger = logging.getLogger(__name__)
 
-# Longer than the server's own 10s query deadline, so a slow query fails with
+# Longer than the server's own 30s query deadline, so a slow query fails with
 # the server's reason instead of a bare client-side timeout.
-DEFAULT_REQUEST_TIMEOUT = 15.0
+DEFAULT_REQUEST_TIMEOUT = 35.0
 DEFAULT_TUNNEL_TIMEOUT = 60.0
 
 
