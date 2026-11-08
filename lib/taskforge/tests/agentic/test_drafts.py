@@ -8,10 +8,12 @@ import io
 import json
 import shlex
 import tarfile
+import threading
 import urllib.request
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
@@ -135,16 +137,58 @@ class LinuxFactory:
         raise AssertionError("submit starts no grader machine")
 
 
-def config(agent: ScriptedAgent) -> DraftConfig:
+def config(agent: ScriptedAgent, judge: JudgeConnection | None = None) -> DraftConfig:
     return DraftConfig(
         agent_model=agent,
         workspace_factory=ShellSimMachineFactory(),
         solver_factories={Backend.SHELLSIM: ShellSimMachineFactory(), Backend.LOCAL: LinuxFactory()},
-        judge=JudgeConnection("http://judge.invalid/v1", "unused", default_model="deepseek"),
+        judge=judge or JudgeConnection("http://judge.invalid/v1", "unused", default_model="deepseek"),
         agent_limits=LIMITS,
         solver_limits=LIMITS,
         command_timeout=10,
     )
+
+
+@pytest.fixture
+def judge_replies(monkeypatch):
+    """A judge server that answers each chat completion with the first of the replies that a test sets, which it
+    removes while more than one is left."""
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    replies: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            reply = replies.pop(0) if len(replies) > 1 else replies[0]
+            payload = json.dumps(
+                {
+                    "id": "judge",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "deepseek",
+                    "choices": [
+                        {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}
+                    ],
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield replies, JudgeConnection(f"http://127.0.0.1:{server.server_port}/v1", "unused", default_model="deepseek")
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def replies(result) -> dict[str, dict]:
@@ -169,7 +213,9 @@ async def test_a_draft_needs_a_program_whose_ids_give_varied_tasks():
     assert answers == [f"{EXPECTED}1", f"{EXPECTED}2"]
 
 
-async def test_a_draft_may_grade_with_a_judge_that_it_does_not_call():
+async def test_a_draft_may_grade_with_a_judge_that_gives_the_right_answer_full_credit(judge_replies):
+    replies, judge = judge_replies
+    replies.append("The answer matches the reference.\nSCORE: 1")
     spec = JudgeSpec(references=(EXPECTED,), question="How many units are left?", incomplete_retry_tokens=32768)
     package = verifyit_package(spec)
     judged = SHELL_TASK.model_copy(update={"grader": package.grader})
@@ -180,7 +226,7 @@ async def test_a_draft_may_grade_with_a_judge_that_it_does_not_call():
         'fi > "$2"'
     )
     agent = ScriptedAgent([write_task(judged.model_dump_json(), build), submit()])
-    result = await draft_task(proposal(), config(agent))
+    result = await draft_task(proposal(), config(agent, judge))
 
     # The accepting reply ends the session, so the trace does not keep it.
     assert (result.failure, result.submits) == (None, 1)
@@ -358,6 +404,22 @@ async def test_submit_grades_the_right_answer_and_its_shifted_numbers():
     assert "together with a wrong answer" in candidates
     [problem] = await tools.control_problems(task, "12345.67")
     assert "fails right_answer" in problem
+
+
+async def test_submit_refuses_a_judge_that_gives_the_right_answer_less_than_full_credit(judge_replies):
+    replies, judge = judge_replies
+    tools = DraftTools(proposal(solver_machine="none"), config(ScriptedAgent([]), judge))
+    task = judge_task("example")
+    checklist = _judge(task, rubric="checklist", references=(), criteria=("States the price", "States the saving"))
+
+    replies.append("The reference fixes another verdict.\nSCORE: 0.5")
+    [problem] = await tools.control_problems(task, "You pay 90 euros.")
+    assert "a reward of 0.5 of 1.0" in problem and "fixes another verdict" in problem
+    replies[:] = ["SCORE: 1", "SCORE: 0"]
+    [problem] = await tools.control_problems(checklist, "You pay 90 euros.")
+    assert "fails the criteria ['States the saving']" in problem
+    replies[:] = ["SCORE: 1"]
+    assert await tools.control_problems(checklist, "You pay 90 euros and save 10.") == []
 
 
 def test_a_full_precision_number_of_an_answer_is_not_moved():

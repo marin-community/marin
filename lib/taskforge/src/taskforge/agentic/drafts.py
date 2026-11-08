@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Draft one task from one task proposal with a short agent session, and no model besides the agent.
+"""Draft one task from one task proposal with a short agent session, and no model besides the agent and a judge.
 
 ``draft_task`` gives the agent the proposal, the example build program and the TaskSpec references, and two tools:
-``submit``, which runs only checks that need no model, and ``finish``. ``submit`` grades the agent's right answer
-and wrong answers made from it by moving one number, except for a judge; nothing rolls out a solver or reviews the
-task: a later step validates the drafts. A draft keeps its build program and the
+``submit``, which runs checks that need no model, and ``finish``. ``submit`` grades the agent's right answer and
+wrong answers made from it by moving one number; a judge grades only the right answer. Nothing rolls out a solver or
+reviews the task: a later step validates the drafts. A draft keeps its build program and the
 workspace that the program reads, so ``task_instances`` can make more tasks of its kind from other task ids.
 """
 
@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "11"
+DRAFT_REVISION = "12"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -221,7 +221,7 @@ class DraftConfig:
     ``VERIFIER_BACKEND`` machines of graders that run in an environment. No solver runs: ``submit`` grades only the
     agent's right answer and wrong answers made from it, with a replayed reply."""
     judge: JudgeConnection
-    """The judge that a judge grader would use. ``check`` needs it, and no draft calls it: controls skip judges."""
+    """The judge of a judge grader, which ``submit`` calls to grade the agent's right answer."""
     agent_limits: RolloutLimits
     solver_limits: RolloutLimits
     command_timeout: float
@@ -278,7 +278,7 @@ TOOL_DEFINITIONS = (
                 "description": (
                     "The correct final reply to this task, exactly as a careful solver writes it in the answer "
                     "format, with the precision that the prompt asks for. The grader must pass it and fail it with "
-                    "any one of its numbers moved by one unit of the last digit. A judge grader is not run."
+                    "any one of its numbers moved by one unit of the last digit. A judge must give it full credit."
                 ),
             },
         },
@@ -330,10 +330,10 @@ class DraftTools:
 
     async def control_problems(self, task: TaskSpec, right_answer: str) -> list[str]:
         """The problems of a grader that fails ``right_answer``, passes it with one number moved by one unit of its
-        last digit, or passes it given together with such a wrong answer in both orders. A judge is not run, since
-        drafts call no model, and a grader that cannot run here is not checked."""
+        last digit, or passes it given together with such a wrong answer in both orders. A judge grades only
+        ``right_answer``, which must get full credit. A grader that cannot run here is not checked."""
         if _judge_spec(task) is not None:
-            return []
+            return await self._judge_control_problems(task, right_answer)
         right = await self._grade(task, right_answer)
         if right is None:
             return []
@@ -369,6 +369,18 @@ class DraftTools:
             )
         return problems
 
+    async def _judge_control_problems(self, task: TaskSpec, right_answer: str) -> list[str]:
+        """The problem of a judge that gives ``right_answer`` less than full credit: validation keeps a task only
+        when a right answer passes at full credit."""
+        right = await self._grade(task, right_answer)
+        if right is None:
+            return []
+        if right.status == Outcome.INVALID_TASK:
+            return [f"The grader cannot grade right_answer: {right.error}"]
+        if right.status == Outcome.GRADED and right.reward is not None and right.reward >= right.score_max:
+            return []
+        return [judge_failure(right_answer, right)]
+
     async def _grade(self, task: TaskSpec, answer: str) -> GradeResult | None:
         """The grade of ``answer``, or None when the grader cannot run here, which must not refuse a draft."""
         limits = self.config.solver_limits
@@ -382,6 +394,20 @@ class DraftTools:
             logger.warning("A control of %s did not grade: %s", task.id, grade.error)
             return None
         return grade
+
+
+def judge_failure(right_answer: str, grade: GradeResult) -> str:
+    """Why a judge gave ``right_answer`` less than full credit, with the checklist criteria that it failed."""
+    detail = grade.detail or {}
+    failed = [result["criterion"] for result in detail.get("criteria", ()) if not result.get("passed")]
+    reason = f"it fails the criteria {failed}" if failed else f"its reason: {str(detail.get('reasoning', ''))[:400]!r}"
+    return (
+        f"The judge gives right_answer {right_answer[:200]!r} a reward of {grade.reward} of {grade.score_max}, and "
+        f"{reason}. A task is kept only when a right answer gets full credit. If right_answer leaves out a "
+        "deliverable, give the full final reply of a correct solver. If a criterion or the reference asks for more "
+        "than the prompt states, or fixes one verdict where the facts support another, change the grader or add the "
+        "fact to the prompt: each criterion checks one deliverable that the prompt names"
+    )
 
 
 def shifted_answers(answer: str) -> list[str]:

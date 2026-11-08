@@ -230,11 +230,17 @@ copies an example's values.
 - A judge's reference is the answer, never the task's text, which the solver sees. A judge question gives no \
 score scale, weights, caps or reply format: verifyit sets those. Set incomplete_retry_tokens to 32768, as the \
 judge example does.
+- A judged verdict, plan or choice must follow from the stated facts. Before you submit a judge task, ask whether \
+an expert could defend another verdict or plan from the prompt's facts. If one could, add the fact that excludes \
+it, or make the grader credit any choice that the stated facts support with correct reasoning. A reference or \
+criterion that requires one choice the prompt leaves open fails right solvers.
+- Write any grading context of a judge, such as a key file, from the same variables as the solver's files, never \
+as a second copy of the data.
 - Pin every PyPI package of a machine to one version, as name==version.
 - A grader fails an answer that the prompt's rules make wrong: an answer that gives several conflicting answers, \
 pads a list of candidates, or uses another case or spelling than the prompt requires. A judge question says that \
-such an answer scores 0. A checklist has at most 8 criteria, each a check of a stated number, decision or \
-required element, not of a phrase. A script grader normalizes only what the prompt allows, and checks a formula \
+such an answer scores 0. A checklist has about 5 coarse criteria, at most 8, each a check of a stated number, \
+decision or deliverable that the prompt names, not of a phrase or of a detail that the prompt does not ask for. A script grader normalizes only what the prompt allows, and checks a formula \
 symbolically or at points beyond the ones the prompt shows.
 - For a number to d decimals, set tolerance_abs to 0.5 * 10**-d around the unrounded value, as the numeric \
 example does, so that only the correctly rounded answer passes. A script grader does the same for every number \
@@ -248,13 +254,14 @@ answer with more than one \\boxed{{}} or "Answer:" value, even when the last one
 - Run the program for one task id, then call submit with the TaskSpec's path, the program's path and the right \
 answer of that task id, written exactly as a correct solver's final reply in the answer format, with the asked \
 precision. submit grades it, and wrong answers made from it by moving one of its numbers by one unit of the last \
-digit, with the task's grader, except a judge.
+digit, with the task's grader. A judge grades only the right answer, which must get full credit, every checklist \
+criterion included: for a judge, give the complete reply of a careful expert solver.
 
 # Tools
 
 - submit: checks that the task can run, that its CSV and JSON files parse, that its machine matches the \
 proposal's solver_machine, the rules above that need no model, and that the program writes the same task again \
-from its id and valid tasks with varied answers from other ids. It needs no model. When it reports \
+from its id and valid tasks with varied answers from other ids. It calls no model besides the task's judge. When it reports \
 problems, fix only those and submit again. The session ends when submit accepts the task.
 - finish: stop, with a report, only when the proposal cannot become a task with these tools.
 
