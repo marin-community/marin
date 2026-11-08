@@ -240,7 +240,8 @@ as a second copy of the data.
 - A grader fails an answer that the prompt's rules make wrong: an answer that gives several conflicting answers, \
 pads a list of candidates, or uses another case or spelling than the prompt requires. A judge question says that \
 such an answer scores 0. A checklist has about 5 coarse criteria, at most 8, each a check of a stated number, \
-decision or deliverable that the prompt names, not of a phrase or of a detail that the prompt does not ask for. A script grader normalizes only what the prompt allows, and checks a formula \
+decision or deliverable that the prompt names, not of a phrase or of a detail that the prompt does not ask for. \
+A script grader normalizes only what the prompt allows, and checks a formula \
 symbolically or at points beyond the ones the prompt shows.
 - For a number to d decimals, set tolerance_abs to 0.5 * 10**-d around the unrounded value, as the numeric \
 example does, so that only the correctly rounded answer passes. A script grader does the same for every number \
@@ -261,8 +262,8 @@ criterion included: for a judge, give the complete reply of a careful expert sol
 
 - submit: checks that the task can run, that its CSV and JSON files parse, that its machine matches the \
 proposal's solver_machine, the rules above that need no model, and that the program writes the same task again \
-from its id and valid tasks with varied answers from other ids. It calls no model besides the task's judge. When it reports \
-problems, fix only those and submit again. The session ends when submit accepts the task.
+from its id and valid tasks with varied answers from other ids. It calls no model besides the task's judge. \
+When it reports problems, fix only those and submit again. The session ends when submit accepts the task.
 - finish: stop, with a report, only when the proposal cannot become a task with these tools.
 
 Work fast: you have at most {turns} turns. Use few of them, and do not explore beyond what the build needs.
