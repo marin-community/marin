@@ -38,8 +38,9 @@ from forge.lowering import (
     requirements,
 )
 from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
-from forge.policy import GRADER_BASE_IMAGE, load_policy
+from forge.policy import GRADER_BASE_IMAGE, load_policy, resolution_lines
 from forge.resources.env import ReadFile
+from forge.resources.sandbox.factories import shellsim_factory
 from forge.wiring import submit_gate
 
 
@@ -168,3 +169,13 @@ async def test_authored_interface_errors_return_tool_feedback(
     result = await tool(ctx, {})
     assert isinstance(result, ToolResult) and message in result.content
     await ctx.drain()
+
+
+def test_shellsim_output_budget_is_declared_and_resolved_without_changing_shared_default() -> None:
+    declared = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
+    resolved = declared.overlaid({"sandbox.output_budget_mb": 512})
+    assert "POLICY sandbox.output_budget_mb declared=1024 resolved=512" in resolution_lines(declared, resolved)
+    factory = shellsim_factory(output_budget_mb=resolved.setting("sandbox.output_budget_mb", int))
+    assert isinstance(factory, ShellSimMachineFactory)
+    assert factory.output == 512 * 1024 * 1024
+    assert ShellSimMachineFactory().output == 128 * 1024 * 1024

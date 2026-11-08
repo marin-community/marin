@@ -15,7 +15,16 @@ pytest.importorskip("shellsim")
 
 import shellsim
 from shellbox.backends.shellsim.machine import INTERRUPT_GRACE, ShellSimMachineFactory
-from shellbox.machine import Command, ExitReason, MachineSpec, PackageSpec, Result, ShellStatus
+from shellbox.machine import (
+    Command,
+    ExitReason,
+    MachineOutputLimitExceeded,
+    MachineResourceExhausted,
+    MachineSpec,
+    PackageSpec,
+    Result,
+    ShellStatus,
+)
 from shellbox.transfer import LinkedDownloadPath, download_files
 
 UNSUPPORTED_COMMAND = "unsupported-native-command-with-a-long-name-for-output-truncation-testing"
@@ -426,5 +435,20 @@ def test_download_only_types_confirmed_path_links(code, reason, linked):
         if not linked:
             assert f"exit={code}" in str(caught.value)
             assert "inspection error" in str(caught.value)
+
+    asyncio.run(check())
+
+
+def test_output_exhaustion_keeps_strict_factory_semantics_and_has_a_specific_type():
+    async def check():
+        assert ShellSimMachineFactory().output == 128 * 1024 * 1024
+        machine = await ShellSimMachineFactory(output=64).create(MachineSpec(PackageSpec()))
+        try:
+            with pytest.raises(MachineResourceExhausted) as caught:
+                await machine.run(Command(("seq", "1000")))
+            assert isinstance(caught.value, MachineOutputLimitExceeded)
+            assert machine.simulation.terminated
+        finally:
+            await machine.close()
 
     asyncio.run(check())

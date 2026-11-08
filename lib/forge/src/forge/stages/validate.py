@@ -9,11 +9,12 @@ from pathlib import PurePosixPath
 
 from rolloutengine.models import TaskRolloutSpec, TraceMode
 from rolloutengine.validation import InvalidTaskSpec
+from taskcompendium.grading_result import GradeResult, Outcome
 
 from forge.config import ForgeConfig
 from forge.effects.context import Context
-from forge.effects.events import Resolved
-from forge.effects.issues import Hold, describe_exception
+from forge.effects.events import Note, Resolved
+from forge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
 from forge.harness.protocol import Returned, Stopped
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
@@ -39,19 +40,31 @@ async def control_result(ctx: Context, spec: TaskRolloutSpec, index: int, contro
 
 
 async def solver_result(ctx: Context, spec: TaskRolloutSpec, trial: int, attempt: int) -> TrialResult:
-    result = await ctx.emit(SolverRollout(spec, trial, attempt))
-    return TrialResult(trial, result.grade, trial_cause(result, spec.task))
+    for retry in range(2):
+        result = None
+        try:
+            result = await ctx.emit(SolverRollout(spec, trial, attempt))
+        except* OutputBudgetExhausted:
+            await ctx.emit(Note(f"Solver {trial}: output budget exhausted on attempt {retry + 1} of 2"))
+        if result is not None:
+            return TrialResult(trial, result.grade, trial_cause(result, spec.task))
+    return TrialResult(trial, GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted"))
 
 
 async def adversary_result(
     ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources, spec: TaskRolloutSpec, name: str
 ) -> AdversaryResult:
-    result = AdversaryResult(name, False, ())
-    try:
-        result = await run_adversary(ctx, workpiece, config, resources, spec, name)
-    except* Hold as error:
-        result = AdversaryResult(name, False, (), failure_reasons(error))
-    return result
+    for retry in range(2):
+        result = None
+        try:
+            result = await run_adversary(ctx, workpiece, config, resources, spec, name)
+        except* OutputBudgetExhausted:
+            await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
+        except* Hold as error:
+            result = AdversaryResult(name, False, (), failure_reasons(error))
+        if result is not None:
+            return result
+    return AdversaryResult(name, True, (), ("output budget exhausted",))
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:

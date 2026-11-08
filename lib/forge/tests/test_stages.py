@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
@@ -20,9 +21,9 @@ from forge.arms import decided, validated
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
 from forge.effects.events import Resolved
-from forge.effects.issues import Hold, Restart
+from forge.effects.issues import Hold, OutputBudgetExhausted, Restart
 from forge.effects.log import EventLog
-from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
+from forge.harness.protocol import Returned, Stopped, StopReason, Submitted, Tool
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from forge.lowering import machine_backend, requirements
 from forge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
@@ -55,6 +56,7 @@ from forge.model.review import (
     TrialResult,
     ValidationResult,
 )
+from forge.model.stage import Exit
 from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy
 from forge.policy.defaults import DEFAULTS_DIR
@@ -62,8 +64,8 @@ from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
-from forge.resources.inference import FakeInference
-from forge.resources.rollouts import RolloutResource
+from forge.resources.inference import FakeInference, InferenceClient
+from forge.resources.rollouts import RolloutResource, SolverRollout
 from forge.resources.web import FakeWeb
 from forge.stages.author import author
 from forge.stages.classify import grade_cause, replayable_grade
@@ -71,7 +73,7 @@ from forge.stages.exits import Decided, Triaged, TriageRejected, Validated
 from forge.stages.review import review
 from forge.stages.rules import default_review
 from forge.stages.triage import triage
-from forge.stages.validate import adversary_result, claim_result, control_result, validate
+from forge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
 from forge.wiring import build_config, install
 
 
@@ -728,3 +730,58 @@ def test_generation_limited_solver_is_failed_pass_rate_evidence(workpiece: Workp
     assert result.solver[0].cause is Cause.GENERATION_LIMIT and result.solver[0].grade is grade
     unavailable = replace(result, controls=(ControlResult(0, None, False, Cause.NO_GRADE),))
     assert not isinstance(default_review(workpiece.with_(evidence=(unavailable,)), setup.band, setup.budget), Accept)
+
+
+@pytest.mark.parametrize("failures", [1, 2])
+async def test_output_budget_retries_solver_once_then_records_failed_trial(failures: int) -> None:
+    ctx = Context(log=EventLog())
+    calls = 0
+    success = await CandidateEngine().run_task(rollout_spec(arithmetic_task()), solver_model)
+
+    async def execute(event: SolverRollout) -> GradedRollout:
+        nonlocal calls
+        calls += 1
+        if calls <= failures:
+            raise OutputBudgetExhausted("output budget exhausted")
+        return success
+
+    ctx.handle(SolverRollout, execute)
+    result = await solver_result(ctx, rollout_spec(arithmetic_task()), 0, 0)
+    await ctx.drain()
+    assert calls == 2
+    assert result.cause is None
+    assert result.grade == (
+        success.grade if failures == 1 else GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted")
+    )
+
+
+@pytest.mark.parametrize("failures", [1, 2])
+async def test_output_budget_replaces_adversary_once_and_does_not_hold(workpiece: Workpiece, failures: int) -> None:
+    class Harness(RecordingHarness):
+        calls = 0
+
+        async def run(
+            self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
+        ) -> Exit:
+            self.calls += 1
+            if self.calls <= failures:
+                raise OutputBudgetExhausted("output budget exhausted")
+            return Returned("report", AdversaryReport(()), session)
+
+    harness = Harness(OutputBudgetExhausted("output budget exhausted"))
+    setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+    await ctx.drain()
+    assert result.completed and not result.findings
+    assert result.reasons == (("output budget exhausted",) if failures == 2 else ())
+    assert isinstance(bundle.envs, Environments)
+    assert len(bundle.envs.created) == 2 and all(env.closed for env in bundle.envs.created)
+    evidence = ValidationResult(
+        "task",
+        (TrialResult(0, GradeResult(Outcome.GRADED, 0)),),
+        (ControlResult(0, GradeResult(Outcome.GRADED, 1), True),),
+        (result,),
+    )
+    assert not isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)

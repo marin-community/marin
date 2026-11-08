@@ -21,7 +21,7 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
-from shellbox.machine import ExecSetupFailed, MachineCancelled, MachineTerminated
+from shellbox.machine import ExecSetupFailed, MachineCancelled, MachineOutputLimitExceeded, MachineTerminated
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -37,7 +37,7 @@ from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
 from forge.effects.events import Event, Retrying
-from forge.effects.issues import Restart, Transient
+from forge.effects.issues import OutputBudgetExhausted, Restart, Transient
 from forge.effects.log import EventLog
 from forge.model.controls import Candidate
 from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
@@ -215,3 +215,10 @@ def test_parent_cancellation_is_transient_in_every_rollout_phase(operation: Roll
     decision = interruption(error)
     assert isinstance(decision, Transient)
     assert "parent job terminated" in str(decision)
+
+
+@pytest.mark.parametrize("operation", [RolloutOperation.ADVANCE, RolloutOperation.GRADE])
+def test_only_agent_output_exhaustion_counts_as_agent_failure(operation: RolloutOperation) -> None:
+    error = RolloutInterrupted(Rollout("output", (), "interrupted"), operation)
+    error.__cause__ = MachineOutputLimitExceeded("ShellSim terminated: output_limit_exceeded")
+    assert isinstance(interruption(error), OutputBudgetExhausted) is (operation is RolloutOperation.ADVANCE)

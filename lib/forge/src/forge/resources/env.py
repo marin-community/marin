@@ -23,6 +23,7 @@ from shellbox.machine import (
     Machine,
     MachineCancelled,
     MachineFactory,
+    MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineTerminated,
 )
@@ -30,7 +31,7 @@ from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
-from forge.effects.issues import Hold, Restart, Transient
+from forge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
 from forge.resources.execution import Notify, retry_effect
 
 
@@ -150,6 +151,8 @@ class ShellboxEnv(_RecordedEnv):
             yield
         except IsADirectoryError as error:
             raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
+        except MachineOutputLimitExceeded as error:
+            raise OutputBudgetExhausted("output budget exhausted") from error
         except MachineResourceExhausted as error:
             raise Hold(f"environment terminated: {error}") from error
         except MachineTerminated as error:
@@ -237,6 +240,8 @@ class ShellboxEnvFactory(EnvFactory):
             machine = await owned.enter_async_context(
                 prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
             )
+        except MachineOutputLimitExceeded as error:
+            raise OutputBudgetExhausted("output budget exhausted") from error
         except MachineResourceExhausted as error:
             raise Hold(f"environment terminated: {error}") from error
         except MachineTerminated as error:

@@ -288,7 +288,10 @@ async def runtime(
     if not controller:
         raise ValueError("Iris sandboxes require a controller URL or an Iris job context")
     container = IrisMachineFactory(controller_url=controller, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
-    factories: dict[str, MachineFactory] = {container.backend.value: container, "shellsim": shellsim_factory()}
+    factories: dict[str, MachineFactory] = {
+        container.backend.value: container,
+        "shellsim": shellsim_factory(output_budget_mb=policy.setting("sandbox.output_budget_mb", int)),
+    }
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         clients: dict[str, CompletionBackend] = {}

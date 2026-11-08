@@ -228,6 +228,10 @@ class MachineResourceExhausted(MachineTerminated):
     """The machine exhausted its resource budget; recreating it cannot repair the task."""
 
 
+class MachineOutputLimitExceeded(MachineResourceExhausted):
+    """The machine exhausted its cumulative output budget."""
+
+
 class ExecSetupFailed(RuntimeError):
     """Transport setup failed before the command was sent, so retry is safe."""
 
