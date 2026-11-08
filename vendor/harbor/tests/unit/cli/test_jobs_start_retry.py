@@ -38,13 +38,17 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
         "harbor.environments.factory.EnvironmentFactory.run_preflight",
         lambda **_: None,
     )
-    monkeypatch.setattr("harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None)
+    monkeypatch.setattr(
+        "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
+    )
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
 
     return captured
 
 
-def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(tmp_path: Path, monkeypatch) -> None:
+def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(
+    tmp_path: Path, monkeypatch
+) -> None:
     config_path = tmp_path / "job.yaml"
     config_path.write_text(
         "\n".join(
@@ -73,27 +77,38 @@ def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(tmp_path: Path
     }
 
 
-def test_jobs_start_uses_model_retry_exclude_default_without_config(tmp_path: Path, monkeypatch) -> None:
+def test_jobs_start_uses_model_retry_exclude_default_without_config(
+    tmp_path: Path, monkeypatch
+) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
     result = runner.invoke(app, ["jobs", "start", "--agent", "pi"])
 
     assert result.exit_code == 0, result.output
     assert len(captured) == 1
-    assert captured[0].retry.exclude_exceptions == JobConfig(agents=[AgentConfig(name="pi")]).retry.exclude_exceptions
+    assert (
+        captured[0].retry.exclude_exceptions
+        == JobConfig(agents=[AgentConfig(name="pi")]).retry.exclude_exceptions
+    )
 
 
-def test_jobs_start_hugging_face_dataset_without_revision(tmp_path: Path, monkeypatch) -> None:
+def test_jobs_start_hugging_face_dataset_without_revision(
+    tmp_path: Path, monkeypatch
+) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
-    result = runner.invoke(app, ["jobs", "start", "--agent", "pi", "--dataset", "hf://example/tasks"])
+    result = runner.invoke(
+        app, ["jobs", "start", "--agent", "pi", "--dataset", "hf://example/tasks"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured[0].datasets[0].name == "hf://example/tasks"
     assert captured[0].datasets[0].ref is None
 
 
-def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(tmp_path: Path, monkeypatch) -> None:
+def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(
+    tmp_path: Path, monkeypatch
+) -> None:
     config_path = tmp_path / "job.yaml"
     config_path.write_text(
         "\n".join(
@@ -127,7 +142,9 @@ def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(tmp_path: Path, monkey
     assert captured[0].retry.exclude_exceptions == {"VerifierTimeoutError"}
 
 
-def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(tmp_path: Path, monkeypatch) -> None:
+def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
+    tmp_path: Path, monkeypatch
+) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
     result = runner.invoke(

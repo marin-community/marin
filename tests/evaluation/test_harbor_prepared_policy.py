@@ -97,7 +97,7 @@ def test_runtime_failures_use_published_infrastructure_taxonomy_in_marin(tmp_pat
         (
             "user_agent",
             {"import_path": "harbor.agents.terminus_2:Terminus2", "bridge": {"kind": "acp"}},
-            "Harbor simulated-user agents are not supported",
+            "Extra inputs are not permitted",
         ),
     ],
 )

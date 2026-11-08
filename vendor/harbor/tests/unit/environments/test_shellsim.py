@@ -39,9 +39,7 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
             await environment.download_dir(
                 "/logs/agent", f"file://{tmp_path}/local-download"
             )
-            (tmp_path / "local-download" / "existing.txt").write_text(
-                "local artifact"
-            )
+            (tmp_path / "local-download" / "existing.txt").write_text("local artifact")
             await environment.download_dir("/logs/agent", tmp_path / "local-download")
             await environment.download_dir("/logs/agent", str(remote / "by-uri"))
 

@@ -10,10 +10,14 @@ from harbor.models.agent.context import AgentContext
 
 
 @pytest.mark.asyncio
-async def test_codex_keeps_host_authentication_out_of_guest_state(tmp_path, monkeypatch, mock_environment):
+async def test_codex_keeps_host_authentication_out_of_guest_state(
+    tmp_path, monkeypatch, mock_environment
+):
     auth_file = tmp_path / ".codex" / "auth.json"
     auth_file.parent.mkdir()
-    auth_file.write_text(json.dumps({"tokens": {"access_token": "host-oauth-private-canary"}}))
+    auth_file.write_text(
+        json.dumps({"tokens": {"access_token": "host-oauth-private-canary"}})
+    )
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(auth_file))
     monkeypatch.setenv("CODEX_FORCE_AUTH_JSON", "true")
@@ -34,7 +38,10 @@ async def test_codex_keeps_host_authentication_out_of_guest_state(tmp_path, monk
     assert "host-provider-private-canary" not in serialized
     assert "host-github-private-canary" not in serialized
     assert any(call["env"].get("OPENAI_API_KEY") == "EMPTY" for call in calls)
-    assert json.loads(auth_file.read_text())["tokens"]["access_token"] == "host-oauth-private-canary"
+    assert (
+        json.loads(auth_file.read_text())["tokens"]["access_token"]
+        == "host-oauth-private-canary"
+    )
 
 
 @pytest.mark.parametrize("control", ["CODEX_AUTH_JSON_PATH", "CODEX_FORCE_AUTH_JSON"])

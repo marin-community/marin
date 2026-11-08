@@ -85,7 +85,9 @@ def test_served_model_alias_drift_resume_proceeds() -> None:
     job = _reconcile(planned, existing)
 
     assert job._remaining_trial_configs == []
-    assert job._trial_configs[0].agent.model_alias == ("hosted_vllm/laion/original-endpoint")
+    assert job._trial_configs[0].agent.model_alias == (
+        "hosted_vllm/laion/original-endpoint"
+    )
 
 
 def test_model_name_drift_resume_rejected() -> None:

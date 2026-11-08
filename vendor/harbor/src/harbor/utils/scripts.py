@@ -61,7 +61,8 @@ def quote_windows_shell_arg(value: str | PurePath) -> str:
     for char in _WINDOWS_UNSAFE_CHARS:
         if char in s:
             raise ValueError(
-                f"Value {s!r} contains {char!r}, which cannot be safely " "embedded in a cmd.exe command string"
+                f"Value {s!r} contains {char!r}, which cannot be safely "
+                "embedded in a cmd.exe command string"
             )
     # Only quote if the value contains characters that require it
     needs_quotes = any(char in s for char in _WINDOWS_CHARS_REQUIRING_QUOTES)
@@ -139,7 +140,9 @@ def build_execution_command(
     """
     script_str = str(script_path)
     ext = _extension(script_str)
-    script_piece = quote_shell_arg(script_str, task_os) if task_os is not None else script_str
+    script_piece = (
+        quote_shell_arg(script_str, task_os) if task_os is not None else script_str
+    )
 
     if ext == ".bat":
         cmd = f"cmd /c {script_piece}"
@@ -149,7 +152,9 @@ def build_execution_command(
 
     if stdout_path is not None:
         stdout_str = str(stdout_path)
-        stdout_piece = quote_shell_arg(stdout_str, task_os) if task_os is not None else stdout_str
+        stdout_piece = (
+            quote_shell_arg(stdout_str, task_os) if task_os is not None else stdout_str
+        )
         cmd = f"({cmd}) > {stdout_piece} 2>&1"
 
     return cmd

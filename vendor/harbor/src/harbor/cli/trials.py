@@ -25,7 +25,9 @@ from rich.console import Console
 from typer import Argument, Option, Typer
 from upath import UPath
 
-trials_app = Typer(no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]})
+trials_app = Typer(
+    no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
+)
 console = Console()
 
 
@@ -36,7 +38,8 @@ def start(
         Option(
             "-p",
             "--path",
-            help="Path to a local task directory, or path within git repo if --task-git-url " "is specified",
+            help="Path to a local task directory, or path within git repo if --task-git-url "
+            "is specified",
             rich_help_panel="Task",
         ),
     ] = None,
@@ -138,7 +141,9 @@ def start(
         Option(
             "-a",
             "--agent",
-            help=("Supported agent: pi, mini-swe-agent, codex, opencode, terminus-2, or terminus-kira."),
+            help=(
+                "Supported agent: pi, mini-swe-agent, codex, opencode, terminus-2, or terminus-kira."
+            ),
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -217,7 +222,8 @@ def start(
         Option(
             "--skill",
             "--skills",
-            help="Path to a skill directory, or a root containing skill directories. " "Can be used multiple times.",
+            help="Path to a skill directory, or a root containing skill directories. "
+            "Can be used multiple times.",
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -408,7 +414,9 @@ def start(
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
-            base_config = TrialConfig.model_validate(yaml.safe_load(config_path.read_text()))
+            base_config = TrialConfig.model_validate(
+                yaml.safe_load(config_path.read_text())
+            )
         elif config_path.suffix == ".json":
             base_config = TrialConfig.model_validate_json(config_path.read_text())
         else:
@@ -419,12 +427,16 @@ def start(
             raise ValueError("Either --path or --config must be provided")
 
         if agent_name is None:
-            raise ValueError("Specify --agent or a config with an explicit supported agent")
+            raise ValueError(
+                "Specify --agent or a config with an explicit supported agent"
+            )
         config = TrialConfig(
             agent=AgentConfig(name=agent_name),
             task=TaskConfig(path=path),
             trial_name=trial_name or "",
-            trials_dir=(UPath(trials_dir) if trials_dir is not None else UPath("./trials")),
+            trials_dir=(
+                UPath(trials_dir) if trials_dir is not None else UPath("./trials")
+            ),
             timeout_multiplier=timeout_multiplier or 1.0,
         )
     else:
@@ -441,7 +453,9 @@ def start(
     if agent_setup_timeout_multiplier is not None:
         config.agent_setup_timeout_multiplier = agent_setup_timeout_multiplier
     if environment_build_timeout_multiplier is not None:
-        config.environment_build_timeout_multiplier = environment_build_timeout_multiplier
+        config.environment_build_timeout_multiplier = (
+            environment_build_timeout_multiplier
+        )
     if trial_attempt_timeout_sec is not None:
         config.trial_attempt_timeout_sec = trial_attempt_timeout_sec
     if trial_cleanup_grace_sec is not None:
@@ -551,7 +565,9 @@ def start(
     console.print(f"Finished: {result.finished_at}")
 
     if result.exception_info:
-        console.print(f"[bold red]Error: {result.exception_info.exception_type}[/bold red]")
+        console.print(
+            f"[bold red]Error: {result.exception_info.exception_type}[/bold red]"
+        )
         console.print(f"Message: {result.exception_info.exception_message}")
     elif result.verifier_result:
         console.print(f"Rewards: {result.verifier_result.rewards}")
@@ -567,6 +583,7 @@ def summarize(
 ):
     """Summarize a single trial using Claude Agent SDK."""
     console.print(
-        "[red]Error: 'harbor trials summarize' has been removed. " "Use 'harbor analyze <trial-dir>' instead.[/red]"
+        "[red]Error: 'harbor trials summarize' has been removed. "
+        "Use 'harbor analyze <trial-dir>' instead.[/red]"
     )
     raise SystemExit(1)

@@ -145,7 +145,6 @@ class DaytonaEnvironment(BaseEnvironment):
             for path in (
                 paths.agent_dir,
                 paths.verifier_dir,
-                paths.user_agent_dir,
                 paths.artifacts_dir,
             )
         }

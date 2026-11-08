@@ -14,7 +14,9 @@ class TestEnvironmentEnvBackwardCompat:
                     **(
                         {
                             "task": {"path": "examples/tasks/hello-world"},
-                            "environment": {"env": ["OPENAI_API_KEY=${OPENAI_API_KEY}"]},
+                            "environment": {
+                                "env": ["OPENAI_API_KEY=${OPENAI_API_KEY}"]
+                            },
                         }
                     ),
                 }
@@ -34,7 +36,9 @@ class TestEnvironmentEnvBackwardCompat:
                     **(
                         {
                             "task": {"path": "examples/tasks/hello-world"},
-                            "environment": {"env": {"OPENAI_API_KEY": "${OPENAI_API_KEY}"}},
+                            "environment": {
+                                "env": {"OPENAI_API_KEY": "${OPENAI_API_KEY}"}
+                            },
                         }
                     ),
                 }
@@ -67,7 +71,9 @@ class TestEnvironmentEnvBackwardCompat:
             "PLAIN_SETTING": "plain-value",
         }
 
-    def test_job_config_equality_accepts_serialized_environment_env_template(self, monkeypatch):
+    def test_job_config_equality_accepts_serialized_environment_env_template(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-real-secret")
         original = JobConfig.model_validate(
             {
@@ -86,7 +92,9 @@ class TestEnvironmentEnvBackwardCompat:
         assert persisted.environment.env == {"OPENAI_API_KEY": "${OPENAI_API_KEY}"}
         assert original == persisted
 
-    def test_trial_config_equality_accepts_serialized_environment_env_template(self, monkeypatch):
+    def test_trial_config_equality_accepts_serialized_environment_env_template(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-real-secret")
         original = TrialConfig.model_validate(
             {
@@ -150,7 +158,12 @@ class TestSuppressOverrideWarningsDeprecation:
     def test_default_config_does_not_warn(self):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            TrialConfig.model_validate({"agent": {"name": "pi"}, **({"task": {"path": "examples/tasks/hello-world"}})})
+            TrialConfig.model_validate(
+                {
+                    "agent": {"name": "pi"},
+                    **({"task": {"path": "examples/tasks/hello-world"}}),
+                }
+            )
 
         assert caught == []
 

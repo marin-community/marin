@@ -57,7 +57,9 @@ def _sha(char: str) -> str:
 
 
 def _trial(task: TaskConfig, trial_name: str = "trial-1", **kwargs) -> TrialConfig:
-    return TrialConfig(task=task, trial_name=trial_name, **{"agent": AgentConfig(name="pi"), **kwargs})
+    return TrialConfig(
+        task=task, trial_name=trial_name, **{"agent": AgentConfig(name="pi"), **kwargs}
+    )
 
 
 def test_local_task_uses_packager_content_hash(tmp_path: Path) -> None:
@@ -114,7 +116,9 @@ def test_package_task_uses_resolved_ref_digest() -> None:
 def test_job_lock_equality_ignores_trial_order() -> None:
     first_task = TaskConfig(name="test-org/first", ref=_sha("1"))
     second_task = TaskConfig(name="test-org/second", ref=_sha("2"))
-    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[first_task, second_task])
+    config = JobConfig(
+        agents=[AgentConfig(name="pi")], job_name="job", tasks=[first_task, second_task]
+    )
 
     first_lock = build_job_lock(
         config=config,
@@ -124,7 +128,9 @@ def test_job_lock_equality_ignores_trial_order() -> None:
         ],
         invocation=["harbor", "run"],
     )
-    second_lock = first_lock.model_copy(update={"trials": list(reversed(first_lock.trials))})
+    second_lock = first_lock.model_copy(
+        update={"trials": list(reversed(first_lock.trials))}
+    )
 
     assert first_lock == second_lock
 
@@ -146,7 +152,9 @@ def test_job_lock_ignores_model_alias_but_keeps_model_name_in_identity() -> None
 
     original = lock_for("hosted_vllm/org/model", "hosted_vllm/original-endpoint")
     moved = lock_for("hosted_vllm/org/model", "hosted_vllm/resumed-endpoint")
-    different_model = lock_for("hosted_vllm/org/other-model", "hosted_vllm/resumed-endpoint")
+    different_model = lock_for(
+        "hosted_vllm/org/other-model", "hosted_vllm/resumed-endpoint"
+    )
 
     assert original == moved
     assert original != different_model
@@ -155,7 +163,9 @@ def test_job_lock_ignores_model_alias_but_keeps_model_name_in_identity() -> None
 def test_job_lock_equality_ignores_non_replay_identity_fields() -> None:
     task = TaskConfig(name="test-org/test-task", ref=_sha("1"))
     lock = build_job_lock(
-        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="original-job", tasks=[task]),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")], job_name="original-job", tasks=[task]
+        ),
         trial_configs=[_trial(task, trial_name="original-trial")],
         invocation=["harbor", "run"],
     )
@@ -218,7 +228,9 @@ def test_job_lock_equality_uses_serialized_sensitive_env_values(monkeypatch) -> 
         ],
         invocation=["harbor", "run"],
     )
-    persisted_lock = JobLock.model_validate_json(lock.model_dump_json(exclude_none=True))
+    persisted_lock = JobLock.model_validate_json(
+        lock.model_dump_json(exclude_none=True)
+    )
 
     persisted_trial = persisted_lock.trials[0]
     assert persisted_trial.agent.env == {"OPENAI_API_KEY": "${OPENAI_API_KEY}"}
@@ -293,7 +305,11 @@ def test_dataset_config_is_not_written_but_trial_task_source_remains(
     task = TaskConfig(name="test-org/test-task", ref=_sha("c"), source=dataset_dir.name)
 
     lock = build_job_lock(
-        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", datasets=[DatasetConfig(path=dataset_dir)]),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            datasets=[DatasetConfig(path=dataset_dir)],
+        ),
         trial_configs=[_trial(task)],
         invocation=["harbor", "run"],
     )
@@ -364,7 +380,9 @@ def test_extra_instruction_lock_equality_uses_digest_only() -> None:
     ) == lock_models.ExtraInstructionLock(path=Path("other.md"), digest=digest)
 
 
-def test_job_lock_equality_ignores_extra_instruction_path(tmp_path: Path, monkeypatch) -> None:
+def test_job_lock_equality_ignores_extra_instruction_path(
+    tmp_path: Path, monkeypatch
+) -> None:
     task_dir = _make_task_dir(tmp_path)
     task = TaskConfig(path=task_dir)
     extra_hint = tmp_path / "extra-no-multimodal-hint.md"
@@ -383,7 +401,11 @@ def test_job_lock_equality_ignores_extra_instruction_path(tmp_path: Path, monkey
     instruction_lock = lock.trials[0].extra_instructions
     assert instruction_lock is not None
     other_trial = lock.trials[0].model_copy(
-        update={"extra_instructions": [instruction_lock[0].model_copy(update={"path": Path("other.md")})]}
+        update={
+            "extra_instructions": [
+                instruction_lock[0].model_copy(update={"path": Path("other.md")})
+            ]
+        }
     )
     other_lock = lock.model_copy(update={"trials": [other_trial]})
 
@@ -416,7 +438,9 @@ def test_agent_skill_lock_equality_ignores_source_path() -> None:
     digest = _sha("e")
     assert lock_models.AgentSkillLock(
         name="skill", source=Path("/tmp/skill"), digest=digest
-    ) == lock_models.AgentSkillLock(name="skill", source=Path("/other/skill"), digest=digest)
+    ) == lock_models.AgentSkillLock(
+        name="skill", source=Path("/other/skill"), digest=digest
+    )
 
 
 def test_job_lock_equality_ignores_agent_skill_source_path(tmp_path: Path) -> None:
@@ -432,7 +456,9 @@ def test_job_lock_equality_ignores_agent_skill_source_path(tmp_path: Path) -> No
 
     skill_lock = lock.trials[0].skills[0]
     other_trial = lock.trials[0].model_copy(
-        update={"skills": [skill_lock.model_copy(update={"source": Path("/other/alpha")})]}
+        update={
+            "skills": [skill_lock.model_copy(update={"source": Path("/other/alpha")})]
+        }
     )
     other_lock = lock.model_copy(update={"trials": [other_trial]})
 
@@ -605,7 +631,9 @@ def test_harbor_git_commit_hash_uses_direct_url_vcs_commit(monkeypatch) -> None:
     assert lock_models._get_harbor_git_commit_hash() == commit_id
 
 
-def test_harbor_git_commit_hash_uses_editable_direct_url_path(monkeypatch, tmp_path: Path) -> None:
+def test_harbor_git_commit_hash_uses_editable_direct_url_path(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo_path = tmp_path / "harbor repo"
     repo_path.mkdir()
     commit_id = "b" * 40
@@ -630,7 +658,9 @@ def test_harbor_git_commit_hash_uses_editable_direct_url_path(monkeypatch, tmp_p
     assert git_lookup_paths == [repo_path]
 
 
-def test_harbor_git_commit_hash_ignores_noneditable_file_direct_url(monkeypatch, tmp_path: Path) -> None:
+def test_harbor_git_commit_hash_ignores_noneditable_file_direct_url(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo_path = tmp_path / "harbor"
     repo_path.mkdir()
     monkeypatch.setattr(
@@ -752,7 +782,11 @@ def test_job_lock_equality_still_catches_agent_semantic_env_drift() -> None:
     ("overrides", "matches"),
     [
         (
-            {"OPENAI_BASE_URL": "https://iris.example:8443/proxy/t/new-token/serve.new/v1?token=new#api"},
+            {
+                "OPENAI_BASE_URL": (
+                    "https://iris.example:8443/proxy/t/new-token/serve.new/v1?token=new#api"
+                )
+            },
             True,
         ),
         ({"OPENAI_BASE_URL": "https://another.example/v1"}, True),
@@ -774,7 +808,9 @@ def test_judge_endpoint_rotation_preserves_resume_identity(overrides, matches) -
 
     assert saved_trial.matches_identity(new_trial) is matches
     config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
-    saved_lock = JobLock.model_validate_json(build_job_lock(config=config, trial_configs=[old_trial]).model_dump_json())
+    saved_lock = JobLock.model_validate_json(
+        build_job_lock(config=config, trial_configs=[old_trial]).model_dump_json()
+    )
     new_lock = build_job_lock(config=config, trial_configs=[new_trial])
     assert (saved_lock == new_lock) is matches
     assert new_trial.verifier.env == old_env | overrides
@@ -841,9 +877,13 @@ def test_recorded_judge_identity_survives_host_and_serving_alias_replacement(
     [
         (
             {
-                "candidate_model_endpoint": "https://iris.example:8443/proxy/t/new-capability/serve.new/v1",
+                "candidate_model_endpoint": (
+                    "https://iris.example:8443/proxy/t/new-capability/serve.new/v1"
+                ),
                 "candidate_model_name": "new-serving-alias",
-                "model_endpoint": "https://judge.example/proxy/t/new-capability/serve.new/v1",
+                "model_endpoint": (
+                    "https://judge.example/proxy/t/new-capability/serve.new/v1"
+                ),
                 "auto_snapshot": True,
             },
             "org/candidate",
@@ -864,7 +904,9 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(
 ):
     task = TaskConfig(name="test-org/test-task", ref=_sha("a"))
     old_kwargs = {
-        "candidate_model_endpoint": "https://iris.example/proxy/t/old-capability/serve.old/v1",
+        "candidate_model_endpoint": (
+            "https://iris.example/proxy/t/old-capability/serve.old/v1"
+        ),
         "candidate_model_name": "old-serving-alias",
         "model_endpoint": "https://judge.example/proxy/t/old-capability/serve.old/v1",
         "model_name": "judge-model",
@@ -893,7 +935,9 @@ def test_persisted_relay_capabilities_rotate_without_changing_resume_identity(
     assert saved_trial.matches_identity(new_trial) is matches
 
     config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
-    persisted_lock = build_job_lock(config=config, trial_configs=[old_trial]).model_dump_json()
+    persisted_lock = build_job_lock(
+        config=config, trial_configs=[old_trial]
+    ).model_dump_json()
     assert "old-capability" not in persisted_lock
     saved_lock = JobLock.model_validate_json(persisted_lock)
     new_lock = build_job_lock(config=config, trial_configs=[new_trial])
@@ -933,7 +977,9 @@ def test_candidate_model_change_without_immutable_agent_identity_rejects_saved_r
     saved_trial = TrialConfig.model_validate_json(trials[0].model_dump_json())
     assert not saved_trial.matches_identity(trials[1])
     config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
-    saved_lock = JobLock.model_validate_json(build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json())
+    saved_lock = JobLock.model_validate_json(
+        build_job_lock(config=config, trial_configs=[trials[0]]).model_dump_json()
+    )
     assert saved_lock != build_job_lock(config=config, trial_configs=[trials[1]])
 
 
@@ -957,12 +1003,22 @@ def test_job_lock_equality_ignores_environment_cache_acquisition_kwargs(
     with_flag = EnvironmentConfig(kwargs=provisioning_kwarg)
 
     without_lock = build_job_lock(
-        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task], environment=without),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=without,
+        ),
         trial_configs=[_trial(task, environment=without)],
         invocation=["harbor", "run"],
     )
     with_flag_lock = build_job_lock(
-        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task], environment=with_flag),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=with_flag,
+        ),
         trial_configs=[_trial(task, environment=with_flag)],
         invocation=["harbor", "run"],
     )
@@ -978,12 +1034,22 @@ def test_job_lock_equality_still_catches_environment_semantic_kwarg_drift() -> N
     on = EnvironmentConfig(kwargs={"network_block_all": True})
 
     off_lock = build_job_lock(
-        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task], environment=off),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=off,
+        ),
         trial_configs=[_trial(task, environment=off)],
         invocation=["harbor", "run"],
     )
     on_lock = build_job_lock(
-        config=JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task], environment=on),
+        config=JobConfig(
+            agents=[AgentConfig(name="pi")],
+            job_name="job",
+            tasks=[task],
+            environment=on,
+        ),
         trial_configs=[_trial(task, environment=on)],
         invocation=["harbor", "run"],
     )

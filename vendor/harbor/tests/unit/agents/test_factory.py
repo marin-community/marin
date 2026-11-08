@@ -71,7 +71,9 @@ def test_unsupported_agents_are_rejected_before_initialization(tmp_path, config)
         AgentFactory.create_agent_from_config(config, logs_dir=tmp_path)
 
 
-def test_create_agent_from_config_routes_alias_and_records_model_name(monkeypatch, tmp_path):
+def test_create_agent_from_config_routes_alias_and_records_model_name(
+    monkeypatch, tmp_path
+):
     monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, CaptureAgent)
 
     agent = AgentFactory.create_agent_from_config(

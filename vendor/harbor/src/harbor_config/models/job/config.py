@@ -23,7 +23,6 @@ from harbor_config.models.trial.config import (
     ArtifactConfig,
     EnvironmentConfig,
     TaskConfig,
-    UserAgentConfig,
     VerifierConfig,
 )
 
@@ -53,8 +52,12 @@ class DatasetConfig(BaseModel):
     ref: str | None = None
     registry_url: str | None = None
     registry_path: Path | None = None
-    overwrite: bool = Field(default=False, description="Whether to overwrite cached remote tasks.")
-    download_dir: Path | None = Field(default=None, description="The directory to cache remote tasks to.")
+    overwrite: bool = Field(
+        default=False, description="Whether to overwrite cached remote tasks."
+    )
+    download_dir: Path | None = Field(
+        default=None, description="The directory to cache remote tasks to."
+    )
     task_names: list[str] | None = Field(
         default=None,
         description="Tasks to include from the dataset. Name can be a glob pattern.",
@@ -103,7 +106,9 @@ class DatasetConfig(BaseModel):
             repository = self.name.removeprefix(HF_DATASET_PREFIX)
             parts = repository.split("/")
             if len(parts) != 2 or not all(parts):
-                raise ValueError("Hugging Face dataset name must be hf://org/repository.")
+                raise ValueError(
+                    "Hugging Face dataset name must be hf://org/repository."
+                )
             if self.version is not None:
                 raise ValueError("Hugging Face datasets use 'ref', not 'version'.")
         return self
@@ -128,7 +133,10 @@ class DatasetConfig(BaseModel):
             filtered_ids = [
                 task_id
                 for task_id in filtered_ids
-                if any(fnmatch(task_id.get_name(), pattern_id) for pattern_id in self.task_names)
+                if any(
+                    fnmatch(task_id.get_name(), pattern_id)
+                    for pattern_id in self.task_names
+                )
             ]
             if not filtered_ids:
                 available = sorted(tid.get_name() for tid in task_ids)
@@ -142,7 +150,10 @@ class DatasetConfig(BaseModel):
             filtered_ids = [
                 task_id
                 for task_id in filtered_ids
-                if not any(fnmatch(task_id.get_name(), pattern_id) for pattern_id in self.exclude_task_names)
+                if not any(
+                    fnmatch(task_id.get_name(), pattern_id)
+                    for pattern_id in self.exclude_task_names
+                )
             ]
 
         if self.n_tasks is not None:
@@ -150,7 +161,9 @@ class DatasetConfig(BaseModel):
 
         return filtered_ids
 
-    async def get_task_configs(self, disable_verification: bool = False) -> list[TaskConfig]:
+    async def get_task_configs(
+        self, disable_verification: bool = False
+    ) -> list[TaskConfig]:
         if self.is_local():
             return await self._get_local_task_configs(disable_verification)
         elif self.is_hugging_face():
@@ -173,7 +186,9 @@ class DatasetConfig(BaseModel):
             task_configs = task_configs[: self.n_tasks]
         return task_configs, n_benchmark
 
-    async def _get_local_task_configs(self, disable_verification: bool) -> list[TaskConfig]:
+    async def _get_local_task_configs(
+        self, disable_verification: bool
+    ) -> list[TaskConfig]:
         assert self.path is not None
         return self._task_configs_from_path(
             self.path,
@@ -181,7 +196,9 @@ class DatasetConfig(BaseModel):
             disable_verification,
         )
 
-    async def _get_hugging_face_task_configs(self, disable_verification: bool) -> list[TaskConfig]:
+    async def _get_hugging_face_task_configs(
+        self, disable_verification: bool
+    ) -> list[TaskConfig]:
         from harbor.hugging_face_dataset import download_dataset_snapshot
 
         assert self.name is not None
@@ -194,7 +211,9 @@ class DatasetConfig(BaseModel):
         self.ref = snapshot.name
         return self._task_configs_from_path(snapshot, self.name, disable_verification)
 
-    def _task_configs_from_path(self, path: Path, source: str, disable_verification: bool) -> list[TaskConfig]:
+    def _task_configs_from_path(
+        self, path: Path, source: str, disable_verification: bool
+    ) -> list[TaskConfig]:
         from harbor.models.task.task import Task as TaskModel
 
         task_ids: list[LocalTaskId | GitTaskId | PackageTaskId] = [
@@ -277,7 +296,9 @@ class DatasetConfig(BaseModel):
 
 
 class RetryConfig(BaseModel):
-    max_retries: int = Field(default=0, description="Maximum number of retry attempts", ge=0)
+    max_retries: int = Field(
+        default=0, description="Maximum number of retry attempts", ge=0
+    )
     include_exceptions: set[str] | None = Field(
         default=None,
         description="Exception types to retry on. If None, retries all exceptions.",
@@ -290,11 +311,18 @@ class RetryConfig(BaseModel):
             "RewardFileEmptyError",
             "VerifierOutputParseError",
         },
-        description="Exception types to NOT retry on. Takes precedence over " "include_exceptions.",
+        description="Exception types to NOT retry on. Takes precedence over "
+        "include_exceptions.",
     )
-    wait_multiplier: float = Field(default=1.0, description="Multiplier for exponential backoff wait time")
-    min_wait_sec: float = Field(default=1.0, description="Minimum wait time in seconds between retries")
-    max_wait_sec: float = Field(default=60.0, description="Maximum wait time in seconds between retries")
+    wait_multiplier: float = Field(
+        default=1.0, description="Multiplier for exponential backoff wait time"
+    )
+    min_wait_sec: float = Field(
+        default=1.0, description="Minimum wait time in seconds between retries"
+    )
+    max_wait_sec: float = Field(
+        default=60.0, description="Maximum wait time in seconds between retries"
+    )
 
 
 _TELEMETRY_FIELD_MAX_LENGTH = 4096
@@ -330,9 +358,11 @@ class ArchiveConfig(BaseModel):
 class JobConfig(BaseModel):
     # If replay-affecting fields are added or changed here, update JobLock in
     # harbor.models.job.lock so lock.json records the same resolved run input.
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    job_name: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d__%H-%M-%S"))
+    job_name: str = Field(
+        default_factory=lambda: datetime.now().strftime("%Y-%m-%d__%H-%M-%S")
+    )
     jobs_dir: UPath = Field(default_factory=lambda: UPath("jobs"))
     artifact_authority: ArtifactAuthorityConfig | None = None
     n_attempts: int = 1
@@ -346,7 +376,8 @@ class JobConfig(BaseModel):
         default=DEFAULT_TRIAL_CLEANUP_GRACE_SEC,
         gt=0,
         description=(
-            "Seconds to wait for timed-out phase or attempt cancellation before " "quarantining unfinished work."
+            "Seconds to wait for timed-out phase or attempt cancellation before "
+            "quarantining unfinished work."
         ),
     )
     debug: bool = Field(default=False, description="Enable debug logging")
@@ -371,13 +402,7 @@ class JobConfig(BaseModel):
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     metrics: list[MetricConfig] = Field(default_factory=list)
-    sotopia_cohort: SotopiaCohort | None = None
-    """Comparison cohort required for SOTOPIA length correction."""
     agents: list[AgentConfig] = Field(min_length=1)
-    user_agent: UserAgentConfig | None = Field(
-        default=None,
-        description="Optional simulated-user agent and bridge applied to every trial.",
-    )
     datasets: list[DatasetConfig] = Field(default_factory=list)
     tasks: list[TaskConfig] = Field(default_factory=list)
     artifacts: list[str | ArtifactConfig] = Field(default_factory=list)
@@ -428,7 +453,9 @@ class JobConfig(BaseModel):
             )
             orch = data.pop("orchestrator")
             if isinstance(orch, dict):
-                data.setdefault("n_concurrent_trials", orch.get("n_concurrent_trials", 4))
+                data.setdefault(
+                    "n_concurrent_trials", orch.get("n_concurrent_trials", 4)
+                )
                 if "quiet" in orch:
                     data.setdefault("quiet", orch["quiet"])
                 if "retry" in orch:

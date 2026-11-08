@@ -8,7 +8,6 @@ from typing import Annotated
 
 import yaml
 from dotenv import load_dotenv
-from harbor.agents.factory import AgentFactory
 from harbor.cli.notifications import show_registry_hint_if_first_run
 from harbor.cli.utils import (
     cli_guest_environment,
@@ -19,8 +18,6 @@ from harbor.cli.utils import (
     parse_tpu_spec,
     run_async,
 )
-from harbor.models.agent.name import AgentName
-from harbor.models.bridge import BridgeConfig, BridgeKind
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.job.config import (
     DatasetConfig,
@@ -33,30 +30,20 @@ from harbor.models.trial.config import (
     EnvironmentConfig,
     ResourceMode,
     TaskConfig,
-    UserAgentConfig,
 )
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import TrialResult
-from harbor.trial.simulated_user import validate_user_agent_version_pin
 from harbor.utils.artifact_authority import validate_artifact_authority
 from rich.console import Console
 from rich.table import Table
 from typer import Argument, Context, Option, Typer
 from upath import UPath
 
-jobs_app = Typer(no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]})
+jobs_app = Typer(
+    no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
+)
 console = Console()
 logger = logging.getLogger(__name__)
-
-
-def _validate_bridge_target_agents(agents: list[AgentConfig], kind: BridgeKind) -> None:
-    """Fail before task startup for built-in targets without bridge support."""
-    for agent in agents:
-        if agent.name is None or agent.name not in AgentName.values():
-            continue
-        agent_cls = AgentFactory.get_agent_class(AgentName(agent.name))
-        if kind not in agent_cls.SUPPORTED_BRIDGES:
-            raise ValueError(f"Agent '{agent.name}' does not support the '{kind}' bridge.")
 
 
 def _format_duration(started_at: datetime | None, finished_at: datetime | None) -> str:
@@ -123,7 +110,11 @@ def print_job_results_tables(job_result) -> None:
         if dataset_stats.metrics:
             for i, metric in enumerate(dataset_stats.metrics):
                 for key, value in metric.items():
-                    metric_label = f"Metric {i + 1}: {key}" if len(dataset_stats.metrics) > 1 else key
+                    metric_label = (
+                        f"Metric {i + 1}: {key}"
+                        if len(dataset_stats.metrics) > 1
+                        else key
+                    )
                     summary_table.add_column(metric_label.title(), justify="right")
                     if isinstance(value, float):
                         summary_row.append(f"{value:.3f}")
@@ -351,7 +342,9 @@ def start(
         Option(
             "-a",
             "--agent",
-            help=("Supported agent: pi, mini-swe-agent, codex, opencode, terminus-2, or terminus-kira."),
+            help=(
+                "Supported agent: pi, mini-swe-agent, codex, opencode, terminus-2, or terminus-kira."
+            ),
             rich_help_panel="Agent",
             show_default=False,
         ),
@@ -413,110 +406,9 @@ def start(
         Option(
             "--skill",
             "--skills",
-            help="Path to a skill directory, or a root containing skill directories. " "Can be used multiple times.",
+            help="Path to a skill directory, or a root containing skill directories. "
+            "Can be used multiple times.",
             rich_help_panel="Agent",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_name: Annotated[
-        str | None,
-        Option(
-            "--user-agent",
-            help="Agent that plays the simulated user.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_import_path: Annotated[
-        str | None,
-        Option(
-            "--user-agent-import-path",
-            help="Import path for a custom simulated-user agent.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_model: Annotated[
-        str | None,
-        Option(
-            "--user-model",
-            help="Model name for the simulated-user agent.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_kwargs: Annotated[
-        list[str] | None,
-        Option(
-            "--uk",
-            "--user-agent-kwarg",
-            help="Simulated-user agent kwarg in key=value format.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_agent_env: Annotated[
-        list[str] | None,
-        Option(
-            "--ue",
-            "--user-agent-env",
-            help="Environment variable for the simulated-user agent in KEY=VALUE format.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_mcp_config: Annotated[
-        list[Path] | None,
-        Option(
-            "--user-mcp-config",
-            help="MCP config for the simulated-user agent. Can be repeated.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_persona_path: Annotated[
-        Path | None,
-        Option(
-            "--user-persona-path",
-            help="Plain-text persona for the simulated user.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    user_prompt_template_path: Annotated[
-        Path | None,
-        Option(
-            "--user-prompt-template-path",
-            help="Jinja2 prompt template for the simulated user.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    bridge_kind: Annotated[
-        BridgeKind | None,
-        Option(
-            "--bridge",
-            help="Protocol bridge connecting the simulated user to the target.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    bridge_prompt_path: Annotated[
-        Path | None,
-        Option(
-            "--bridge-prompt-path",
-            help="Instructions teaching the user agent how to use the bridge.",
-            rich_help_panel="Simulated User",
-            show_default=False,
-        ),
-    ] = None,
-    bridge_kwargs: Annotated[
-        list[str] | None,
-        Option(
-            "--bk",
-            "--bridge-kwarg",
-            help="Bridge kwarg in key=value format.",
-            rich_help_panel="Simulated User",
             show_default=False,
         ),
     ] = None,
@@ -663,7 +555,8 @@ def start(
         list[Path] | None,
         Option(
             "--extra-instruction-path",
-            help="Path to an extra instruction file to append to the task " "instruction. Can be used multiple times.",
+            help="Path to an extra instruction file to append to the task "
+            "instruction. Can be used multiple times.",
             rich_help_panel="Dataset",
             show_default=False,
         ),
@@ -813,7 +706,8 @@ def start(
         list[str] | None,
         Option(
             "--artifact",
-            help="Environment path to download as an artifact after the trial " "(can be used multiple times)",
+            help="Environment path to download as an artifact after the trial "
+            "(can be used multiple times)",
             rich_help_panel="Job Settings",
             show_default=False,
         ),
@@ -870,7 +764,9 @@ def start(
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
-            base_config = JobConfig.model_validate(yaml.safe_load(config_path.read_text()))
+            base_config = JobConfig.model_validate(
+                yaml.safe_load(config_path.read_text())
+            )
         elif config_path.suffix == ".json":
             base_config = JobConfig.model_validate_json(config_path.read_text())
         else:
@@ -878,8 +774,12 @@ def start(
 
     if base_config is None:
         if agent_name is None and agent_import_path is None:
-            raise ValueError("Specify --agent or a config with an explicit supported agent")
-        config = JobConfig(agents=[AgentConfig(name=agent_name, import_path=agent_import_path)])
+            raise ValueError(
+                "Specify --agent or a config with an explicit supported agent"
+            )
+        config = JobConfig(
+            agents=[AgentConfig(name=agent_name, import_path=agent_import_path)]
+        )
     else:
         config = base_config
 
@@ -902,7 +802,9 @@ def start(
     if agent_setup_timeout_multiplier is not None:
         config.agent_setup_timeout_multiplier = agent_setup_timeout_multiplier
     if environment_build_timeout_multiplier is not None:
-        config.environment_build_timeout_multiplier = environment_build_timeout_multiplier
+        config.environment_build_timeout_multiplier = (
+            environment_build_timeout_multiplier
+        )
     if trial_attempt_timeout_sec is not None:
         config.trial_attempt_timeout_sec = trial_attempt_timeout_sec
     if trial_cleanup_grace_sec is not None:
@@ -926,7 +828,9 @@ def start(
         parsed_kwargs = parse_kwargs(agent_kwargs)
         parsed_env = parse_env_vars(agent_env)
         parsed_mcp_servers = [
-            server for mcp_config_path in mcp_config or [] for server in load_mcp_servers(mcp_config_path)
+            server
+            for mcp_config_path in mcp_config or []
+            for server in load_mcp_servers(mcp_config_path)
         ]
 
         if model_names is not None:
@@ -957,7 +861,9 @@ def start(
         parsed_kwargs = parse_kwargs(agent_kwargs)
         parsed_env = parse_env_vars(agent_env)
         parsed_mcp_servers = [
-            server for mcp_config_path in mcp_config or [] for server in load_mcp_servers(mcp_config_path)
+            server
+            for mcp_config_path in mcp_config or []
+            for server in load_mcp_servers(mcp_config_path)
         ]
         if parsed_kwargs or parsed_env or parsed_mcp_servers or skills:
             for agent in config.agents:
@@ -969,88 +875,6 @@ def start(
                     agent.mcp_servers.extend(parsed_mcp_servers)
                 if skills:
                     agent.skills.extend(skills)
-
-    if user_agent_name is not None and user_agent_import_path is not None:
-        console.print("[red]Error:[/red] Use either --user-agent or " "--user-agent-import-path, not both.")
-        raise SystemExit(1)
-
-    user_agent_requested = user_agent_name is not None or user_agent_import_path is not None
-    if user_agent_requested:
-        existing_bridge = config.user_agent.bridge.model_copy(deep=True) if config.user_agent is not None else None
-        resolved_bridge_kind = bridge_kind or (existing_bridge.kind if existing_bridge is not None else None)
-        if resolved_bridge_kind is None:
-            console.print("[red]Error:[/red] --user-agent requires --bridge.")
-            raise SystemExit(1)
-        bridge = existing_bridge or BridgeConfig(kind=resolved_bridge_kind)
-        bridge.kind = resolved_bridge_kind
-        if bridge_prompt_path is not None:
-            bridge.prompt_path = bridge_prompt_path
-        if bridge_kwargs is not None:
-            bridge.kwargs.update(parse_kwargs(bridge_kwargs))
-        user_mcp_servers = [server for config_path in user_mcp_config or [] for server in load_mcp_servers(config_path)]
-        config.user_agent = UserAgentConfig(
-            name=user_agent_name,
-            import_path=user_agent_import_path,
-            model_name=user_model,
-            kwargs=parse_kwargs(user_agent_kwargs),
-            env=parse_env_vars(user_agent_env),
-            mcp_servers=user_mcp_servers,
-            user_persona_path=user_persona_path,
-            user_prompt_template_path=user_prompt_template_path,
-            bridge=bridge,
-        )
-    elif config.user_agent is not None:
-        if user_model is not None:
-            config.user_agent.model_name = user_model
-        if user_agent_kwargs is not None:
-            config.user_agent.kwargs.update(parse_kwargs(user_agent_kwargs))
-        if user_agent_env is not None:
-            config.user_agent.env.update(parse_env_vars(user_agent_env))
-        if user_mcp_config is not None:
-            config.user_agent.mcp_servers.extend(
-                server for config_path in user_mcp_config for server in load_mcp_servers(config_path)
-            )
-        if user_persona_path is not None:
-            config.user_agent.user_persona_path = user_persona_path
-        if user_prompt_template_path is not None:
-            config.user_agent.user_prompt_template_path = user_prompt_template_path
-        if bridge_kind is not None:
-            config.user_agent.bridge.kind = bridge_kind
-        if bridge_prompt_path is not None:
-            config.user_agent.bridge.prompt_path = bridge_prompt_path
-        if bridge_kwargs is not None:
-            config.user_agent.bridge.kwargs.update(parse_kwargs(bridge_kwargs))
-
-    if config.user_agent is None and (
-        user_model is not None
-        or user_agent_kwargs
-        or user_agent_env
-        or user_mcp_config
-        or user_persona_path is not None
-        or user_prompt_template_path is not None
-        or bridge_kind is not None
-        or bridge_prompt_path is not None
-        or bridge_kwargs
-    ):
-        console.print(
-            "[red]Error:[/red] simulated-user and bridge flags require "
-            "--user-agent, --user-agent-import-path, or user_agent in the job config."
-        )
-        raise SystemExit(1)
-
-    if config.user_agent is not None:
-        try:
-            _validate_bridge_target_agents(config.agents, config.user_agent.bridge.kind)
-            for agent in config.agents:
-                validate_user_agent_version_pin(
-                    agent.name,
-                    agent.kwargs.get("version"),
-                    config.user_agent.name,
-                    config.user_agent.kwargs.get("version"),
-                )
-        except ValueError as exc:
-            console.print(f"[red]Error:[/red] {exc}")
-            raise SystemExit(1) from exc
 
     if environment_type is not None:
         config.environment.type = environment_type
@@ -1109,7 +933,8 @@ def start(
     if path is not None:
         is_task = Task.is_valid_dir(
             path,
-            disable_verification=config.verifier.disable or config.verifier.import_path is not None,
+            disable_verification=config.verifier.disable
+            or config.verifier.import_path is not None,
         )
 
         if is_task:
@@ -1204,7 +1029,9 @@ def start(
         console.print()
         print_job_results_tables(job_result)
         console.print("[bold]Job Info[/bold]")
-        console.print(f"Total runtime: {_format_duration(job_result.started_at, job_result.finished_at)}")
+        console.print(
+            f"Total runtime: {_format_duration(job_result.started_at, job_result.finished_at)}"
+        )
         console.print(f"Results written to {job._job_result_path}")
         console.print()
         return job, job_result
@@ -1281,20 +1108,26 @@ def _prune_unscored_trials(job_dir: Path) -> None:
             continue
 
         try:
-            trial_result = TrialResult.model_validate_json(trial_paths.result_path.read_text())
+            trial_result = TrialResult.model_validate_json(
+                trial_paths.result_path.read_text()
+            )
         except Exception as e:
             # A truncated/empty/corrupt result.json (e.g. a 0-byte file left by a
             # wall-clock kill mid-write) is an INCOMPLETE trial, not a completed one.
             # Remove its dir so resume re-runs it, instead of aborting the ENTIRE resume
             # on this one parse error (observed on wall-terminated re-resumes).
             console.print(
-                f"Removing trial with unreadable result ({type(e).__name__}); " f"will re-run: {trial_dir.name}"
+                f"Removing trial with unreadable result ({type(e).__name__}); "
+                f"will re-run: {trial_dir.name}"
             )
             safe_rmtree(trial_dir)
             continue
 
         if trial_result.verifier_result is None:
-            console.print(f"Removing unscored trial (verifier_result=None); " f"will re-run: {trial_dir.name}")
+            console.print(
+                f"Removing unscored trial (verifier_result=None); "
+                f"will re-run: {trial_dir.name}"
+            )
             safe_rmtree(trial_dir)
 
 
@@ -1313,7 +1146,8 @@ def resume(
         Option(
             "-f",
             "--filter-error-type",
-            help="Remove trials with these error types before resuming (can be used " "multiple times)",
+            help="Remove trials with these error types before resuming (can be used "
+            "multiple times)",
             show_default=False,
         ),
     ] = ["CancelledError"],
@@ -1382,7 +1216,8 @@ def summarize(
 ):
     """Summarize trial failures in a job using Claude Agent SDK."""
     console.print(
-        "[red]Error: 'harbor jobs summarize' has been removed. " "Use 'harbor analyze <job-dir>' instead.[/red]"
+        "[red]Error: 'harbor jobs summarize' has been removed. "
+        "Use 'harbor analyze <job-dir>' instead.[/red]"
     )
     raise SystemExit(1)
 

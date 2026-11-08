@@ -107,7 +107,12 @@ class BackgroundServerAgent(PartialAnswerAgent):
 def allow_trial_agents(monkeypatch):
     agents = AgentFactory._AGENT_MAP | {
         f"test-{agent.__name__}": agent
-        for agent in (PartialAnswerAgent, WaitingAgent, JudgeProbeAgent, BackgroundServerAgent)
+        for agent in (
+            PartialAnswerAgent,
+            WaitingAgent,
+            JudgeProbeAgent,
+            BackgroundServerAgent,
+        )
     }
     monkeypatch.setattr(AgentFactory, "_AGENT_MAP", agents)
 

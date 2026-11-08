@@ -360,7 +360,9 @@ async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_sepa
             host_capabilities=HostCapabilities(
                 daytona=None,
                 model_authentication={
-                    "https://candidate.example/proxy/t/host-capability/serve/v1": "candidate-private",
+                    "https://candidate.example/proxy/t/host-capability/serve/v1": (
+                        "candidate-private"
+                    ),
                     "https://judge.example/v1": "judge-private",
                 },
             ),
@@ -560,7 +562,9 @@ print('ok')
             400,
             {
                 "code": 400,
-                "message": "This model's maximum context length is 131072 tokens: host-private details",
+                "message": (
+                    "This model's maximum context length is 131072 tokens: host-private details"
+                ),
             },
             BadRequestError,
             "context_length_exceeded",

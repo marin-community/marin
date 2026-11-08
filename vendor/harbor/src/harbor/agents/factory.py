@@ -141,7 +141,9 @@ class AgentFactory:
         agent_kwargs["protected_values"] = host_capabilities.protected_values
         agent_kwargs["model_authentication"] = host_capabilities.model_authentication
         if config.override_setup_timeout_sec is not None:
-            agent_kwargs["override_setup_timeout_sec"] = config.override_setup_timeout_sec
+            agent_kwargs["override_setup_timeout_sec"] = (
+                config.override_setup_timeout_sec
+            )
         return agent_class(
             logs_dir=logs_dir,
             model_name=config.model_name,

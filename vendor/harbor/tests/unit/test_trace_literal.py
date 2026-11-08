@@ -149,7 +149,9 @@ def test_collect_with_literal_emits_token_columns(tmp_path):
             _LITERAL_AGENT_STEP,
         ],
     )
-    convs = collect_conversations_from_trial(trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True)
+    convs = collect_conversations_from_trial(
+        trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True
+    )
     assert len(convs) == 1
     row = convs[0]
     assert row["prompt_token_ids"] == [[1, 2, 3]]
@@ -185,7 +187,9 @@ def test_collect_with_literal_noops_on_text_only_trajectory(tmp_path):
             {"source": "agent", "message": "All done."},
         ],
     )
-    convs = collect_conversations_from_trial(trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True)
+    convs = collect_conversations_from_trial(
+        trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True
+    )
     assert len(convs) == 1
     # Literal flag requested but trajectory has no token data → columns absent.
     row = convs[0]
@@ -221,7 +225,9 @@ def test_collect_with_literal_multi_turn(tmp_path):
             },
         ],
     )
-    convs = collect_conversations_from_trial(trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True)
+    convs = collect_conversations_from_trial(
+        trial_dir, _base_run_meta("trial-1"), include_literal_tokens=True
+    )
     # Two agent steps → two episodes; the first episode has 1 turn, the second 2.
     assert len(convs) == 2
     first, second = convs
@@ -414,7 +420,9 @@ def test_proxy_forward_records_non_json_upstream(tmp_path, monkeypatch):
 
     monkeypatch.setattr(proxy, "_get_client", _fake_get_client)
 
-    status, resp_json, _ = asyncio.run(proxy.forward("/v1/chat/completions", {"model": "m", "messages": []}))
+    status, resp_json, _ = asyncio.run(
+        proxy.forward("/v1/chat/completions", {"model": "m", "messages": []})
+    )
     assert status == 500
     assert resp_json is None
     entry = json.loads(log_path.read_text().strip())
@@ -608,7 +616,9 @@ def test_proxy_app_streaming_request_tees_sse(tmp_path):
 
     log_path = tmp_path / "literal.jsonl"
     proxy = RecordProxy("http://vllm.local", log_path, timeout=10.0)
-    stub_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local")
+    stub_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local"
+    )
 
     async def _fake_get_client():
         return stub_client
@@ -655,7 +665,9 @@ def test_proxy_app_stamps_correlation_id_header_on_entry(tmp_path):
 
     log_path = tmp_path / "literal.jsonl"
     proxy = RecordProxy("http://vllm.local", log_path, timeout=10.0)
-    stub_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local")
+    stub_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=stub), base_url="http://vllm.local"
+    )
 
     async def _fake_get_client():
         return stub_client
@@ -763,7 +775,9 @@ def test_export_traces_accepts_include_literal_tokens(tmp_path, monkeypatch):
     assert "prompt_token_ids" not in ds.column_names
 
 
-def test_mini_swe_proxy_preserves_agent_identity_and_context_budget(tmp_path, monkeypatch):
+def test_mini_swe_proxy_preserves_agent_identity_and_context_budget(
+    tmp_path, monkeypatch
+):
     headers = {CORRELATION_ID_HEADER: "mini-trial", TASK_AGENT_HEADER: "mini-swe-agent"}
     messages = [{"role": "user", "content": "run bash"}]
 
@@ -777,14 +791,18 @@ def test_mini_swe_proxy_preserves_agent_identity_and_context_budget(tmp_path, mo
                 "messages": messages,
                 "add_generation_prompt": True,
             }
-            return httpx.Response(200, json={"tokens": [1, 2], "count": 2, "max_model_len": 128})
+            return httpx.Response(
+                200, json={"tokens": [1, 2], "count": 2, "max_model_len": 128}
+            )
         assert request.url.path == "/v1/chat/completions"
         assert body["return_token_ids"] is True
         return httpx.Response(
             200,
             json={
                 "prompt_token_ids": [1, 2],
-                "choices": [{"token_ids": [99], "logprobs": {"token_logprobs": [-0.1]}}],
+                "choices": [
+                    {"token_ids": [99], "logprobs": {"token_logprobs": [-0.1]}}
+                ],
             },
         )
 

@@ -80,7 +80,9 @@ class TestTrialQueue:
     @pytest.mark.unit
     async def test_submit_single_trial(self, queue, trial_config, trial_result):
         """Test submitting and awaiting a single trial."""
-        with patch.object(queue, "_execute_trial_with_retries", return_value=trial_result):
+        with patch.object(
+            queue, "_execute_trial_with_retries", return_value=trial_result
+        ):
             result = await queue.submit(trial_config)
             assert result == trial_result
 
@@ -97,7 +99,9 @@ class TestTrialQueue:
             for i in range(3)
         ]
 
-        with patch.object(queue, "_execute_trial_with_retries", return_value=trial_result):
+        with patch.object(
+            queue, "_execute_trial_with_retries", return_value=trial_result
+        ):
             coros = queue.submit_batch(configs)
             assert len(coros) == 3
 
@@ -118,7 +122,9 @@ class TestTrialQueue:
             for i in range(3)
         ]
 
-        with patch.object(queue, "_execute_trial_with_retries", return_value=trial_result):
+        with patch.object(
+            queue, "_execute_trial_with_retries", return_value=trial_result
+        ):
             coros = queue.submit_batch(configs)
             async with asyncio.TaskGroup() as tg:
                 tasks = [tg.create_task(coro) for coro in coros]
@@ -158,7 +164,9 @@ class TestTrialQueue:
             for i in range(3)
         ]
 
-        with patch.object(queue, "_execute_trial_with_retries", side_effect=mixed_execute):
+        with patch.object(
+            queue, "_execute_trial_with_retries", side_effect=mixed_execute
+        ):
             with pytest.raises(ExceptionGroup):
                 async with asyncio.TaskGroup() as tg:
                     for coro in queue.submit_batch(configs):
@@ -242,7 +250,9 @@ class TestTrialQueue:
             execution_times.append((start, end))
             return MagicMock(spec=TrialResult)
 
-        with patch.object(queue, "_execute_trial_with_retries", side_effect=mock_execute_trial):
+        with patch.object(
+            queue, "_execute_trial_with_retries", side_effect=mock_execute_trial
+        ):
             await asyncio.gather(*queue.submit_batch(configs))
 
         assert len(execution_times) == 5

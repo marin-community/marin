@@ -3,6 +3,7 @@
 from harbor.agents.installed.codex import Codex
 from harbor.agents.installed.opencode import OpenCode
 
+
 class TestCodexSkills:
     """Test _build_register_skills_command() for Codex."""
 
@@ -45,6 +46,7 @@ class TestOpenCodeSkills:
         cmd = agent._build_register_skills_command()
         assert cmd is not None
         assert "'/workspace/my skills'" in cmd
+
 
 SKILL_FRONTMATTER = """\
 ---
@@ -117,7 +119,9 @@ class TestTerminus2Skills:
         assert await agent._build_skills_section(env) is None
 
     async def test_skills_dir_with_valid_skill(self, temp_dir):
-        content = SKILL_FRONTMATTER.format(name="greet", description="Say hello to the user.", body="Do it.")
+        content = SKILL_FRONTMATTER.format(
+            name="greet", description="Say hello to the user.", body="Do it."
+        )
         agent = self._make_agent(temp_dir, skills_dir="/skills")
         env = _make_mock_environment(skills={"greet": content})
         result = await agent._build_skills_section(env)
@@ -129,9 +133,15 @@ class TestTerminus2Skills:
 
     async def test_multiple_skills_sorted(self, temp_dir):
         skills = {
-            "zeta": SKILL_FRONTMATTER.format(name="zeta", description="Zeta skill.", body=""),
-            "alpha": SKILL_FRONTMATTER.format(name="alpha", description="Alpha skill.", body=""),
-            "mid": SKILL_FRONTMATTER.format(name="mid", description="Mid skill.", body=""),
+            "zeta": SKILL_FRONTMATTER.format(
+                name="zeta", description="Zeta skill.", body=""
+            ),
+            "alpha": SKILL_FRONTMATTER.format(
+                name="alpha", description="Alpha skill.", body=""
+            ),
+            "mid": SKILL_FRONTMATTER.format(
+                name="mid", description="Mid skill.", body=""
+            ),
         }
         agent = self._make_agent(temp_dir, skills_dir="/skills")
         env = _make_mock_environment(skills=skills)
@@ -168,7 +178,9 @@ class TestTerminus2ParseSkillFrontmatter:
     def test_no_frontmatter_delimiter(self):
         from harbor.agents.terminus_2.terminus_2 import Terminus2
 
-        assert Terminus2._parse_skill_frontmatter("Just markdown, no frontmatter.") is None
+        assert (
+            Terminus2._parse_skill_frontmatter("Just markdown, no frontmatter.") is None
+        )
 
     def test_frontmatter_with_dashes_in_yaml_value(self):
         """Ensure --- inside a YAML value does not break frontmatter parsing."""

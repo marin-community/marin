@@ -53,7 +53,9 @@ def test_matching_precreated_authority_record_succeeds(tmp_path) -> None:
 
 @pytest.mark.unit
 @pytest.mark.parametrize("record_contents", [None, "not json", '{"hostname": "x"}'])
-def test_required_authority_rejects_missing_or_malformed_record(tmp_path, record_contents) -> None:
+def test_required_authority_rejects_missing_or_malformed_record(
+    tmp_path, record_contents
+) -> None:
     root = tmp_path / "artifact-store"
     root.mkdir()
     record_path = root / ".harbor-authority.json"
@@ -220,15 +222,25 @@ def test_authority_config_round_trips_with_job_and_trial_configs(tmp_path) -> No
         tmp_path / "artifact-store" / ".harbor-authority.json",
         mode="warn",
     )
-    job_config = JobConfig(agents=[AgentConfig(name="pi")], artifact_authority=authority)
+    job_config = JobConfig(
+        agents=[AgentConfig(name="pi")], artifact_authority=authority
+    )
     trial_config = TrialConfig(
         agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         artifact_authority=authority,
     )
 
-    assert JobConfig.model_validate_json(job_config.model_dump_json()).artifact_authority == authority
-    assert TrialConfig.model_validate_json(trial_config.model_dump_json()).artifact_authority == authority
+    assert (
+        JobConfig.model_validate_json(job_config.model_dump_json()).artifact_authority
+        == authority
+    )
+    assert (
+        TrialConfig.model_validate_json(
+            trial_config.model_dump_json()
+        ).artifact_authority
+        == authority
+    )
 
 
 @pytest.mark.unit
