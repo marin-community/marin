@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 from harbor.agents.factory import AgentFactory
 from harbor.environments import model_relay
 from harbor.environments.docker_translate import import_prepared_task
@@ -28,6 +29,7 @@ from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
 from openai import AsyncOpenAI
 from shellbox.http_service import HttpRequest
 
+_ROOT = Path(__file__).parents[4]
 _CANDIDATE_ENDPOINT = "https://candidate.test/proxy/t/private-capability/v1"
 _JUDGE_ENDPOINT = "https://judge.test/v1"
 
