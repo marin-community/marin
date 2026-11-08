@@ -36,6 +36,7 @@ from shellbox.machine import (
     Command,
     ExecSetupFailed,
     ExitReason,
+    MachineCancelled,
     MachineSpec,
     MachineTerminated,
     NetworkPolicy,
@@ -440,15 +441,24 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(mon
     asyncio.run(scenario())
 
 
-def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.FAILED))
+@pytest.mark.parametrize(
+    "state,reason,error_type",
+    [
+        (TaskState.FAILED, "container exited", RuntimeError),
+        (TaskState.KILLED, "Parent job terminated", MachineCancelled),
+    ],
+)
+def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path, state, reason, error_type):
+    task = LocalTask(state)
+    task.status = lambda: SimpleNamespace(state=state, error_message=reason)
+    job = LocalJob(task)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
 
-    with pytest.raises(RuntimeError, match="container exited"):
+    with pytest.raises(error_type, match=reason.lower()):
         asyncio.run(factory.create(spec))
     assert job.cancelled
 
@@ -696,3 +706,41 @@ def test_command_capture_exec_rpc_count(tmp_path: Path, script: str, count: int)
     result = asyncio.run(machine.run(Command(("sh", "-c", script))))
     assert result.exit_code == 0
     assert rpc.calls == count
+
+
+@pytest.mark.parametrize(
+    "code,message,cancelled",
+    [
+        (
+            Code.FAILED_PRECONDITION,
+            "Cannot submit job: parent job /user/pilot has terminated (state=JOB_STATE_KILLED)",
+            True,
+        ),
+        (Code.FAILED_PRECONDITION, "Cannot submit job: parent job /user/pilot is absent from the database", False),
+        (Code.UNAVAILABLE, "Cannot submit job: parent job /user/pilot has terminated (state=JOB_STATE_KILLED)", False),
+    ],
+)
+def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, message, cancelled):
+    error = ConnectError(code, message)
+    cleaned = []
+    client = RecordingClient()
+    endpoint = LocalEndpoint()
+
+    def submit(**kwargs):
+        raise error
+
+    client.submit = submit
+    client.shutdown = lambda: cleaned.append("client")
+    endpoint.close = lambda: cleaned.append("endpoint")
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: endpoint)
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    with pytest.raises(MachineCancelled if cancelled else ConnectError) as caught:
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
+    assert cleaned == ["client", "endpoint"]
+    if cancelled:
+        assert str(caught.value) == "parent job terminated"
+        assert caught.value.__cause__ is error
+    else:
+        assert caught.value is error

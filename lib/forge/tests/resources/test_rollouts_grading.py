@@ -21,7 +21,7 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
-from shellbox.machine import ExecSetupFailed, MachineTerminated
+from shellbox.machine import ExecSetupFailed, MachineCancelled, MachineTerminated
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -206,3 +206,12 @@ def test_empty_interruption_causes_keep_exception_types() -> None:
     decision = interruption(interrupted)
     assert isinstance(decision, Restart)
     assert str(decision) == "Rollout interrupted during grade: TimeoutError <- CancelledError"
+
+
+@pytest.mark.parametrize("operation", list(RolloutOperation))
+def test_parent_cancellation_is_transient_in_every_rollout_phase(operation: RolloutOperation) -> None:
+    error = RolloutInterrupted(Rollout("cancelled", (), "interrupted"), operation)
+    error.__cause__ = MachineCancelled("parent job terminated")
+    decision = interruption(error)
+    assert isinstance(decision, Transient)
+    assert "parent job terminated" in str(decision)

@@ -14,6 +14,7 @@ from shellbox.machine import (
     ExecSetupFailed,
     ExitReason,
     Machine,
+    MachineCancelled,
     MachineResourceExhausted,
     MachineTerminated,
     PackageSpec,
@@ -188,6 +189,7 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
     "failure,decision",
     [
         (MachineTerminated("gone"), Restart),
+        (MachineCancelled("parent job terminated"), Transient),
         (MachineResourceExhausted("Iris sandbox OOMKilled"), Hold),
         (MachineTerminated("Iris sandbox is preempted: WorkloadEvictedDueToPreempted"), Restart),
         (MachineTerminated("Machine is closed"), Restart),
@@ -275,8 +277,10 @@ async def test_websocket_setup_failure_retries_only_three_times() -> None:
     assert len(events) == 2 and all(isinstance(event, Retrying) for event in events)
 
 
-async def test_machine_startup_websocket_failure_is_transient(monkeypatch: pytest.MonkeyPatch) -> None:
-    failure = ExecSetupFailed("handshake refused")
+@pytest.mark.parametrize("failure", [ExecSetupFailed("handshake refused"), MachineCancelled("parent job terminated")])
+async def test_machine_startup_expected_failure_is_transient(
+    monkeypatch: pytest.MonkeyPatch, failure: RuntimeError
+) -> None:
 
     @asynccontextmanager
     async def failed_start(*args: object, **kwargs: object) -> AsyncIterator[Machine]:

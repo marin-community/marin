@@ -220,6 +220,10 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class MachineCancelled(RuntimeError):
+    """The machine or its owning job was cancelled before the operation completed."""
+
+
 class MachineResourceExhausted(MachineTerminated):
     """The machine exhausted its resource budget; recreating it cannot repair the task."""
 

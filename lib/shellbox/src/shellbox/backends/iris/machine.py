@@ -39,6 +39,7 @@ from shellbox.machine import (
     ExecSetupFailed,
     ExecutionRequirements,
     ExitReason,
+    MachineCancelled,
     MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
@@ -488,6 +489,8 @@ class IrisMachineFactory:
                         probe = await machine._script("command -v timeout", timeout=RPC_PADDING_SECONDS)
                         machine._timeout_available = probe.exit_code == 0
                         return machine
+                    if status.state is TaskState.KILLED:
+                        raise MachineCancelled(status.error_message.lower() or "sandbox job terminated")
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
                 await asyncio.sleep(2)
@@ -533,7 +536,7 @@ class IrisMachineFactory:
                 max_retries_preemption=0,
             )
             return IrisMachine(endpoint, client, rpc, job, job.task(0), spec)
-        except BaseException:
+        except BaseException as error:
             try:
                 if job is not None:
                     job.cancel()
@@ -543,4 +546,11 @@ class IrisMachineFactory:
                         client.shutdown()
                 finally:
                     endpoint.close()
+            # Contract on controller-owned text until Iris carries typed parent-termination status.
+            if (
+                isinstance(error, ConnectError)
+                and error.code == Code.FAILED_PRECONDITION
+                and re.fullmatch(r"Cannot submit job: parent job .+ has terminated \(state=JOB_STATE_\w+\)", str(error))
+            ):
+                raise MachineCancelled("parent job terminated") from error
             raise

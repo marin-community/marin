@@ -21,6 +21,7 @@ from shellbox.machine import (
     ExitReason,
     FileReader,
     Machine,
+    MachineCancelled,
     MachineFactory,
     MachineResourceExhausted,
     MachineTerminated,
@@ -153,7 +154,7 @@ class ShellboxEnv(_RecordedEnv):
             raise Hold(f"environment terminated: {error}") from error
         except MachineTerminated as error:
             raise Restart(f"environment terminated: {error}") from error
-        except ExecSetupFailed as error:
+        except (ExecSetupFailed, MachineCancelled) as error:
             raise Transient(str(error)) from error
         except (RuntimeError, SimulationError) as error:
             detail = str(error)
@@ -240,7 +241,7 @@ class ShellboxEnvFactory(EnvFactory):
             raise Hold(f"environment terminated: {error}") from error
         except MachineTerminated as error:
             raise Restart(f"environment terminated: {error}") from error
-        except ExecSetupFailed as error:
+        except (ExecSetupFailed, MachineCancelled) as error:
             raise Transient(str(error)) from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
