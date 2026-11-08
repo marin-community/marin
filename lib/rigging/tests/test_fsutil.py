@@ -253,6 +253,10 @@ class _FakeObjectStore:
         found = self.filesystem.find(path, detail=detail)
         return {name: self._with_metadata(name, info) for name, info in found.items()}
 
+    def split_path(self, path):
+        bucket, _, key = path.partition("/")
+        return bucket, key, None
+
     def call_s3(self, method, **request):
         assert self.protocol == "s3" and method == "list_multipart_uploads"
         prefix = f"{request['Bucket']}/{request['Prefix']}"

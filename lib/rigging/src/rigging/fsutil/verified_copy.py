@@ -65,15 +65,6 @@ class VerifiedCopyResult:
     total_bytes: int
 
 
-class _DestinationKind(StrEnum):
-    """How a destination keeps a write unpublished and checks it after commit."""
-
-    S3_FIXED_PARTS = "s3_fixed_parts"
-    S3 = "s3"
-    GCS = "gcs"
-    LOCAL = "local"
-
-
 class _ChecksumAlgorithm(StrEnum):
     SHA256 = "sha256"
     MD5 = "md5"
@@ -147,6 +138,8 @@ class _Digest(Protocol):
 
 
 class _S3MultipartFilesystem(Protocol):
+    def split_path(self, path: str) -> tuple[str, str, str | None]: ...
+
     def call_s3(self, method: str, **kwargs: object) -> dict[str, Any]: ...
 
     def abort_mpu(self, bucket: str, key: str, mpu: str) -> object: ...
@@ -201,7 +194,7 @@ class _MultipartEtag:
 class _StreamDigest:
     """The size and digests of one copied byte stream."""
 
-    def __init__(self, algorithms: set[_ChecksumAlgorithm], multipart_part_size: int | None):
+    def __init__(self, algorithms: set[_ChecksumAlgorithm], multipart_part_size: int | None = None):
         self.size = 0
         self._digests = {algorithm: _new_digest(algorithm) for algorithm in {_ChecksumAlgorithm.SHA256, *algorithms}}
         self._multipart = _MultipartEtag(multipart_part_size) if multipart_part_size is not None else None
@@ -224,11 +217,8 @@ class _StreamDigest:
 class _DeferredObjectUpload:
     """An S3 multipart or GCS resumable upload that stays invisible until committed."""
 
-    def __init__(self, filesystem: AbstractFileSystem, path: str, kind: _DestinationKind):
-        options: dict[str, int | bool] = {"autocommit": False}
-        if kind is _DestinationKind.S3_FIXED_PARTS:
-            options["block_size"] = S3_UPLOAD_PART_BYTES
-        self._file = filesystem.open(path, "wb", **options)
+    def __init__(self, file: Any):
+        self._file = file
 
     def write(self, data: bytes) -> None:
         self._file.write(data)
@@ -267,6 +257,99 @@ class _LocalUpload:
         self._filesystem.rm(self._partial_path)
 
 
+class _Destination(Protocol):
+    """How a destination backend holds back, publishes, and checks a streamed write."""
+
+    @property
+    def filesystem(self) -> AbstractFileSystem: ...
+
+    def discard_unfinished_uploads(self, root: str) -> None:
+        """Remove the unpublished writes that a killed copy below ``root`` could not discard."""
+        ...
+
+    def stream_digest(self, algorithms: set[_ChecksumAlgorithm]) -> _StreamDigest:
+        """Digest ``algorithms`` and whatever this destination checks after commit."""
+        ...
+
+    def open_upload(self, path: str) -> _Upload: ...
+
+    def check_committed(self, path: str, info: dict[str, Any], digest: _StreamDigest) -> None:
+        """Raise ``VerifiedCopyError`` if a committed object does not match its stream."""
+        ...
+
+
+@dataclass(frozen=True)
+class _S3Destination:
+    """S3 multipart uploads, completed only on commit.
+
+    With a fixed ``part_size`` the committed ETag follows from the stream. Without
+    one, s3fs sizes the parts, so the committed object is read back.
+    """
+
+    filesystem: AbstractFileSystem
+    part_size: int | None
+
+    def discard_unfinished_uploads(self, root: str) -> None:
+        _abort_unfinished_uploads(cast(_S3MultipartFilesystem, self.filesystem), root)
+
+    def stream_digest(self, algorithms: set[_ChecksumAlgorithm]) -> _StreamDigest:
+        return _StreamDigest(algorithms, multipart_part_size=self.part_size)
+
+    def open_upload(self, path: str) -> _Upload:
+        part_options = {} if self.part_size is None else {"block_size": self.part_size}
+        return _DeferredObjectUpload(self.filesystem.open(path, "wb", autocommit=False, **part_options))
+
+    def check_committed(self, path: str, info: dict[str, Any], digest: _StreamDigest) -> None:
+        if self.part_size is None:
+            _check_read_back(self.filesystem, path, digest)
+        elif _etag(info) != digest.multipart_etag():
+            raise VerifiedCopyError(f"destination ETag mismatch for {path}")
+
+
+@dataclass(frozen=True)
+class _GcsDestination:
+    """GCS resumable uploads, finalized only on commit and checked by their MD5."""
+
+    filesystem: AbstractFileSystem
+
+    def discard_unfinished_uploads(self, root: str) -> None:
+        """Leave unfinished resumable uploads, which stay invisible until GCS expires them after a week."""
+
+    def stream_digest(self, algorithms: set[_ChecksumAlgorithm]) -> _StreamDigest:
+        return _StreamDigest({*algorithms, _ChecksumAlgorithm.MD5})
+
+    def open_upload(self, path: str) -> _Upload:
+        return _DeferredObjectUpload(self.filesystem.open(path, "wb", autocommit=False))
+
+    def check_committed(self, path: str, info: dict[str, Any], digest: _StreamDigest) -> None:
+        md5 = info.get("md5Hash")
+        if md5 is None or _base64_hex(md5) != digest.hex_digest(_ChecksumAlgorithm.MD5):
+            raise VerifiedCopyError(f"destination MD5 mismatch for {path}")
+
+
+@dataclass(frozen=True)
+class _LocalDestination:
+    """Local files written beside their final paths and renamed into place."""
+
+    filesystem: AbstractFileSystem
+
+    def discard_unfinished_uploads(self, root: str) -> None:
+        if not self.filesystem.exists(root):
+            return
+        for path in cast(list[str], self.filesystem.find(root)):
+            if path.endswith(PARTIAL_SUFFIX):
+                self.filesystem.rm(path)
+
+    def stream_digest(self, algorithms: set[_ChecksumAlgorithm]) -> _StreamDigest:
+        return _StreamDigest(algorithms)
+
+    def open_upload(self, path: str) -> _Upload:
+        return _LocalUpload(self.filesystem, path)
+
+    def check_committed(self, path: str, info: dict[str, Any], digest: _StreamDigest) -> None:
+        _check_read_back(self.filesystem, path, digest)
+
+
 def verified_copy_prefix(
     source_url: str,
     destination_url: str,
@@ -295,7 +378,7 @@ def verified_copy_prefix(
         else _sibling_location(destination, ".verified-copy-status")
     )
     _validate_disjoint_locations(source, destination, status)
-    kind = _destination_kind(destination.filesystem)
+    backend = _destination(destination.filesystem)
 
     source_url, source_fs, source_root = source.url, source.filesystem, source.path
     destination_url, destination_fs, destination_root = destination.url, destination.filesystem, destination.path
@@ -316,13 +399,11 @@ def verified_copy_prefix(
         return _result(manifest_url, verified, copied_files=0, resumed_files=len(verified))
 
     destination_files = _destination_files(destination_fs, destination_root)
-    partial_paths = sorted(path for path in destination_files if path.endswith(PARTIAL_SUFFIX))
-    expected_paths = {source.path for source in sources}
-    extras = sorted(destination_files.keys() - expected_paths - set(partial_paths))
+    extras = sorted(destination_files.keys() - {source.path for source in sources})
     if extras:
         sample = ", ".join(extras[:3])
         raise VerifiedCopyError(f"destination contains {len(extras)} unexpected file(s): {sample}")
-    _discard_interrupted_writes(destination_fs, destination_root, partial_paths, kind)
+    backend.discard_unfinished_uploads(destination_root)
 
     copied_files = 0
     resumed_files = 0
@@ -333,9 +414,8 @@ def verified_copy_prefix(
                 _copy_or_resume,
                 source,
                 source_fs=source_fs,
-                destination_fs=destination_fs,
+                destination=backend,
                 destination_root=destination_root,
-                kind=kind,
                 status_fs=status_fs,
                 status_root=status_root,
                 published=destination_files.get(source.path),
@@ -385,7 +465,7 @@ def _destination_files(filesystem: AbstractFileSystem, root: str) -> dict[str, _
             identity=_destination_identity(info),
         )
         for path, info in _find_files(filesystem, root).items()
-        if _relative_path(path, root) != COMPLETION_MANIFEST
+        if _relative_path(path, root) != COMPLETION_MANIFEST and not path.endswith(PARTIAL_SUFFIX)
     }
 
 
@@ -396,27 +476,15 @@ def _find_files(filesystem: AbstractFileSystem, root: str) -> dict[str, dict[str
     return {path: info for path, info in found.items() if info.get("type") != "directory"}
 
 
-def _discard_interrupted_writes(
-    filesystem: AbstractFileSystem,
-    root: str,
-    partial_paths: list[str],
-    kind: _DestinationKind,
-) -> None:
-    """Remove the local partial files and S3 multipart uploads that a killed copy left."""
-    for path in partial_paths:
-        filesystem.rm(_join_path(root, path))
-    if kind in (_DestinationKind.S3_FIXED_PARTS, _DestinationKind.S3):
-        _abort_unfinished_uploads(cast(_S3MultipartFilesystem, filesystem), root)
-
-
 def _abort_unfinished_uploads(filesystem: _S3MultipartFilesystem, root: str) -> None:
     """Abort every unfinished multipart upload below ``root``.
 
     A destination prefix belongs to one verified copy at a time, so an unfinished
     upload below it was left by an earlier attempt that could not abort it.
     """
-    bucket, _, key = root.partition("/")
-    request: dict[str, object] = {"Bucket": bucket, "Prefix": f"{key.rstrip('/')}/"}
+    bucket, key, _ = filesystem.split_path(root)
+    prefix = key if not key or key.endswith("/") else f"{key}/"
+    request: dict[str, object] = {"Bucket": bucket, "Prefix": prefix}
     while True:
         page = filesystem.call_s3("list_multipart_uploads", **request)
         for upload in page.get("Uploads", []):
@@ -432,9 +500,8 @@ def _copy_or_resume(
     source: _SourceFile,
     *,
     source_fs: AbstractFileSystem,
-    destination_fs: AbstractFileSystem,
+    destination: _Destination,
     destination_root: str,
-    kind: _DestinationKind,
     status_fs: AbstractFileSystem,
     status_root: str,
     published: _DestinationFile | None,
@@ -449,14 +516,14 @@ def _copy_or_resume(
         == (source.source_path, source.identity, source.path, source.size)
         and published is not None
         and published.size == source.size
-        and _destination_matches_marker(destination_fs, destination_path, published, marker)
+        and _destination_matches_marker(destination.filesystem, destination_path, published, marker)
     ):
         return _CopyOutcome(
             VerifiedFile(source.path, source.size, marker.sha256, source.identity),
             _CopyDisposition.RESUMED,
         )
 
-    copied = _copy_file(source, source_fs=source_fs, destination_fs=destination_fs, path=destination_path, kind=kind)
+    copied = _copy_file(source, source_fs=source_fs, destination=destination, path=destination_path)
     _write_json_atomic(
         status_fs,
         marker_path,
@@ -481,17 +548,17 @@ def _copy_file(
     source: _SourceFile,
     *,
     source_fs: AbstractFileSystem,
-    destination_fs: AbstractFileSystem,
+    destination: _Destination,
     path: str,
-    kind: _DestinationKind,
 ) -> _CopiedFile:
     """Stream ``source`` to ``path`` and publish it only after the stream is verified."""
-    algorithms = {source.checksum.algorithm} if source.checksum is not None else set()
-    if kind is _DestinationKind.GCS:
-        algorithms.add(_ChecksumAlgorithm.MD5)
-    digest = _StreamDigest(algorithms, S3_UPLOAD_PART_BYTES if kind is _DestinationKind.S3_FIXED_PARTS else None)
+    filesystem = destination.filesystem
+    digest = destination.stream_digest({source.checksum.algorithm} if source.checksum is not None else set())
+    parent, separator, _ = path.rpartition("/")
+    if separator:
+        filesystem.makedirs(parent, exist_ok=True)
     with source_fs.open(source.source_path, "rb") as reader:
-        upload = _open_upload(destination_fs, path, kind)
+        upload = destination.open_upload(path)
         try:
             while chunk := reader.read(COPY_CHUNK_BYTES):
                 digest.update(chunk)
@@ -501,21 +568,17 @@ def _copy_file(
         except BaseException:
             upload.discard()
             raise
+    filesystem.invalidate_cache(path)
+    info = filesystem.info(path)
     try:
-        identity = _committed_identity(destination_fs, path, digest, kind)
+        if int(info.get("size") or 0) != digest.size:
+            raise VerifiedCopyError(f"destination size mismatch for {path}")
+        destination.check_committed(path, info, digest)
     except VerifiedCopyError:
-        destination_fs.rm(path)
+        filesystem.rm(path)
         raise
-    return _CopiedFile(digest.hex_digest(_ChecksumAlgorithm.SHA256), identity)
-
-
-def _open_upload(filesystem: AbstractFileSystem, path: str, kind: _DestinationKind) -> _Upload:
-    parent, separator, _ = path.rpartition("/")
-    if separator:
-        filesystem.makedirs(parent, exist_ok=True)
-    if kind is _DestinationKind.LOCAL:
-        return _LocalUpload(filesystem, path)
-    return _DeferredObjectUpload(filesystem, path, kind)
+    sha256 = digest.hex_digest(_ChecksumAlgorithm.SHA256)
+    return _CopiedFile(sha256, _destination_identity(info) or f"{SHA256_IDENTITY_PREFIX}{sha256}")
 
 
 def _check_streamed_source(source_fs: AbstractFileSystem, source: _SourceFile, digest: _StreamDigest) -> None:
@@ -530,28 +593,9 @@ def _check_streamed_source(source_fs: AbstractFileSystem, source: _SourceFile, d
         raise VerifiedCopyError(f"source identity changed while copying {source.path}")
 
 
-def _committed_identity(
-    filesystem: AbstractFileSystem,
-    path: str,
-    digest: _StreamDigest,
-    kind: _DestinationKind,
-) -> str:
-    """Check a committed object against its streamed digests and return its resume identity."""
-    filesystem.invalidate_cache(path)
-    info = filesystem.info(path)
-    if int(info.get("size") or 0) != digest.size:
-        raise VerifiedCopyError(f"destination size mismatch for {path}")
-    sha256 = digest.hex_digest(_ChecksumAlgorithm.SHA256)
-    if kind is _DestinationKind.S3_FIXED_PARTS:
-        if _etag(info) != digest.multipart_etag():
-            raise VerifiedCopyError(f"destination ETag mismatch for {path}")
-    elif kind is _DestinationKind.GCS:
-        md5 = info.get("md5Hash")
-        if md5 is None or _base64_hex(md5) != digest.hex_digest(_ChecksumAlgorithm.MD5):
-            raise VerifiedCopyError(f"destination MD5 mismatch for {path}")
-    elif _sha256(filesystem, path) != sha256:
+def _check_read_back(filesystem: AbstractFileSystem, path: str, digest: _StreamDigest) -> None:
+    if _sha256(filesystem, path) != digest.hex_digest(_ChecksumAlgorithm.SHA256):
         raise VerifiedCopyError(f"destination hash mismatch for {path}")
-    return _destination_identity(info) or f"{SHA256_IDENTITY_PREFIX}{sha256}"
 
 
 def _destination_matches_marker(
@@ -608,16 +652,15 @@ def _resolved_location(url: str, upload_policy: S3UploadPolicy) -> TransferLocat
     return location
 
 
-def _destination_kind(filesystem: AbstractFileSystem) -> _DestinationKind:
+def _destination(filesystem: AbstractFileSystem) -> _Destination:
     protocols = normalize_protocols(filesystem.protocol)
     if "s3" in protocols:
-        if getattr(filesystem, "fixed_upload_size", False):
-            return _DestinationKind.S3_FIXED_PARTS
-        return _DestinationKind.S3
+        fixed_parts = getattr(filesystem, "fixed_upload_size", False)
+        return _S3Destination(filesystem, S3_UPLOAD_PART_BYTES if fixed_parts else None)
     if "gs" in protocols or "gcs" in protocols:
-        return _DestinationKind.GCS
+        return _GcsDestination(filesystem)
     if "file" in protocols:
-        return _DestinationKind.LOCAL
+        return _LocalDestination(filesystem)
     raise VerifiedCopyError(f"verified copies cannot hold back publication on {protocols[0]}:// destinations")
 
 
