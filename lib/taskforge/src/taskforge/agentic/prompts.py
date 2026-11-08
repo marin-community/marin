@@ -226,7 +226,13 @@ prose, on an "Answer:" line or in \\boxed{{}} fails. Either ask for the bare ans
 and ask for the answer in \\boxed{{}}. For a list, give expected one entry per item. submit grades the reference \
 written the way the prompt asks.
 - Write format examples with placeholders such as "<tier>" or with values that are not in the answer: a solver \
-copies an example's values.
+copies an example's values. Before you submit, check that no example, and no sentence about grading, contains or \
+starts a value of right_answer.
+- Before you submit, map each grader criterion, compared field and required value to the sentence of the prompt \
+that asks for it. Ask in the prompt for any that has none, or drop it from the grader.
+- The first submit that passes every other check of a task with no solver machine runs one blind solve: the \
+drafting model answers the prompt without right_answer. If the grader fails that answer, submit shows it to you: \
+settle each graded value on which it differs, as that reply says.
 - A judge's reference is the answer, never the task's text, which the solver sees. A judge question gives no \
 score scale, weights, caps or reply format: verifyit sets those. Set incomplete_retry_tokens to 32768, as the \
 judge example does.

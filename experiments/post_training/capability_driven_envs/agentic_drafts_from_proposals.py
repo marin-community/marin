@@ -189,6 +189,7 @@ async def _draft_all(slots: Sequence[Slot], settings: RunSettings) -> list[dict[
         workspace_factory=workspace,
         solver_factories={backend: solver_factory(backend) for backend in (Backend.SHELLSIM, Backend.LOCAL)},
         judge=JudgeConnection(endpoint.base_url, endpoint.token, default_model=DEEPSEEK_MODEL),
+        blind_solver=RelayModel(source, lambda endpoint: models.connect(endpoint, "blind-solve")),
         agent_limits=agent_limits(settings.turns).model_copy(update={"attempt_timeout": settings.session_timeout}),
         solver_limits=SOLVER_LIMITS,
         command_timeout=COMMAND_TIMEOUT,

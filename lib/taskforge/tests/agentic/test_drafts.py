@@ -44,7 +44,7 @@ from taskforge.agentic.drafts import (
     draft_task,
     shifted_answers,
 )
-from taskforge.agentic.grader_examples import EXAMPLES, json_task, judge_task, script_task
+from taskforge.agentic.grader_examples import EXAMPLES, exact_task, json_task, judge_task, script_task
 from taskforge.agentic.instances import task_instances
 from taskforge.agentic.tools import VARIANT_SUFFIX, VARIANTS, reference_answer
 
@@ -153,6 +153,7 @@ def config(agent: ScriptedAgent, judge: JudgeConnection | None = None) -> DraftC
         workspace_factory=ShellSimMachineFactory(),
         solver_factories={Backend.SHELLSIM: ShellSimMachineFactory(), Backend.LOCAL: LinuxFactory()},
         judge=judge or JudgeConnection("http://judge.invalid/v1", "unused", default_model="deepseek"),
+        blind_solver=None,
         agent_limits=LIMITS,
         solver_limits=LIMITS,
         command_timeout=10,
@@ -187,7 +188,7 @@ def judge_replies(monkeypatch):
             self.end_headers()
             self.wfile.write(payload)
 
-        def log_message(self, *_args):
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 (the parent method names it)
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -456,6 +457,51 @@ async def test_submit_refuses_a_script_grader_that_prints_no_reward_with_its_out
 
     [problem] = await tools.control_problems(script_task("example"), "2 3 5")
     assert "finite numeric reward" in problem and "KeyError: 'strain'" in problem
+
+
+def exact_expected(task: TaskSpec) -> tuple[str, ...]:
+    grader = task.grader
+    assert isinstance(grader, VerifyitGrader)
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    assert isinstance(spec, ExactSpec)
+    return spec.expected
+
+
+@dataclass
+class BlindSolver:
+    """Replies to every prompt with ``answer``."""
+
+    answer: str
+    calls: int = 0
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        self.calls += 1
+        return ModelTurn({"role": "assistant", "content": self.answer}, (), (), None, "stop", usage=TokenUsage(10, 1))
+
+
+async def test_one_blind_solve_that_the_grader_fails_shows_the_agent_its_answer():
+    task = exact_task("example")
+    [expected] = exact_expected(task)
+    solver = BlindSolver("not the word")
+    tools = DraftTools(
+        proposal(solver_machine="none"), dataclasses.replace(config(ScriptedAgent([])), blind_solver=solver)
+    )
+
+    [problem] = await tools.blind_solve_problems(task, expected)
+    assert "a reward of 0.0" in problem and "'not the word'" in problem
+    # A session runs one blind solve: the agent's next submit is not checked again.
+    assert await tools.blind_solve_problems(task, expected) == [] and solver.calls == 1
+
+
+async def test_a_blind_solve_that_the_grader_passes_refuses_nothing():
+    task = exact_task("example")
+    [expected] = exact_expected(task)
+    tools = DraftTools(
+        proposal(solver_machine="none"),
+        dataclasses.replace(config(ScriptedAgent([])), blind_solver=BlindSolver(expected)),
+    )
+
+    assert await tools.blind_solve_problems(task, expected) == []
 
 
 def test_a_full_precision_number_of_an_answer_is_not_moved():

@@ -485,7 +485,7 @@ class ToolSession:
                 ungraded[_clip(reason, limit=300)] += 1
                 continue
             passed = grade_passed(grade)
-            answer = _final_answer(rollout)
+            answer = final_answer(rollout)
             format_failure = (
                 grade.status == Outcome.SUBMISSION_FAILURE and rollout.stop_reason not in RAN_OUT_STOP_REASONS
             )
@@ -1115,7 +1115,7 @@ def grade_passed(grade: GradeResult) -> bool:
     return grade.passed if grade.passed is not None else grade.reward >= grade.score_max
 
 
-def _final_answer(rollout: Rollout) -> str:
+def final_answer(rollout: Rollout) -> str:
     messages = rollout.conversations[-1].messages if rollout.conversations else ()
     replies = [message for message in messages if message.get("role") == "assistant"]
     return str(replies[-1].get("content") or "") if replies else ""

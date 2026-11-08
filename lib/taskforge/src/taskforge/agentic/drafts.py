@@ -75,6 +75,7 @@ from taskforge.agentic.tools import (
     WORKDIR,
     ReplayModel,
     ToolError,
+    final_answer,
     grade_passed,
     keyword_grader_problems,
     machine_runtime,
@@ -93,7 +94,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "15"
+DRAFT_REVISION = "16"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -224,10 +225,13 @@ class DraftConfig:
     taskcompendium and verifyit."""
     solver_factories: Mapping[Backend, MachineFactory]
     """The solver machines that ``RolloutEngine.check`` checks a task against, by backend, with the
-    ``VERIFIER_BACKEND`` machines of graders that run in an environment. No solver runs: ``submit`` grades only the
-    agent's right answer and wrong answers made from it, with a replayed reply."""
+    ``VERIFIER_BACKEND`` machines of graders that run in an environment. ``submit`` grades the agent's right answer and
+    wrong answers made from it with a replayed reply, and runs at most one blind solve, of ``blind_solver``."""
     judge: JudgeConnection
     """The judge of a judge grader, which ``submit`` calls to grade the agent's right answer."""
+    blind_solver: Model | None
+    """The model of one blind solve of a task that needs no solver machine: the first submit that passes every other
+    check grades its answer, and shows the agent where it differs from the grader. None runs no blind solve."""
     agent_limits: RolloutLimits
     solver_limits: RolloutLimits
     command_timeout: float
@@ -313,6 +317,7 @@ class DraftTools:
         self.draft: Draft | None = None
         self.report: str | None = None
         self.submits = 0
+        self.blind_solves = 0
 
     def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
         return TOOL_DEFINITIONS
@@ -394,6 +399,26 @@ class DraftTools:
             return []
         return [judge_failure(right_answer, right)]
 
+    async def blind_solve_problems(self, task: TaskSpec, right_answer: str) -> list[str]:
+        """The answer of one blind solve, when the grader does not pass it, for the agent to settle each graded field
+        on which it differs from ``right_answer``. A session runs at most one, and only on a task that needs no
+        solver machine; a solve that fails to run or grade refuses nothing."""
+        solver = self.config.blind_solver
+        if solver is None or self.blind_solves or self.proposal.solver_machine is not SolverMachine.NONE:
+            return []
+        self.blind_solves += 1
+        limits = self.config.solver_limits
+        spec = solver_spec(task, self.backend, limits, judge=self.config.judge, verifier_backend=VERIFIER_BACKEND)
+        try:
+            outcome = await self.solver_engine.run_task(spec, solver)
+        except RolloutInterrupted as error:
+            logger.warning("The blind solve of %s did not run: %s", task.id, error.rollout.failure)
+            return []
+        grade = outcome.grade
+        if grade.status != Outcome.GRADED or grade.reward is None or grade_passed(grade):
+            return []
+        return [blind_solve_failure(final_answer(outcome.rollout), right_answer, grade)]
+
     async def _grade(self, task: TaskSpec, answer: str) -> GradeResult | None:
         """The grade of ``answer``, or None when the grader cannot run here, which must not refuse a draft."""
         limits = self.config.solver_limits
@@ -407,6 +432,23 @@ class DraftTools:
             logger.warning("A control of %s did not grade: %s", task.id, grade.error)
             return None
         return grade
+
+
+def blind_solve_failure(answer: str, right_answer: str, grade: GradeResult) -> str:
+    """The answer of a blind solve that the grader fails, with the judge's failed criteria or reason."""
+    detail = grade.detail or {}
+    failed = [result["criterion"] for result in detail.get("criteria", ()) if not result.get("passed")]
+    reason = str(detail.get("reasoning", ""))[:400]
+    why = f" It fails the criteria {failed}." if failed else (f" The judge's reason: {reason!r}." if reason else "")
+    return (
+        f"A blind solve, the drafting model answering the prompt without right_answer, gets a reward of "
+        f"{grade.reward} of {grade.score_max}.{why} Its answer: {answer[:1500]!r}. Compare it with right_answer "
+        f"{right_answer[:300]!r} on each graded value, verdict or label. Where the prompt's facts and rules also "
+        "support the blind value, add the fact or rule that decides it, or make the grader credit both. Where "
+        "right_answer contradicts the task's files, fix it. Where the grader requires something that the prompt "
+        "never asks for, ask for it in the prompt or drop it from the grader. Where the blind value is wrong by the "
+        "prompt's stated rules, the task is fine as it is: submit again. This check runs once per session"
+    )
 
 
 def judge_failure(right_answer: str, grade: GradeResult) -> str:
@@ -862,6 +904,8 @@ class DraftSession:
             problems = await program_problems(
                 self.machine, program, task, self.tools.problems, timeout, max_answer_share=DRAFT_MAX_ANSWER_SHARE
             )
+        if not problems:
+            problems = await self.tools.blind_solve_problems(task, right_answer)
         if problems:
             return _reply({"accepted": False, "problems": problems})
         self.tools.draft = Draft(task, program, await workspace_snapshot(self.machine))
