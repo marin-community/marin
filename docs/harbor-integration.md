@@ -215,8 +215,10 @@ unless Compose overrides them. The evaluator does not build images or start nest
 A sidecar exit closes the whole local task, including the agent. Grading cannot continue
 inside that task.
 
-The prepared local path supports the six maintained agents in reviewed images.
-Images must provide the harnesses and dependencies those agents require.
+The prepared local path accepts Pi, Mini-SWE-Agent, Codex, OpenCode,
+Terminus-2, and Terminus-Kira. Reviewed images must provide their harnesses
+and dependencies. Preflight rejects unsupported agents and simulated users
+before task allocation.
 
 Standalone Pi tasks, including single-container tasks, must declare a digest-pinned
 `main` image with Pi installed in `environment/shellbox-images.json`.
