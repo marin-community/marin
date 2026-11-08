@@ -16,7 +16,7 @@ from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
-from forge.harness.protocol import Returned, Stopped
+from forge.harness.protocol import Returned, Stopped, StopReason
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
 from forge.model.controls import Control
@@ -132,6 +132,8 @@ async def run_adversary(
                 tuple(tool.schema for tool in tools.values()),
             )
             outcome = await config.adversaries[name].run(ctx, session, resources.inference_for("adversary"), tools)
+            if isinstance(outcome, Stopped) and outcome.reason is StopReason.CONTEXT_LIMIT:
+                return AdversaryResult(name, True, (), ("adversary exhausted its window without a report",))
             if (
                 not isinstance(outcome, Returned)
                 or outcome.tool != "report"

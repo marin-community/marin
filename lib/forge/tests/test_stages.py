@@ -23,11 +23,12 @@ from forge.effects.context import Context
 from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold, OutputBudgetExhausted, Restart
 from forge.effects.log import EventLog
+from forge.harness.loop import AgenticHarness
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from forge.lowering import machine_backend, requirements
 from forge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
-from forge.model.llm import Completion, Message, Role, ToolCall
+from forge.model.llm import Completion, Message, Role, ToolCall, Usage
 from forge.model.proposal import (
     REQUIRED_HEADINGS,
     ResearchNeed,
@@ -51,13 +52,13 @@ from forge.model.review import (
     ValidationResult,
 )
 from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy
+from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
-from forge.resources.inference import FakeInference
+from forge.resources.inference import ContextExceeded, FakeInference
 from forge.resources.rollouts import RolloutResource, SolverRollout
 from forge.resources.web import FakeWeb
 from forge.stages.author import author
@@ -654,13 +655,13 @@ def test_generation_limit_is_failed_solver_evidence(workpiece: Workpiece, grade:
     assert isinstance(default_review(workpiece.with_(evidence=(unavailable,)), band, setup.budget), Retry)
 
 
-@pytest.mark.parametrize("kind,grouped", [(Hold, False), (Hold, True), (Restart, False), (Restart, True), (None, False)])
+@pytest.mark.parametrize("kind,grouped", [(Hold, False), (Hold, True), (Restart, False), (Restart, True)])
 async def test_adversary_interruptions_preserve_cause_and_close_environment(
     workpiece: Workpiece,
-    kind: type[Hold] | type[Restart] | None,
+    kind: type[Hold] | type[Restart],
     grouped: bool,
 ) -> None:
-    failure = kind("unavailable") if kind else Stopped(StopReason.CONTEXT_LIMIT, Conversation((), ()))
+    failure = kind("unavailable")
     harness = RecordingHarness(
         ExceptionGroup("observer", [failure]) if grouped and isinstance(failure, Exception) else failure
     )
@@ -674,10 +675,50 @@ async def test_adversary_interruptions_preserve_cause_and_close_environment(
     else:
         result = (await validate(ctx, workpiece, setup, bundle)).result
         restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece.with_(evidence=(result,))))
-        reason = "Hold: unavailable" if kind else "context_limit after 0 turns without report"
+        reason = "Hold: unavailable"
         assert restored.evidence[0].adversary == (AdversaryResult("finder", False, (), (reason,)),)
         assert len(result.solver) == 3 and len(result.controls) == 2
         decision = default_review(restored, setup.band, setup.budget)
         assert isinstance(decision, Incomplete) and decision.reasons == (f"finder: {reason}",)
     await ctx.drain()
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+
+
+# full-s-20261108/S at f929478063: window exhaustion after 20 turns held otherwise reviewable tasks.
+@pytest.mark.parametrize("overflow", ["estimate", "provider"])
+@pytest.mark.parametrize("verdict", [Accept, Modify, Retry])
+async def test_adversary_window_exhaustion_completes_and_explains_review(
+    workpiece: Workpiece, overflow: str, verdict: type[Accept] | type[Modify] | type[Retry]
+) -> None:
+    assert workpiece.submission is not None
+    setup = config()
+    harness = AgenticHarness(32, sampling(setup.policy), "report findings", 20000)
+    setup = replace(setup, adversaries={"finder": harness}, tools={"finder": {}})
+    client = FakeInference(
+        (
+            (
+                ContextExceeded("model window exceeded")
+                if overflow == "provider"
+                else Completion("No report yet", usage=Usage(prompt_tokens=32))
+            ),
+        )
+    )
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), role_inference={"adversary": client})
+    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+    assert result == AdversaryResult("finder", True, (), ("adversary exhausted its window without a report",))
+    current = replace(evidence(), task_digest=workpiece.submission.digest, adversary=(result,))
+    if verdict is Modify:
+        current = replace(current, controls=(replace(current.controls[0], met=False),))
+    if verdict is Retry:
+        current = replace(current, solver=(TrialResult(0, None, Cause.AGENT_TIMEOUT),))
+    wp = workpiece.with_(evidence=(current,))
+    decision = (await review(ctx, wp, setup, bundle)).decision
+    assert isinstance(decision, verdict)
+    notes = decision.findings if isinstance(decision, Modify) else decision.reasons
+    assert "finder: adversary exhausted its window without a report" in notes
+    saved = WORKPIECE.validate_json(WORKPIECE.dump_json(wp.with_(decisions=(decision,))))
+    assert saved.decisions[-1] == decision
+    assert len(client.requests) == 1
+    assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
+    await ctx.drain()

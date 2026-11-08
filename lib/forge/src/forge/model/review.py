@@ -72,6 +72,7 @@ class Modify:
 class Retry:
     cause: Cause
     count: int
+    reasons: tuple[str, ...] = ()
     kind: Literal["retry"] = "retry"
 
 
