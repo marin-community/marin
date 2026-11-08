@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 """Paper figure of collect_proposal_cross_predictions_20261024: each trained proposal is a column with its measured
-loss (mean and 95% interval over three trainer seeds, in the proposing model's colour) and the four models' predicted
+loss (mean ± std over three trainer seeds, in the proposing model's colour) and the four models' predicted
 losses, Uncheatable (left) and OlmoBaseEval Easy (right). Lower is better. Printed at 100%: `--layout half` (2.7 in wide)
 or `--layout full` (5.5 in, one legend row, each column labelled with its proposing model, as in "MARINER's proposal";
 the paper's Figure 7 since 2026-10-25).
@@ -14,7 +14,6 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
@@ -39,7 +38,7 @@ XLABEL_GAP = 3.0  # the slanted tick labels to the x label
 def draw_panel(ax, measured: pd.DataFrame, predictions: pd.DataFrame, layout: str) -> None:
     for x, (proposal, (_label, _name, color, _marker, _size)) in enumerate(MODELS.items()):
         loss = measured[measured.proposal.eq(proposal)].loss.to_numpy()
-        mean, half = loss.mean(), 1.96 * loss.std(ddof=1) / np.sqrt(len(loss))
+        mean, half = loss.mean(), loss.std(ddof=1)
         span = [x - BAR_HALF_WIDTH, x + BAR_HALF_WIDTH]
         ax.fill_between(span, mean - half, mean + half, color=color, alpha=0.2, lw=0, zorder=1)
         ax.plot(span, [mean, mean], color=color, lw=1.8, solid_capstyle="butt", zorder=2)
@@ -142,7 +141,7 @@ def main() -> None:
         )
         for key, (_label, _name, color, marker, size) in MODELS.items()
     }
-    measured_key = (Line2D([], [], color=MEASURED_KEY, lw=1.8), "Measured (95% CI)")
+    measured_key = (Line2D([], [], color=MEASURED_KEY, lw=1.8), "Measured (mean ± std)")
     if layout == "full":  # one row
         entries = [
             measured_key,
