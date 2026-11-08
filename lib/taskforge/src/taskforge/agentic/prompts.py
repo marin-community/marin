@@ -234,6 +234,12 @@ judge example does.
 an expert could defend another verdict or plan from the prompt's facts. If one could, add the fact that excludes \
 it, or make the grader credit any choice that the stated facts support with correct reasoning. A reference or \
 criterion that requires one choice the prompt leaves open fails right solvers.
+- Every graded verdict, label, level or category, by any grader, has a rule in the prompt that decides it: a \
+threshold for each level of a scale, and the boundary between each pair of categories that could both describe a \
+case. For each graded item, check that the case's facts meet exactly one category's rule, with a margin; if two \
+fit, change the facts or the rule, not the grader.
+- Compute every reference value from the solver's files as written, for example a time conversion or a schedule \
+read from them, and recheck it against those files before you submit.
 - Write any grading context of a judge, such as a key file, from the same variables as the solver's files, never \
 as a second copy of the data.
 - Pin every PyPI package of a machine to one version, as name==version.
