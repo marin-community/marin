@@ -66,7 +66,9 @@ def _install_tokenizer(monkeypatch):
     monkeypatch.setattr(
         httpx,
         "Client",
-        lambda **kwargs: client_type(transport=httpx.MockTransport(tokenizer), **kwargs),
+        lambda **kwargs: client_type(
+            transport=httpx.MockTransport(tokenizer), **kwargs
+        ),
     )
 
 
@@ -182,7 +184,9 @@ def test_compaction_activates_only_above_character_threshold(monkeypatch):
             return _model_response("summary")
         return _tool_response()
 
-    monkeypatch.setattr(Completions, "create", lambda self, **kwargs: completion(**kwargs))
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     _model(compacting_model_class, threshold).query(messages)
     assert len(calls) == 1
 
@@ -211,7 +215,9 @@ def test_compaction_preserves_full_transcript_and_complete_recent_turn(monkeypat
             return _model_response("Files inspected: old-a and old-b.")
         return _tool_response()
 
-    monkeypatch.setattr(Completions, "create", lambda self, **kwargs: completion(**kwargs))
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     model = _model(compacting_model_class, 800)
     model.query(messages)
 
@@ -248,13 +254,19 @@ def test_compaction_reuses_prior_summary_without_resummarizing_raw_history(
             return _model_response(f"summary-{len(calls)}")
         return _tool_response()
 
-    monkeypatch.setattr(Completions, "create", lambda self, **kwargs: completion(**kwargs))
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     model = _model(compacting_model_class, 300)
     model.query(messages)
     messages.extend(_turn("second", 300))
     model.query(messages)
 
-    summary_calls = [call for call in calls if call["messages"][0]["content"].startswith("You compact the work history")]
+    summary_calls = [
+        call
+        for call in calls
+        if call["messages"][0]["content"].startswith("You compact the work history")
+    ]
     assert len(summary_calls) == 2
     assert "summary-1" in summary_calls[1]["messages"][1]["content"]
     assert "first" not in summary_calls[1]["messages"][1]["content"]
@@ -279,7 +291,9 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
             raise RuntimeError("summary unavailable")
         return _tool_response()
 
-    monkeypatch.setattr(Completions, "create", lambda self, **kwargs: completion(**kwargs))
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     model = _model(compacting_model_class, 300)
     model.query(messages)
 
@@ -389,14 +403,20 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
         if request.url.path == "/tokenize":
             tokenized.append(payload)
             tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
-            return httpx.Response(200, json={"count": next(counts), "max_model_len": server_context})
+            return httpx.Response(
+                200, json={"count": next(counts), "max_model_len": server_context}
+            )
         assert request.url.path == "/v1/chat/completions"
         assert "drop_params" not in payload
         # Keep the real SDK signature and serialization in the tested path.
         payload["extra_headers"] = dict(request.headers)
         return httpx.Response(200, json=completion(**payload).model_dump())
 
-    monkeypatch.setattr(httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport))
+    monkeypatch.setattr(
+        httpx.Client,
+        "_transport_for_url",
+        lambda self, url: httpx.MockTransport(transport),
+    )
     config = tmp_path / "custom.yaml"
     config.write_text(
         f"model:\n  model_kwargs:\n    max_tokens: {requested}\n    temperature: 0.25\n    extra_body:\n      chat_template_kwargs:\n        enable_thinking: false\n"
@@ -424,7 +444,11 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
                 (
                     str(config)
                     if word == "/tmp/mswea-config/custom.yaml"
-                    else (f"--output={trajectory}" if word.startswith("--output=") else word)
+                    else (
+                        f"--output={trajectory}"
+                        if word.startswith("--output=")
+                        else word
+                    )
                 )
                 for word in argv
             ]
@@ -452,17 +476,27 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     expected_status = "LimitsExceeded" if max_turns is not None else "ContextLimit"
     assert saved["info"]["exit_status"] == expected_status
     assert saved["messages"][-1]["extra"]["exit_status"] == expected_status
-    assistant = next(message for message in saved["messages"] if message["role"] == "assistant")
+    assistant = next(
+        message for message in saved["messages"] if message["role"] == "assistant"
+    )
     assert assistant["extra"]["actions"][0]["command"] == "echo ready"
-    agent_completions = [completion for completion in completions if completion.get("tools")]
+    agent_completions = [
+        completion for completion in completions if completion.get("tools")
+    ]
     assert len(agent_completions) == 1
     assert agent_completions[0]["max_tokens"] == expected
-    assert agent_completions[0]["extra_headers"]["x-ot-trial-id"] == context.metadata["rollout_correlation_id"]
+    assert (
+        agent_completions[0]["extra_headers"]["x-ot-trial-id"]
+        == context.metadata["rollout_correlation_id"]
+    )
     assert agent_completions[0]["extra_headers"]["x-ot-task-agent"] == "mini-swe-agent"
     expected_requests = 1 if max_turns is not None else 2
     if summarization_threshold_chars is not None:
         expected_requests += 1
-    assert tokenization_trial_ids == [context.metadata["rollout_correlation_id"]] * expected_requests
+    assert (
+        tokenization_trial_ids
+        == [context.metadata["rollout_correlation_id"]] * expected_requests
+    )
     assert context.rollout_details == [
         {
             "prompt_token_ids": [[101, 102]],
@@ -474,17 +508,26 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
         assert agent_completions[0]["temperature"] == 0.25
     assert tokenized[0]["messages"] == agent_completions[0]["messages"]
     assert tokenized[0]["tools"] == agent_completions[0]["tools"]
-    assert tokenized[0]["chat_template_kwargs"] == ({"enable_thinking": False} if custom_config else {})
+    assert tokenized[0]["chat_template_kwargs"] == (
+        {"enable_thinking": False} if custom_config else {}
+    )
     assert tokenized[0]["add_generation_prompt"] is True
     if max_turns is None and summarization_threshold_chars is None:
-        previous_assistant = next(message for message in tokenized[1]["messages"] if message["role"] == "assistant")
+        previous_assistant = next(
+            message
+            for message in tokenized[1]["messages"]
+            if message["role"] == "assistant"
+        )
         if model_format == "k2_horizon":
             assert previous_assistant["reasoning"] == ""
         else:
             assert "reasoning" not in previous_assistant
     assert saved["info"]["config"]["model"]["context_window"] == 32768
     if summarization_threshold_chars is not None:
-        assert saved["info"]["config"]["model"]["summarization_threshold_chars"] == summarization_threshold_chars
+        assert (
+            saved["info"]["config"]["model"]["summarization_threshold_chars"]
+            == summarization_threshold_chars
+        )
         compaction = saved["info"]["context_compaction"]
         assert compaction["events"][0]["history_chars_before"] > 256
         assert compaction["events"][0]["history_chars_after"] <= 256

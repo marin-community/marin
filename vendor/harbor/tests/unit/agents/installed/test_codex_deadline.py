@@ -12,7 +12,9 @@ from harbor.trial.errors import AgentTimeoutError
 
 
 @pytest.mark.asyncio
-async def test_codex_server_timeout_is_reported_as_agent_timeout(tmp_path, monkeypatch, mock_environment):
+async def test_codex_server_timeout_is_reported_as_agent_timeout(
+    tmp_path, monkeypatch, mock_environment
+):
     commands = []
 
     async def exec_command(*, command, **kwargs):

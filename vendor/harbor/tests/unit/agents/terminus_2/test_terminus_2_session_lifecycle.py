@@ -19,7 +19,9 @@ from harbor.models.trial.paths import TrialPaths
 from shellbox.machine import MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Process scopes require Linux")
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="Process scopes require Linux"
+)
 
 
 class ScriptedLLM(BaseLLM):

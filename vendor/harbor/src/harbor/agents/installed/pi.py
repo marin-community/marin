@@ -39,7 +39,6 @@ from harbor.models.agent.name import AgentName
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.utils.env import validate_task_environment
 
-
 _REMOTE_LOG_READ_BLOCK_SIZE = 1024 * 1024
 
 
@@ -103,9 +102,7 @@ lines.on("close", () => {
   }
   process.exitCode = 1;
 });
-""".replace(
-            "__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER
-        )
+""".replace("__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER)
         .replace("__CONTEXT_LENGTH_FAILURE_MARKER__", _CONTEXT_LENGTH_FAILURE_MARKER)
         .strip()
     )
@@ -560,7 +557,7 @@ export default function (pi) {
         compaction = {
             "enabled": True,
             "reserveTokens": self._model_limits.compaction_reserve_tokens,
-            "keepRecentTokens": (self._model_limits.compaction_keep_recent_tokens),
+            "keepRecentTokens": self._model_limits.compaction_keep_recent_tokens,
         }
         serialized = json.dumps(compaction, separators=(",", ":"))
         return (
@@ -867,7 +864,9 @@ export default function (pi) {
                 parts.append(block.get("text") or "")
         return "\n".join(part for part in parts if part)
 
-    def _trajectory_from_events(self, events: list[dict], context: AgentContext) -> Trajectory | None:
+    def _trajectory_from_events(
+        self, events: list[dict], context: AgentContext
+    ) -> Trajectory | None:
         """Build the ATIF trajectory from pi.txt's session event stream, or None.
 
         ``message_end`` events carry the final form of every message, so streaming
@@ -889,7 +888,9 @@ export default function (pi) {
             if message is None:
                 continue
             timestamp = self._pi_timestamp_to_iso(
-                message.get("timestamp") if message.get("timestamp") is not None else event.get("timestamp")
+                message.get("timestamp")
+                if message.get("timestamp") is not None
+                else event.get("timestamp")
             )
             role = message.get("role")
             if role == "assistant":
@@ -954,13 +955,16 @@ export default function (pi) {
                     text = sections.get("preamble") or ""
             if not text:
                 return None
-            return Step(step_id=step_id, timestamp=timestamp, source="system", message=text)
+            return Step(
+                step_id=step_id, timestamp=timestamp, source="system", message=text
+            )
         if message.get("role") == "user":
             return Step(
                 step_id=step_id,
                 timestamp=timestamp,
                 source="user",
-                message=self._message_text(message.get("content")) or "(empty user message)",
+                message=self._message_text(message.get("content"))
+                or "(empty user message)",
             )
         return None
 
@@ -968,7 +972,9 @@ export default function (pi) {
         self, message: dict, timestamp: str | None, step_id: int
     ) -> Step:
         """An agent step with its reasoning, tool calls, and usage metrics."""
-        blocks = [block for block in (message.get("content") or []) if isinstance(block, dict)]
+        blocks = [
+            block for block in message.get("content") or [] if isinstance(block, dict)
+        ]
         text = self._message_text(blocks)
         reasoning = "\n\n".join(
             block["thinking"]
@@ -977,7 +983,9 @@ export default function (pi) {
             and isinstance(block.get("thinking"), str)
             and block["thinking"]
         )
-        tool_call_blocks = [block for block in blocks if block.get("type") == "toolCall"]
+        tool_call_blocks = [
+            block for block in blocks if block.get("type") == "toolCall"
+        ]
         tool_calls = [
             self._tool_call(block, position)
             for position, block in enumerate(tool_call_blocks, start=1)
@@ -994,7 +1002,8 @@ export default function (pi) {
             cost_total = (usage.get("cost") or {}).get("total")
             cost_usd = (
                 cost_total
-                if isinstance(cost_total, (int, float)) and not isinstance(cost_total, bool)
+                if isinstance(cost_total, (int, float))
+                and not isinstance(cost_total, bool)
                 else None
             )
             metrics = Metrics(
@@ -1025,7 +1034,9 @@ export default function (pi) {
         arguments = call.get("arguments")
         return ToolCall(
             tool_call_id=str(call.get("id") or call.get("toolCallId") or position),
-            function_name=str(call.get("name") or call.get("toolName") or "unknown_tool"),
+            function_name=str(
+                call.get("name") or call.get("toolName") or "unknown_tool"
+            ),
             arguments=arguments if isinstance(arguments, dict) else {},
         )
 
@@ -1042,12 +1053,19 @@ export default function (pi) {
         result = ObservationResult(
             source_call_id=str(call_id) if call_id else None,
             content=self._message_text(message.get("content")) or None,
-            extra={"is_error": message["isError"]} if isinstance(message.get("isError"), bool) else None,
+            extra=(
+                {"is_error": message["isError"]}
+                if isinstance(message.get("isError"), bool)
+                else None
+            ),
         )
         if steps and steps[-1].source == "agent":
             step = steps[-1]
-            tool_call_ids = {call.tool_call_id for call in (step.tool_calls or [])}
-            if result.source_call_id is not None and result.source_call_id not in tool_call_ids:
+            tool_call_ids = {call.tool_call_id for call in step.tool_calls or []}
+            if (
+                result.source_call_id is not None
+                and result.source_call_id not in tool_call_ids
+            ):
                 result = result.model_copy(update={"source_call_id": None})
             if step.observation is None:
                 step.observation = Observation(results=[result])

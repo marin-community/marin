@@ -43,7 +43,11 @@ def _shell_tokens(keystrokes: str | list[str]) -> list[str]:
     if isinstance(keystrokes, str):
         text = keystrokes
     else:
-        keys = keystrokes[:-1] if keystrokes and keystrokes[-1] in _ENTER_KEYS else keystrokes
+        keys = (
+            keystrokes[:-1]
+            if keystrokes and keystrokes[-1] in _ENTER_KEYS
+            else keystrokes
+        )
         text = "".join(keys)
     if "\n" in text.rstrip("\r\n") or "\r" in text.rstrip("\r\n"):
         return []
@@ -59,7 +63,9 @@ def _shell_tokens(keystrokes: str | list[str]) -> list[str]:
 def _submits_command(keystrokes: str | list[str]) -> bool:
     if isinstance(keystrokes, str):
         return keystrokes.endswith(("\n", "\r"))
-    return bool(keystrokes) and (keystrokes[-1] in _ENTER_KEYS or keystrokes[-1].endswith(("\n", "\r")))
+    return bool(keystrokes) and (
+        keystrokes[-1] in _ENTER_KEYS or keystrokes[-1].endswith(("\n", "\r"))
+    )
 
 
 def _kills_runner(keystrokes: str | list[str], script: str) -> bool:
@@ -170,8 +176,13 @@ class TmuxSession:
             raise ValueError("pane_width and pane_height must be valid integers.")
         if self._pane_width <= 0 or self._pane_height <= 0:
             raise ValueError("pane_width and pane_height must be positive integers.")
-        if not math.isfinite(batch_exec_timeout_margin_sec) or batch_exec_timeout_margin_sec <= 0:
-            raise ValueError("batch_exec_timeout_margin_sec must be positive and finite")
+        if (
+            not math.isfinite(batch_exec_timeout_margin_sec)
+            or batch_exec_timeout_margin_sec <= 0
+        ):
+            raise ValueError(
+                "batch_exec_timeout_margin_sec must be positive and finite"
+            )
         self._session_name = session_name
         self._logger = logger
         self._previous_buffer: str | None = None
@@ -213,7 +224,9 @@ class TmuxSession:
         if system_info["package_manager"]:
             install_command = self._get_tmux_install_command(system_info)
             if install_command:
-                self._logger.debug(f"Installing tools using {system_info['package_manager']}: {install_command}")
+                self._logger.debug(
+                    f"Installing tools using {system_info['package_manager']}: {install_command}"
+                )
                 result = await self._exec(command=install_command, user="root")
 
                 if result.return_code == 0:
@@ -258,7 +271,9 @@ class TmuxSession:
         ]
 
         for pm_name in package_managers:
-            check_result = await self._exec(command=f"which {pm_name} >/dev/null 2>&1", user="root")
+            check_result = await self._exec(
+                command=f"which {pm_name} >/dev/null 2>&1", user="root"
+            )
             if check_result.return_code == 0:
                 system_info["package_manager"] = pm_name
                 break
@@ -345,7 +360,9 @@ class TmuxSession:
             result = await self._exec(command=build_cmd, user="root")
 
             # Verify installation
-            verify_result = await self._exec(command="tmux -V || /usr/local/bin/tmux -V", user="root")
+            verify_result = await self._exec(
+                command="tmux -V || /usr/local/bin/tmux -V", user="root"
+            )
             if verify_result.return_code == 0:
                 self._logger.debug("tmux successfully built and installed from source")
             else:
@@ -357,7 +374,10 @@ class TmuxSession:
     @property
     def _tmux_start_session(self) -> str:
         # Build environment variable options for tmux new-session -e KEY=value
-        env_options = "".join(f"-e {shlex.quote(f'{key}={value}')} " for key, value in self._extra_env.items())
+        env_options = "".join(
+            f"-e {shlex.quote(f'{key}={value}')} "
+            for key, value in self._extra_env.items()
+        )
 
         return (
             f"export TERM=xterm-256color && "
@@ -468,7 +488,11 @@ class TmuxSession:
             ]
         )
         if capture_entire:
-            return "set -o pipefail; " f"{{ printf '\\n'; {command}; }} | " f"tail -c {_MAX_CAPTURE_BYTES} | sed '1d'"
+            return (
+                "set -o pipefail; "
+                f"{{ printf '\\n'; {command}; }} | "
+                f"tail -c {_MAX_CAPTURE_BYTES} | sed '1d'"
+            )
         return command
 
     async def start(self) -> None:
@@ -494,7 +518,9 @@ class TmuxSession:
             user=self._user,
         )
         if start_session_result.return_code != 0:
-            raise RuntimeError(f"Failed to start tmux session. Error: {start_session_result.stderr}")
+            raise RuntimeError(
+                f"Failed to start tmux session. Error: {start_session_result.stderr}"
+            )
 
     def _is_enter_key(self, key: str) -> bool:
         return key in _ENTER_KEYS
@@ -610,7 +636,9 @@ class TmuxSession:
                     f"stderr={result.stderr!r}, stdout={result.stdout!r}"
                 )
 
-        result = await self._exec(f"timeout {max_timeout_sec}s tmux wait done", user=self._user)
+        result = await self._exec(
+            f"timeout {max_timeout_sec}s tmux wait done", user=self._user
+        )
         if result.return_code != 0:
             raise TimeoutError(f"Command timed out after {max_timeout_sec} seconds")
 
@@ -763,7 +791,9 @@ class TmuxSession:
                 ]
             elif result.return_code in {137, 143}:
                 commands = [
-                    batch.keystrokes for batch in batches[: sent_index + 1] if _kills_runner(batch.keystrokes, script)
+                    batch.keystrokes
+                    for batch in batches[: sent_index + 1]
+                    if _kills_runner(batch.keystrokes, script)
                 ]
             else:
                 commands = []
@@ -805,7 +835,9 @@ class TmuxSession:
                 f"{self.environment.session_id}: tmux session ended before "
                 "Harbor could complete the requested terminal action"
             )
-            self._raise_batch_failure(error, result, keystroke_batches, sent_index, script)
+            self._raise_batch_failure(
+                error, result, keystroke_batches, sent_index, script
+            )
         if stdout.startswith(f"{markers.command_failed}\n"):
             raise TmuxCommandError(
                 f"{self.environment.session_id}: tmux command failed while the "
@@ -822,13 +854,17 @@ class TmuxSession:
                 f"recognized status marker: return_code={result.return_code}, "
                 f"stderr={result.stderr!r}, stdout={stdout!r:.200}"
             )
-            self._raise_batch_failure(error, result, keystroke_batches, sent_index, script)
+            self._raise_batch_failure(
+                error, result, keystroke_batches, sent_index, script
+            )
         if result.return_code != 0:
             error = TmuxCommandError(
                 f"{self.environment.session_id}: tmux capture failed: "
                 f"return_code={result.return_code}, stderr={result.stderr!r}"
             )
-            self._raise_batch_failure(error, result, keystroke_batches, sent_index, script)
+            self._raise_batch_failure(
+                error, result, keystroke_batches, sent_index, script
+            )
         full_index = stdout.find(full_marker, len(visible_marker))
         if full_index == -1:
             raise TmuxBatchProtocolError(
@@ -838,11 +874,15 @@ class TmuxSession:
             )
         visible_screen = stdout[len(visible_marker) : full_index]
         current_buffer = stdout[full_index + len(full_marker) :]
-        output = await self._incremental_output_from_captures(current_buffer, visible_screen)
+        output = await self._incremental_output_from_captures(
+            current_buffer, visible_screen
+        )
         return output, True
 
     async def capture_pane(self, capture_entire: bool = False) -> str:
-        result = await self._exec(self._tmux_capture_pane(capture_entire=capture_entire), user=self._user)
+        result = await self._exec(
+            self._tmux_capture_pane(capture_entire=capture_entire), user=self._user
+        )
         return result.stdout or ""
 
     async def _get_visible_screen(self) -> str:

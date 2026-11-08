@@ -40,12 +40,16 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
         "harbor.environments.factory.EnvironmentFactory.run_preflight",
         lambda **_: None,
     )
-    monkeypatch.setattr("harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None)
+    monkeypatch.setattr(
+        "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
+    )
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
     return captured
 
 
-def test_run_skill_flags_append_to_config_file_agents(tmp_path: Path, monkeypatch) -> None:
+def test_run_skill_flags_append_to_config_file_agents(
+    tmp_path: Path, monkeypatch
+) -> None:
     existing = _make_skill(tmp_path / "existing", "existing")
     first = _make_skill(tmp_path / "first", "first")
     skills_root = tmp_path / "root"

@@ -63,10 +63,15 @@ def _batch_marker(command: str, suffix: str) -> str:
 
 
 def _batch_output(command: str, *, visible: str, full: str) -> str:
-    return f"{_batch_marker(command, 'VISIBLE')}\n{visible}" f"{_batch_marker(command, 'FULL')}\n{full}"
+    return (
+        f"{_batch_marker(command, 'VISIBLE')}\n{visible}"
+        f"{_batch_marker(command, 'FULL')}\n{full}"
+    )
 
 
-def _batch(keystrokes: str | list[str], duration_sec: float = 0.0) -> TmuxKeystrokeBatch:
+def _batch(
+    keystrokes: str | list[str], duration_sec: float = 0.0
+) -> TmuxKeystrokeBatch:
     return TmuxKeystrokeBatch(keystrokes, duration_sec)
 
 
@@ -114,7 +119,9 @@ async def test_model_process_kill_is_scoreable(tmux_session, keystrokes):
         ("pkill -f '['\n", 143, True),
     ],
 )
-async def test_unattributed_batch_failure_stays_infrastructure(tmux_session, keystrokes, return_code, sent):
+async def test_unattributed_batch_failure_stays_infrastructure(
+    tmux_session, keystrokes, return_code, sent
+):
     async def execute(command, **kwargs):
         return ExecResult(
             return_code=return_code,
@@ -135,7 +142,10 @@ async def test_model_session_exit_is_scoreable(tmux_session, keystrokes):
     async def execute(command, **kwargs):
         return ExecResult(
             return_code=0,
-            stdout=(f"{_batch_marker(command, 'SENT')}0\n" f"{_batch_marker(command, 'SESSION_ENDED')}\n"),
+            stdout=(
+                f"{_batch_marker(command, 'SENT')}0\n"
+                f"{_batch_marker(command, 'SESSION_ENDED')}\n"
+            ),
         )
 
     tmux_session.environment.exec = AsyncMock(side_effect=execute)
@@ -156,12 +166,15 @@ async def test_model_session_exit_is_scoreable(tmux_session, keystrokes):
         (["exit", "0", "Enter"], True),
     ],
 )
-async def test_session_loss_is_not_attributed_to_unexecuted_exit(tmux_session, keystrokes, sent):
+async def test_session_loss_is_not_attributed_to_unexecuted_exit(
+    tmux_session, keystrokes, sent
+):
     async def execute(command, **kwargs):
         return ExecResult(
             return_code=0,
             stdout=(
-                (f"{_batch_marker(command, 'SENT')}0\n" if sent else "") + f"{_batch_marker(command, 'SESSION_ENDED')}\n"
+                (f"{_batch_marker(command, 'SENT')}0\n" if sent else "")
+                + f"{_batch_marker(command, 'SESSION_ENDED')}\n"
             ),
         )
 
@@ -189,10 +202,13 @@ _CAPTURE_LIMIT = tmux_session_module._MAX_CAPTURE_BYTES
 _ASCII_CAPTURE_COMMAND = f"yes x | head -c {_CAPTURE_LIMIT * 2}; printf 'END\\n'"
 _MULTIBYTE_LINE_BYTES = 159 * len("🙂".encode("utf-8")) + 1
 _MULTIBYTE_LINE_COUNT = _CAPTURE_LIMIT * 2 // _MULTIBYTE_LINE_BYTES + 2
-while (_MULTIBYTE_LINE_BYTES * _MULTIBYTE_LINE_COUNT + 2 - _CAPTURE_LIMIT) % len("🙂".encode("utf-8")) == 0:
+while (_MULTIBYTE_LINE_BYTES * _MULTIBYTE_LINE_COUNT + 2 - _CAPTURE_LIMIT) % len(
+    "🙂".encode("utf-8")
+) == 0:
     _MULTIBYTE_LINE_COUNT += 1
 _MULTIBYTE_CAPTURE_COMMAND = (
-    "python3 -c 'import sys; " f'sys.stdout.buffer.write((("🙂"*159+"\\n")*{_MULTIBYTE_LINE_COUNT}+"Z\\n").encode())\''
+    "python3 -c 'import sys; "
+    f'sys.stdout.buffer.write((("🙂"*159+"\\n")*{_MULTIBYTE_LINE_COUNT}+"Z\\n").encode())\''
 )
 
 
@@ -226,7 +242,10 @@ tmux() {{
         capture_output=True,
         text=True,
     )
-    if max_transport_bytes is not None and len(result.stdout.encode("utf-8")) > max_transport_bytes:
+    if (
+        max_transport_bytes is not None
+        and len(result.stdout.encode("utf-8")) > max_transport_bytes
+    ):
         raise OverflowError("terminal capture exceeded the transport memory bound")
     return ExecResult(
         return_code=result.returncode,
@@ -236,7 +255,9 @@ tmux() {{
 
 
 def _run_batch_with_has_session_error(command: str, diagnostic: str):
-    fake_tmux = f"tmux() {{ printf '%s\\n' {shlex.quote(diagnostic)} >&2; return 1; }}\n"
+    fake_tmux = (
+        f"tmux() {{ printf '%s\\n' {shlex.quote(diagnostic)} >&2; return 1; }}\n"
+    )
     return subprocess.run(
         ["bash", "-c", f"{fake_tmux}{command}"],
         check=False,
@@ -251,7 +272,10 @@ def test_tmux_send_keys_chunks_long_payload_below_limit(tmux_session):
     commands = tmux_session._tmux_send_keys([long_key, "Enter"])
 
     assert len(commands) >= 2
-    assert all(len(command) <= tmux_session._TMUX_SEND_KEYS_MAX_COMMAND_LENGTH for command in commands)
+    assert all(
+        len(command) <= tmux_session._TMUX_SEND_KEYS_MAX_COMMAND_LENGTH
+        for command in commands
+    )
 
     all_payload = []
     for command in commands:
@@ -292,7 +316,10 @@ def test_tmux_send_keys_chunks_quote_heavy_payload_below_limit(tmux_session):
     commands = tmux_session._tmux_send_keys([quote_heavy_key, "Enter"])
 
     assert len(commands) >= 2
-    assert all(len(command) <= tmux_session._TMUX_SEND_KEYS_MAX_COMMAND_LENGTH for command in commands)
+    assert all(
+        len(command) <= tmux_session._TMUX_SEND_KEYS_MAX_COMMAND_LENGTH
+        for command in commands
+    )
 
     all_payload = []
     for command in commands:
@@ -332,7 +359,9 @@ async def test_send_keys_and_capture_batches_commands_and_observation(tmux_sessi
 
     tmux_session.environment.exec = AsyncMock(side_effect=execute)
 
-    output, session_alive = await tmux_session.send_keys_and_capture([_batch("first\n", 1.0), _batch("second\n", 2.0)])
+    output, session_alive = await tmux_session.send_keys_and_capture(
+        [_batch("first\n", 1.0), _batch("second\n", 2.0)]
+    )
 
     assert session_alive is True
     assert output == "Current Terminal Screen:\n$ second\ntwo\n"
@@ -380,7 +409,9 @@ async def test_send_keys_and_capture_bounds_complete_scrollback_before_transport
 
     tmux_session.environment.exec = AsyncMock(side_effect=execute)
 
-    output, session_alive = await tmux_session.send_keys_and_capture([_batch("echo hi\n")])
+    output, session_alive = await tmux_session.send_keys_and_capture(
+        [_batch("echo hi\n")]
+    )
 
     assert session_alive is True
     assert output == "Current Terminal Screen:\nvisible\n"
@@ -403,7 +434,9 @@ async def test_send_keys_and_capture_preserves_complete_capture_failure(tmux_ses
         ("COMMAND_FAILED", TmuxCommandError),
     ],
 )
-async def test_send_keys_and_capture_classifies_confirmed_failure(tmux_session, marker_suffix, error_type):
+async def test_send_keys_and_capture_classifies_confirmed_failure(
+    tmux_session, marker_suffix, error_type
+):
     async def execute(command, **kwargs):
         return ExecResult(
             return_code=0,
@@ -424,7 +457,9 @@ async def test_send_keys_and_capture_classifies_confirmed_failure(tmux_session, 
         "no sessions",
     ],
 )
-def test_batch_script_requires_absence_diagnostic_for_session_ended(tmux_session, diagnostic):
+def test_batch_script_requires_absence_diagnostic_for_session_ended(
+    tmux_session, diagnostic
+):
     batch_markers = _BatchMarkers.create()
     command = tmux_session._build_batch_script([], batch_markers)
 
@@ -463,7 +498,9 @@ async def test_send_keys_and_capture_treats_post_action_exit_as_normal(tmux_sess
 async def test_send_keys_and_capture_classifies_missing_markers_as_protocol_error(
     tmux_session,
 ):
-    tmux_session.environment.exec = AsyncMock(return_value=ExecResult(return_code=127, stderr="bash: not found"))
+    tmux_session.environment.exec = AsyncMock(
+        return_value=ExecResult(return_code=127, stderr="bash: not found")
+    )
 
     with pytest.raises(TmuxBatchProtocolError):
         await tmux_session.send_keys_and_capture([_batch("echo hi\n")])
@@ -496,7 +533,10 @@ async def test_send_non_blocking_keys_executes_all_chunked_commands(tmux_session
 
     await tmux_session._send_non_blocking_keys(keys=[long_key], min_timeout_sec=0.0)
 
-    executed_commands = [_extract_called_command(call) for call in tmux_session.environment.exec.await_args_list]
+    executed_commands = [
+        _extract_called_command(call)
+        for call in tmux_session.environment.exec.await_args_list
+    ]
     assert executed_commands == expected_commands
 
 
@@ -545,7 +585,10 @@ async def test_send_blocking_keys_waits_after_chunked_send(tmux_session):
         max_timeout_sec=1.0,
     )
 
-    executed_commands = [_extract_called_command(call) for call in tmux_session.environment.exec.await_args_list]
+    executed_commands = [
+        _extract_called_command(call)
+        for call in tmux_session.environment.exec.await_args_list
+    ]
     assert executed_commands == [*expected_commands, wait_command]
 
 
@@ -590,11 +633,15 @@ async def test_send_non_blocking_keys_error_message_includes_diagnostics(tmux_se
     """When a chunk fails, the RuntimeError message must include the
     failing command, return_code, stderr and stdout to aid debugging."""
     tmux_session.environment.exec = AsyncMock(
-        return_value=ExecResult(return_code=42, stderr="boom-stderr", stdout="boom-stdout"),
+        return_value=ExecResult(
+            return_code=42, stderr="boom-stderr", stdout="boom-stdout"
+        ),
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        await tmux_session._send_non_blocking_keys(keys=["echo hi"], min_timeout_sec=0.0)
+        await tmux_session._send_non_blocking_keys(
+            keys=["echo hi"], min_timeout_sec=0.0
+        )
 
     message = str(exc_info.value)
     assert "failed to send non-blocking keys" in message
@@ -608,7 +655,9 @@ async def test_send_blocking_keys_error_message_includes_diagnostics(tmux_sessio
     """When a chunk fails, the RuntimeError message must include the
     failing command, return_code, stderr and stdout to aid debugging."""
     tmux_session.environment.exec = AsyncMock(
-        return_value=ExecResult(return_code=7, stderr="bad-stderr", stdout="bad-stdout"),
+        return_value=ExecResult(
+            return_code=7, stderr="bad-stderr", stdout="bad-stdout"
+        ),
     )
 
     with pytest.raises(RuntimeError) as exc_info:

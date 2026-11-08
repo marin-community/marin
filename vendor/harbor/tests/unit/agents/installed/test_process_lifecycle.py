@@ -30,10 +30,14 @@ from shellbox.machine import MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Installed harnesses execute on Linux")
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Installed harnesses execute on Linux"
+)
 @pytest.mark.parametrize("agent_type", [Pi, MiniSweAgent, Codex, OpenCode])
 @pytest.mark.parametrize("ending", ["complete", "timeout", "cancel"])
-async def test_installed_harness_stops_detached_tools_before_verification(tmp_path, monkeypatch, agent_type, ending):
+async def test_installed_harness_stops_detached_tools_before_verification(
+    tmp_path, monkeypatch, agent_type, ending
+):
     monkeypatch.setenv("OPENAI_API_KEY", "fixture")
     monkeypatch.setenv("MSWEA_API_KEY", "fixture")
     monkeypatch.delenv("CODEX_AUTH_JSON_PATH", raising=False)
@@ -118,10 +122,14 @@ print('READY', flush=True)
         await environment.machine.close()
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper and real tmux contract")
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux subreaper and real tmux contract"
+)
 @pytest.mark.parametrize("agent_type", [Terminus2, TerminusKira])
 @pytest.mark.parametrize("ending", ["complete", "timeout", "cancel"])
-async def test_terminus_phase_preserves_background_tools_then_reaps_them(tmp_path, monkeypatch, agent_type, ending):
+async def test_terminus_phase_preserves_background_tools_then_reaps_them(
+    tmp_path, monkeypatch, agent_type, ending
+):
     if shutil.which("tmux") is None:
         pytest.skip("tmux is not installed")
     ready, release = asyncio.Event(), asyncio.Event()
@@ -153,7 +161,12 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(tmp_pat
                 payload = {
                     "analysis": "run",
                     "plan": "run",
-                    "commands": [{"keystrokes": f"python3 {shlex.quote(str(tool))}\n", "duration": 0.1}],
+                    "commands": [
+                        {
+                            "keystrokes": f"python3 {shlex.quote(str(tool))}\n",
+                            "duration": 0.1,
+                        }
+                    ],
                     "task_complete": False,
                 }
                 name = "execute_commands"
@@ -163,7 +176,12 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(tmp_pat
                         await asyncio.sleep(0)
                 ready.set()
                 await release.wait()
-                payload = {"analysis": "done", "plan": "done", "commands": [], "task_complete": True}
+                payload = {
+                    "analysis": "done",
+                    "plan": "done",
+                    "commands": [],
+                    "task_complete": True,
+                }
                 name = "task_complete"
             if agent_type is TerminusKira:
                 return LLMResponse(
@@ -172,7 +190,10 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(tmp_pat
                         {
                             "id": uuid.uuid4().hex,
                             "type": "function",
-                            "function": {"name": name, "arguments": json.dumps(payload)},
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(payload),
+                            },
                         }
                     ],
                 )
@@ -180,14 +201,19 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(tmp_pat
 
     monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.OpenAILLM", Model)
     environment = object.__new__(DaytonaEnvironment)
-    environment.machine = ProcessMachine(tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace"))
+    environment.machine = ProcessMachine(
+        tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace")
+    )
     environment.machine.path("/logs/agent").mkdir(parents=True)
     environment.session_id = "phase"
     environment.default_user = None
     environment.agent_timeout_sec = None
     environment._persistent_env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
     agent = agent_type(
-        logs_dir=tmp_path / "logs", model_name="openai/test", max_turns=4, tokenizer_encoding="cl100k_base"
+        logs_dir=tmp_path / "logs",
+        model_name="openai/test",
+        max_turns=4,
+        tokenizer_encoding="cl100k_base",
     )
     await agent.setup(environment)
     trial = object.__new__(SingleStepTrial)
@@ -218,7 +244,9 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(tmp_pat
     try:
         waiting = asyncio.create_task(ready.wait())
         try:
-            done, _ = await asyncio.wait({waiting, pending}, timeout=10, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                {waiting, pending}, timeout=10, return_when=asyncio.FIRST_COMPLETED
+            )
             if pending in done:
                 await pending
             assert waiting in done, "The agent did not reach its second model call"

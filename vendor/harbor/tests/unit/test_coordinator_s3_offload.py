@@ -73,7 +73,9 @@ def _configure_trial_for_init_result(trial: SingleStepTrial, tmp_path: Path) -> 
 
 
 @pytest.mark.unit
-async def test_finalize_writes_result_json_off_event_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_finalize_writes_result_json_off_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     loop_thread = threading.get_ident()
     artifact_writer = ArtifactWriter()
     monkeypatch.setattr(trial_module, "get_artifact_writer", lambda: artifact_writer)
@@ -81,7 +83,9 @@ async def test_finalize_writes_result_json_off_event_loop(tmp_path: Path, monkey
 
     trial = object.__new__(SingleStepTrial)
     trial._attempt_index = None
-    trial.config = TrialConfig(task=TaskConfig(path=tmp_path), agent=AgentConfig(name="pi"))
+    trial.config = TrialConfig(
+        task=TaskConfig(path=tmp_path), agent=AgentConfig(name="pi")
+    )
     trial._artifact_persistence_failure = None
     trial._pending_cleanup_tasks = set()
     trial._is_agent_environment_stopped = True
@@ -147,7 +151,9 @@ async def test_init_result_skips_remote_mkdir_and_offloads_config_write(
 
 
 @pytest.mark.unit
-async def test_init_result_mkdirs_on_local_trials_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_init_result_mkdirs_on_local_trials_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(trial_module, "get_artifact_writer", lambda: ArtifactWriter())
     writer = _ThreadRecordingWriter(tmp_path / "config.json")
     trial_dir = mock.MagicMock()
@@ -201,7 +207,9 @@ async def test_download_artifacts_writes_manifest_off_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     artifact_writer = ArtifactWriter()
-    monkeypatch.setattr(artifact_handler_module, "get_artifact_writer", lambda: artifact_writer)
+    monkeypatch.setattr(
+        artifact_handler_module, "get_artifact_writer", lambda: artifact_writer
+    )
 
     handler = ArtifactHandler(artifacts=[], logger=mock.MagicMock())
 

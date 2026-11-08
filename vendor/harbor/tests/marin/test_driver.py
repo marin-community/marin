@@ -15,12 +15,13 @@ from harbor.environments.model_relay import ModelRelay
 from harbor.models.task.task import Task
 from harbor.utils.env import resolve_env_vars
 from harbor_config import JobConfig
-from harbor_config.models.trial.config import TaskConfig, TrialConfig
+from harbor_config.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from marin.evaluation.harbor.trial_driver import (
     RuntimeOverlay,
     _model_authentication,
     _model_environment,
     _preflight_one,
+    _validate_environment,
     effective_job_config,
 )
 from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
@@ -36,7 +37,7 @@ def test_checked_in_policies_select_supported_agents():
     assert paths
     for path in paths:
         config = JobConfig.model_validate(yaml.safe_load(path.read_text()))
-        assert config.user_agent is None, path
+        _validate_environment(config)
         for agent in config.agents:
             AgentFactory.get_agent_class_from_config(agent)
 
@@ -160,9 +161,7 @@ def test_host_agent_receives_live_capability_while_saved_config_redacts_it(
     assert "private-capability" not in config.model_dump_json()
 
 
-@pytest.mark.parametrize(
-    "agent_name", ["pi", "opencode", "mini-swe-agent"]
-)
+@pytest.mark.parametrize("agent_name", ["pi", "opencode", "mini-swe-agent"])
 def test_installed_candidate_cannot_receive_host_endpoint_or_credentials(
     policy, overlay, agent_name
 ):
@@ -203,22 +202,29 @@ def test_installed_candidate_cannot_receive_host_endpoint_or_credentials(
 
 
 @pytest.mark.parametrize(
-    ("name", "import_path", "selected_class", "expected_endpoint"),
+    ("import_path", "selected_class", "expected_endpoint"),
     [
         (
-            "terminus-2",
             "harbor.agents.installed.pi:Pi",
             "Pi",
             "http://127.0.0.1:8788/v1",
         ),
-        ("pi", "harbor.agents.terminus_2.terminus_2:Terminus2", "Terminus2", _CANDIDATE_ENDPOINT),
+        (
+            "harbor.agents.terminus_2.terminus_2:Terminus2",
+            "Terminus2",
+            _CANDIDATE_ENDPOINT,
+        ),
     ],
 )
-def test_candidate_routing_agrees_with_factory_precedence(
-    tmp_path, policy, overlay, name, import_path, selected_class, expected_endpoint
+def test_candidate_routing_uses_agent_selected_by_import_path(
+    tmp_path, policy, overlay, import_path, selected_class, expected_endpoint
 ):
-    candidate = policy.agents[0].model_copy(
-        update={"name": name, "import_path": import_path}
+    candidate = AgentConfig.model_validate(
+        {
+            **policy.agents[0].model_dump(mode="python"),
+            "name": None,
+            "import_path": import_path,
+        }
     )
     config = effective_job_config(
         policy.model_copy(update={"agents": [candidate]}), overlay
@@ -228,6 +234,10 @@ def test_candidate_routing_agrees_with_factory_precedence(
     )
     assert type(agent).__name__ == selected_class
     assert config.agents[0].kwargs["api_base"] == expected_endpoint
+    if selected_class == "Terminus2":
+        assert config.agents[0].kwargs["llm_call_kwargs"]["max_tokens"] == (
+            config.agents[0].kwargs["model_info"]["max_output_tokens"]
+        )
 
 
 def test_host_authentication_uses_owned_snapshot_and_rejects_endpoint_credential_conflict(
@@ -296,6 +306,7 @@ async def test_candidate_transport_keeps_the_policy_openai_key_for_its_judge(
         _CANDIDATE_ENDPOINT + "/chat/completions": "Bearer candidate-private",
         _JUDGE_ENDPOINT + "/chat/completions": "Bearer judge-private",
     }
+
 
 def test_tau2_compose_and_verifier_models_use_hosted_judge_without_parent_secrets(
     prepared_task, policy, overlay
@@ -447,6 +458,7 @@ async def test_verifier_roles_reach_fixed_provider_with_host_authentication(
             )
             assert response.choices[0].message.content == role
     assert provider_models == ["judge-alias"] * len(roles)
+
 
 @pytest.mark.parametrize(
     ("backend", "location"),

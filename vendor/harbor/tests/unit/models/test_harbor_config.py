@@ -21,14 +21,19 @@ from harbor_config.models.trial.config import TrialConfig
 from pydantic import ValidationError
 
 
-@pytest.mark.parametrize("route", ["private-capability", "cluster=marin/private-capability"])
+@pytest.mark.parametrize(
+    "route", ["private-capability", "cluster=marin/private-capability"]
+)
 def test_persisted_configs_redact_capabilities_without_changing_live_routes(route):
     endpoint = f"https://iris.example/proxy/t/{route}/serve.model/v1"
     config = JobConfig.model_validate(
         {
             "agents": [{"name": "terminus-2", "kwargs": {"api_base": endpoint}}],
             "environment": {
-                "kwargs": {"candidate_model_endpoint": endpoint, "nested": [{"url": endpoint}]},
+                "kwargs": {
+                    "candidate_model_endpoint": endpoint,
+                    "nested": [{"url": endpoint}],
+                },
                 "env": {"OPENAI_BASE_URL": endpoint},
             },
             "verifier": {"env": {"OPENAI_BASE_URL": endpoint}},
@@ -43,7 +48,9 @@ def test_persisted_configs_redact_capabilities_without_changing_live_routes(rout
     assert persisted["environment"]["kwargs"]["nested"] == [{"url": expected}]
     assert persisted["verifier"]["env"]["OPENAI_BASE_URL"] == expected
 
-    runtime_copy = JobConfig.model_validate({"agents": [{"name": "pi"}], **(config.model_dump(mode="python"))})
+    runtime_copy = JobConfig.model_validate(
+        {"agents": [{"name": "pi"}], **(config.model_dump(mode="python"))}
+    )
     assert runtime_copy.agents[0].kwargs["api_base"] == endpoint
     assert runtime_copy.environment.kwargs["candidate_model_endpoint"] == endpoint
     assert runtime_copy.environment.env["OPENAI_BASE_URL"] == endpoint
@@ -98,7 +105,9 @@ datasets:
     assert canonical_json(full_harbor) == canonical_json(config_only)
     assert config_only.n_concurrent_trials == 16
     assert config_only.retry.max_retries == 6
-    assert config_only.datasets[0].registry_url == "https://example.invalid/registry.json"
+    assert (
+        config_only.datasets[0].registry_url == "https://example.invalid/registry.json"
+    )
     assert config_only.datasets[0].registry_path is not None
 
 
@@ -110,7 +119,9 @@ def test_config_api_matches_harbor_validation_errors() -> None:
     with pytest.raises(ValidationError) as config_error:
         load_config_document(invalid_document)
 
-    assert json.loads(harbor_error.value.json()) == json.loads(config_error.value.json())
+    assert json.loads(harbor_error.value.json()) == json.loads(
+        config_error.value.json()
+    )
 
 
 def test_config_path_matches_harbor_cli_input_rules(tmp_path) -> None:
@@ -129,7 +140,9 @@ def test_config_path_matches_harbor_cli_input_rules(tmp_path) -> None:
 def test_overlay_revalidates_and_canonicalizes_nested_values() -> None:
     config = load_config_document(
         {
-            "agents": [{"name": "opencode", "kwargs": {"compaction": {"enabled": True}}}],
+            "agents": [
+                {"name": "opencode", "kwargs": {"compaction": {"enabled": True}}}
+            ],
             "environment": {"type": "daytona", "override_cpus": 4},
         }
     )

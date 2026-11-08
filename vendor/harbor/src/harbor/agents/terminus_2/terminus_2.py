@@ -147,7 +147,9 @@ _OVERLONG_SUMMARY_MARKER = (
     "OVERLONG MODEL SUMMARIZATION WAS TRUNCATED. PLEASE RESUME YOUR WORK FROM "
     "THE PARTIAL HANDOFF AND CONVERSATION EXCERPT ABOVE."
 )
-_SUMMARY_FAILURE_MARKER = "MODEL SUMMARIZATION FAILED. PLEASE RESUME FROM THE BOUNDED TASK STATE ABOVE."
+_SUMMARY_FAILURE_MARKER = (
+    "MODEL SUMMARIZATION FAILED. PLEASE RESUME FROM THE BOUNDED TASK STATE ABOVE."
+)
 
 
 @dataclass(frozen=True)
@@ -182,7 +184,9 @@ def _trajectory_step_count(message_history_length: int) -> int:
     return 1 + (message_history_length - 1) // MESSAGES_PER_TURN
 
 
-def _accepted_trajectory_step_count(*, accepted_history_length: int, parent_history_length: int) -> int:
+def _accepted_trajectory_step_count(
+    *, accepted_history_length: int, parent_history_length: int
+) -> int:
     """Map accepted parent chat and one-step-per-message suffixes to steps."""
     accepted_parent_length = min(accepted_history_length, parent_history_length)
     accepted_suffix_length = max(0, accepted_history_length - parent_history_length)
@@ -201,11 +205,13 @@ def _decode_extra_body(extra_body: str) -> dict[str, Any]:
         decoded = json.loads(extra_body)
     except json.JSONDecodeError as e:
         raise ValueError(
-            "extra_body must be a dict or a JSON object string, " f"got undecodable string: {extra_body!r}"
+            "extra_body must be a dict or a JSON object string, "
+            f"got undecodable string: {extra_body!r}"
         ) from e
     if not isinstance(decoded, dict):
         raise ValueError(
-            "extra_body must be a dict or a JSON object string, " f"decoded {extra_body!r} to {type(decoded).__name__}"
+            "extra_body must be a dict or a JSON object string, "
+            f"decoded {extra_body!r} to {type(decoded).__name__}"
         )
     return decoded
 
@@ -242,7 +248,9 @@ def _enqueue_episode_text(path: Path | UPath, text: str) -> None:
     object-store upload for remote logs_dir) goes through the background
     artifact writer instead of the caller thread.
     """
-    get_artifact_writer().submit_optional(path, lambda: text, description=f"terminus-2 episode log {path.name}")
+    get_artifact_writer().submit_optional(
+        path, lambda: text, description=f"terminus-2 episode log {path.name}"
+    )
 
 
 @dataclass
@@ -350,7 +358,9 @@ class Terminus2(BaseAgent):
             ValueError: If llm_backend is not a recognized backend.
         """
         # Normalize enum to string value for matching
-        backend_value = llm_backend.value if isinstance(llm_backend, LLMBackend) else llm_backend
+        backend_value = (
+            llm_backend.value if isinstance(llm_backend, LLMBackend) else llm_backend
+        )
         constructor_kwargs = dict(llm_kwargs or {})
         if temperature is not None:
             constructor_kwargs["temperature"] = temperature
@@ -381,7 +391,8 @@ class Terminus2(BaseAgent):
                 )
             case _:
                 raise ValueError(
-                    f"Unknown llm_backend: {llm_backend!r}. " f"Supported backends: {[b.value for b in LLMBackend]}"
+                    f"Unknown llm_backend: {llm_backend!r}. "
+                    f"Supported backends: {[b.value for b in LLMBackend]}"
                 )
 
     def __init__(
@@ -392,7 +403,12 @@ class Terminus2(BaseAgent):
         parser_name: str = "json",
         api_base: str | None = None,
         temperature: float | None = None,
-        reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
+        reasoning_effort: (
+            Literal[
+                "none", "minimal", "low", "medium", "high", "xhigh", "max", "default"
+            ]
+            | None
+        ) = None,
         collect_rollout_details: bool = False,
         session_id: str | None = None,
         enable_summarize: bool = True,
@@ -518,7 +534,11 @@ class Terminus2(BaseAgent):
         self._parser_name = parser_name
         self._collect_rollout_details = collect_rollout_details
         self._reasoning_effort = reasoning_effort
-        self._token_encoding = tiktoken.get_encoding(tokenizer_encoding) if tokenizer_encoding is not None else None
+        self._token_encoding = (
+            tiktoken.get_encoding(tokenizer_encoding)
+            if tokenizer_encoding is not None
+            else None
+        )
         resolved_model_info = self._resolve_model_info(self.model_alias, model_info)
 
         self._llm = self._init_llm(
@@ -575,8 +595,13 @@ class Terminus2(BaseAgent):
         self._session_id = session_id if session_id else str(uuid.uuid4())
         self._trajectory_steps: list[Step] = []
         self._enable_episode_logging = enable_episode_logging
-        if not math.isfinite(batch_exec_timeout_margin_sec) or batch_exec_timeout_margin_sec <= 0:
-            raise ValueError("batch_exec_timeout_margin_sec must be positive and finite")
+        if (
+            not math.isfinite(batch_exec_timeout_margin_sec)
+            or batch_exec_timeout_margin_sec <= 0
+        ):
+            raise ValueError(
+                "batch_exec_timeout_margin_sec must be positive and finite"
+            )
         self._batch_turn_execs = batch_turn_execs
         self._batch_exec_timeout_margin_sec = batch_exec_timeout_margin_sec
         self._session_alive_hint: bool | None = None
@@ -592,7 +617,9 @@ class Terminus2(BaseAgent):
             merged_extra_body.update(extra_body)
             self._llm_call_kwargs["extra_body"] = merged_extra_body
 
-        self._summarization_count: int = 0  # Track number of summarization subagents created
+        self._summarization_count: int = (
+            0  # Track number of summarization subagents created
+        )
         self._continuation_segments_persisted: int = (
             0  # Completed trajectory boundary dumps (canonical index of the
             # current in-memory segment); diverges from _summarization_count
@@ -601,19 +628,29 @@ class Terminus2(BaseAgent):
         self._pending_subagent_refs: list[SubagentTrajectoryRef] | None = (
             None  # Track subagent refs to include in next step
         )
-        self._pending_handoff_prompt: str | None = None  # Track handoff prompt to include as user step
+        self._pending_handoff_prompt: str | None = (
+            None  # Track handoff prompt to include as user step
+        )
         self._subagent_metrics = SubagentMetrics()  # Track subagent metrics separately
-        self._subagent_rollout_details: list[RolloutDetail] = []  # Track rollout details for each subagent
-        self._enable_summarize = enable_summarize  # Toggle for proactive and context limit summarization
+        self._subagent_rollout_details: list[RolloutDetail] = (
+            []
+        )  # Track rollout details for each subagent
+        self._enable_summarize = (
+            enable_summarize  # Toggle for proactive and context limit summarization
+        )
         self._proactive_summarization_threshold = proactive_summarization_threshold
         self._tmux_pane_width = tmux_pane_width
         self._tmux_pane_height = tmux_pane_height
 
         # Trajectory configuration
         self._trajectory_config = trajectory_config or {}
-        self._save_raw_content_in_trajectory = self._trajectory_config.get("raw_content", False)
+        self._save_raw_content_in_trajectory = self._trajectory_config.get(
+            "raw_content", False
+        )
         self._linear_history = self._trajectory_config.get("linear_history", False)
-        self._trajectory_dump_cadence = _resolve_trajectory_dump_cadence(trajectory_dump_cadence)
+        self._trajectory_dump_cadence = _resolve_trajectory_dump_cadence(
+            trajectory_dump_cadence
+        )
         # Optional: include full chat messages in TrialResult metadata (can be large)
         self._store_all_messages = store_all_messages
         self._interleaved_thinking = interleaved_thinking
@@ -630,7 +667,9 @@ class Terminus2(BaseAgent):
         # outcomes even when the trial still scores.
         self._stop_reason: AgentStopReason | None = None
 
-    def _resolve_model_info(self, model_name: str | None, provided_model_info: dict | None) -> dict | None:
+    def _resolve_model_info(
+        self, model_name: str | None, provided_model_info: dict | None
+    ) -> dict | None:
         if provided_model_info:
             return provided_model_info
         if model_name and "hosted_vllm" in model_name:
@@ -673,7 +712,9 @@ class Terminus2(BaseAgent):
         elif self._parser_name == "xml":
             return TerminusXMLPlainParser()
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _get_prompt_template_path(self) -> Path:
         """Return the path to the prompt template for this format."""
@@ -682,7 +723,9 @@ class Terminus2(BaseAgent):
         elif self._parser_name == "xml":
             return Path(__file__).parent / "templates" / "terminus-xml-plain.txt"
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _get_timeout_template_path(self) -> Path:
         """Return the path to the timeout template for this format."""
@@ -722,7 +765,8 @@ class Terminus2(BaseAgent):
 
         # List subdirectories containing SKILL.md in the remote environment
         result = await environment.exec(
-            f"find {shlex.quote(self.skills_dir)} -mindepth 2 -maxdepth 2" " -name SKILL.md -type f | sort",
+            f"find {shlex.quote(self.skills_dir)} -mindepth 2 -maxdepth 2"
+            " -name SKILL.md -type f | sort",
             timeout_sec=10,
         )
 
@@ -733,7 +777,9 @@ class Terminus2(BaseAgent):
         entries: list[tuple[str, str, str]] = []  # (name, description, location)
 
         for skill_md_path in skill_md_paths:
-            cat_result = await environment.exec(f"cat {shlex.quote(skill_md_path)}", timeout_sec=10)
+            cat_result = await environment.exec(
+                f"cat {shlex.quote(skill_md_path)}", timeout_sec=10
+            )
             if cat_result.return_code != 0 or not cat_result.stdout:
                 continue
             fm = self._parse_skill_frontmatter(cat_result.stdout)
@@ -766,7 +812,9 @@ class Terminus2(BaseAgent):
         elif self._parser_name == "xml":
             return "response"
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
     def _get_completion_confirmation_message(self, terminal_output: str) -> str:
         """Return the format-specific task completion confirmation message."""
@@ -787,9 +835,13 @@ class Terminus2(BaseAgent):
                 "<task_complete>true</task_complete> again."
             )
         else:
-            raise ValueError(f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'.")
+            raise ValueError(
+                f"Unknown parser_name: {self._parser_name}. Use 'json' or 'xml'."
+            )
 
-    def _setup_episode_logging(self, logging_dir: Path | UPath | None, episode: int) -> EpisodeLoggingPaths:
+    def _setup_episode_logging(
+        self, logging_dir: Path | UPath | None, episode: int
+    ) -> EpisodeLoggingPaths:
         # Default OFF: no per-turn episode-N/{debug,prompt,response} writes. This
         # returns all-None so `_query_llm` skips prompt/response writes AND the
         # per-call raw request+response `debug.json` is never written (OpenAILLM.call
@@ -856,9 +908,13 @@ class Terminus2(BaseAgent):
                         raise ContextManagementInfrastructureError(
                             f"Could not count prompt tokens through /tokenize; local fallback failed: {fallback_error}"
                         ) from error
-                raise ContextManagementInfrastructureError("Could not count prompt tokens through /tokenize") from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
             except Exception as error:
-                raise ContextManagementInfrastructureError("Could not count prompt tokens through /tokenize") from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
 
         return self._token_counter_fallback(chat, extra_messages)
 
@@ -887,7 +943,9 @@ class Terminus2(BaseAgent):
             if model_for_request.startswith(prefix):
                 model_for_request = model_for_request[len(prefix) :]
                 break
-        messages = [m.model_dump() if hasattr(m, "model_dump") else m for m in chat.messages]
+        messages = [
+            m.model_dump() if hasattr(m, "model_dump") else m for m in chat.messages
+        ]
         if extra_messages:
             messages.extend(extra_messages)
         return (
@@ -908,13 +966,16 @@ class Terminus2(BaseAgent):
         encoding = self._token_encoding
         if encoding is None:
             try:
-                encoding = tiktoken.encoding_for_model(self.model_alias.split("/", 1)[-1])
+                encoding = tiktoken.encoding_for_model(
+                    self.model_alias.split("/", 1)[-1]
+                )
             except KeyError:
                 raise ValueError(
                     f"Configure tokenizer_encoding for {self.model_alias!r} when the endpoint has no /tokenize route"
                 ) from None
         return OPENAI_CHAT_REPLY_PRIMING_TOKENS + sum(
-            OPENAI_CHAT_TOKENS_PER_MESSAGE + sum(len(encoding.encode(str(value))) for value in message.values())
+            OPENAI_CHAT_TOKENS_PER_MESSAGE
+            + sum(len(encoding.encode(str(value))) for value in message.values())
             for message in messages
         )
 
@@ -959,16 +1020,24 @@ class Terminus2(BaseAgent):
             except httpx.HTTPStatusError as error:
                 if error.response.status_code == 404:
                     try:
-                        return await asyncio.to_thread(self._token_counter_fallback, chat, extra_messages)
+                        return await asyncio.to_thread(
+                            self._token_counter_fallback, chat, extra_messages
+                        )
                     except Exception as fallback_error:
                         raise ContextManagementInfrastructureError(
                             f"Could not count prompt tokens through /tokenize; local fallback failed: {fallback_error}"
                         ) from error
-                raise ContextManagementInfrastructureError("Could not count prompt tokens through /tokenize") from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
             except Exception as error:
-                raise ContextManagementInfrastructureError("Could not count prompt tokens through /tokenize") from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
 
-        return await asyncio.to_thread(self._token_counter_fallback, chat, extra_messages)
+        return await asyncio.to_thread(
+            self._token_counter_fallback, chat, extra_messages
+        )
 
     def _limit_output_length(self, output: str, max_bytes: int = 10000) -> str:
         """
@@ -995,7 +1064,11 @@ class Terminus2(BaseAgent):
         last_portion = output_bytes[-portion_size:].decode("utf-8", errors="ignore")
 
         # Calculate omitted bytes
-        omitted_bytes = len(output_bytes) - len(first_portion.encode("utf-8")) - len(last_portion.encode("utf-8"))
+        omitted_bytes = (
+            len(output_bytes)
+            - len(first_portion.encode("utf-8"))
+            - len(last_portion.encode("utf-8"))
+        )
 
         return (
             f"{first_portion}\n[... output limited to {max_bytes} bytes; "
@@ -1029,9 +1102,12 @@ class Terminus2(BaseAgent):
             chat._messages = trimmed_messages
 
         chat.reset_response_chain()
-        free_tokens = context_limit - self._count_total_tokens(chat, extra_request_messages)
+        free_tokens = context_limit - self._count_total_tokens(
+            chat, extra_request_messages
+        )
         self.logger.debug(
-            f"Unwound messages. Remaining messages: {len(chat.messages)}, " f"Free tokens: approximately {free_tokens}"
+            f"Unwound messages. Remaining messages: {len(chat.messages)}, "
+            f"Free tokens: approximately {free_tokens}"
         )
 
     def _collect_subagent_rollout_detail(self, response: LLMResponse) -> None:
@@ -1051,7 +1127,9 @@ class Terminus2(BaseAgent):
         if response.logprobs is not None:
             rollout_detail["logprobs"] = [response.logprobs]
         if response.extra is not None:
-            rollout_detail["extra"] = {key: [value] for key, value in response.extra.items()}
+            rollout_detail["extra"] = {
+                key: [value] for key, value in response.extra.items()
+            }
 
         if rollout_detail:
             self._subagent_rollout_details.append(rollout_detail)
@@ -1107,7 +1185,11 @@ class Terminus2(BaseAgent):
         max_tokens: int,
     ) -> ContextManagedResponse:
         """Dispatch one context-managed subagent request and record its duration."""
-        call_kwargs = {key: value for key, value in self._llm_call_kwargs.items() if key != "max_tokens"}
+        call_kwargs = {
+            key: value
+            for key, value in self._llm_call_kwargs.items()
+            if key != "max_tokens"
+        }
         start_time = time.time()
         managed_response = await self._context_window_manager.call(
             prompt=prompt,
@@ -1226,9 +1308,13 @@ class Terminus2(BaseAgent):
         summary_output_exhausted = False
         try:
             output_limit = self._llm.get_model_output_limit()
-            max_reserve = _MAX_RESERVED_SUMMARY_OUTPUT if output_limit is None else output_limit
+            max_reserve = (
+                _MAX_RESERVED_SUMMARY_OUTPUT if output_limit is None else output_limit
+            )
             if max_reserve < 1:
-                raise ContextManagementInfrastructureError("Context recovery requires a positive output budget.")
+                raise ContextManagementInfrastructureError(
+                    "Context recovery requires a positive output budget."
+                )
             reserve = min(RESERVED_SUMMARY_OUTPUT, max_reserve)
             while True:
                 chat._messages = list(original_messages)
@@ -1243,12 +1329,17 @@ class Terminus2(BaseAgent):
                     if self._handoff_has_required_gap(chat, handoff):
                         return handoff, refs
                     raise ContextLengthExceededError(
-                        "The complete generated handoff does not leave enough " "context for the next model response."
+                        "The complete generated handoff does not leave enough "
+                        "context for the next model response."
                     )
                 except OutputLengthExceededError as error:
                     next_reserve = min(reserve * 2, max_reserve)
                     if next_reserve == reserve:
-                        failed_summary = error.partial_response.content or error.partial_response.reasoning_content or ""
+                        failed_summary = (
+                            error.partial_response.content
+                            or error.partial_response.reasoning_content
+                            or ""
+                        )
                         summary_output_exhausted = True
                         raise
                     reserve = next_reserve
@@ -1277,12 +1368,17 @@ class Terminus2(BaseAgent):
                 _MAX_RESERVED_SUMMARY_OUTPUT,
             )
             if short_output_tokens < 1:
-                raise ContextManagementInfrastructureError("Short context recovery requires a positive output budget.")
+                raise ContextManagementInfrastructureError(
+                    "Short context recovery requires a positive output budget."
+                )
             short_result = await self._run_subagent(
                 prompt=short_prompt,
                 message_history=[],
                 steps=[],
-                session_id=(f"{self._session_id}-summarization-" f"{self._summarization_count}-short"),
+                session_id=(
+                    f"{self._session_id}-summarization-"
+                    f"{self._summarization_count}-short"
+                ),
                 agent_name="terminus-2-summarization-short",
                 filename_suffix="short",
                 summary_text="Short context recovery from bounded task state",
@@ -1290,7 +1386,10 @@ class Terminus2(BaseAgent):
                 subagent_name_for_logging="short summary subagent",
             )
             short_ref = short_result.trajectory_ref
-            source = f"{progress.recovery_state}\n\nSHORT HANDOFF SUMMARY:\n" f"{short_result.response.content}"
+            source = (
+                f"{progress.recovery_state}\n\nSHORT HANDOFF SUMMARY:\n"
+                f"{short_result.response.content}"
+            )
         except Exception as error:
             self.logger.warning(
                 "Short context summary failed; using deterministic recovery: %s: %s",
@@ -1304,8 +1403,14 @@ class Terminus2(BaseAgent):
         if failed_summary:
             source += f"\n\nPARTIAL SUMMARY:\n{failed_summary}"
 
-        source += "\n\nCONVERSATION EXCERPT:\n" + self._conversation_excerpt_text(original_messages)
-        marker = _OVERLONG_SUMMARY_MARKER if summary_output_exhausted else _SUMMARY_FAILURE_MARKER
+        source += "\n\nCONVERSATION EXCERPT:\n" + self._conversation_excerpt_text(
+            original_messages
+        )
+        marker = (
+            _OVERLONG_SUMMARY_MARKER
+            if summary_output_exhausted
+            else _SUMMARY_FAILURE_MARKER
+        )
         handoff = self._bounded_recovery_handoff(
             chat=chat,
             original_messages=original_messages,
@@ -1335,18 +1440,26 @@ class Terminus2(BaseAgent):
         sections = [
             (
                 "ORIGINAL TASK",
-                self._limit_output_length(original_instruction, max_bytes=_RECOVERY_STATE_MAX_BYTES),
+                self._limit_output_length(
+                    original_instruction, max_bytes=_RECOVERY_STATE_MAX_BYTES
+                ),
             ),
             (
                 "PENDING OBSERVATION",
-                self._limit_output_length(pending_prompt, max_bytes=_RECOVERY_STATE_MAX_BYTES),
+                self._limit_output_length(
+                    pending_prompt, max_bytes=_RECOVERY_STATE_MAX_BYTES
+                ),
             ),
             (
                 "CURRENT TERMINAL SCREEN",
-                self._limit_output_length(terminal_screen, max_bytes=_RECOVERY_STATE_MAX_BYTES),
+                self._limit_output_length(
+                    terminal_screen, max_bytes=_RECOVERY_STATE_MAX_BYTES
+                ),
             ),
         ]
-        return "\n\n".join(f"{heading}:\n{content}" for heading, content in sections if content)
+        return "\n\n".join(
+            f"{heading}:\n{content}" for heading, content in sections if content
+        )
 
     def _bounded_recovery_handoff(
         self,
@@ -1372,7 +1485,9 @@ class Terminus2(BaseAgent):
         while max_bytes >= _OVERLONG_SUMMARY_MIN_BYTES:
             excerpt = self._limit_output_length(source, max_bytes=max_bytes)
             handoff = f"{excerpt}\n\n{marker}"
-            used_tokens = self._count_total_tokens(chat, extra_messages=[{"role": "user", "content": handoff}])
+            used_tokens = self._count_total_tokens(
+                chat, extra_messages=[{"role": "user", "content": handoff}]
+            )
             if context_limit - used_tokens >= required_gap:
                 self.logger.warning(
                     "Continuing with a %s-byte bounded context-recovery handoff",
@@ -1391,7 +1506,9 @@ class Terminus2(BaseAgent):
             max(RESERVED_SUMMARY_OUTPUT, self._proactive_summarization_threshold),
             max(1, context_limit // 2),
         )
-        used_tokens = self._count_total_tokens(chat, extra_messages=[{"role": "user", "content": handoff}])
+        used_tokens = self._count_total_tokens(
+            chat, extra_messages=[{"role": "user", "content": handoff}]
+        )
         return context_limit - used_tokens >= required_gap
 
     def _conversation_excerpt_text(self, messages: list[dict[str, Any]]) -> str:
@@ -1482,7 +1599,8 @@ Be comprehensive and detailed. The next agent needs to understand everything
             that has happened so far in order to continue."""
         if progress is not None and progress.recovery_state:
             summary_prompt += (
-                "\n\nThe following state was captured before any history was " f"trimmed:\n{progress.recovery_state}"
+                "\n\nThe following state was captured before any history was "
+                f"trimmed:\n{progress.recovery_state}"
             )
         summary_overhead_messages = [{"role": "user", "content": summary_prompt}]
 
@@ -1503,7 +1621,9 @@ Be comprehensive and detailed. The next agent needs to understand everything
         subagent_trajectory_refs = []
 
         # ===== SUBAGENT 1: Summary Generation =====
-        summary_session_id = f"{self._session_id}-summarization-{self._summarization_count}-summary"
+        summary_session_id = (
+            f"{self._session_id}-summarization-{self._summarization_count}-summary"
+        )
 
         # Trajectory needs to reflect what is sent to LLM: essentially the previous chat
         # history, minus the messages that were removed to free up tokens.
@@ -1511,7 +1631,9 @@ Be comprehensive and detailed. The next agent needs to understand everything
         # - Chat has: [system, agent1, user1, agent2, user2, ...]
         # - Trajectory has: [step1_system, step2_agent, step3_agent, ...]
         steps_to_include = _trajectory_step_count(len(chat.messages))
-        summary_steps, step_id_counter = self._prepare_copied_trajectory_steps(steps_to_include)
+        summary_steps, step_id_counter = self._prepare_copied_trajectory_steps(
+            steps_to_include
+        )
 
         summary_result = await self._run_subagent(
             prompt=summary_prompt,
@@ -1532,7 +1654,9 @@ Be comprehensive and detailed. The next agent needs to understand everything
 
         # ===== SUBAGENT 2: Question Asking =====
         current_screen = await session.capture_pane(capture_entire=False)
-        questions_session_id = f"{self._session_id}-summarization-{self._summarization_count}-questions"
+        questions_session_id = (
+            f"{self._session_id}-summarization-{self._summarization_count}-questions"
+        )
         questions_steps = []
 
         question_prompt = f"""You are picking up work from a previous AI agent on this task:
@@ -1566,12 +1690,16 @@ so ask everything you need to know."""
         subagent_trajectory_refs.append(questions_result.trajectory_ref)
 
         # ===== SUBAGENT 3: Answer Providing =====
-        answers_session_id = f"{self._session_id}-summarization-{self._summarization_count}-answers"
+        answers_session_id = (
+            f"{self._session_id}-summarization-{self._summarization_count}-answers"
+        )
 
         # Reuse the exact trajectory accepted for the summary request. The
         # provider may have trimmed more history than the local estimate.
         steps_to_include = _trajectory_step_count(len(chat.messages))
-        answers_steps, step_id_counter = self._prepare_copied_trajectory_steps(steps_to_include)
+        answers_steps, step_id_counter = self._prepare_copied_trajectory_steps(
+            steps_to_include
+        )
 
         # Add the summary prompt and response steps that are part of the message history
         # Mark these as copied context since they were already part of the summary subagent trajectory
@@ -1595,7 +1723,11 @@ so ask everything you need to know."""
                 message=summary_response.content,
                 reasoning_content=summary_response.reasoning_content,
                 is_copied_context=True,
-                extra={"note": "Copied from summary subagent - metrics already recorded there"},
+                extra={
+                    "note": (
+                        "Copied from summary subagent - metrics already recorded there"
+                    )
+                },
             )
         )
         step_id_counter += 1
@@ -1608,7 +1740,9 @@ so ask everything you need to know."""
         # The answer subagent should see: unwound chat history + summary prompt + summary response
         answers_message_history = chat.messages + [
             {"role": "user", "content": summary_prompt},
-            assistant_message_from_response(summary_response, self._interleaved_thinking),
+            assistant_message_from_response(
+                summary_response, self._interleaved_thinking
+            ),
         ]
 
         answers_result = await self._run_subagent(
@@ -1632,7 +1766,9 @@ so ask everything you need to know."""
         chat._messages = [
             chat.messages[0],
             {"role": "user", "content": question_prompt},
-            assistant_message_from_response(questions_response, self._interleaved_thinking),
+            assistant_message_from_response(
+                questions_response, self._interleaved_thinking
+            ),
         ]
         chat.reset_response_chain()
 
@@ -1685,10 +1821,14 @@ so ask everything you need to know."""
                 of the context limit and summarization is disabled.
         """
         context_limit = self._llm.get_model_context_limit()
-        pending_messages = [{"role": "user", "content": pending_prompt}] if pending_prompt else None
+        pending_messages = (
+            [{"role": "user", "content": pending_prompt}] if pending_prompt else None
+        )
         exact_prompt_token_ids = None
         if pending_prompt:
-            exact_prompt_token_ids = await chat.prepare_prompt_token_ids(pending_prompt, **self._llm_call_kwargs)
+            exact_prompt_token_ids = await chat.prepare_prompt_token_ids(
+                pending_prompt, **self._llm_call_kwargs
+            )
         if exact_prompt_token_ids is not None:
             current_tokens = len(exact_prompt_token_ids)
         else:
@@ -1710,7 +1850,9 @@ so ask everything you need to know."""
             return None
 
         if free_tokens < self._proactive_summarization_threshold:
-            self.logger.debug(f"Proactively summarizing. Free tokens: approximately {free_tokens}")
+            self.logger.debug(
+                f"Proactively summarizing. Free tokens: approximately {free_tokens}"
+            )
             if session is None:
                 raise RuntimeError("Cannot summarize without session")
             return await self._summarize_with_retry(
@@ -1756,7 +1898,9 @@ so ask everything you need to know."""
             _enqueue_episode_text(prompt_path, prompt)
 
         try:
-            return await self._dispatch_llm_request(chat, prompt, logging_path, response_path)
+            return await self._dispatch_llm_request(
+                chat, prompt, logging_path, response_path
+            )
 
         except ContextLengthExceededError as error:
             return await self._recover_context_capacity(
@@ -1842,7 +1986,9 @@ so ask everything you need to know."""
             )
             self._pending_handoff_prompt = compact_prompt
             if request_context.logging_paths.prompt is not None:
-                _enqueue_episode_text(request_context.logging_paths.prompt, compact_prompt)
+                _enqueue_episode_text(
+                    request_context.logging_paths.prompt, compact_prompt
+                )
             try:
                 return await self._dispatch_llm_request(
                     chat,
@@ -1852,7 +1998,8 @@ so ask everything you need to know."""
                 )
             except ContextLengthExceededError as error:
                 raise ContextManagementInfrastructureError(
-                    "The bounded context-recovery handoff still exceeded the " "provider context limit."
+                    "The bounded context-recovery handoff still exceeded the "
+                    "provider context limit."
                 ) from error
 
     async def _recover_output_overflow(
@@ -1864,12 +2011,17 @@ so ask everything you need to know."""
         request_context: LLMRequestContext,
     ) -> LLMResponse:
         self.logger.debug(f"Output length exceeded: {error}")
-        truncated_response = error.truncated_response or "[TRUNCATED RESPONSE NOT AVAILABLE]"
+        truncated_response = (
+            error.truncated_response or "[TRUNCATED RESPONSE NOT AVAILABLE]"
+        )
         response_path = request_context.logging_paths.response
 
         salvaged_response = self._parser.salvage_truncated_response(truncated_response)
         if salvaged_response:
-            self.logger.debug("Output exceeded length but found valid response. " "Using truncated version.")
+            self.logger.debug(
+                "Output exceeded length but found valid response. "
+                "Using truncated version."
+            )
             if response_path is not None:
                 _enqueue_episode_text(response_path, salvaged_response)
             return salvaged_response
@@ -1877,10 +2029,17 @@ so ask everything you need to know."""
         warnings_text = ""
         parse_result = self._parser.parse_response(truncated_response)
         if parse_result.warning:
-            warnings_text = f"\n\nParser warnings from your truncated response:\n" f"{parse_result.warning}"
+            warnings_text = (
+                f"\n\nParser warnings from your truncated response:\n"
+                f"{parse_result.warning}"
+            )
 
         output_limit = self._llm.get_model_output_limit()
-        limit_str = f"{output_limit} tokens" if output_limit is not None else "the maximum output length"
+        limit_str = (
+            f"{output_limit} tokens"
+            if output_limit is not None
+            else "the maximum output length"
+        )
         error_msg = (
             "ERROR!! NONE of the actions you just requested were performed "
             f"because you exceeded {limit_str}. "
@@ -1963,7 +2122,10 @@ so ask everything you need to know."""
         """
         if self._batch_turn_execs:
             terminal_output, session_alive = await session.send_keys_and_capture(
-                [TmuxKeystrokeBatch(command.keystrokes, command.duration_sec) for command in commands]
+                [
+                    TmuxKeystrokeBatch(command.keystrokes, command.duration_sec)
+                    for command in commands
+                ]
             )
             self._session_alive_hint = session_alive
             return False, self._limit_output_length(terminal_output)
@@ -1979,7 +2141,9 @@ so ask everything you need to know."""
                 return True, self._timeout_template.format(
                     timeout_sec=command.duration_sec,
                     command=command.keystrokes,
-                    terminal_state=self._limit_output_length(await session.get_incremental_output()),
+                    terminal_state=self._limit_output_length(
+                        await session.get_incremental_output()
+                    ),
                 )
 
         return False, self._limit_output_length(await session.get_incremental_output())
@@ -2109,7 +2273,11 @@ so ask everything you need to know."""
                         source="system",
                         message="Performed context summarization and handoff to continue task.",
                         observation=Observation(
-                            results=[ObservationResult(subagent_trajectory_ref=self._pending_subagent_refs)]
+                            results=[
+                                ObservationResult(
+                                    subagent_trajectory_ref=self._pending_subagent_refs
+                                )
+                            ]
                         ),
                     )
                 )
@@ -2120,7 +2288,9 @@ so ask everything you need to know."""
                 # If linear_history mode is enabled, split trajectory immediately WITHOUT adding handoff step
                 # The handoff step will be added to the continuation trajectory during the split
                 if self._linear_history:
-                    self._split_trajectory_on_summarization(self._pending_handoff_prompt)
+                    self._split_trajectory_on_summarization(
+                        self._pending_handoff_prompt
+                    )
                 else:
                     # For non-linear mode, add the handoff prompt as a user step
                     self._trajectory_steps.append(
@@ -2182,8 +2352,11 @@ so ask everything you need to know."""
                         ),
                         metrics=Metrics(
                             prompt_tokens=chat.total_input_tokens - tokens_before_input,
-                            completion_tokens=chat.total_output_tokens - tokens_before_output,
-                            cached_tokens=(cache_tokens_used if cache_tokens_used > 0 else None),
+                            completion_tokens=chat.total_output_tokens
+                            - tokens_before_output,
+                            cached_tokens=(
+                                cache_tokens_used if cache_tokens_used > 0 else None
+                            ),
                             cost_usd=step_cost if step_cost > 0 else None,
                             prompt_token_ids=llm_response.prompt_token_ids,
                             completion_token_ids=llm_response.completion_token_ids,
@@ -2193,7 +2366,9 @@ so ask everything you need to know."""
                 )
                 continue
 
-            terminal_output = await self._execute_interaction(interaction, self._session)
+            terminal_output = await self._execute_interaction(
+                interaction, self._session
+            )
 
             # Capture the pending completion state before potentially modifying it
             was_pending_completion = self._pending_completion
@@ -2204,7 +2379,9 @@ so ask everything you need to know."""
                     observation = terminal_output
                 else:
                     self._pending_completion = True
-                    observation = self._get_completion_confirmation_message(terminal_output)
+                    observation = self._get_completion_confirmation_message(
+                        terminal_output
+                    )
             else:
                 self._pending_completion = False
                 if feedback and "WARNINGS:" in feedback:
@@ -2254,8 +2431,11 @@ so ask everything you need to know."""
                     observation=Observation(results=observation_results),
                     metrics=Metrics(
                         prompt_tokens=chat.total_input_tokens - tokens_before_input,
-                        completion_tokens=chat.total_output_tokens - tokens_before_output,
-                        cached_tokens=(cache_tokens_used if cache_tokens_used > 0 else None),
+                        completion_tokens=chat.total_output_tokens
+                        - tokens_before_output,
+                        cached_tokens=(
+                            cache_tokens_used if cache_tokens_used > 0 else None
+                        ),
                         cost_usd=step_cost if step_cost > 0 else None,
                         prompt_token_ids=llm_response.prompt_token_ids,
                         completion_token_ids=llm_response.completion_token_ids,
@@ -2290,14 +2470,18 @@ so ask everything you need to know."""
                     context_limit = self._llm.get_model_context_limit()
                     # Offloaded off the coordinator event loop (blocking /tokenize POST).
                     current_tokens = await self._acount_total_tokens(chat)
-                    hint_tokens = len(cb_result) // 3  # conservative char-to-token estimate
+                    hint_tokens = (
+                        len(cb_result) // 3
+                    )  # conservative char-to-token estimate
                     if current_tokens + hint_tokens > context_limit - 512:
                         raise ContextLengthExceededError(
                             f"Cannot inject teacher hint: would exceed context limit. "
                             f"Current tokens: {current_tokens}, estimated hint tokens: "
                             f"{hint_tokens}, limit: {context_limit}."
                         )
-                    self.logger.info(f"Turn callback injected hint at episode {episode}")
+                    self.logger.info(
+                        f"Turn callback injected hint at episode {episode}"
+                    )
                     observation = cb_result + observation
                     self._trajectory_steps.append(
                         Step(
@@ -2311,15 +2495,22 @@ so ask everything you need to know."""
                 elif cb_result is True:
                     # Early termination requested by callback (e.g., PRM
                     # detected agent collapse or stuck loop).
-                    self.logger.info(f"Turn callback requested early termination at episode {episode}")
-                    self._early_termination_reason = f"turn_callback requested stop at episode {episode}"
+                    self.logger.info(
+                        f"Turn callback requested early termination at episode {episode}"
+                    )
+                    self._early_termination_reason = (
+                        f"turn_callback requested stop at episode {episode}"
+                    )
                     self._stop_reason = AgentStopReason.EARLY_TERMINATION
                     self._trajectory_steps.append(
                         Step(
                             step_id=len(self._trajectory_steps) + 1,
                             timestamp=datetime.now(timezone.utc).isoformat(),
                             source="system",
-                            message=(f"[Early termination] Turn callback stopped the agent " f"at episode {episode}."),
+                            message=(
+                                f"[Early termination] Turn callback stopped the agent "
+                                f"at episode {episode}."
+                            ),
                         )
                     )
                     self._maybe_persist_trajectory_per_turn()
@@ -2354,7 +2545,8 @@ so ask everything you need to know."""
         self._stop_reason = AgentStopReason.TURN_CAP_EXHAUSTED
         if self._pending_completion:
             detail = (
-                "The agent declared task complete on its final turn, but the " "cap cut off the confirmation exchange."
+                "The agent declared task complete on its final turn, but the "
+                "cap cut off the confirmation exchange."
             )
         else:
             detail = "The agent never declared the task complete."
@@ -2412,7 +2604,9 @@ so ask everything you need to know."""
             await self._session.start()
 
         # Get the terminal state for the initial prompt
-        terminal_state = self._limit_output_length(await self._session.get_incremental_output())
+        terminal_state = self._limit_output_length(
+            await self._session.get_incremental_output()
+        )
 
         augmented_instruction = instruction
         if self.mcp_servers:
@@ -2456,12 +2650,23 @@ so ask everything you need to know."""
         finally:
             # Always capture metrics and rollout details even if the agent times out or errors
             # Combine main chat rollout details with subagent rollout details
-            context.rollout_details = self._chat.rollout_details + self._subagent_rollout_details
+            context.rollout_details = (
+                self._chat.rollout_details + self._subagent_rollout_details
+            )
 
             # Include subagent metrics in context totals
-            context.n_input_tokens = self._chat.total_input_tokens + self._subagent_metrics.total_prompt_tokens
-            context.n_output_tokens = self._chat.total_output_tokens + self._subagent_metrics.total_completion_tokens
-            context.n_cache_tokens = self._chat.total_cache_tokens + self._subagent_metrics.total_cached_tokens
+            context.n_input_tokens = (
+                self._chat.total_input_tokens
+                + self._subagent_metrics.total_prompt_tokens
+            )
+            context.n_output_tokens = (
+                self._chat.total_output_tokens
+                + self._subagent_metrics.total_completion_tokens
+            )
+            context.n_cache_tokens = (
+                self._chat.total_cache_tokens
+                + self._subagent_metrics.total_cached_tokens
+            )
             total_cost = self._chat.total_cost + self._subagent_metrics.total_cost_usd
             context.cost_usd = total_cost if total_cost > 0 else None
             context.metadata = {
@@ -2493,9 +2698,13 @@ so ask everything you need to know."""
                 step.metrics = None
                 if step.extra is None:
                     step.extra = {}
-                step.extra["note"] = "Metrics omitted to avoid duplication - already recorded in parent trajectory"
+                step.extra["note"] = (
+                    "Metrics omitted to avoid duplication - already recorded in parent trajectory"
+                )
 
-    def _prepare_copied_trajectory_steps(self, steps_to_include: int) -> tuple[list[Step], int]:
+    def _prepare_copied_trajectory_steps(
+        self, steps_to_include: int
+    ) -> tuple[list[Step], int]:
         """Prepare trajectory steps for subagent by copying and removing metrics.
 
         Args:
@@ -2539,7 +2748,9 @@ so ask everything you need to know."""
                         prompt_tokens=usage_info.prompt_tokens,
                         completion_tokens=usage_info.completion_tokens,
                         cached_tokens=usage_info.cache_tokens,
-                        cost_usd=(usage_info.cost_usd if usage_info.cost_usd > 0 else None),
+                        cost_usd=(
+                            usage_info.cost_usd if usage_info.cost_usd > 0 else None
+                        ),
                         prompt_token_ids=response.prompt_token_ids,
                         completion_token_ids=response.completion_token_ids,
                         logprobs=response.logprobs,
@@ -2581,7 +2792,9 @@ so ask everything you need to know."""
         Returns:
             SubagentTrajectoryRef for inclusion in parent trajectory
         """
-        total_prompt, total_completion, total_cached, total_cost = self._extract_usage_metrics(usage_info)
+        total_prompt, total_completion, total_cached, total_cost = (
+            self._extract_usage_metrics(usage_info)
+        )
 
         trajectory = Trajectory(
             session_id=session_id,
@@ -2603,7 +2816,10 @@ so ask everything you need to know."""
             ),
         )
 
-        trajectory_path = self.logs_dir / f"trajectory.summarization-{self._summarization_count}-{filename_suffix}.json"
+        trajectory_path = (
+            self.logs_dir
+            / f"trajectory.summarization-{self._summarization_count}-{filename_suffix}.json"
+        )
         # Runs on the event-loop thread at summarization boundaries; enqueue the
         # serialization + (possibly remote fsspec) write on the artifact writer.
         # `trajectory` is local to this call, so late serialization is safe.
@@ -2699,14 +2915,18 @@ so ask everything you need to know."""
         self._continuation_segments_persisted += 1
 
         # Create new session_id for continuation
-        self._session_id = f"{self._session_id.split('-cont-')[0]}-cont-{self._summarization_count}"
+        self._session_id = (
+            f"{self._session_id.split('-cont-')[0]}-cont-{self._summarization_count}"
+        )
 
         # After dumping the trajectory till the summarization stage, reset trajectory by
         # converting from chat messages (excluding the last response which will be added
         # by the normal agent loop flow). Mark all these steps as copied context since they
         # were already present in the previous trajectory segment.
         if self._chat:
-            self._trajectory_steps = self._convert_chat_messages_to_steps(self._chat.messages[:-1], mark_as_copied=True)
+            self._trajectory_steps = self._convert_chat_messages_to_steps(
+                self._chat.messages[:-1], mark_as_copied=True
+            )
 
     def _build_trajectory(
         self, continuation_index: int, *, continued: bool = False
@@ -2773,12 +2993,16 @@ so ask everything you need to know."""
 
         # Determine trajectory filename based on continuation index
         if self._linear_history and continuation_index > 0:
-            trajectory_path = self.logs_dir / f"trajectory.cont-{continuation_index}.json"
+            trajectory_path = (
+                self.logs_dir / f"trajectory.cont-{continuation_index}.json"
+            )
         else:
             trajectory_path = self.logs_dir / "trajectory.json"
         return trajectory, trajectory_path
 
-    def _persist_trajectory(self, continuation_index: int, *, continued: bool = False) -> None:
+    def _persist_trajectory(
+        self, continuation_index: int, *, continued: bool = False
+    ) -> None:
         """Enqueue a trajectory dump on the background artifact writer.
 
         Non-blocking for the caller: the writer's own small worker pool runs

@@ -18,5 +18,4 @@ from harbor_config.models.trial.config import ServiceVolumeImage as ServiceVolum
 from harbor_config.models.trial.config import ServiceVolumeVolume as ServiceVolumeVolume
 from harbor_config.models.trial.config import TaskConfig as TaskConfig
 from harbor_config.models.trial.config import TrialConfig as TrialConfig
-from harbor_config.models.trial.config import UserAgentConfig as UserAgentConfig
 from harbor_config.models.trial.config import VerifierConfig as VerifierConfig

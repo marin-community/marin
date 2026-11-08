@@ -72,7 +72,6 @@ _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
 _OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-_PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -152,9 +151,8 @@ def _single_entry(config: JobConfig, field_name: str) -> object:
 
 
 def _validate_agent(agent: AgentConfig) -> str:
-    AgentFactory.get_agent_class_from_config(agent)
-    assert agent.import_path is not None or agent.name is not None
-    return agent.import_path or str(agent.name)
+    agent_class = AgentFactory.get_agent_class_from_config(agent)
+    return agent_class.name()
 
 
 def _validate_environment(config: JobConfig) -> str:
@@ -176,17 +174,9 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     unknown_kwargs = environment.kwargs.keys() - _LOCAL_ENVIRONMENT_KWARGS
     if unknown_kwargs:
         raise ValueError(f"Unsupported {label} environment kwargs: {sorted(unknown_kwargs)}")
-    if config.user_agent is not None:
-        raise ValueError(f"{label} does not support simulated-user agents")
     for agent in config.agents:
         _validate_agent(agent)
-        installed = _installed_agent(agent)
-        relay_env = {
-            "OPENAI_BASE_URL": f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1",
-            "OPENAI_API_BASE": f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1",
-            "OPENAI_API_KEY": "EMPTY",
-        }
-        if (agent.env and (not installed or agent.env != relay_env)) or agent.mcp_servers or agent.skills:
+        if agent.env or agent.mcp_servers or agent.skills:
             raise ValueError(f"{label} does not accept agent environment forwarding, MCP servers, or skills")
         if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & agent.kwargs.keys():
             raise ValueError(f"{label} does not accept alternate agent environment, MCP, skill, or callback inputs")
@@ -205,7 +195,7 @@ def _validate_job_tasks(job: Job) -> None:
             else task_config.path
         )
         task = Task(task_path, disable_verification=job.config.verifier.disable)
-        if job.config.agents[0].name == AgentName.PI:
+        if _validate_agent(job.config.agents[0]) == AgentName.PI:
             main_image = prepared_images(task.paths.environment_dir).get("main")
             if main_image is None or PINNED_IMAGE.fullmatch(main_image.image) is None:
                 raise ValueError(
@@ -366,7 +356,7 @@ def _agent_config(
     kwargs: Mapping[str, object],
 ) -> AgentConfig:
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
-    if agent.name == _OPENCODE_AGENT:
+    if _validate_agent(agent) == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
     configured = AgentConfig.model_validate(
         {
@@ -394,7 +384,7 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
         agent.kwargs.get(MODEL_INFO_KEY),
     )
     kwargs[MODEL_INFO_KEY] = model_info
-    if agent.name == _TERMINUS_2_AGENT:
+    if _validate_agent(agent) == _TERMINUS_2_AGENT:
         kwargs[_LLM_CALL_KWARGS_KEY] = _terminus_llm_call_kwargs(
             kwargs.get(_LLM_CALL_KWARGS_KEY),
             model_info[MAX_OUTPUT_TOKENS_KEY],
@@ -453,8 +443,6 @@ def _dataset_with_runtime(
 
 
 def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
-    if config.user_agent is not None:
-        raise ValueError("Harbor simulated-user agents are not supported")
     if config.environment.type == EnvironmentType.LOCAL:
         _validate_prepared_policy(config)
     validate_task_environment(
@@ -508,7 +496,6 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "job_name": overlay.job_name,
             "jobs_dir": overlay.jobs_dir,
             "agents": [agent],
-            "user_agent": None,
             "datasets": [dataset],
             "environment": environment,
             "verifier": config.verifier.model_copy(
@@ -577,7 +564,6 @@ def _stable_config(config: JobConfig) -> JobConfig:
             "job_name": _STABLE_JOB_NAME,
             "jobs_dir": _STABLE_JOBS_DIR,
             "agents": [agent],
-            "user_agent": None,
         }
     )
     return JobConfig.model_validate(stable.model_dump(mode="python"), extra="forbid")
@@ -611,8 +597,6 @@ def _preflight_one(
 ) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
-    if config.user_agent is not None:
-        raise ValueError("Harbor simulated-user agents are not supported")
     if config.tasks:
         raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare one dataset")
     agent = _single_entry(config, "agents")
@@ -655,7 +639,7 @@ def _preflight_one(
             ),
         )
         effective_agent = effective.agents[0]
-        if effective_agent.name == AgentName.PI:
+        if _validate_agent(effective_agent) == AgentName.PI:
             try:
                 AgentFactory.create_agent_from_name(
                     AgentName.PI,

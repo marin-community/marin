@@ -182,7 +182,10 @@ class TestProviderBaseUrl:
         result = self._parse_config(agent._build_register_config_command())
         vllm = result["provider"]["vllm"]
         assert vllm["npm"] == "@ai-sdk/openai-compatible"
-        assert vllm["options"] == {"baseURL": "http://127.0.0.1:8788/v1", "apiKey": "EMPTY"}
+        assert vllm["options"] == {
+            "baseURL": "http://127.0.0.1:8788/v1",
+            "apiKey": "EMPTY",
+        }
         assert "host-provider" not in json.dumps(result)
         assert "1783107198924068" in vllm["models"]
 

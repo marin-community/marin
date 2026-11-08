@@ -36,11 +36,18 @@ from harbor.models.trial.result import (
 from harbor.models.verifier.result import VerifierResult
 
 # vLLM's structured context-budget-exhausted payload (the legacy signal).
-_MAX_TOKENS_ZERO_MSG = "Error code: 400 - 'max_tokens must be at least 1, got 0. " "(parameter=max_tokens, value=0)'"
+_MAX_TOKENS_ZERO_MSG = (
+    "Error code: 400 - 'max_tokens must be at least 1, got 0. "
+    "(parameter=max_tokens, value=0)'"
+)
 
 
 def _make_job(tmp_path: Path, task_configs: list[TaskConfig]) -> Job:
-    config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job-resume-retry-test", jobs_dir=tmp_path)
+    config = JobConfig(
+        agents=[AgentConfig(name="pi")],
+        job_name="job-resume-retry-test",
+        jobs_dir=tmp_path,
+    )
     metrics = defaultdict(lambda: [Mean()])
     return Job(config, _task_configs=task_configs, _metrics=metrics)
 
@@ -68,7 +75,11 @@ def _trial_result(
         task_checksum="abc123",
         config=trial_config,
         agent_info=AgentInfo(name="test-agent", version="1.0"),
-        verifier_result=(None if exception_type is not None else VerifierResult(rewards={"reward": 1})),
+        verifier_result=(
+            None
+            if exception_type is not None
+            else VerifierResult(rewards={"reward": 1})
+        ),
         exception_info=exception_info,
         finished_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
         completion=TrialCompletion(trajectory_present=False),
@@ -125,7 +136,9 @@ def _seed_completed_job(tmp_path: Path) -> Job:
     results: list[TrialResult] = []
     for trial_config in job._trial_configs:
         exc_type, exc_msg = _ROLES[str(trial_config.task.path)]
-        result = _trial_result(trial_config, exception_type=exc_type, exception_message=exc_msg)
+        result = _trial_result(
+            trial_config, exception_type=exc_type, exception_message=exc_msg
+        )
         results.append(result)
         trial_dir = job.job_dir / trial_config.trial_name
         trial_dir.mkdir(parents=True, exist_ok=True)
@@ -154,7 +167,9 @@ def test_resume_reruns_retryable_and_keeps_the_rest(tmp_path: Path) -> None:
     resumed = _make_job(tmp_path, task_configs)
     try:
         rerun_paths = {str(cfg.task.path) for cfg in resumed._remaining_trial_configs}
-        kept_paths = {str(res.config.task.path) for res in resumed._existing_trial_results}
+        kept_paths = {
+            str(res.config.task.path) for res in resumed._existing_trial_results
+        }
 
         assert rerun_paths == _RERUN_PATHS
         assert kept_paths == _KEPT_PATHS
@@ -181,7 +196,9 @@ def test_resume_uses_result_config_when_standalone_config_was_dropped(
         result
         for trial_dir in seeded.job_dir.iterdir()
         if trial_dir.is_dir()
-        for result in [TrialResult.model_validate_json((trial_dir / "result.json").read_text())]
+        for result in [
+            TrialResult.model_validate_json((trial_dir / "result.json").read_text())
+        ]
         if str(result.config.task.path) == "/tmp/task-valid"
     )
     standalone_config = seeded.job_dir / valid_result.trial_name / "config.json"
@@ -191,7 +208,9 @@ def test_resume_uses_result_config_when_standalone_config_was_dropped(
     resumed = _make_job(tmp_path, task_configs)
     try:
         loaded = next(
-            result for result in resumed._existing_trial_results if result.trial_name == valid_result.trial_name
+            result
+            for result in resumed._existing_trial_results
+            if result.trial_name == valid_result.trial_name
         )
         assert loaded.config == valid_result.config
         assert not standalone_config.exists()
@@ -241,7 +260,9 @@ def test_is_resume_retryable_result_predicate() -> None:
 
     sandbox = _trial_result(trial_config, exception_type="SandboxBuildFailedError")
     cancelled = _trial_result(trial_config, exception_type="CancelledError")
-    ctx_mgmt = _trial_result(trial_config, exception_type="ContextManagementInfrastructureError")
+    ctx_mgmt = _trial_result(
+        trial_config, exception_type="ContextManagementInfrastructureError"
+    )
     valid = _trial_result(trial_config, exception_type=None)
     terminal = _trial_result(trial_config, exception_type="RuntimeError")
 
@@ -286,5 +307,7 @@ def test_legacy_bad_request_predicate_is_narrow() -> None:
 def test_exception_info_records_infra_exception_type() -> None:
     """The typed infrastructure exception persists under its own type name, so a
     never-scored trial is visible and resume-retryable in exception_stats."""
-    info = ExceptionInfo.from_exception(ContextManagementInfrastructureError("recovery exhausted"))
+    info = ExceptionInfo.from_exception(
+        ContextManagementInfrastructureError("recovery exhausted")
+    )
     assert info.exception_type == "ContextManagementInfrastructureError"

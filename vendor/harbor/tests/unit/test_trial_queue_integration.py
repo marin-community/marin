@@ -117,7 +117,9 @@ class TestTrialQueueIntegration:
         assert queue._hooks == {event: [] for event in TrialEvent}
 
     @pytest.mark.unit
-    def test_job_initializes_trial_queue_with_existing_constructor_shape(self, tmp_path):
+    def test_job_initializes_trial_queue_with_existing_constructor_shape(
+        self, tmp_path
+    ):
         """Test that Job still wires TrialQueue the same way as before."""
         config = JobConfig(
             agents=[AgentConfig(name="pi")],
@@ -183,7 +185,9 @@ class TestTrialQueueIntegration:
     async def test_resolve_task_configs_copies_explicit_tasks(self):
         """Test resolved trial task configs can change without changing JobConfig."""
         task = TaskConfig(name="test-org/test-task", ref="latest")
-        config = JobConfig(agents=[AgentConfig(name="pi")], job_name="job", tasks=[task])
+        config = JobConfig(
+            agents=[AgentConfig(name="pi")], job_name="job", tasks=[task]
+        )
 
         resolved_task_configs = await Job._resolve_task_configs(config)
         resolved_task_configs[0].ref = f"sha256:{'a' * 64}"
@@ -345,7 +349,9 @@ class TestTrialQueueIntegration:
 
             trial_dir = job.job_dir / existing_trial_config.trial_name
             trial_dir.mkdir()
-            (trial_dir / "config.json").write_text(existing_trial_config.model_dump_json(indent=4))
+            (trial_dir / "config.json").write_text(
+                existing_trial_config.model_dump_json(indent=4)
+            )
             (trial_dir / "result.json").write_text(
                 TrialResult(
                     task_name="test-task",
@@ -374,7 +380,9 @@ class TestTrialQueueIntegration:
             resumed_job._close_logger_handlers()
 
     @pytest.mark.unit
-    def test_job_resume_lock_omits_pending_trial_names_and_keeps_invocation(self, tmp_path):
+    def test_job_resume_lock_omits_pending_trial_names_and_keeps_invocation(
+        self, tmp_path
+    ):
         """Test resume rewrites pending trial names outside lock.json."""
         task_dir = _make_task_dir(tmp_path)
         task = TaskConfig(path=task_dir)
@@ -412,7 +420,9 @@ class TestTrialQueueIntegration:
             existing_trial_config = job._trial_configs[0]
             trial_dir = job.job_dir / existing_trial_config.trial_name
             trial_dir.mkdir()
-            (trial_dir / "config.json").write_text(existing_trial_config.model_dump_json(indent=4))
+            (trial_dir / "config.json").write_text(
+                existing_trial_config.model_dump_json(indent=4)
+            )
             (trial_dir / "result.json").write_text(
                 TrialResult(
                     task_name="test-task",
@@ -431,7 +441,10 @@ class TestTrialQueueIntegration:
 
         resumed_job = Job(config, _task_configs=[task], _metrics={})
         try:
-            assert [trial_config.trial_name for trial_config in resumed_job._remaining_trial_configs] != [
+            assert [
+                trial_config.trial_name
+                for trial_config in resumed_job._remaining_trial_configs
+            ] != [
                 "original-trial-1",
                 "original-trial-2",
             ]
@@ -441,7 +454,9 @@ class TestTrialQueueIntegration:
 
             rewritten_lock_data = json.loads(resumed_job._job_lock_path.read_text())
             assert rewritten_lock_data["invocation"] == original_invocation
-            assert all("trial_name" not in trial for trial in rewritten_lock_data["trials"])
+            assert all(
+                "trial_name" not in trial for trial in rewritten_lock_data["trials"]
+            )
         finally:
             resumed_job._close_logger_handlers()
 
@@ -496,7 +511,9 @@ class TestTrialQueueIntegration:
         ("method_name", "event"),
         list(HOOK_METHOD_TO_EVENT.items()),
     )
-    def test_trial_queue_named_hook_methods_register_expected_events(self, method_name, event):
+    def test_trial_queue_named_hook_methods_register_expected_events(
+        self, method_name, event
+    ):
         """Test that named TrialQueue hook methods map to the right events."""
         queue = TrialQueue(n_concurrent=1)
 
@@ -513,7 +530,9 @@ class TestTrialQueueIntegration:
         ("method_name", "event"),
         list(HOOK_METHOD_TO_EVENT.items()),
     )
-    def test_job_named_hook_methods_delegate_to_trial_queue(self, tmp_path, method_name, event):
+    def test_job_named_hook_methods_delegate_to_trial_queue(
+        self, tmp_path, method_name, event
+    ):
         """Test that legacy Job hook helpers still register via TrialQueue."""
         config = JobConfig(
             agents=[AgentConfig(name="pi")],
@@ -573,7 +592,9 @@ class TestTrialQueueIntegration:
         assert config_dict["n_concurrent_trials"] == 8
         assert config_dict["quiet"] is True
 
-        restored = JobConfig.model_validate({"agents": [{"name": "pi"}], **(config_dict)})
+        restored = JobConfig.model_validate(
+            {"agents": [{"name": "pi"}], **(config_dict)}
+        )
         assert restored.n_concurrent_trials == 8
         assert restored.quiet is True
 

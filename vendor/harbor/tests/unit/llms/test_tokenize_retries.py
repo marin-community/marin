@@ -11,8 +11,6 @@ import pytest
 from harbor.llms import vllm_tokenization
 
 
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["timeout", "connection", "protocol", 429, 503])
 async def test_tokenizer_recovers_after_transient_failure(monkeypatch, failure):
@@ -31,7 +29,9 @@ async def test_tokenizer_recovers_after_transient_failure(monkeypatch, failure):
         return httpx.Response(200, json={"tokens": [1, 2, 3]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(tokenizer)) as client:
-        monkeypatch.setattr(vllm_tokenization, "shared_async_tokenize_client", lambda: client)
+        monkeypatch.setattr(
+            vllm_tokenization, "shared_async_tokenize_client", lambda: client
+        )
         tokens = await vllm_tokenization.tokenize_chat(
             api_base="http://model/v1",
             model="target",
@@ -48,7 +48,9 @@ async def test_tokenizer_recovers_after_transient_failure(monkeypatch, failure):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status, attempts", [(503, 3), (400, 1)])
-async def test_tokenizer_propagates_exhausted_or_permanent_errors(monkeypatch, status, attempts):
+async def test_tokenizer_propagates_exhausted_or_permanent_errors(
+    monkeypatch, status, attempts
+):
     requests = []
 
     def tokenizer(request):
@@ -56,7 +58,9 @@ async def test_tokenizer_propagates_exhausted_or_permanent_errors(monkeypatch, s
         return httpx.Response(status)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(tokenizer)) as client:
-        monkeypatch.setattr(vllm_tokenization, "shared_async_tokenize_client", lambda: client)
+        monkeypatch.setattr(
+            vllm_tokenization, "shared_async_tokenize_client", lambda: client
+        )
         with pytest.raises(httpx.HTTPStatusError) as error:
             await vllm_tokenization.tokenize_chat(
                 api_base="http://model/v1",

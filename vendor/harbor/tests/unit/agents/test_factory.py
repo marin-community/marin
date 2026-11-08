@@ -6,9 +6,7 @@ from harbor.agents.factory import AgentFactory
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
-from harbor.models.job.config import JobConfig
 from harbor.models.trial.config import AgentConfig
-from pydantic import ValidationError
 
 
 class CaptureAgent(BaseAgent):
@@ -71,7 +69,9 @@ def test_unsupported_agents_are_rejected_before_initialization(tmp_path, config)
         AgentFactory.create_agent_from_config(config, logs_dir=tmp_path)
 
 
-def test_create_agent_from_config_routes_alias_and_records_model_name(monkeypatch, tmp_path):
+def test_create_agent_from_config_routes_alias_and_records_model_name(
+    monkeypatch, tmp_path
+):
     monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, CaptureAgent)
 
     agent = AgentFactory.create_agent_from_config(
@@ -88,10 +88,3 @@ def test_create_agent_from_config_routes_alias_and_records_model_name(monkeypatc
     assert agent.model_alias == "hosted_vllm/resumed-endpoint"
     assert agent.to_agent_info().model_info is not None
     assert agent.to_agent_info().model_info.name == "org/canonical-model"
-
-
-@pytest.mark.parametrize("document", [{}, {"agents": [{}]}, {"agents": []}])
-def test_job_requires_an_explicit_agent_before_runtime_creation(document):
-    with pytest.raises(ValidationError) as error:
-        JobConfig.model_validate(document)
-    assert error.value.errors()[0]["loc"][0] == "agents"

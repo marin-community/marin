@@ -768,7 +768,9 @@ class TestCreateRunAgentCommands:
             ("OPENAI_API_KEY", "OPENAI_API_BASE"),
         ],
     )
-    async def test_explicit_capability_excludes_ambient_credentials(self, temp_dir, key_name, base_name):
+    async def test_explicit_capability_excludes_ambient_credentials(
+        self, temp_dir, key_name, base_name
+    ):
         with (
             patch.dict(
                 os.environ,

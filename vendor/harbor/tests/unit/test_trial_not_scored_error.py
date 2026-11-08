@@ -53,7 +53,9 @@ def _fake_trial(
             exception_info=exception_info,
         ),
         _reached_verifier=reached_verifier,
-        paths=SimpleNamespace(exception_message_path=(tmp_path / "exception_message.txt")),
+        paths=SimpleNamespace(
+            exception_message_path=(tmp_path / "exception_message.txt")
+        ),
     )
 
 
@@ -163,7 +165,9 @@ def test_disabled_and_multistep_are_untouched(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 
 
-def _unscored_trial_result(*, exception_type_exc: BaseException, name: str) -> TrialResult:
+def _unscored_trial_result(
+    *, exception_type_exc: BaseException, name: str
+) -> TrialResult:
     """An UNSCORED trial (verifier_result is None) labelled by the given error."""
     tc = TaskConfig(path="/tmp/x")
     cfg = TrialConfig(agent=AgentConfig(name="pi"), task=tc, trials_dir="/tmp/trials")
@@ -224,7 +228,10 @@ def test_score_is_invariant_to_unscored_label(tmp_path: Path):
         stats = JobStats.from_trial_results(results)
         eval_stats = stats.evals["agent__dataset"]
         # Normalise reward_stats (defaultdicts -> plain dict of dicts) for compare.
-        reward_norm = {k: {rv: sorted(ids) for rv, ids in v.items()} for k, v in eval_stats.reward_stats.items()}
+        reward_norm = {
+            k: {rv: sorted(ids) for rv, ids in v.items()}
+            for k, v in eval_stats.reward_stats.items()
+        }
         exc_norm = {k: sorted(v) for k, v in eval_stats.exception_stats.items()}
         aggregates.append(
             {

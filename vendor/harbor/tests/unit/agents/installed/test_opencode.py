@@ -633,7 +633,9 @@ class TestOpenCodeRunCommands:
             ("google/gemini-2.5-pro", "GOOGLE_BASE_URL"),
         ],
     )
-    async def test_run_forwards_provider_base_url(self, temp_dir, model_name, variable, mock_environment):
+    async def test_run_forwards_provider_base_url(
+        self, temp_dir, model_name, variable, mock_environment
+    ):
         endpoint = "https://provider.example.test/v1"
         agent = OpenCode(
             logs_dir=temp_dir, model_name=model_name, extra_env={variable: endpoint}

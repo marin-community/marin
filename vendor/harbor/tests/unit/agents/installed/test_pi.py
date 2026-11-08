@@ -63,6 +63,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     for path, contents in scripts.items():
         path.write_text(contents)
         path.chmod(0o755)
+
     class LocalShellEnvironment:
         agent_timeout_sec = None
 
@@ -98,7 +99,9 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("requested_version", [None, "0.87.0", "0.80.5"])
-async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, requested_version):
+async def test_image_pi_preserves_requested_version(
+    temp_dir, monkeypatch, requested_version
+):
     shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
     agent = Pi(logs_dir=temp_dir, version=requested_version)
 
@@ -182,7 +185,9 @@ class TestPiAgent:
             ("openai/gpt-4", "OPENAI_BASE_URL"),
         ],
     )
-    async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable, mock_environment):
+    async def test_provider_base_url_forwarding(
+        self, temp_dir, model_name, variable, mock_environment
+    ):
         agent = Pi(
             logs_dir=temp_dir,
             model_name=model_name,
@@ -333,8 +338,8 @@ class TestPiAgent:
     ],
 )
 async def test_hosted_vllm_endpoint_registers_pi_provider(
-    temp_dir, model_name, thinking_format, monkeypatch
-, mock_environment):
+    temp_dir, model_name, thinking_format, monkeypatch, mock_environment
+):
     monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
     endpoint = "https://iris.example/proxy/t/cluster=cw/scoped-token/serve.inference/v1"
     served_id = "campaign-model"
@@ -820,7 +825,9 @@ fetch(`${provider.baseUrl}/chat/completions`, {
 
 
 @pytest.mark.asyncio
-async def test_builtin_provider_does_not_replace_models_document(temp_dir, mock_environment):
+async def test_builtin_provider_does_not_replace_models_document(
+    temp_dir, mock_environment
+):
     agent = Pi(
         logs_dir=temp_dir,
         model_name="anthropic/claude-sonnet-4-5",
@@ -1232,7 +1239,9 @@ class TestPiTrajectoryConversion:
                     "role": "system",
                     "content": "",
                     "sections": {
-                        "preamble": "You are a test assistant operating inside a coding agent harness."
+                        "preamble": (
+                            "You are a test assistant operating inside a coding agent harness."
+                        )
                     },
                 },
                 "timestamp": 1762309200000,
@@ -1241,18 +1250,29 @@ class TestPiTrajectoryConversion:
                 "type": "message_end",
                 "message": {
                     "role": "user",
-                    "content": [{"type": "text", "text": "List the files in /app and write a greeting."}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "List the files in /app and write a greeting.",
+                        }
+                    ],
                 },
                 "timestamp": 1762309200001,
             },
-            {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Checking"}},
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_delta", "delta": "Checking"},
+            },
             {
                 "type": "message_end",
                 "message": {
                     "role": "assistant",
                     "content": [
                         {"type": "thinking", "thinking": "List files before writing."},
-                        {"type": "text", "text": "Listing the directory before writing."},
+                        {
+                            "type": "text",
+                            "text": "Listing the directory before writing.",
+                        },
                         {
                             "type": "toolCall",
                             "id": "chatcmpl-tool-aaa",
@@ -1300,7 +1320,10 @@ class TestPiTrajectoryConversion:
                             "type": "toolCall",
                             "id": "chatcmpl-tool-bbb",
                             "name": "write",
-                            "arguments": {"path": "/app/greeting.txt", "content": "hello"},
+                            "arguments": {
+                                "path": "/app/greeting.txt",
+                                "content": "hello",
+                            },
                         },
                     ],
                     "model": "hosted_vllm/test-model",
@@ -1327,7 +1350,9 @@ class TestPiTrajectoryConversion:
                     "content": [
                         {
                             "type": "text",
-                            "text": "Done. The directory contains hello.txt and the greeting was written.",
+                            "text": (
+                                "Done. The directory contains hello.txt and the greeting was written."
+                            ),
                         }
                     ],
                     "model": "hosted_vllm/test-model",
@@ -1397,7 +1422,9 @@ class TestPiTrajectoryConversion:
 
         second_tool_step = trajectory.steps[3]
         assert [call.function_name for call in second_tool_step.tool_calls] == ["write"]
-        assert second_tool_step.observation.results[0].content == "wrote /app/greeting.txt"
+        assert (
+            second_tool_step.observation.results[0].content == "wrote /app/greeting.txt"
+        )
         assert second_tool_step.observation.results[0].extra == {"is_error": True}
 
         final = trajectory.steps[4]
@@ -1409,9 +1436,19 @@ class TestPiTrajectoryConversion:
 
         # Source session: 105 + 140 + 180 prompt, 20 + 35 + 40 completion,
         # five system/user/assistant messages, and two tool results.
-        assert trajectory.final_metrics.total_prompt_tokens == context.n_input_tokens == 425
-        assert trajectory.final_metrics.total_completion_tokens == context.n_output_tokens == 95
-        assert trajectory.final_metrics.total_cached_tokens == context.n_cache_tokens == 5
+        assert (
+            trajectory.final_metrics.total_prompt_tokens
+            == context.n_input_tokens
+            == 425
+        )
+        assert (
+            trajectory.final_metrics.total_completion_tokens
+            == context.n_output_tokens
+            == 95
+        )
+        assert (
+            trajectory.final_metrics.total_cached_tokens == context.n_cache_tokens == 5
+        )
         assert trajectory.final_metrics.total_cost_usd == context.cost_usd == 0.1
         assert trajectory.final_metrics.total_steps == len(trajectory.steps) == 5
 
@@ -1435,7 +1472,9 @@ class TestPiTrajectoryConversion:
 
         trajectory = self._read_trajectory(temp_dir)
         assert [step.source for step in trajectory.steps] == ["system", "user", "agent"]
-        assert [call.function_name for call in trajectory.steps[2].tool_calls] == ["bash"]
+        assert [call.function_name for call in trajectory.steps[2].tool_calls] == [
+            "bash"
+        ]
         assert trajectory.steps[2].observation is None
         assert trajectory.final_metrics.total_steps == 3
         assert context.n_input_tokens == 105  # 100 + 5 cacheRead
