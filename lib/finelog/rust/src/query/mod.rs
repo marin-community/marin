@@ -897,8 +897,8 @@ mod tests {
         // Absent, unparseable, and negative-ish garbage all fall back to the default.
         assert_eq!(
             parse_query_timeout(None),
-            Some(Duration::from_secs(10)),
-            "the default must shed work before dashboard clients retry"
+            Some(Duration::from_secs(30)),
+            "the default bounds clients that send no deadline; dashboards send their own"
         );
         assert_eq!(
             parse_query_timeout(Some("nonsense")),
