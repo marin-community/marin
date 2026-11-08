@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import override
 
 import pytest
@@ -225,10 +226,37 @@ def driver_args(proposal: TaskProposal, tmp_path: Path, monkeypatch: pytest.Monk
         work_dir=str(tmp_path / "work"),
         resume_held=False,
         concurrency=2,
-        shard_index=0,
-        shard_count=1,
+        buckets=4096,
+        bucket_range=None,
         ranks=(),
     )
+
+
+async def test_bucket_split_preserves_manifest_order_and_ownership(
+    driver_args: Namespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = [tmp_path / f"slot-{index}.proposal.json" for index in range(40)]
+    for path in paths:
+        path.write_bytes(Path(driver_args.proposals).read_bytes())
+    manifest = tmp_path / "manifest.txt"
+    manifest.write_text("\n".join(map(str, paths)))
+    driver_args.proposals = str(manifest)
+    launched: list[str] = []
+
+    def launch(command: list[str]) -> SimpleNamespace:
+        launched.append(command[command.index("--proposals") + 1])
+        return SimpleNamespace(wait=lambda: 0)
+
+    monkeypatch.setattr(driver.subprocess, "Popen", launch)
+    partitions = []
+    for span in ((0, 4096), (0, 3072), (3072, 3584), (3584, 4096)):
+        driver_args.bucket_range = span
+        launched.clear()
+        await driver.run(driver_args)
+        partitions.append(tuple(launched))
+        assert launched == [str(path) for path in paths if str(path) in launched]
+    assert partitions[0] == tuple(map(str, paths))
+    assert sorted(path for part in partitions[1:] for path in part) == sorted(partitions[0])
 
 
 async def test_driver_persists_programming_failure_then_reraises(

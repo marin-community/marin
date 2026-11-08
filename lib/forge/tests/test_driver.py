@@ -11,11 +11,12 @@ from typing import Never
 
 import httpx
 import pytest
+from experiments.forge import run_forge
 from iris.cluster.types import JobName
 from shellbox.backends.iris.machine import IrisMachineFactory
 
 from forge import wiring
-from forge.driver import eligible, inputs, proposal_key
+from forge.driver import eligible, inputs, proposal_bucket, proposal_key
 from forge.model.proposal import Environment, TaskProposal, Verification
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
@@ -68,6 +69,29 @@ def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path
 def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No proposal"):
         inputs(str(tmp_path))
+
+
+@pytest.mark.parametrize("drivers,span", [(7, None), (32, "24:32"), (64, "48:64")])
+def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int, span: str | None) -> None:
+    for key in ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "GLM_BASE_URL"):
+        monkeypatch.setenv(key, "fake")
+    monkeypatch.delenv("GLM_RELAY_JOB", raising=False)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(run_forge.subprocess, "run", lambda command, **_: commands.append(command))
+    argv = ["launcher", "--arm", "S", "--drivers", str(drivers), "--concurrency", "4", "--cpu", "8"]
+    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
+    monkeypatch.setattr(sys, "argv", argv + (["--driver-range", span] if span else []))
+    run_forge.main()
+    ranges = [tuple(map(int, command[command.index("--bucket-range") + 1].split(":"))) for command in commands]
+    covered = [bucket for start, end in ranges for bucket in range(start, end)]
+    assert covered == list(range(3072 if span else 0, 4096))
+    assert len(commands) == (int(span.split(":")[1]) - int(span.split(":")[0]) if span else drivers)
+    assert max(end - start for start, end in ranges) - min(end - start for start, end in ranges) <= 1
+    assert (
+        3998
+        == proposal_bucket("s3://old/cap/slot-8.proposal.json", 4096)
+        == proposal_bucket("s3://new/prefix/cap/slot-8.proposal.json", 4096)
+    )
 
 
 async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_host(
