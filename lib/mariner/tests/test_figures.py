@@ -199,9 +199,18 @@ OWN_BEST_PREDICTORS = {
     "uncheatable": {Method.MARINER, Method.SPLINE},
     "obe_easy": {Method.MARINER, Method.SPLINE, Method.OLMIX},
 }
-# Figure 7's caption: each bar is the measured loss's "mean and 95% interval over three trainer seeds", which the
-# paper's figure draws as the mean plus or minus 1.96 standard errors (ddof 1) of the three runs.
-INTERVAL_STANDARD_ERRORS = 1.96
+# Figure 7's caption: each bar is the measured loss's "mean $\pm$ std over three trainer seeds", the values that
+# tab:a-baseline-validation prints for these four proposals (sections/appendix.tex:342-350).
+PRINTED_VALIDATION_LOSSES = {
+    ("uncheatable", "mariner"): ("0.9825", "0.0010"),
+    ("uncheatable", "olmix"): ("1.0022", "0.0014"),
+    ("uncheatable", "spline"): ("0.9857", "0.0014"),
+    ("uncheatable", "regmix"): ("1.0006", "0.0004"),
+    ("obe_easy", "mariner"): ("1.0678", "0.0052"),
+    ("obe_easy", "olmix"): ("1.0922", "0.0040"),
+    ("obe_easy", "spline"): ("1.0803", "0.0050"),
+    ("obe_easy", "regmix"): ("1.0887", "0.0040"),
+}
 # Figure 1's surrogate panel shows MARINER's predicted loss falling and then rising (sections/surrogate.tex:40: "so a
 # task's predicted loss can fall and then rise as a bucket is upweighted"), with its interior optimum at p = 0.578 of the
 # panel's 400-point grid, where the paper's panel marks it without printing the share; Olmix's monotone fit picking pure
@@ -259,6 +268,10 @@ SWARM_BUCKETS = 39  # sections/experimental_setup.tex:38: "The partition draws 3
 ZERO_EPOCH_CELLS = 40
 # Figure 22's legends print each token budget's minimizing StarCoder epochs, by the StarCoder subset's repetition
 # relative to the target run's, from the smallest budget (1.00B tokens) to the largest (7.41B).
+# sections/appendix.tex:400: "With the token budget fixed, the full pool and the subsets at up to a quarter of the
+# target's repetition put the minimum at StarCoder fractions of 0.8 to 1."
+MILD_REPETITION = 0.25
+MILD_MINIMUM_SHARES = (0.8, 1.0)
 PRINTED_REPLAY_EPOCHS = {
     0.125: ["3.0", "3.3", "3.3", "3.3"],
     0.25: ["6.0", "5.3", "6.6", "6.6"],
@@ -294,11 +307,13 @@ SWITCH_POOL = "m100a"
 SWITCH_BASELINE_LEAD = 64
 SWITCH_PAIRS = 8
 RAMP_PAIRS = 5
-# sections/appendix_analysis.tex:362: "Ramps of up to 512 steps changed the mean final programming-languages BPB by at
-# most 0.0005, and the 2,048- and 5,632-step ramps raised it in every seed."
+# sections/appendix_analysis.tex:362: "Smoothing gave no detectable improvement in final programming-languages BPB, and
+# three of the five tested ramps increased it ... Ramps of up to 512 steps changed the mean final programming-languages
+# BPB by at most 0.0005. The 128-, 2,048-, and 5,632-step ramps raised it in every seed."
+TESTED_RAMPS = 5
 NARROW_RAMP_WIDTH = 512
 NARROW_RAMP_CHANGE = 0.0005
-WIDE_RAMPS = 2
+RAISING_RAMP_WIDTHS = (128, 2048, 5632)
 # Figure 27's caption (sections/appendix_analysis.tex:368): "each mixture block of 2,048 sequences (16 training steps)",
 # and "All ramps are centred on the start of the decay, 80% of the way through training."
 BLOCK_SEQUENCES = 2048
@@ -556,9 +571,10 @@ def check_proposal_predictions(values: dict[str, pd.DataFrame]) -> None:
     """Figure 7. sections/abstract.tex:1: "Its proposed mixtures measure within 0.005 BPB of its predictions." And
     sections/surrogate.tex:112 on the 4x4 matrix of predictions: "MARINER's prediction is the closest to the measured
     loss at every trained proposal except Olmix's", each model's predicted best proposal (``OWN_BEST_PREDICTORS``),
-    and "Tuned RegMix predicts every proposal too high on OlmoBaseEval Easy but orders all four correctly". Its bars'
-    interval is ``INTERVAL_STANDARD_ERRORS`` standard errors over the three trainer seeds. The redraw raises unless the
-    snapshot holds all four models' predictions of every proposal."""
+    and "Tuned RegMix predicts every proposal too high on OlmoBaseEval Easy but orders all four correctly". Its bars
+    are the means and standard deviations over the three trainer seeds that tab:a-baseline-validation prints
+    (``PRINTED_VALIDATION_LOSSES``). The redraw raises unless the snapshot holds all four models' predictions of every
+    proposal."""
     summary = values["measured_summary"].set_index(["objective", "proposal"])
     predictions = values["predictions"].pivot(
         index=["objective", "proposal"], columns="predictor", values="predicted_bpb"
@@ -580,9 +596,10 @@ def check_proposal_predictions(values: dict[str, pd.DataFrame]) -> None:
             assert predicted[regmix].sort_values().index.tolist() == measured.sort_values().index.tolist()
     runs = values["measured"].groupby(["objective", "proposal"])["bpb"]
     assert (runs.size() == len(TRAINER_SEEDS)).all()
-    standard_error = (runs.std(ddof=1) / np.sqrt(runs.size())).loc[summary.index]
-    np.testing.assert_allclose(summary["half_width"], INTERVAL_STANDARD_ERRORS * standard_error, rtol=1e-12, atol=0)
+    np.testing.assert_allclose(summary["sd_bpb"], runs.std(ddof=1).loc[summary.index], rtol=1e-12, atol=0)
     np.testing.assert_allclose(summary["mean_bpb"], runs.mean().loc[summary.index], rtol=1e-12, atol=0)
+    printed = {key: (f"{row.mean_bpb:.4f}", f"{row.sd_bpb:.4f}") for key, row in summary.iterrows()}
+    assert printed == PRINTED_VALIDATION_LOSSES
 
 
 def check_accuracy_vs_bpb(values: dict[str, pd.DataFrame]) -> None:
@@ -789,18 +806,19 @@ def check_extrapolation_residuals(values: dict[str, pd.DataFrame]) -> None:
 
 
 def check_downsampling_by_budget(values: dict[str, pd.DataFrame]) -> None:
-    """Figure 21's caption (sections/appendix.tex:405): "At every token budget $D$, stronger downsampling shifts the
-    minimum toward a smaller StarCoder fraction", with the full StarCoder pool added. At each of the four budgets the
-    grid minimum's share never rises from the full pool through the six subsets in order of repetition, and the most
-    repeated subset's lies below the full pool's. The shift is weak: the minimum stays put in 8 of the 24 steps between
-    neighbouring pools, so sections/appendix.tex:400's "each smaller StarCoder subset puts the minimum at a smaller
-    StarCoder fraction" holds only in that weak sense."""
+    """Figure 21's caption (sections/appendix.tex:405): "At every token budget $D$, the minimum moves to a smaller
+    StarCoder fraction at each step of downsampling from half the target's repetition to four times it", with the full
+    StarCoder pool added; and sections/appendix.tex:400: "the full pool and the subsets at up to a quarter of the
+    target's repetition put the minimum at StarCoder fractions of 0.8 to 1" (``MILD_MINIMUM_SHARES``)."""
     minima = values["minima"]
     assert minima.groupby("train_tokens").size().tolist() == [7, 7, 7, 7]
+    low, high = MILD_MINIMUM_SHARES
     for _, rows in minima.groupby("train_tokens"):
-        shares = rows.sort_values("support_order")["share"].to_numpy()
-        assert (np.diff(shares) <= 0).all()
-        assert shares[-1] < shares[0]
+        rows = rows.sort_values("support_order")
+        mild = rows["epoch_multiplier"].isna() | (rows["epoch_multiplier"] <= MILD_REPETITION)  # NaN: the full pool
+        assert mild.sum() == 3
+        assert rows.loc[mild, "share"].between(low, high).all()
+        assert (np.diff(rows.loc[~mild, "share"].to_numpy()) < 0).all()
 
 
 def check_downsampling_by_repetition(values: dict[str, pd.DataFrame]) -> None:
@@ -861,9 +879,9 @@ def check_curricula_sweeps(values: dict[str, pd.DataFrame]) -> None:
 def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
     """Figure 26: its caption's switch, baseline step and seeds (``SWITCH_SHARES`` to ``RAMP_PAIRS``);
     sections/appendix_analysis.tex:353: the PL and C4 gaps "move monotonically to their new levels", each step up to
-    the 95% interval of the point it reaches; and sections/appendix_analysis.tex:362: "Ramps of up to 512 steps changed
-    the mean final programming-languages BPB by at most 0.0005, and the 2,048- and 5,632-step ramps raised it in every
-    seed"."""
+    the 95% interval of the point it reaches; and sections/appendix_analysis.tex:362: no ramp's interval lies above
+    zero, ramps of up to 512 steps change the mean by at most 0.0005, and the three ramps of ``RAISING_RAMP_WIDTHS``
+    raise final programming-languages BPB in every seed, with intervals below zero."""
     switch = values["switch"].iloc[0]
     assert (switch["p0"], switch["p1"]) == SWITCH_SHARES
     assert SWITCH_POOL in switch["label"].split()
@@ -877,11 +895,14 @@ def check_switch_smoothing(values: dict[str, pd.DataFrame]) -> None:
         steps = np.sign(change[-1] - change[0]) * np.diff(change)
         assert (steps >= -rows["half_width_bpb"].to_numpy()[1:]).all()
     ramps = values["ramp_gains"]
+    assert len(ramps) == TESTED_RAMPS
     assert (ramps["pairs"] == RAMP_PAIRS).all()
+    assert (ramps["low_bpb"] <= 0).all()
     narrow = ramps["width"] <= NARROW_RAMP_WIDTH
     assert (ramps.loc[narrow, "gain_bpb"].abs() <= NARROW_RAMP_CHANGE).all()
-    assert (~narrow).sum() == WIDE_RAMPS
-    assert (ramps.loc[~narrow, "worse_in"] == ramps.loc[~narrow, "pairs"]).all()
+    raising = ramps[ramps["worse_in"] == ramps["pairs"]]
+    assert tuple(raising["width"].astype(int)) == RAISING_RAMP_WIDTHS
+    assert (raising["high_bpb"] < 0).all()
 
 
 def check_ramp_schedules(values: dict[str, pd.DataFrame]) -> None:

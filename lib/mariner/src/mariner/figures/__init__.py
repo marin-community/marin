@@ -65,7 +65,7 @@ FIGURES: dict[str, FigureSpec] = {
         FigureSpec("fig:r6", "r6_learning_curve_per_fold_ratio", surrogate.draw_learning_curves),
         FigureSpec("fig:proposal-predictions", "r_proposal_predictions", surrogate.draw_proposal_predictions),
         FigureSpec("fig:accuracy", "r_accuracy_vs_bpb", results.draw_accuracy_vs_bpb),
-        FigureSpec("fig:r1", "r1_scaling_curves_placeholder", results.draw_scaling_curves),
+        FigureSpec("fig:r1", "r1_scaling_curves", results.draw_scaling_curves),
         FigureSpec("fig:off-objective", "r_on_off_objective", results.draw_on_off_objective),
         FigureSpec("fig:component-tradeoffs", "r8_component_tradeoffs_4panel", results.draw_component_tradeoffs),
         FigureSpec("fig:domain-repetition", "figure4_cap_policy", analysis.draw_domain_repetition),

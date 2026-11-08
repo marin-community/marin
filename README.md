@@ -67,7 +67,7 @@ mariner figures --data mariner-data --out figures --only fig:b6
 | 6 | Selection regret against swarm size | `fig:r6` | [`r6_learning_curve_per_fold_ratio.pdf`](lib/mariner/paper_figures/r6_learning_curve_per_fold_ratio.pdf) |
 | 7 | Predicted and measured loss of each proposal | `fig:proposal-predictions` | [`r_proposal_predictions.pdf`](lib/mariner/paper_figures/r_proposal_predictions.pdf) |
 | 8 | Downstream accuracy against loss | `fig:accuracy` | [`r_accuracy_vs_bpb.pdf`](lib/mariner/paper_figures/r_accuracy_vs_bpb.pdf) |
-| 9 | Loss across compute scales | `fig:r1` | [`r1_scaling_curves_placeholder.pdf`](lib/mariner/paper_figures/r1_scaling_curves_placeholder.pdf) |
+| 9 | Loss across compute scales | `fig:r1` | [`r1_scaling_curves.pdf`](lib/mariner/paper_figures/r1_scaling_curves.pdf) |
 | 10 | Loss on the optimized and the other objective | `fig:off-objective` | [`r_on_off_objective.pdf`](lib/mariner/paper_figures/r_on_off_objective.pdf) |
 | 11 | Component losses under each objective | `fig:component-tradeoffs` | [`r8_component_tradeoffs_4panel.pdf`](lib/mariner/paper_figures/r8_component_tradeoffs_4panel.pdf) |
 | 12 | Epoch caps against the optimal epochs of two bucket–task pairs | `fig:domain-repetition` | [`figure4_cap_policy.pdf`](lib/mariner/paper_figures/figure4_cap_policy.pdf) |

@@ -474,9 +474,8 @@ PROPOSAL_MIXTURES = {
 # out, so that each proposal has one run at each trainer seed.
 RERUN_LAUNCH = "olmix_cap_kl_sweep"
 TRAINER_SEEDS = (0, 1, 2)
-NORMAL_QUANTILE_95 = 1.96  # the figure's interval: the mean plus or minus 1.96 standard errors
 BAR_HALF_WIDTH = 0.32
-INTERVAL_ALPHA = 0.2  # the band of a proposal's measured 95% interval
+SPREAD_ALPHA = 0.2  # the band of a proposal's measured mean plus or minus one standard deviation
 MARKERS = {Method.MARINER: "o", Method.OLMIX: "D", Method.SPLINE: "s", Method.REGMIX: "^"}
 
 
@@ -497,7 +496,8 @@ def seed_runs(validation: pd.DataFrame, mixture: str, proposal_objective: str) -
 def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
     """Each proposal's measured runs and their summary, and the predictions ``fits_proposal_predictions`` holds.
 
-    The summary is the mean over the three trainer seeds and the half-width of the figure's 95% interval.
+    The summary is the mean and the standard deviation (ddof 1) over the three trainer seeds, which the figure's bars
+    span as the mean plus or minus one standard deviation.
     """
     runs = read_table(root, VALIDATION_TABLE)
     outcomes = [f"{OUTCOME_PREFIX}{objective}" for objective in PROPOSAL_MIXTURES]
@@ -542,12 +542,12 @@ def proposal_values(root: Path) -> dict[str, pd.DataFrame]:
         .agg(mean_bpb="mean", sd_bpb="std", runs="size")
         .reset_index()
     )
-    summary["half_width"] = NORMAL_QUANTILE_95 * summary["sd_bpb"] / np.sqrt(summary["runs"])
     return {"measured": measured_runs, "measured_summary": summary, "predictions": pd.DataFrame(predictions)}
 
 
 def draw_proposal_predictions(root: Path) -> FigureData:
-    """Figure 7: each proposal's measured loss with its 95% interval, and every model's prediction for it.
+    """Figure 7: each proposal's measured loss (mean and standard deviation over the trainer seeds), and every
+    model's prediction for it.
 
     Raises ``ValueError`` naming the (proposal, predictor) pairs the snapshot has no prediction for.
     """
@@ -569,8 +569,8 @@ def draw_proposal_predictions(root: Path) -> FigureData:
             row = summary[(summary["objective"] == objective) & (summary["proposal"] == proposal)].iloc[0]
             color = METHOD_COLORS[proposal]
             span = [column - BAR_HALF_WIDTH, column + BAR_HALF_WIDTH]
-            low, high = row["mean_bpb"] - row["half_width"], row["mean_bpb"] + row["half_width"]
-            axis.fill_between(span, low, high, color=color, alpha=INTERVAL_ALPHA, linewidth=0)
+            low, high = row["mean_bpb"] - row["sd_bpb"], row["mean_bpb"] + row["sd_bpb"]
+            axis.fill_between(span, low, high, color=color, alpha=SPREAD_ALPHA, linewidth=0)
             axis.plot(span, [row["mean_bpb"]] * 2, color=color, linewidth=1.8)
             for predictor in PROPOSAL_MODELS:
                 predicted = predictions[
@@ -591,7 +591,7 @@ def draw_proposal_predictions(root: Path) -> FigureData:
         axis.set_xlabel("Proposal of")
         axis.set_title(OBJECTIVE_TITLES[objective])
     axes[0].set_ylabel("Loss at 3e18 FLOPs (BPB)")
-    handles = [Line2D([], [], color=NEUTRAL, linewidth=1.8, label="measured (mean and 95% interval)")]
+    handles = [Line2D([], [], color=NEUTRAL, linewidth=1.8, label="measured (mean ± std)")]
     handles += [
         Line2D(
             [],
