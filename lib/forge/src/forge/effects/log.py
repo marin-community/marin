@@ -134,7 +134,7 @@ class JsonlSink(Sink):
                     "event": _encode(record.event, record.sequence, self._known),
                 },
                 sort_keys=True,
-                allow_nan=False,
+                allow_nan=True,
             )
             + "\n"
         ).encode()
@@ -261,7 +261,7 @@ class EventLog:
 
     async def record(self, event: Event[object]) -> None:
         try:
-            json.dumps(_encode(event), sort_keys=True, allow_nan=False)
+            json.dumps(_encode(event), sort_keys=True, allow_nan=True)
         except (TypeError, ValueError) as error:
             raise LogFailure("Cannot encode the event") from error
         record = Record(len(self._records) + 1, time.time(), event)

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import math
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -189,3 +190,22 @@ async def test_conversation_logs_each_turn_once_and_replays_legacy_full_requests
     assert event_digest(legacy) == event_digest(second)
     assert resumed.lookup(legacy, ()) == Completion("reply")
     assert resumed.resolved()[-1].request == second
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, number: float) -> None:
+    sink = JsonlSink(str(tmp_path / "nonfinite.jsonl"))
+    log = EventLog(sink=sink)
+    request = Timed(number)
+    await log.record(request)
+    await log.record(Resolved(request, (), number))
+    loaded = await sink.read()
+    resumed = EventLog(replay_from=loaded)
+    value = resumed.lookup(Timed(number), ())
+    assert isinstance(value, float)
+    assert math.isnan(value) if math.isnan(number) else value == number
+    assert event_digest(loaded[0].event) == event_digest(request)
+    # Rewriting the same append batch must preserve the wire representation.
+    before = Path(sink.path).read_bytes()
+    await sink.write(loaded[-1:])
+    assert Path(sink.path).read_bytes() == before

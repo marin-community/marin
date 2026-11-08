@@ -49,10 +49,10 @@ def json_value(value: object) -> object:
 
 def digest(value: object) -> str:
     """Adapt typed event values to the shared TaskCompendium canonical hash."""
-    return canonical_sha256({"value": json_value(value)})
+    return canonical_sha256({"value": json_value(value)}, allow_nan=True)
 
 
 def pretty_json(value: object) -> str:
     return json.dumps(
-        to_jsonable_python(value, bytes_mode="base64"), sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False
+        to_jsonable_python(value, bytes_mode="base64"), sort_keys=True, ensure_ascii=False, indent=2, allow_nan=True
     )
