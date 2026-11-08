@@ -36,6 +36,7 @@ from taskcompendium.models import (
     Grader,
     GradingAttempt,
     JsonAnswer,
+    JsonObjectInFinal,
     JsonValueAnswer,
     NoGrader,
     PlainText,
@@ -94,6 +95,28 @@ def test_structured_exact_compares_json_types_and_order(actual, reward):
     )
     result = grade_answer(task, _attempt(task, json.dumps(actual)))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+@pytest.mark.parametrize(
+    "reply,expected_status,expected_reward",
+    [
+        ('Here is the answer:\n```json\n{"nested":{"value":2}}\n```', Outcome.GRADED, 1.0),
+        ('{"nested":{"value":2}}', Outcome.GRADED, 1.0),
+        ('{"nested":{"value":3}}', Outcome.GRADED, 0.0),
+        ('{"nested":{"value":2}} and {"nested":{"value":3}}', Outcome.SUBMISSION_FAILURE, 0.0),
+        ('{"nested":{"value":2},"nested":{"value":3}}', Outcome.SUBMISSION_FAILURE, 0.0),
+        ('{"nested":{"value":NaN}}', Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+def test_reference_blind_single_json_object_extraction(reply, expected_status, expected_reward):
+    task = _task(
+        _grader(StructuredExactSpec(expected={"nested": {"value": 2}})),
+        AnswerType.JSON,
+        JsonObjectInFinal(),
+    )
+    restored = TaskSpec.model_validate_json(task.model_dump_json())
+    result = grade_answer(restored, _attempt(restored, reply))
+    assert (result.status, result.reward) == (expected_status, expected_reward)
 
 
 @pytest.mark.parametrize(

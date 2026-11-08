@@ -794,6 +794,44 @@ class JsonValueAnswer(BaseAnswerFormat):
             raise SubmissionFailure("JSON value submission is malformed") from error
 
 
+class JsonObjectInFinal(BaseAnswerFormat):
+    """Extract one unambiguous JSON object from the final reply, allowing surrounding prose.
+
+    The extraction is reference-blind: nested objects are part of their outer
+    object, and multiple independent objects are rejected rather than selecting
+    the one that happens to match the private grader.
+    """
+
+    kind: Literal["json_object_in_final"] = "json_object_in_final"
+    submission_types = (JsonSubmission,)
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.JSON
+
+    def extract(self, attempt: GradingAttempt) -> JsonSubmission:
+        text = _text_answer(attempt.conversation.events[-1])
+        decoder = json.JSONDecoder()
+        candidates: list[str] = []
+        consumed_until = -1
+        for start, char in enumerate(text):
+            if char != "{" or start < consumed_until:
+                continue
+            try:
+                value, end = decoder.raw_decode(text[start:])
+            except ValueError:
+                continue
+            if not isinstance(value, dict):
+                continue
+            candidates.append(text[start : start + end])
+            consumed_until = start + end
+        if len(candidates) != 1:
+            raise SubmissionFailure("Final response requires exactly one unambiguous JSON object")
+        try:
+            return JsonSubmission(decode_json_value(candidates[0]))
+        except ValueError as error:
+            raise SubmissionFailure("Final response contains invalid JSON") from error
+
+
 class AnswerCall(BaseAnswerFormat):
     """The string ``answer`` argument of one ``submit_answer`` function call."""
 
@@ -819,7 +857,7 @@ class AnswerCall(BaseAnswerFormat):
 
 
 NormalAnswerFormat = Annotated[
-    PlainText | Boxed | JsonAnswer | JsonValueAnswer | AnswerCall, Field(discriminator="kind")
+    PlainText | Boxed | JsonAnswer | JsonValueAnswer | JsonObjectInFinal | AnswerCall, Field(discriminator="kind")
 ]
 
 
@@ -868,7 +906,8 @@ class FinalAction(BaseAnswerFormat):
 
 
 AnswerFormat = Annotated[
-    PlainText | Boxed | JsonAnswer | JsonValueAnswer | AnswerCall | FinalAction, Field(discriminator="kind")
+    PlainText | Boxed | JsonAnswer | JsonValueAnswer | JsonObjectInFinal | AnswerCall | FinalAction,
+    Field(discriminator="kind"),
 ]
 
 

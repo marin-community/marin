@@ -1,0 +1,3 @@
+# Local CmdStan compilation output; private posterior CSVs stay outside git.
+/irt_v3
+/irt_v3.hpp

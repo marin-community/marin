@@ -37,10 +37,10 @@ from taskforge.stage40_build_with_program.context import (
 from taskforge.stage40_build_with_program.failure_text import BuildCrash
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.program_sdk import load_program
-from taskforge.stage40_build_with_program.run import ResearchRequirement
+from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from tests.stage30_author.programs import PROGRAM as PLAIN_PROGRAM
-from tests.stage40_build_with_program.conftest import LIMITS, SAMPLING, WORKPIECE, build_draft
+from tests.stage40_build_with_program.conftest import LIMITS, SAMPLING, WORKPIECE
 
 TOKEN_ENV = "TASKFORGE_TEST_GLM_TOKEN"
 CONTROLLER_URL = "http://controller.example:10000"
@@ -62,6 +62,12 @@ PROGRAM = (
     )
     .replace(QUESTION, ASKED)
 )
+BUILD_INPUT_PROGRAM = PROGRAM.replace(
+    "async def assemble(context: RLEnvBuildContext, question: Question, grader: Grader) -> TaskSpec:",
+    "async def assemble(context: RLEnvBuildContext, question: Question, grader: Grader, "
+    "build_input: object) -> TaskSpec:",
+).replace("        context.workpiece_id,\n", '        build_input["task_id"],\n')
+BUILD_INPUT = {"task_id": "task-from-build-input"}
 
 
 def with_question(body: str) -> str:
@@ -124,12 +130,25 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
 ):
     for _ in range(2):
         fake_glm.stream(content=json.dumps({"text": "What is 6 * 7?"}))
-    in_process = await build_draft(tmp_path / "here", load_program(PROGRAM), proposal, services, glm_client)
-    request = make_request(PROGRAM)
+    in_process = await run_build(
+        load_program(BUILD_INPUT_PROGRAM),
+        proposal,
+        WORKPIECE,
+        tmp_path / "here" / "round",
+        str(tmp_path / "here" / "store"),
+        glm_client,
+        SAMPLING,
+        services,
+        0,
+        research=ResearchRequirement.OFF,
+        build_input=BUILD_INPUT,
+    )
+    request = replace(make_request(BUILD_INPUT_PROGRAM), build_input=BUILD_INPUT)
 
     child = await run_build_in_process(request, wall_timeout=WALL_TIMEOUT)
 
     assert child == in_process
+    assert child.task.id == BUILD_INPUT["task_id"]
     assert {outcome.status for outcome in child.provenance.steps} == {CacheStatus.MISS}
     assert fake_glm.request_headers[1]["authorization"] == f"Bearer {TOKEN}"
     ledger = JsonlLedger(tmp_path / "child" / "ledger")
