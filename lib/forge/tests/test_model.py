@@ -11,6 +11,7 @@ from forge.model.controls import Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Message, Role, ToolCall, ToolSchema
 from forge.model.proposal import TaskProposal
 from forge.model.review import (
+    Abandon,
     Accept,
     AdversaryResult,
     BandOutcome,
@@ -59,6 +60,7 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
             Accept(BandOutcome.IN_BAND),
             Reject(RejectKind.TASK, ("ambiguous",)),
             Retry(Cause.NO_GRADE, 2),
+            Abandon(("author stopped",)),
         ),
         terminal=Terminal.HELD,
     )
@@ -68,7 +70,7 @@ def test_saved_workpiece_round_trip_keeps_conversation_evidence_and_decisions(wo
     restored = WORKPIECE.validate_json(WORKPIECE.dump_json(workpiece))
     assert restored == workpiece
     assert restored.evidence[0].solver[1].cause is Cause.AGENT_TIMEOUT
-    assert tuple(type(d) for d in restored.decisions) == (Modify, Incomplete, Accept, Reject, Retry)
+    assert tuple(type(d) for d in restored.decisions) == (Modify, Incomplete, Accept, Reject, Retry, Abandon)
     assert restored.session is not None
     assert restored.session.messages[-1].reasoning == "done"
 
@@ -94,3 +96,16 @@ def test_policy_overlay_changes_digest_and_preserves_original() -> None:
     assert updated.stage_digest("author") != policy.stage_digest("author")
     assert policy.prompt("author.system").render(name="Ada") == "Hello Ada"
     assert updated.setting("author.tags", tuple) == ("b",)
+
+
+@pytest.mark.parametrize("reasons", [(), ("",), (" ",)])
+def test_abandon_requires_a_reason(reasons: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError, match="non-empty reasons"):
+        Abandon(reasons)
+
+
+def test_saved_abandon_cannot_fall_back_to_a_reasonless_decision(workpiece: Workpiece) -> None:
+    saved = WORKPIECE.dump_python(workpiece, mode="json")
+    saved.update(terminal="abandoned", decisions=[{"kind": "abandon", "reasons": []}])
+    with pytest.raises(ValueError, match=r"decisions.0.abandon.reasons"):
+        WORKPIECE.validate_python(saved)

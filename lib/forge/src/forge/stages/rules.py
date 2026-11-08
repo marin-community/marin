@@ -65,7 +65,8 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
 
 def assess(result: ValidationResult, band: BandRules) -> Decision:
     if result.lowering_error is not None:
-        return Incomplete((f"Lowering failed: {result.lowering_error}",))
+        decision = Modify if result.lowering_cause is Cause.INVALID_TASK else Incomplete
+        return decision((f"Lowering failed: {result.lowering_error}",))
     if not result.solver or not result.controls:
         return Incomplete(("Required solver or control evidence is absent",))
     trials = (*result.solver, *result.controls, *(f for a in result.adversary for f in a.findings))

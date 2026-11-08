@@ -5,11 +5,12 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import PurePosixPath
 from typing import override
 
+from taskforge.llm.agent import replay_arguments
 from taskforge.llm.policy import LLMPolicy
 
 from forge.effects.context import Context
@@ -53,7 +54,8 @@ class AgenticHarness(Harness):
     async def run(
         self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
-        prompt_tokens, empty_completions, turns = 0, 0, 0
+        prompt_tokens, empty_completions = 0, 0
+        turns = sum(message.role == Role.ASSISTANT for message in session.messages)
         previous: InferenceRequest | None = None
         consumed = 0
         schemas = tuple(tool.schema for tool in tools.values())
@@ -79,10 +81,11 @@ class AgenticHarness(Harness):
                     return Stopped(StopReason.CONTEXT_LIMIT, session, str(error), turns)
                 # Provider prompt_tokens already includes the cached portion.
                 prompt_tokens = result.usage.prompt_tokens + result.usage.completion_tokens
+                calls = tuple(replace(call, arguments=replay_arguments(call.arguments)) for call in result.tool_calls)
                 session = Conversation(
                     (
                         *session.messages,
-                        Message(Role.ASSISTANT, result.content, result.tool_calls, reasoning=result.reasoning),
+                        Message(Role.ASSISTANT, result.content, calls, reasoning=result.reasoning),
                     ),
                     schemas,
                 )
@@ -96,7 +99,9 @@ class AgenticHarness(Harness):
                         if not isinstance(args, dict):
                             raise ValueError("Tool arguments must be a JSON object")
                     except ValueError as error:
-                        outcome = ToolResult(f"Invalid arguments: {error}")
+                        outcome = ToolResult(
+                            f"{call.name} arguments were not a valid JSON object: {error}; call {call.name} again."
+                        )
                     else:
                         tool = tools.get(call.name)
                         outcome = ToolResult(f"Unknown tool: {call.name}") if tool is None else await tool(ctx, args)

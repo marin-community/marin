@@ -460,19 +460,38 @@ def test_too_easy_does_not_create_an_extra_modification_budget(workpiece: Workpi
     assert "Shared modification budget exhausted" in final.decisions[-1].reasons
 
 
-async def test_validate_returns_lowering_failure_without_starting_trials(workpiece: Workpiece) -> None:
+@pytest.mark.parametrize("authored", [False, True])
+async def test_validate_returns_lowering_failure_without_starting_trials(workpiece: Workpiece, authored: bool) -> None:
     assert workpiece.submission is not None
     task = workpiece.submission.task.model_copy(
         update={"environment_requirements": requirements(image="example.org/task@sha256:" + "0" * 64)}
     )
+    if authored:
+        task = workpiece.submission.task.model_copy(
+            update={
+                "resources": workpiece.submission.task.resources.model_copy(
+                    update={"worker": (inline_resource("input.txt", b"input"),)}
+                )
+            }
+        )
     workpiece = workpiece.with_(submission=replace(workpiece.submission, task=task))
     ctx = Context(log=EventLog())
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     result = (await validate(ctx, workpiece, config(harness), resources(ctx))).result
     assert result.lowering_error is not None
     assert not result.solver and not result.controls
+    assert workpiece.submission is not None
+    setup = config(harness)
+    if authored:
+        assert result.lowering_cause is Cause.INVALID_TASK
+        assert setup.submit_gate(workpiece.submission) == ("Task resources require a task machine",)
+    else:
+        assert result.lowering_cause is Cause.GRADER_INFRA
+        with pytest.raises(Hold, match="Lowering failed"):
+            setup.submit_gate(workpiece.submission)
     assert isinstance(
-        default_review(workpiece.with_(evidence=(result,)), config(harness).band, config(harness).budget), Incomplete
+        default_review(workpiece.with_(evidence=(result,)), config(harness).band, config(harness).budget),
+        Modify if authored else Incomplete,
     )
 
 
