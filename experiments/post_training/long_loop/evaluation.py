@@ -32,7 +32,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
-from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION
+from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION, SKIPPED_BENCHMARKS
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
 from experiments.post_training.long_loop.sft import read_json
@@ -53,6 +53,7 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
             seen.add(row["benchmark"])
     if len(chosen) != 21:
         raise ValueError("Micro smoke must cover all 21 benchmark paths")
+    chosen = [i for i in chosen if table["benchmark"][i].as_py() not in SKIPPED_BENCHMARKS]
     smoke = repaired_table(table.take(pa.array(chosen)), wheels_revision)
     fs, key = filesystem_for(output + "/rollouts.parquet")
     with fs.open(key, "wb") as target:
@@ -201,7 +202,15 @@ def micro_inputs(version: str) -> ArtifactStep:
                 for name in ("DAYTONA_EVAL_API_KEY", "DAYTONA_TARGET", "TOGETHER_API_KEY")
                 if name in os.environ
             },
-            resources=ResourceConfig.with_gpu("H100", count=1, cpu=4, ram="16GB", disk="64GB", target_cluster=None),
+            resources=ResourceConfig.with_gpu(
+                "H100",
+                count=8,
+                cpu=32,
+                ram="128GB",
+                disk="512GB",
+                target_cluster=None,
+                container_profile="CONTAINER_PROFILE_PRIVILEGED",
+            ),
         ),
         version=version,
         output=OUT,

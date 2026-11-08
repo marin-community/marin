@@ -24,6 +24,7 @@ from experiments.post_training.long_loop.eval_runtime.profile import (
     DESTINATION,
     MODEL,
     REVISION,
+    SKIPPED_BENCHMARKS,
     counterpart_environment,
     pi_agent_config,
 )
@@ -46,7 +47,7 @@ async def main(
     semaphore = asyncio.Semaphore(4)
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        rows = restored_environments(root / "tasks")
+        rows = [row for row in restored_environments(root / "tasks") if row.benchmark not in SKIPPED_BENCHMARKS]
         unique = {row.image_source_key: row for row in reversed(rows)}
         selected = {row.benchmark: row.image_source_key for row in reversed(rows)}
         keys = list(selected.values()) if smoke else list(unique)
@@ -91,21 +92,26 @@ async def main(
                     )
                     environment = trial.agent_environment
                     agent = trial.agent
-                    try:
-                        async with asyncio.timeout(1800):
-                            await environment.start(force_build=False)
-                        async with asyncio.timeout(360):
-                            await agent.setup(environment)
-                        result = await environment.exec(command="uname -m", timeout_sec=30)
-                        if result.return_code != 0:
-                            raise RuntimeError("Environment execution failed")
-                        receipts.append(
-                            {**asdict(row), "architecture": result.stdout.strip(), "elapsed": time.monotonic() - started}
-                        )
-                        logging.info("Validated %s (%s), %d/%d", row.benchmark, key, len(receipts), len(keys))
-                    finally:
-                        async with asyncio.timeout(60):
-                            await environment.stop(delete=True)
+                    async with asyncio.TaskGroup() as service_tasks:
+                        try:
+                            async with asyncio.timeout(1800):
+                                await environment.start(force_build=False, service_tasks=service_tasks)
+                            async with asyncio.timeout(360):
+                                await agent.setup(environment)
+                            result = await environment.exec(command="uname -m", timeout_sec=30)
+                            if result.return_code != 0:
+                                raise RuntimeError("Environment execution failed")
+                            receipts.append(
+                                {
+                                    **asdict(row),
+                                    "architecture": result.stdout.strip(),
+                                    "elapsed": time.monotonic() - started,
+                                }
+                            )
+                            logging.info("Validated %s (%s), %d/%d", row.benchmark, key, len(receipts), len(keys))
+                        finally:
+                            async with asyncio.timeout(60):
+                                await environment.stop(delete=True)
                 except Exception as error:
                     failures.append(
                         {
@@ -131,6 +137,7 @@ async def main(
             "data_uri": data_uri,
             "scope": "diagnostic" if benchmarks else ("smoke" if smoke else "full"),
             "provisioning": "native_harbor_daytona",
+            "excluded_benchmarks": SKIPPED_BENCHMARKS,
             "named_snapshots_required": False,
             "required_source_keys": keys,
             "expected_source_keys": len(keys),

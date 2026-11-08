@@ -68,3 +68,5 @@ preflight use `DAYTONA_EVAL_API_KEY`. Both are dedicated organization credential
 never substitute `DAYTONA_API_KEY`. Inline evaluation through the training factory
 is disabled; evaluation is the separate Eval-org graph stage. A fresh live run
 still requires verified organization identity and an explicit Daytona target.
+
+The current reduced smoke excludes `tau3-pi` under [#11083](https://github.com/marin-community/marin/issues/11083): 20 benchmark paths, including six agentic environment paths. Reports retain the exclusion; this is not complete Micro210 coverage. Standalone preflight reserves nine H100s (one coordinator plus an eight-GPU host).

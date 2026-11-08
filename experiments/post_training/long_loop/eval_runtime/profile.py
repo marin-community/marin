@@ -47,3 +47,8 @@ def counterpart_environment() -> dict[str, str]:
         "TAU2_NL_ASSERTIONS_MODEL": COUNTERPART_MODEL,
         "TAU2_USER_REASONING_EFFORT": "low",
     }
+
+
+# Temporary user-authorized smoke exclusion; preserve the full release unchanged.
+SKIPPED_BENCHMARKS = {"tau3-pi": "Unsupported Compose/network contract; marin issue #11083"}
+SMOKE_PATH_COUNT = 21 - len(SKIPPED_BENCHMARKS)

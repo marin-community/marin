@@ -13,6 +13,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
+from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
 from experiments.post_training.long_loop.timing import Event, EventLog, report
 
 
@@ -51,10 +52,11 @@ def write_report(*, output: str, stages: list[str]) -> None:
     fs, root = filesystem_for(output)
     fs.pipe_file(root + "/timing.md", text.encode())
     fs.pipe_file(root + "/timing-sources.json", json.dumps(sources, indent=2).encode())
-    evaluation = audit(stages[-1], expected_rollouts=21)
+    evaluation = audit(stages[-1], expected_rollouts=SMOKE_PATH_COUNT)
+    evaluation["excluded_benchmarks"] = SKIPPED_BENCHMARKS
     fs.pipe_file(root + "/evaluation.json", json.dumps(evaluation, indent=2).encode())
     if not evaluation["all_verified"]:
-        raise ValueError("Micro210 runtime smoke did not verify every one of its 21 paths")
+        raise ValueError(f"Micro210 reduced smoke did not verify all {SMOKE_PATH_COUNT} selected paths")
 
 
 def report_step(version: str, stages: list[ArtifactStep]) -> ArtifactStep:
