@@ -7966,7 +7966,7 @@ model:
   latent_dim: null
   layer_norm_eps: 1.0e-05
   local_kv_heads: null
-  max_seq_len: 262144
+  max_seq_len: 32768
   moe_implementation: sonic
   num_expert_waves: 1
   num_experts: 256
@@ -8032,7 +8032,7 @@ resources:
   image: null
   preemptible: false
   ram: 1500GB
-  replicas: 32
+  replicas: 4
   target_cluster: cw-rno2a
   zone: null
 stop_after_steps: 15
@@ -8047,7 +8047,7 @@ trainer:
   - 842
   - 128001
   balance_attention_rows: false
-  context_axis_size: 8
+  context_axis_size: 2
   data_seed: null
   ema_beta: null
   expert_axis_size: 1
@@ -8055,7 +8055,7 @@ trainer:
   log_every: 1
   master_param_mode: device
   offload_opt_state: true
-  replica_axis_size: 2
+  replica_axis_size: 1
   save_checkpoints: true
   sharding_dump_path: null
   special_token_ids:
@@ -8199,4 +8199,6 @@ trainer:
   training_data_mode: mixture
   watch_mode: inline
   z_loss_weight: 0.0001
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 8
+
+max_retries_preemption: 0

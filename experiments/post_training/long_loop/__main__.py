@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the Snowball SFT → GS8 RL → Micro210 plumbing loop."""
+"""Build the Snowball plumbing SFT geometry (32k/32 GPU), not target, → GS8 RL → Micro210 loop."""
 
 from dataclasses import replace
 

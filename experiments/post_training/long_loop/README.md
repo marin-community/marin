@@ -21,17 +21,20 @@ command adopts that job instead of creating another coordinator. Failed stages
 are not automatically replayed. Reconcile a failed or ambiguous attempt before
 using a new version.
 
-Peak stage requests are 8 H100 for the base import, 256 for SFT, 8 for the
+Peak stage requests are 8 H100 for the base import, 32 for SFT, 8 for the
 CPU export host, 8 for the endpoint probe, 40 for RL, and 16 for evaluation including
 the judge. Dependencies serialize these stages. Every GPU job uses RNO2A at
 **interactive** priority; the aggregate limit is **256 H100**. Neither priority
 changes nor PR creation are authorized. Keep all changes in this worktree and
 merge current main regularly.
 
-SFT uses the archived tested 262k trainer, 256 sequences per update, and the
+Plumbing SFT geometry (32k/32 GPU), not target, uses the archived trainer, 256 sequences per update, and the
 initial phase of the 10-05 reproduction composition: 20.4734375% replay.
 The original 4,750-step learning-rate schedule and special-token treatment are
-preserved; this smoke stops at step 15 (~1.007B scheduled token positions).
+preserved; this smoke stops at step 15 (~126M scheduled token positions).
+The mesh is replica1/data16/context2 with accumulation8. SFT preemption retries are zero.
+Each JAX rank preserves stdout/stderr under `IRIS_OUTPUT_DIR` for the attempt archive.
+262k/256-GPU SFT and attempt-scoped JAX bootstrap remain target-geometry qualifications.
 `runtime-origin.json` records the reused source bytes. The deleted native base
 import is reconstructed from HF revision `058ecaf27b9e4f37219df221a51e7d490d58ec3d`.
 The import must verify every one of the 502 tensor mappings.

@@ -43,6 +43,8 @@ import signal
 import subprocess
 import sys
 import threading
+from contextlib import nullcontext
+from pathlib import Path
 from types import FrameType
 from typing import IO
 
@@ -81,18 +83,23 @@ def _child_rank_env(
     }
 
 
-def _pump_output(tag: str, source: IO[str], sink: IO[str], write_lock: threading.Lock) -> None:
+def _pump_output(
+    tag: str, source: IO[str], sink: IO[str], write_lock: threading.Lock, archive: Path | None = None
+) -> None:
     """Forward one of a child's streams to the matching supervisor stream, rank-tagged.
 
     stdout and stderr stay separate: iris classifies an unprefixed line by the
     stream it arrived on, so folding a child's stderr into stdout would demote
     its tracebacks to ``INFO``.
     """
-    for line in iter(source.readline, ""):
-        with write_lock:
-            sink.write(tag + line)
-            sink.flush()
-    source.close()
+    with source, archive.open("w", buffering=1) if archive else nullcontext() as saved:
+        for line in iter(source.readline, ""):
+            if saved is not None:
+                saved.write(line)
+                saved.flush()
+            with write_lock:
+                sink.write(tag + line)
+                sink.flush()
 
 
 def _signal_children(children: list[subprocess.Popen], ranks, sig: int) -> None:
@@ -137,8 +144,14 @@ def _spawn_children(
             )
             children.append(child)
             tag = rank_log_tag(local_rank)
-            for source, sink in ((child.stdout, sys.stdout), (child.stderr, sys.stderr)):
-                pump = threading.Thread(target=_pump_output, args=(tag, source, sink, write_lock), daemon=True)
+            output_dir = os.environ.get("IRIS_OUTPUT_DIR")
+            for stream, source, sink in (("stdout", child.stdout, sys.stdout), ("stderr", child.stderr, sys.stderr)):
+                archive = (
+                    Path(output_dir) / f"rank-{task_index * nproc + local_rank}.{stream}.log" if output_dir else None
+                )
+                if archive is not None:
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                pump = threading.Thread(target=_pump_output, args=(tag, source, sink, write_lock, archive), daemon=True)
                 pump.start()
                 pumps.append(pump)
     except BaseException:

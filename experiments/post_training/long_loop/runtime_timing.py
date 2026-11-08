@@ -44,6 +44,7 @@ def write_report(*, output: str, stages: list[str]) -> None:
             events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
             sources.append(fs.unstrip_protocol(key))
     text = report(events, synthetic=False)
+    text += "\nPlumbing SFT geometry (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.\n"
     text += (
         "\nStage spans include scheduling and startup; they are not active compute measurements.\n"
         "Queue wait, allocation release, native learner phases, and per-benchmark timing require the\n"

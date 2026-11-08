@@ -437,6 +437,7 @@ class GrugRunConfig:
     # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
     # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
     # restores checkpoints benefits from a deep budget.
+    max_retries_preemption: int = 0
     max_retries_failure: int = 0
     max_task_failures: int = 10
 
@@ -1591,6 +1592,7 @@ def run_grug(config: GrugRunConfig) -> None:
         resources=config.resources,
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
+        max_retries_preemption=config.max_retries_preemption,
         max_task_failures=config.max_task_failures,
     )
 

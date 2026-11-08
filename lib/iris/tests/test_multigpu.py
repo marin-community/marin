@@ -201,3 +201,14 @@ def test_build_multigpu_hook_requires_gpu() -> None:
 def test_build_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
         build_multigpu_hook(_gpu_resources(8), 3)
+
+
+def test_rank_streams_preserved_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+    code = (
+        "import os,sys; r=os.environ['IRIS_MULTIGPU_PROCESS_INDEX']; "
+        "print('out-'+r,flush=True); print('err-'+r,file=sys.stderr,flush=True); sys.exit(7)"
+    )
+    assert run(nproc=1, devices_per_proc=1, child_argv=_py(code)) == 7
+    assert (tmp_path / "rank-0.stdout.log").read_text() == "out-0\n"
+    assert (tmp_path / "rank-0.stderr.log").read_text() == "err-0\n"
