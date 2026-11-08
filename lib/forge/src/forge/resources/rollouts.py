@@ -10,7 +10,7 @@ from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, Rollo
 from shellbox.machine import ExecSetupFailed, MachineTerminated
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
-from forge.effects.issues import Restart, Transient
+from forge.effects.issues import Restart, Transient, describe_exception
 from forge.resources.execution import Notify, has_cause, retry_effect
 
 
@@ -32,7 +32,7 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
     cause = error.__cause__
     while cause is not None and id(cause) not in seen:
         seen.add(id(cause))
-        causes.append(str(cause))
+        causes.append(describe_exception(cause))
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"

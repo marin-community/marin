@@ -9,7 +9,7 @@ from collections.abc import Callable
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import StageCompleted
-from forge.effects.issues import Hold, Restart, Transient
+from forge.effects.issues import Hold, Restart, Transient, describe_exception
 from forge.effects.log import EventLog
 from forge.model.content_hash import digest
 from forge.model.proposal import TaskProposal
@@ -29,7 +29,7 @@ def reasons(error: BaseException) -> tuple[str, ...]:
     cause: BaseException | None = error
     while cause is not None and id(cause) not in seen:
         seen.add(id(cause))
-        details.append(f"{type(cause).__name__}: {cause}")
+        details.append(describe_exception(cause))
         cause = cause.__cause__
     return (" <- ".join(details),)
 

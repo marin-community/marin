@@ -12,7 +12,7 @@ from rolloutengine.models import TaskRolloutSpec, TraceMode
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Resolved
-from forge.effects.issues import Hold
+from forge.effects.issues import Hold, describe_exception
 from forge.harness.protocol import Returned, Stopped
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
@@ -57,7 +57,7 @@ def failure_reasons(error: BaseException) -> tuple[str, ...]:
     """Retain leaf diagnostics when observer scopes group infrastructure failures."""
     if isinstance(error, BaseExceptionGroup):
         return tuple(reason for child in error.exceptions for reason in failure_reasons(child))
-    reasons = (f"{type(error).__name__}: {error}",)
+    reasons = (describe_exception(error),)
     return reasons + (failure_reasons(error.__cause__) if error.__cause__ is not None else ())
 
 

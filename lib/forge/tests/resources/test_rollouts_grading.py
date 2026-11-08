@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from collections.abc import Sequence
 from functools import partial
 from typing import override
@@ -40,7 +41,7 @@ from forge.effects.issues import Restart, Transient
 from forge.effects.log import EventLog
 from forge.model.controls import Candidate
 from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
-from forge.resources.rollouts import Engine, RolloutResource, SolverRollout, run_rollout
+from forge.resources.rollouts import Engine, RolloutResource, SolverRollout, interruption, run_rollout
 
 
 class FakeEngine(Engine):
@@ -98,7 +99,7 @@ async def test_rollout_interruptions_select_retry_or_restart(operation: RolloutO
     with pytest.raises(decision) as failure:
         await resource.run(SolverRollout(rollout_spec(arithmetic_task()), 4, 2))
     assert failure.value.__cause__ is interrupted
-    detail = (str(cause) + " <- " + str(cause.__cause__))[:300]
+    detail = (f"RuntimeError: {cause} <- RuntimeError: {cause.__cause__}")[:300]
     assert str(failure.value) == f"Rollout interrupted during {operation}: {detail}"
     assert "ImagePullBackOff" in str(failure.value)
     assert engine.run_ids == ["arithmetic:4:2"]
@@ -194,3 +195,14 @@ async def test_early_grader_cut_is_not_cached_for_stage_replay(solver: bool) -> 
     await ctx.emit(event)
     await ctx.drain()
     assert len(engine.run_ids) == 2
+
+
+def test_empty_interruption_causes_keep_exception_types() -> None:
+    cancelled = asyncio.CancelledError()
+    timeout = TimeoutError()
+    timeout.__cause__ = cancelled
+    interrupted = RolloutInterrupted(Rollout("test", (), "stop"), RolloutOperation.GRADE)
+    interrupted.__cause__ = timeout
+    decision = interruption(interrupted)
+    assert isinstance(decision, Restart)
+    assert str(decision) == "Rollout interrupted during grade: TimeoutError <- CancelledError"

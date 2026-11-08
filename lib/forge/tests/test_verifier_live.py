@@ -16,7 +16,8 @@ import pytest
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from shellbox.backends.iris.machine import ExecOutput, IrisMachine, IrisMachineFactory
-from shellbox.machine import Command, MachineSpec
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, ExitReason, MachineSpec
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -222,9 +223,6 @@ async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -
 @pytest.mark.timeout(1800)
 @pytest.mark.skipif(not os.environ.get("PROBE_OUTPUT"), reason="requires live Iris and storage")
 async def test_nested_command_timeout_keeps_sandbox_alive() -> None:
-    from shellbox.image import RegistryImage
-    from shellbox.machine import ExitReason
-
     configure_coreweave_s3()
     factory = Factory()
     machine = await factory.create(MachineSpec(source=RegistryImage(GRADER_BASE_IMAGE), workdir="/workspace"))

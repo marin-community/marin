@@ -27,3 +27,8 @@ class Hold(EffectIssue):
 
 class LogFailure(EffectIssue):
     """Event log encoding, decoding, or persistence failed."""
+
+
+def describe_exception(error: BaseException) -> str:
+    message = str(error).strip()
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
