@@ -2,21 +2,34 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import override
 
 import pytest
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
+from rolloutengine.validation import InvalidTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
+    FinalAction,
+    FunctionDefinition,
+    NoGrader,
+    PlainText,
     ScriptGrader,
+    ShellToolBinding,
     StdoutReward,
 )
 
+from forge.effects.context import Context
+from forge.effects.log import EventLog
+from forge.harness.protocol import ToolResult
+from forge.harness.tools.submit import SubmitTool
+from forge.harness.tools.validate import ValidateTool
 from forge.lowering import (
     GRADING_MACHINE,
     LoweringSettings,
@@ -24,7 +37,10 @@ from forge.lowering import (
     lowering_settings,
     requirements,
 )
+from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from forge.policy import GRADER_BASE_IMAGE, load_policy
+from forge.resources.env import ReadFile
+from forge.wiring import submit_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,3 +125,46 @@ def test_shellsim_binding_omits_host_cpu_allocation() -> None:
     task = arithmetic_task(environment_requirements=requirements(image=None))
     spec = lower_with_settings(task, lowering_settings(policy), {"shellsim": ShellSimMachineFactory()})
     assert spec.task_machine is not None and spec.task_machine.cpus is None
+
+
+@pytest.mark.parametrize("tool_type", [SubmitTool, ValidateTool])
+@pytest.mark.parametrize("defect", ["shell", "final_action"])
+async def test_authored_interface_errors_return_tool_feedback(
+    tool_type: type[SubmitTool] | type[ValidateTool], defect: str
+) -> None:
+    task = arithmetic_task(
+        answer_format=FinalAction(normal_submission=PlainText()), grader=NoGrader(reason="interface preflight")
+    )
+    message = "final action requires at least one final tool"
+    if defect == "shell":
+        definition = FunctionDefinition(
+            name="Bash",
+            description="Run",
+            parameters={
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}},
+                "required": ["cmd"],
+            },
+        )
+        task = arithmetic_task(
+            environment_requirements=requirements(image=None),
+            interaction_tools=(definition,),
+            tool_bindings={"Bash": ShellToolBinding(command_parameter="cmd")},
+        )
+        message = "Shell tools require exactly one required string argument and no additional properties"
+    settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
+    factories = {"shellsim": AvailableFactory(Backend.SHELLSIM)}
+    with pytest.raises(InvalidTaskSpec, match=message):
+        lower_with_settings(task, settings, factories)
+    controls = (Control(Candidate("12"), RewardBand(Outcome.GRADED, 1), ControlKind.POSITIVE),)
+    files = {"/task.json": task.model_dump_json().encode(), "/controls.json": CONTROLS.dump_json(controls)}
+
+    async def read(event: ReadFile) -> bytes:
+        return files[str(event.path)]
+
+    ctx = Context(log=EventLog())
+    ctx.handle(ReadFile, read)
+    tool = tool_type(partial(submit_gate, settings=settings, factories=factories), "/task.json", "/controls.json")
+    result = await tool(ctx, {})
+    assert isinstance(result, ToolResult) and message in result.content
+    await ctx.drain()

@@ -708,3 +708,23 @@ def test_adversary_grader_failure_requests_repair_with_evidence(workpiece: Workp
     assert error in revised.session.messages[-1].content
     if crash:
         assert traceback in revised.session.messages[-1].content
+
+
+@pytest.mark.parametrize("grade", [None, GradeResult(Outcome.GRADED, 1)])
+def test_generation_limited_solver_is_failed_pass_rate_evidence(workpiece: Workpiece, grade: GradeResult | None) -> None:
+    assert workpiece.submission is not None
+    good = GradeResult(Outcome.GRADED, 1)
+    result = ValidationResult(
+        workpiece.submission.digest,
+        (TrialResult(0, grade, Cause.GENERATION_LIMIT), TrialResult(1, good)),
+        (ControlResult(0, good, True),),
+        (),
+    )
+    setup = config()
+    decision = default_review(
+        workpiece.with_(evidence=(result,)), BandRules(0.5, 0.5, frozenset({BandOutcome.IN_BAND})), setup.budget
+    )
+    assert isinstance(decision, Accept)
+    assert result.solver[0].cause is Cause.GENERATION_LIMIT and result.solver[0].grade is grade
+    unavailable = replace(result, controls=(ControlResult(0, None, False, Cause.NO_GRADE),))
+    assert not isinstance(default_review(workpiece.with_(evidence=(unavailable,)), setup.band, setup.budget), Accept)

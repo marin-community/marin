@@ -21,6 +21,7 @@ from forge.model.review import (
     Reject,
     RejectKind,
     Retry,
+    TrialResult,
     ValidationResult,
 )
 from forge.model.workpiece import Workpiece
@@ -70,7 +71,11 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     if not result.solver or not result.controls:
         return Incomplete(("Required solver or control evidence is absent",))
     trials = (*result.solver, *result.controls, *(f for a in result.adversary for f in a.findings))
-    causes = Counter(t.cause or (Cause.NO_GRADE if t.grade is None else None) for t in trials)
+    causes = Counter(
+        t.cause or (Cause.NO_GRADE if t.grade is None else None)
+        for t in trials
+        if not (isinstance(t, TrialResult) and t.cause is Cause.GENERATION_LIMIT)
+    )
     unavailable = tuple(
         f"{count} ungraded trial(s): {cause}"
         for cause, count in sorted((cause, count) for cause, count in causes.items() if cause is not None)
@@ -103,7 +108,11 @@ def assess(result: ValidationResult, band: BandRules) -> Decision:
     )
     if findings:
         return Modify(findings)
-    solved = sum(passed(trial.grade) for trial in result.solver if trial.grade is not None)
+    solved = sum(
+        passed(trial.grade)
+        for trial in result.solver
+        if trial.grade is not None and trial.cause is not Cause.GENERATION_LIMIT
+    )
     place = band.place(solved / len(result.solver))
     if place is BandOutcome.IN_BAND and place in band.accepted:
         return Accept(place)
