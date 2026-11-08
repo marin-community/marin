@@ -18,6 +18,7 @@ from forge.resources.inference import InferenceClient
 class StopReason(StrEnum):
     FINISHED = "finished"
     CONTEXT_LIMIT = "context_limit"
+    DEGENERATE_OUTPUT = "degenerate output"
 
 
 @dataclass(frozen=True, slots=True)

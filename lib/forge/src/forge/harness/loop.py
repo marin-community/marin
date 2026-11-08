@@ -54,7 +54,7 @@ class AgenticHarness(Harness):
     async def run(
         self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
-        prompt_tokens, empty_completions = 0, 0
+        prompt_tokens, empty_completions, degenerate_completions = 0, 0, 0
         turns = sum(message.role == Role.ASSISTANT for message in session.messages)
         previous: InferenceRequest | None = None
         consumed = 0
@@ -74,11 +74,24 @@ class AgenticHarness(Harness):
                     )
                 turns += 1
                 try:
-                    request = InferenceRequest(session.messages[consumed:], schemas, self.sampling, previous)
+                    request = InferenceRequest(
+                        session.messages[consumed:], schemas, self.sampling, previous, sample=degenerate_completions
+                    )
                     result = await ctx.emit(request)
                     previous, consumed = request, len(session.messages)
                 except ContextExceeded as error:
                     return Stopped(StopReason.CONTEXT_LIMIT, session, str(error), turns)
+                if result.finish_reason == FinishReason.LENGTH and not result.content and not result.tool_calls:
+                    degenerate_completions += 1
+                    if degenerate_completions == 2:
+                        return Stopped(
+                            StopReason.DEGENERATE_OUTPUT,
+                            session,
+                            f"{result.usage.reasoning_tokens} reasoning tokens, finish=length",
+                            turns,
+                        )
+                    continue
+                degenerate_completions = 0
                 # Provider prompt_tokens already includes the cached portion.
                 prompt_tokens = result.usage.prompt_tokens + result.usage.completion_tokens
                 calls = tuple(replace(call, arguments=replay_arguments(call.arguments)) for call in result.tool_calls)

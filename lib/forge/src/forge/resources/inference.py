@@ -35,6 +35,7 @@ class InferenceRequest(Event[Completion]):
     tools: tuple[ToolSchema, ...]
     sampling: LLMPolicy
     previous: "InferenceRequest | None" = None
+    sample: int = 0
     _history: str = field(default="", init=False, repr=False, compare=False, metadata={"serialize": False})
 
     def __post_init__(self) -> None:
@@ -45,7 +46,7 @@ class InferenceRequest(Event[Completion]):
 
     @override
     def identity(self) -> object:
-        return (self._history, self.tools, self.sampling)
+        return (self._history, self.tools, self.sampling) + ((self.sample,) if self.sample else ())
 
     @property
     def conversation(self) -> tuple[Message, ...]:

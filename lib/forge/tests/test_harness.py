@@ -39,7 +39,7 @@ from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.tools.web import WebFetchTool, WebSearchTool
 from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
-from forge.model.llm import Completion, Message, Role, ToolCall, Usage
+from forge.model.llm import Completion, FinishReason, Message, Role, ToolCall, Usage
 from forge.model.workpiece import Conversation, Submission
 from forge.resources.env import (
     CommandResult,
@@ -352,6 +352,39 @@ async def test_three_consecutive_empty_completions_hold_provider_failure() -> No
         await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(ctx, Conversation((), ()), client, {})
     await ctx.drain()
     assert len(client.requests) == 3
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(tmp_path: Path, recovers: bool) -> None:
+    failed = Completion(
+        "",
+        finish_reason=FinishReason.LENGTH,
+        usage=Usage(prompt_tokens=48461, completion_tokens=565939, reasoning_tokens=565939),
+        reasoning="repeated reasoning",
+    )
+    client = FakeInference((failed, call("finish", {"reason": "done"}, "finish") if recovers else failed))
+    sink = JsonlSink(str(tmp_path / "session.jsonl"))
+    ctx = Context(log=EventLog(sink=sink))
+    initial = Conversation((Message(Role.USER, "build"),), ())
+    harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000)
+    tools = {"finish": FinishTool()}
+    result = await harness.run(ctx, initial, client, tools)
+    await ctx.drain()
+    assert isinstance(result, Stopped)
+    assert result.reason == (StopReason.FINISHED if recovers else StopReason.DEGENERATE_OUTPUT)
+    assert len(client.requests) == 2
+    assert client.requests[0].conversation == client.requests[1].conversation == initial.messages
+    assert all(message.reasoning != failed.reasoning for message in result.session.messages)
+    if not recovers:
+        assert result.detail == "565939 reasoning tokens, finish=length"
+        assert result.session.messages == initial.messages
+    records = await sink.read()
+    assert any(isinstance(record.event, Resolved) and record.event.value == failed for record in records)
+    replay = Context(log=EventLog(replay_from=records))
+    replay_client = FakeInference(())
+    assert await harness.run(replay, initial, replay_client, tools) == result
+    await replay.drain()
+    assert replay_client.requests == []
 
 
 @pytest.mark.parametrize("name", ["grade", "submit", "validate"])
