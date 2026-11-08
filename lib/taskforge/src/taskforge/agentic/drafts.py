@@ -50,6 +50,7 @@ from taskcompendium.models import (
     VerifyitGrader,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.submission import submission_compatibility
 from verifyit.grade import numeric_tolerance
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.numeric import numeric_literal
@@ -92,7 +93,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "12"
+DRAFT_REVISION = "13"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -444,6 +445,7 @@ def draft_task_problems(task: TaskSpec, solver_machine: SolverMachine) -> list[s
         *leaked_reference_problems(task),
         *example_answer_problems(task),
         *answer_form_problems(task),
+        *submission_problems(task),
         *answer_in_prompt_problems(task),
     ]
 
@@ -477,6 +479,18 @@ def _judge_spec(task: TaskSpec) -> JudgeSpec | None:
         return None
     spec = spec_from_table({"mode": grader.mode, **grader.parameters})
     return spec if isinstance(spec, JudgeSpec) else None
+
+
+def submission_problems(task: TaskSpec) -> list[str]:
+    """An answer format whose submissions the grader cannot take, which fails every rollout before the solver."""
+    reasons = submission_compatibility(task).reasons
+    if not reasons:
+        return []
+    return [
+        f"The answer format {task.answer_format.kind!r} does not fit the grader: {'; '.join(reasons)}. A judge, "
+        "numeric, math or mcq grader takes plain_text or boxed; json_value is for structured_exact or exact, as "
+        "the json example does"
+    ]
 
 
 def judge_problems(task: TaskSpec) -> list[str]:

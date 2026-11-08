@@ -20,7 +20,16 @@ from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUs
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import Boxed, ResourceGroups, ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
+from taskcompendium.models import (
+    AnswerType,
+    Boxed,
+    JsonValueAnswer,
+    ResourceGroups,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+)
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec, JudgeSpec, NumericSpec, spec_from_table
@@ -300,6 +309,10 @@ def example_with_the_answer() -> TaskSpec:
     return _with_prompt(task, f"{_prompt(task)} For example: {example}")
 
 
+def judge_of_a_json_answer() -> TaskSpec:
+    return judge_task("example").model_copy(update={"answer_type": AnswerType.JSON, "answer_format": JsonValueAnswer()})
+
+
 def long_checklist() -> TaskSpec:
     task = judge_task("example")
     criteria = tuple(f"The answer states the price after discount {k}" for k in range(9))
@@ -354,6 +367,7 @@ DEFECTS = {
     "exact entries meant as alternatives, which make a list": (exact_with_alternatives, "not a set of alternatives"),
     "exact answer on an Answer line that plain_text compares whole": (choice_with_an_answer_line, "its own grader"),
     "checklist with more criteria than judge calls allow": (long_checklist, "criteria"),
+    "answer format that the grader cannot take": (judge_of_a_json_answer, "does not fit the grader"),
     "tolerance that passes the neighbors of the rounded answer": (tolerance_of_a_whole_unit, "decimals"),
     "script file staged under tests/tests": (nested_script_files, "stages no file there"),
     "judge question with its own scale": (judge_with_own_scale, "own scale or reply format"),
