@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 pytest.importorskip("iris")
@@ -280,8 +281,8 @@ def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path
     assert isinstance(raised.value, MachineTerminated)
 
 
-@pytest.mark.parametrize("code", [Code.RESOURCE_EXHAUSTED, Code.UNAVAILABLE])
-def test_exec_admission_refusal_is_retried(tmp_path: Path, monkeypatch, code) -> None:
+@pytest.mark.parametrize("code", list(Code))
+def test_exec_rpc_failure_is_retried(tmp_path: Path, monkeypatch, code) -> None:
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
     rpc = RefusingRpc(code, refusals=2)
     machine, _ = local_machine(tmp_path, rpc)
@@ -292,13 +293,13 @@ def test_exec_admission_refusal_is_retried(tmp_path: Path, monkeypatch, code) ->
     assert rpc.sent("echo ran") == 3
 
 
-def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path: Path) -> None:
-    rpc = RefusingRpc(Code.DEADLINE_EXCEEDED, refusals=1)
-    machine, _ = local_machine(tmp_path, rpc)
-
-    with pytest.raises(ConnectError):
-        asyncio.run(machine.run(Command(("echo", "once"))))
-    assert rpc.sent("echo once") == 1
+def test_exec_programming_error_is_not_transport_unavailability() -> None:
+    error = ValueError("malformed local request")
+    call = Mock(side_effect=error)
+    with pytest.raises(ValueError) as caught:
+        iris_backend._controller_call(call, exec_call=True)
+    assert caught.value is error
+    assert call.call_count == 1
 
 
 class ClosingRpc(RefusingRpc):
@@ -782,7 +783,18 @@ def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, 
 @pytest.mark.parametrize("exec_call", [False, True])
 @pytest.mark.parametrize("attempts", [2, 240])
 @pytest.mark.parametrize(
-    "error", [ConnectError(Code.UNAVAILABLE, "Controller is shutting down"), ConnectionRefusedError("refused")]
+    "error",
+    [
+        ConnectError(Code.UNAVAILABLE, "Controller is shutting down"),
+        ConnectionRefusedError("refused"),
+        ConnectError(
+            Code.INTERNAL,
+            "RPC ExecInContainer: QueuePool limit of size 4 overflow 4 reached, connection timed out, timeout 30.00",
+        ),
+        ConnectError(Code.DEADLINE_EXCEEDED, "RPC timed out"),
+        httpx.ReadTimeout("connection timed out"),
+        httpx.RemoteProtocolError("connection closed"),
+    ],
 )
 def test_controller_wait_budget(monkeypatch, exec_call, attempts, error):
     clock = [0.0]
@@ -792,6 +804,13 @@ def test_controller_wait_budget(monkeypatch, exec_call, attempts, error):
     monkeypatch.setattr(iris_backend, "DEFAULT_RETRY_MAX_ELAPSED", 0.003)
     monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.002, maximum=0.002, jitter=0))
     call = Mock(side_effect=error)
+    if not exec_call and not iris_backend._controller_unavailable(error):
+        with pytest.raises(type(error)) as caught:
+            iris_backend._controller_call(call, exec_call=False)
+        assert caught.value is error
+        assert call.call_count == 1
+        assert clock[0] == 0
+        return
     with pytest.raises(MachineUnavailable) as caught:
         iris_backend._controller_call(call, exec_call=exec_call)
     assert caught.value.__cause__ is error
