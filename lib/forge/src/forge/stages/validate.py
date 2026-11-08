@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from rolloutengine.models import TaskRolloutSpec, TraceMode
 from rolloutengine.validation import InvalidTaskSpec
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.runtime.resources import resource_bytes
 
 from forge.config import ForgeConfig
 from forge.effects.context import Context
@@ -24,11 +25,11 @@ from forge.model.proposal import render
 from forge.model.review import AdversaryFinding, AdversaryResult, Cause, ControlResult, TrialResult, ValidationResult
 from forge.model.workpiece import Conversation, Workpiece
 from forge.resources.bundle import Resources
-from forge.resources.env import WriteFile
+from forge.resources.env import WriteFiles
 from forge.resources.execution import close_resource
 from forge.resources.grading import GradeCandidate
 from forge.resources.rollouts import SolverRollout
-from forge.stages.author import hydrate, install_env, sandbox_limits
+from forge.stages.author import install_env, sandbox_limits
 from forge.stages.classify import grade_cause, grader_infra_unavailable, trial_cause
 from forge.stages.exits import Validated
 from forge.stages.summary import task_manifest
@@ -102,10 +103,14 @@ async def run_adversary(
     try:
         async with ctx.scope(f"adversary:{name}"):
             install_env(ctx, env)
-            await hydrate(ctx, files)
             task_json = spec.task.model_dump_json().encode()
             await ctx.emit(
-                WriteFile(PurePosixPath(config.policy.setting("author.workdir", str), "task.json"), task_json)
+                WriteFiles(
+                    (
+                        *((PurePosixPath("/", file.path), resource_bytes(file)) for file in files),
+                        (PurePosixPath(config.policy.setting("author.workdir", str), "task.json"), task_json),
+                    )
+                )
             )
             tools = {**config.tools[name], "report": ReportTool(spec.task)}
             session = Conversation(

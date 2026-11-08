@@ -170,10 +170,16 @@ async def upload_resources(
         # File-only entries preserve existing guest directory ownership and modes.
         write_archive(archive, resource_files(resources, ""), [])
         await machine.upload(archive, target)
-        for arguments in (("tar", "-xf", target, "-C", "/"), ("rm", "-f", target)):
-            result = await machine.run(Command(arguments, cwd="/", timeout=timeout, user=user))
-            if result.exit_code != 0:
-                raise RuntimeError(f"Could not stage task resources: {result.stderr.decode(errors='replace')}")
+        result = await machine.run(
+            Command(
+                ("sh", "-c", 'tar -xf "$1" -C "$2" && rm -f "$1"', "resources", target, "/"),
+                cwd="/",
+                timeout=timeout,
+                user=user,
+            )
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(f"Could not stage task resources: {result.stderr.decode(errors='replace')}")
 
 
 @dataclass

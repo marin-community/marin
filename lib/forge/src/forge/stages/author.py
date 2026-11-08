@@ -7,7 +7,7 @@ import json
 from functools import partial
 from pathlib import PurePosixPath
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, TaskSpec
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
 from forge.config import ForgeConfig
@@ -21,7 +21,17 @@ from forge.model.stage import Exit
 from forge.model.workpiece import Conversation, Workpiece
 from forge.policy import GRADER_BASE_IMAGE, Policy
 from forge.resources.bundle import Resources
-from forge.resources.env import Env, ReadFile, RunCommand, WriteFile, read_file, run_command, write_file
+from forge.resources.env import (
+    Env,
+    ReadFile,
+    RunCommand,
+    WriteFile,
+    WriteFiles,
+    read_file,
+    run_command,
+    write_file,
+    write_files,
+)
 from forge.resources.execution import close_resource
 from forge.stages.summary import validation_path
 
@@ -75,11 +85,7 @@ def install_env(ctx: Context, env: Env) -> None:
     ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
     ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
     ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
-
-
-async def hydrate(ctx: Context, files: tuple[TaskResource, ...], root: str = "/") -> None:
-    for file in files:
-        await ctx.emit(WriteFile(PurePosixPath(root, file.path), resource_bytes(file)))
+    ctx.handle(WriteFiles, partial(write_files, notify=ctx.emit), uses=(env,))
 
 
 async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources) -> Exit:
@@ -95,17 +101,30 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
     try:
         async with ctx.scope("author"):
             install_env(ctx, env)
-            await hydrate(ctx, files)
+            writes = [(PurePosixPath("/", file.path), resource_bytes(file)) for file in files]
             submission = workpiece.submission
             if submission is not None:
-                await hydrate(ctx, (*submission.task.resources.all, *submission.task.resources.worker))
-                await hydrate(ctx, submission.task.resources.verifier, "/tests")
-                await ctx.emit(WriteFile(workdir / "task.json", submission.task.model_dump_json().encode()))
-                await ctx.emit(WriteFile(workdir / "controls.json", CONTROLS.dump_json(submission.controls)))
+                writes.extend(
+                    (PurePosixPath("/", file.path), resource_bytes(file))
+                    for file in (*submission.task.resources.all, *submission.task.resources.worker)
+                )
+                writes.extend(
+                    (PurePosixPath("/tests", file.path), resource_bytes(file))
+                    for file in submission.task.resources.verifier
+                )
+                writes.extend(
+                    (
+                        (workdir / "task.json", submission.task.model_dump_json().encode()),
+                        (workdir / "controls.json", CONTROLS.dump_json(submission.controls)),
+                    )
+                )
             proposal = render(workpiece.proposal)
-            for index, evidence in enumerate(workpiece.evidence):
-                await ctx.emit(WriteFile(validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence)))
-            await ctx.emit(WriteFile(workdir / "proposal.json", proposal.encode()))
+            writes.extend(
+                (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
+                for index, evidence in enumerate(workpiece.evidence)
+            )
+            writes.append((workdir / "proposal.json", proposal.encode()))
+            await ctx.emit(WriteFiles(tuple(writes)))
             tools = config.tools["author"]
             session = workpiece.session or Conversation(
                 (

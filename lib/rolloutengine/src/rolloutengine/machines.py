@@ -203,6 +203,10 @@ class _AttemptMachineFactory:
     verifier: Callable[[MachineSpec], Awaitable[Machine]] | None = None
 
     @property
+    def fixed_execution_user(self) -> bool:
+        return getattr(self.factories[self.runtime.backend], "fixed_execution_user", False)
+
+    @property
     def backend(self) -> Backend:
         return self.factories[self.runtime.backend].backend
 
