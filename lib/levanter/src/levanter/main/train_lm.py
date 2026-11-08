@@ -159,7 +159,6 @@ def hf_initialization(config: TrainLmConfig, tokenizer) -> tuple[HFCheckpointCon
     model_config = preserve_hf_runtime_settings(
         converter.config_from_hf_config(converter.default_hf_config),
         config.model,
-        config.trainer.fp32_fields,
     )
     return converter, model_config
 
