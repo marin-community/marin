@@ -195,7 +195,7 @@ def micro_inputs(version: str) -> ArtifactStep:
         remote(
             prepare_micro,
             name=f"long-loop-micro-inputs-{version}",
-            resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB", target_cluster="cw-rno2a"),
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB", target_cluster=None),
         ),
         version=version,
         output=OUT,

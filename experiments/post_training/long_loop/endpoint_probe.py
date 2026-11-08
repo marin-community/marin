@@ -44,7 +44,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
     origin = yaml.safe_load((root / "lib/iris/config/marin.yaml").read_text())["dashboard_url"]
     inference = inference_config_for_model(
         model,
-        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a"),
+        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=None),
         env_vars={},
         priority=priority_band_value("interactive"),
         capability_origin=origin,

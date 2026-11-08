@@ -54,6 +54,7 @@ def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None
         raise ValueError("Base import did not verify all 502 tensors")
     # A fresh decoded copy preserves the identity-bearing template supplied by the artifact.
     config = json.loads(json.dumps(recipe))
+    config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
     trainer["id"] = run_id
     trainer["initialize_from"] = initializer + "/native/step-0"
@@ -130,9 +131,7 @@ def sft_steps(
         remote(
             import_base,
             name=f"long-loop-base-{version}",
-            resources=ResourceConfig.with_gpu(
-                "H100", count=8, cpu=32, ram="512GB", disk="500GB", target_cluster="cw-rno2a"
-            ),
+            resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512GB", disk="500GB", target_cluster=None),
         ),
         version=version,
         output=OUT,
@@ -155,7 +154,7 @@ def sft_steps(
         remote(
             export_sft,
             name=f"long-loop-export-{version}",
-            resources=ResourceConfig.with_cpu(cpu=32, ram="512GB", disk="256GB", target_cluster="cw-rno2a"),
+            resources=ResourceConfig.with_cpu(cpu=32, ram="512GB", disk="256GB", target_cluster=None),
             env_vars={"JAX_PLATFORMS": "cpu"},
         ),
         version=version,

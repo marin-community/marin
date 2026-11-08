@@ -39,7 +39,7 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     launch = yaml.safe_load(config.skyrl.launch_config_yaml)
     inference = inference_config_for_model(
         config.judge,
-        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a"),
+        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=None),
         env_vars={},
         priority=priority_band_value(launch["iris"]["priority"]),
         capability_origin=config.capability_origin,
