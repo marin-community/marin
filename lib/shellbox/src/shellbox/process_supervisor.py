@@ -138,6 +138,13 @@ def main() -> int:
             return 0
         if action != "run":
             raise ValueError(f"Unknown supervisor action: {action}")
+        pid = os.fork()
+        if pid:
+            _, status = os.waitpid(pid, 0)
+            return os.waitstatus_to_exitcode(status)
+        # A cancelled command transport may kill its process group. Keep the
+        # subreaper alive so the independent cancel command can reach it.
+        os.setsid()
         return run(control, args[0], args[1:])
     except Exception as error:
         control.mkdir(mode=0o700, parents=True, exist_ok=True)

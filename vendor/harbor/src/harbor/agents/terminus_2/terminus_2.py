@@ -2599,7 +2599,7 @@ so ask everything you need to know."""
         self._context = context
 
         if self._session is None:
-            raise RuntimeError("Session is not set")
+            await self.setup(environment)
         if not await self._session.is_session_alive():
             await self._session.start()
 

@@ -541,7 +541,7 @@ class TmuxSession:
         """Stop the agent terminal when its owner releases the session."""
         if not await self.is_session_alive():
             return
-        result = await self.environment.exec(
+        result = await self._exec(
             command=f"tmux kill-session -t {shlex.quote(self._session_name)}",
             user=self._user,
         )
@@ -569,7 +569,7 @@ class TmuxSession:
             f'else status=$?; [ "$status" -eq {PROCESS_GROUP_ABSENT_EXIT_CODE} ] || exit "$status"; '
             "break; fi; done; fi; fi"
         )
-        result = await self.environment.exec(
+        result = await self._exec(
             command=command, user=self._user, timeout_sec=_FOREGROUND_STOP_TIMEOUT
         )
         if result.return_code != 0:

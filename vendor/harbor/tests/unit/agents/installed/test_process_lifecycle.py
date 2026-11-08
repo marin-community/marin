@@ -22,7 +22,9 @@ from harbor.agents.terminus_kira import TerminusKira
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.llms.base import BaseLLM, LLMResponse
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.trial.paths import TrialPaths
 from harbor.trial.errors import AgentTimeoutError
 from harbor.trial.single_step import SingleStepTrial
 from shellbox.machine import MachineSpec, PackageSpec
@@ -77,18 +79,25 @@ print('READY', flush=True)
     executable = tmp_path / "bin" / agent_type.name()
     executable.write_text(script)
     executable.chmod(0o755)
-    environment = object.__new__(DaytonaEnvironment)
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    environment = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="lifecycle",
+        session_id="lifecycle",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/image"),
+        persistent_env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tmp_path}/bin:/usr/local/bin:/usr/bin:/bin",
+        },
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
     environment.machine = ProcessMachine(
         tmp_path / "guest",
         MachineSpec(PackageSpec(), workdir="/workspace"),
     )
     environment.machine.path("/logs/agent").mkdir(parents=True)
-    environment.session_id = "lifecycle"
-    environment.default_user = None
-    environment._persistent_env = {
-        "HOME": str(tmp_path),
-        "PATH": f"{tmp_path}/bin:/usr/local/bin:/usr/bin:/bin",
-    }
     environment.agent_timeout_sec = 2 if ending == "timeout" else None
     agent = agent_type(
         logs_dir=tmp_path / "logs",
@@ -200,15 +209,21 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(
             return LLMResponse(content=json.dumps(payload))
 
     monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.OpenAILLM", Model)
-    environment = object.__new__(DaytonaEnvironment)
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    environment = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="phase",
+        session_id="phase",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/image"),
+        persistent_env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
     environment.machine = ProcessMachine(
         tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace")
     )
     environment.machine.path("/logs/agent").mkdir(parents=True)
-    environment.session_id = "phase"
-    environment.default_user = None
-    environment.agent_timeout_sec = None
-    environment._persistent_env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
     agent = agent_type(
         logs_dir=tmp_path / "logs",
         model_name="openai/test",
@@ -219,7 +234,6 @@ async def test_terminus_phase_preserves_background_tools_then_reaps_them(
     trial = object.__new__(SingleStepTrial)
     trial.agent = agent
     trial.agent_environment = environment
-    trial.user_agent = None
     trial.config = TrialConfig(
         agent=AgentConfig(name=agent_type.name(), model_name="openai/test"),
         task=TaskConfig(path=tmp_path),
