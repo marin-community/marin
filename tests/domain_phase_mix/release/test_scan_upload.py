@@ -85,8 +85,8 @@ def release_sources():
 
 def _write_clean_tree(root: Path) -> dict:
     """A build tree holding only public strings: W&B run ids, the content id forms (each continuing `_01`, like a
-    Fieldbook id), an exposure id that begins `exp_01`, `marin-` names that are no bucket, a source file name ending in
-    `_wandb.csv`, and hex digests in the fields that hold them by design. Returns the manifest."""
+    Fieldbook id), an exposure id that begins `exp_01`, `marin-` names that are no bucket, and hex digests in the
+    fields that hold them by design. Returns the manifest."""
     (root / "data/heldout").mkdir(parents=True)
     (root / "data/tasks").mkdir(parents=True)
     pd.DataFrame(
@@ -113,7 +113,6 @@ def _write_clean_tree(root: Path) -> dict:
                 "table": "heldout",
                 "sha256": DIGEST,
                 "keying": f"Each run's W&B run id, such as {RUN_IDS[0]}.",
-                "sources": ["experiments/reference_outputs/delphi_scaling_completed_wandb.csv"],
             }
         ],
     }

@@ -8,17 +8,16 @@
 `build_tables` runs every exporter once. `write` replaces the build's data folder, writes each table (Parquet for the
 `fits` tables, the StarCoder dense grid and the trajectories; CSV with pandas' shortest round-trip float repr for the
 rest, so every value is bit-identical to the exported one), writes figures_tables.csv without the builder column
-that only the repository's copy keeps, and writes the public manifest: per table its config, path, format, rows,
-columns, bytes, SHA-256, where its observation ids (W&B run ids) come from (`keying`), notes and repository-relative
-sources, and the cross-table consistency problems. SOURCES.json (every table's absolute source paths) goes to the
-private directory, which must lie outside the build. The command exits non-zero, after writing the manifest, when two
-tables disagree about a run.
+that only the repository's copy keeps, and writes the public manifest: the build's commit, per table its config,
+path, format, rows, columns, bytes, SHA-256, where its observation ids (W&B run ids) come from (`keying`) and notes,
+and the cross-table consistency problems. SOURCES.json (every table's absolute source paths) goes to the private
+directory, which must lie outside the build; the public manifest names no source files. The command exits
+non-zero, after writing the manifest, when two tables disagree about a run.
 """
 
 import argparse
 import hashlib
 import json
-import re
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -63,9 +62,6 @@ EXPORTER = {
     "domain_sweeps": domain_sweeps,
     "fits": fits,
 }
-# The public manifest shows `*` for a folder named by a 64-hex content hash.
-HASH_FOLDER = re.compile(r"(?<=/)[0-9a-f]{64}(?=/)")
-MIXSEL_PREFIX = "mixture-selection/"
 
 NO_IDS = "The table has no observation ids."
 # Where each table's observation ids, W&B run ids, come from; one training run has one id wherever it appears.
@@ -145,14 +141,14 @@ NOTES = {
     "swarm_llama_160m_1p2b": [
         "The 39 single-bucket deletions (design_kind deletion) are fit rows here and frozen held-out runs in heldout, "
         "under the same observation ids; pool the two tables by observation_id.",
-        "No launch manifest of the deletions is among the sources, so their seeds are null.",
+        "The records this release was built from hold no launch manifest of the deletions, so their seeds are null.",
     ],
     "swarm_llama_200m_6b": [
         "The proportional fit row (run_label baseline_proportional) keeps its own run's values. The parity panel "
         "behind the swarm's fits, and the July packet copied from it, replaced them by the mean of 11 proportional "
         "runs: the ten repeats here and the two-phase swarm's proportional run, which this release omits.",
-        "The stratified baseline is a two-phase swarm run whose launch left no manifest among the sources, so its "
-        "seeds are null.",
+        "The stratified baseline is a two-phase swarm run whose launch left no manifest among the records this "
+        "release was built from, so its seeds are null.",
     ],
     "heldout": [
         "The 39 Llama 160M single-bucket deletions are also fit rows of swarm_llama_160m_1p2b, and 117 Qwen3 runs "
@@ -182,7 +178,7 @@ NOTES = {
     ],
     "validation_3e18": [
         "UniMax-8 trainer seeds 1 and 2 carry recorded aggregates only; their per-task values are not among the "
-        "sources.",
+        "records this release was built from.",
         "117 runs are also rows of heldout, and the ladder's 3e18 rung copies 15: trainer seeds 0 to 2 of MARINER's "
         "and of the matched Olmix proposals for each objective, and the UniMax-8 repeats.",
     ],
@@ -248,8 +244,6 @@ RELEASE_NOTES = [
     "byte shares) and bpb__obe_easy (the mean of the 51 OlmoBaseEval Easy tasks) are computed from a run's components "
     "whenever it has all of that objective's components, and otherwise are the aggregate its source recorded under "
     "the same weights, or null where the source recorded none under those weights.",
-    "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
-    "mixture-selection repository's; `*` stands for a hash that names a folder.",
     "figures_tables.csv lists the paper's 27 figures and 20 tables, the file name of each figure in the paper's "
     "source, and the configs each one reads: deferred marks two-phase data this release omits, and constant marks "
     "configuration constants typed into the paper.",
@@ -289,17 +283,6 @@ def _add(tables: dict[str, pd.DataFrame], exported: dict[str, pd.DataFrame]) -> 
     if clash:
         raise ValueError(f"two exporters write {clash}")
     tables.update(exported)
-
-
-def public_source(path: Path) -> str:
-    """A source's path relative to its repository, with hash-named folders replaced by `*`."""
-    if path.is_relative_to(paths.REPO):
-        relative = path.relative_to(paths.REPO).as_posix()
-    elif path.is_relative_to(paths.MIXSEL):
-        relative = MIXSEL_PREFIX + path.relative_to(paths.MIXSEL).as_posix()
-    else:
-        raise ValueError(f"a source outside the marin and mixture-selection repositories: {path}")
-    return HASH_FOLDER.sub("*", relative)
 
 
 def _sources(table: str) -> list[Path]:
@@ -373,7 +356,6 @@ def write(tables: dict[str, pd.DataFrame], out: Path, private_dir: Path) -> dict
         "commit": commit,
         "built_at": built_at,
         "notes": RELEASE_NOTES,
-        "context_sources": [public_source(p) for p in context.required_sources()],
         "tables": [],
     }
     private = {
@@ -400,7 +382,6 @@ def write(tables: dict[str, pd.DataFrame], out: Path, private_dir: Path) -> dict
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 "keying": KEYING[name],
                 "notes": _notes(name, df),
-                "sources": sorted({public_source(p) for p in sources}),
             }
         )
         private["tables"][name] = [str(p) for p in sources]

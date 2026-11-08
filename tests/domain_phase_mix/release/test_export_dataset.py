@@ -4,6 +4,7 @@
 import hashlib
 import json
 import re
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -67,7 +68,7 @@ def test_full_export_writes_every_config(build, manifest):
         path = out / t["path"]
         assert t["path"] == f"data/{t['config']}/{t['table']}.{t['format']}"
         assert path.stat().st_size == t["bytes"] and hashlib.sha256(path.read_bytes()).hexdigest() == t["sha256"]
-        assert t["rows"] > 0 and t["keying"] and all(not source.startswith("/") for source in t["sources"])
+        assert t["rows"] > 0 and t["keying"]
     layout = {t["table"]: (t["config"], t["format"]) for t in manifest["tables"]}
     assert layout["starcoder_dense_grid"] == ("starcoder", "parquet")
     assert layout["starcoder_observations"] == ("starcoder", "csv")
@@ -107,16 +108,18 @@ def test_written_files_hold_the_exported_values_exactly(build, manifest):
 
 
 def test_manifest_and_figure_index_name_nothing_internal(build, manifest):
-    # File digests and the commit are hex by design, and source paths name files; every other string must pass.
+    # File digests and the commit are hex by design; every other string must pass.
     public = {key: value for key, value in manifest.items() if key != "commit"}
-    public["tables"] = [{k: v for k, v in t.items() if k not in ("sha256", "sources")} for t in manifest["tables"]]
+    public["tables"] = [{k: v for k, v in t.items() if k != "sha256"} for t in manifest["tables"]]
     text = json.dumps(public) + (build / "build/figures_tables.csv").read_text()
     for pattern in INTERNAL:
         assert not pattern.search(text), pattern.search(text)
-    # Source paths are relative to a repository and replace hash-named folders by `*`.
-    for source in [s for t in manifest["tables"] for s in t["sources"]]:
-        assert not source.startswith(("/", "~")) and "calvinxu" not in source
-        assert not INTERNAL[2].search(source), source
+    # Only the private SOURCES.json names the files the export read, not even by their repository-relative paths.
+    record = json.loads((build / "private/SOURCES.json").read_text())
+    published = json.dumps(manifest)
+    for source in map(Path, {*record["context"], *(p for ps in record["tables"].values() for p in ps)}):
+        root = paths.REPO if source.is_relative_to(paths.REPO) else paths.MIXSEL
+        assert source.relative_to(root).as_posix() not in published, source
 
 
 def test_figures_tables_lists_every_figure_and_table_of_the_paper(manifest):
