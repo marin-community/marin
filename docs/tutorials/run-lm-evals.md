@@ -91,9 +91,9 @@ adapter, local FineStore and Rigging sources, and selected runtime extras.
 ### Command recipes
 
 The original PDBThink protein-reasoning benchmark is available as `--evals pdbthink`.
-It requires a prepared evaluation cache and a model context window large enough
-for every selected prompt. See [PDBThink evaluation](../explanations/pdbthink.md)
-for the frozen candidate dataset, cache preparation, and scoring protocol.
+It uses a staged private evaluation bundle and requires a model context window
+large enough for every selected prompt. See [PDBThink evaluation](../explanations/pdbthink.md)
+for bundle access, the frozen candidate dataset, and scoring protocol.
 
 Run a capped Evalchemy smoke on the smallest registered Qwen model:
 

@@ -1,4 +1,5 @@
 tasks: [PDBThink]
+dataset_cache: gs://marin-us-west1/evaluation/datasets
 task_options:
   PDBThink:
     num_fewshot: 0

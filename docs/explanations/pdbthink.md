@@ -34,7 +34,27 @@ config, definitions, structure and bundle hashes in its
 Prompts and gold answers live in the evaluation data cache and are not committed
 to Marin.
 
-## Prepare the evaluation cache
+## Run the evaluation
+
+The registered `--evals pdbthink` configuration reads the frozen bundle from
+`gs://marin-us-west1/evaluation/datasets`
+([Filer](https://filer.marina.oa.dev/#gs%3A%2F%2Fmarin-us-west1%2Fevaluation%2Fdatasets)).
+This private prefix has no temporary-cache expiry. The evaluation worker needs
+read access to it, including when the worker runs in another region. The bundle
+is about 3.7 MB.
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model <registered-model-key> \
+  --evals pdbthink \
+  --dry-run
+```
+
+Remove `--dry-run` to submit. A missing or changed bundle fails preparation before
+generation. See [Running evaluations](../tutorials/run-lm-evals.md) for model
+configuration and launch options.
+
+## Rebuild or stage a separate cache
 
 Build from a clean checkout of the pinned upstream revision. Run these commands
 inside that checkout; acquisition needs network access to the upstream structure
@@ -60,7 +80,7 @@ uv run --project vendor/evalchemy --frozen --extra pdbthink \
 The command rejects any build that differs from the frozen manifest and verifies
 the written bundle. It creates
 `Open-Athena/pdbthink/94b65a918140e44ca6b6e94032a0ee0a7441b1dd/evaluation.json.gz`
-under the cache prefix. The bundle is about 3.7 MB. For a distributed evaluation,
+under the cache prefix. For a distributed evaluation,
 use a private object-store prefix accessible to the evaluation worker in its
 region. Use `uv run fsutil cp` to copy an already prepared bundle to that prefix.
 
@@ -75,11 +95,7 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-Remove `--dry-run` to submit. The registered `--evals pdbthink` configuration
-uses the launcher's shared regional Evalchemy cache; prepare the bundle there
-before using that shortcut. A missing or changed bundle fails preparation before
-generation. See [Running evaluations](../tutorials/run-lm-evals.md) for model
-configuration and launch options.
+Remove `--dry-run` to submit with the separate cache.
 
 ## Generation and scoring
 
