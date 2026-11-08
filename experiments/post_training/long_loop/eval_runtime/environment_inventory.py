@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import yaml
-from harbor.utils.container_cache import environment_dir_hash_truncated
 from huggingface_hub import hf_hub_download
 from rigging.config_discovery import find_project_root
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
@@ -35,7 +34,6 @@ class EnvironmentRecord:
     task_id: str
     benchmark: str
     image_source_key: str
-    environment_hash: str
     docker_image: str | None
     package_sha256: str
     context: str
@@ -78,7 +76,6 @@ def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
                 task_id=row["task_id"],
                 benchmark=row["benchmark"],
                 image_source_key=image_source_key(source),
-                environment_hash=environment_dir_hash_truncated(context),
                 docker_image=config.environment.docker_image,
                 package_sha256=hashlib.sha256(row["task_spec"].encode()).hexdigest(),
                 context=str(context),

@@ -6,6 +6,7 @@
 from dataclasses import replace
 
 import click
+from fray.types import GpuConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import graph_handles
@@ -53,7 +54,11 @@ def main(source_revision: str, stage: str) -> ArtifactStep:
     if stage == "loop":
         return loop
     inputs = next(step for step in graph_handles([loop]) if step.name == "long-loop/micro-inputs")
-    execution = replace(_skyrl_executions([loop])[0], coordinator_name=f"long-loop-inputs-{version}")
+    execution = replace(
+        _skyrl_executions([loop])[0],
+        coordinator_name=f"long-loop-inputs-{version}",
+        coordinator_gpu=GpuConfig(variant="H100", count=1),
+    )
     return replace(inputs, runtime_args={**inputs.runtime_args, "skyrl_execution": execution})
 
 

@@ -199,7 +199,7 @@ def micro_inputs(version: str) -> ArtifactStep:
             env_vars={
                 name: os.environ[name] for name in ("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY") if name in os.environ
             },
-            resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB", target_cluster=None),
+            resources=ResourceConfig.with_gpu("H100", count=1, cpu=4, ram="16GB", disk="64GB", target_cluster=None),
         ),
         version=version,
         output=OUT,

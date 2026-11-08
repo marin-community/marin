@@ -20,6 +20,7 @@ from typing import Literal, Protocol, cast
 
 import fsspec
 import yaml
+from fray.types import GpuConfig
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -444,6 +445,7 @@ class IrisSkyRLExecution:
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
     coordinator_name: str | None = None
+    coordinator_gpu: GpuConfig | None = None
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()

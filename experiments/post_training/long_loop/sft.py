@@ -154,7 +154,7 @@ def sft_steps(
         remote(
             export_sft,
             name=f"long-loop-export-{version}",
-            resources=ResourceConfig.with_cpu(cpu=32, ram="512GB", disk="256GB", target_cluster=None),
+            resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512GB", disk="256GB", target_cluster=None),
             env_vars={"JAX_PLATFORMS": "cpu"},
         ),
         version=version,

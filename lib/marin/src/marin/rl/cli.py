@@ -15,7 +15,7 @@ from types import ModuleType
 
 import click
 from fray.iris_backend import FrayIrisClient
-from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.types import CpuConfig, Entrypoint, GpuConfig, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
@@ -47,6 +47,7 @@ class _IrisSubmissionRoute:
     timeout_hours: int
     container_profile: job_pb2.ContainerProfile | None
     coordinator_name: str | None
+    coordinator_gpu: GpuConfig | None
 
 
 def _module_name(module: ModuleType) -> str:
@@ -87,12 +88,16 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     names = {execution.coordinator_name for execution in executions}
     if len(names) != 1:
         raise ValueError("one RL main must use one coordinator name")
+    devices = {execution.coordinator_gpu for execution in executions}
+    if len(devices) != 1:
+        raise ValueError("one RL main must use one coordinator device allocation")
     cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
         coordinator_name=names.pop(),
+        coordinator_gpu=devices.pop(),
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
         container_profile=container_profile,
     )
@@ -122,7 +127,8 @@ def _coordinator_request(
             "python",
             ["-m", module_name, *argv, "--max-concurrent", str(max_concurrent)],
         ),
-        resources=ResourceConfig.with_cpu(
+        resources=ResourceConfig(
+            device=route.coordinator_gpu or CpuConfig(),
             cpu=_COORDINATOR_CPU,
             ram=_COORDINATOR_MEMORY,
             disk=_COORDINATOR_DISK,
