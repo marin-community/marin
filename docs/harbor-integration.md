@@ -12,7 +12,7 @@ Preflight checks the policy and model settings before allocating evaluation reso
 Marin's vendored Harbor supports `pi`, `mini-swe-agent`, `codex`, `opencode`,
 `terminus-2` and `terminus-kira`. Job and trial configs must name an agent.
 Other agents, ACP aliases, local adapters and arbitrary import paths fail validation.
-Historical Tau3/ACP, Sotopia and AIME smoke policies remain in `experiments/evaluation`.
+Historical Tau3/ACP and Sotopia campaign policies remain in `experiments/evaluation`.
 Preflight rejects them before task allocation. Unsupported agent source remains in Git history.
 
 Installed CLI agents and foreground Terminus tmux servers run under Shellbox process
@@ -32,8 +32,6 @@ Before launching:
 - BixBench and BFCL standalone Pi policies need prepared Pi images. Changed benchmark
   policies need a new approved cohort version. See [verified cohorts](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
   Historical tasks that install Pi at runtime fail preflight.
-- Claude Code fails Marin preflight because the model relay does not support its
-  required protocol.
 - Use a new results root if the old root has no recorded evaluator identity.
 
 ## Run a benchmark
@@ -305,7 +303,7 @@ Each relay calls one fixed upstream model. It rejects redirects, limits request 
 sizes, and returns sanitized provider error codes. Responses supports non-streaming text,
 output limits and reasoning options. Tools, stored responses and stateful continuations are unsupported.
 Streaming chat is buffered: the guest receives SSE frames after the complete response
-arrives. Claude Code needs routes or features outside this contract.
+arrives.
 
 `judge_access: verifier` opens the judge relay only during grading. Agent-owned
 processes stop before grading on local and Daytona backends. A grader needing a

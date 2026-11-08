@@ -31,6 +31,16 @@ _CANDIDATE_ENDPOINT = "https://candidate.test/proxy/t/private-capability/v1"
 _JUDGE_ENDPOINT = "https://judge.test/v1"
 
 
+def test_checked_in_policies_select_supported_agents():
+    paths = sorted((_ROOT / "experiments/evaluation/configs/harbor").glob("*.yaml"))
+    assert paths
+    for path in paths:
+        config = JobConfig.model_validate(yaml.safe_load(path.read_text()))
+        assert config.user_agent is None, path
+        for agent in config.agents:
+            AgentFactory.get_agent_class_from_config(agent)
+
+
 @pytest.fixture
 def policy():
     return JobConfig.model_validate(
