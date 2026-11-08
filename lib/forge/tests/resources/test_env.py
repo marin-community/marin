@@ -15,6 +15,7 @@ from shellbox.machine import (
     ExitReason,
     Machine,
     MachineCancelled,
+    MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineTerminated,
     PackageSpec,
@@ -24,7 +25,7 @@ from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from forge.effects.events import Event, Note, Resolved, Retrying
-from forge.effects.issues import Hold, Restart, Transient
+from forge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
 from forge.resources import env as env_module
 from forge.resources.env import (
     CommandResult,
@@ -189,6 +190,7 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
     "failure,decision",
     [
         (MachineTerminated("gone"), Restart),
+        (MachineOutputLimitExceeded("ShellSim terminated: output_limit_exceeded"), OutputBudgetExhausted),
         (MachineCancelled("parent job terminated"), Transient),
         (MachineResourceExhausted("Iris sandbox OOMKilled"), Hold),
         (MachineTerminated("Iris sandbox is preempted: WorkloadEvictedDueToPreempted"), Restart),

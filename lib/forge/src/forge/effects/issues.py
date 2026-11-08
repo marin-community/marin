@@ -21,6 +21,10 @@ class Restart(EffectIssue):
     """
 
 
+class OutputBudgetExhausted(Restart):
+    """Replace this agent's machine once; repeated exhaustion is failed agent evidence."""
+
+
 class Hold(EffectIssue):
     """Publish held until explicit resume; exhausted resources require human review.
 

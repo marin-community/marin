@@ -30,6 +30,7 @@ from shellbox.machine import (
     CommandSemantics,
     ExecutionRequirements,
     ExitReason,
+    MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
@@ -215,7 +216,12 @@ class ShellSimMachine:
         try:
             result = await self._await_worker(worker, cancellation)
             if self.simulation.terminated:
-                raise MachineResourceExhausted(f"ShellSim terminated: {result.stop_reason}")
+                kind = (
+                    MachineOutputLimitExceeded
+                    if result.stop_reason == "output_limit_exceeded"
+                    else MachineResourceExhausted
+                )
+                raise kind(f"ShellSim terminated: {result.stop_reason}")
             return result
         finally:
             self._active = None

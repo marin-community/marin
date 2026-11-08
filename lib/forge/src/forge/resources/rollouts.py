@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
-from shellbox.machine import ExecSetupFailed, MachineCancelled, MachineTerminated
+from shellbox.machine import ExecSetupFailed, MachineCancelled, MachineOutputLimitExceeded, MachineTerminated
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
-from forge.effects.issues import Restart, Transient, describe_exception
+from forge.effects.issues import OutputBudgetExhausted, Restart, Transient, describe_exception
 from forge.resources.execution import Notify, has_cause, retry_effect
 
 
@@ -36,6 +36,8 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
+    if error.operation is RolloutOperation.ADVANCE and has_cause(error, MachineOutputLimitExceeded):
+        return OutputBudgetExhausted("output budget exhausted")
     if has_cause(error, MachineCancelled):
         return Transient(message)
     if has_cause(error, MachineTerminated):

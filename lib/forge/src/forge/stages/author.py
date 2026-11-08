@@ -61,6 +61,7 @@ def sandbox_limits(policy: Policy) -> str:
     limits = lowering_settings(policy).task_machine.limits
     return (
         f"Sandbox memory limit: {limits.memory_mb} MiB; CPU request: {limits.cpus}. "
+        f"ShellSim cumulative output budget: {policy.setting('sandbox.output_budget_mb', int)} MiB. "
         f"The shell tool defaults to {policy.setting('solver.command_timeout', float):g} seconds per command; "
         f"Its maximum timeout is {policy.setting('solver.tool_timeout', float):g} seconds. "
         f"Solver commands default to {policy.setting('solver.command_timeout', float):g} seconds. "

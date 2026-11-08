@@ -13,8 +13,10 @@ from taskcompendium.models import EnvironmentRequirements, ScriptGrader, TaskSpe
 SANDBOX_SCHEDULING_TIMEOUT = 600
 
 
-def shellsim_factory() -> MachineFactory:
-    return ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=shellsim.DEFAULT_PYPI_CATALOG))
+def shellsim_factory(*, output_budget_mb: int = 128) -> MachineFactory:
+    return ShellSimMachineFactory(
+        context=shellsim.Context(pypi_catalog=shellsim.DEFAULT_PYPI_CATALOG), output=output_budget_mb * 1024 * 1024
+    )
 
 
 def grading_environment(task: TaskSpec) -> EnvironmentRequirements | None:
