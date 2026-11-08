@@ -85,6 +85,7 @@ dev = [{ include-group = "test" }]
 exclude-dependencies = ["litellm"]
 constraint-dependencies = [
     "nltk>=3.10.4",
+    "oauthlib>=4.0.1",
     # CVE-2026-115586: reject vulnerable transitive virtualenv releases.
     "virtualenv>=21.14.13",
 ]

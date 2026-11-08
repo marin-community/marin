@@ -152,20 +152,6 @@ pub struct SegmentPruning {
     masks: HashMap<String, SpanMask>,
 }
 
-impl SegmentPruning {
-    pub(crate) fn combine(parts: Vec<Self>) -> Self {
-        let mut combined = Self {
-            paths: Vec::new(),
-            masks: HashMap::new(),
-        };
-        for part in parts {
-            combined.paths.extend(part.paths);
-            combined.masks.extend(part.masks);
-        }
-        combined
-    }
-}
-
 struct SpanMask {
     keep: Vec<bool>,
     span_rows: usize,
@@ -196,7 +182,7 @@ fn access_plans(
         .collect()
 }
 
-fn ordered_trigram_needles<'a>(
+pub(crate) fn ordered_trigram_needles<'a>(
     needles: &'a HashMap<String, SubstringPredicate>,
     key_ranges: &HashMap<String, StringRange>,
 ) -> Vec<(&'a str, &'a SubstringPredicate)> {
@@ -217,7 +203,11 @@ pub enum SubstringPredicate {
 }
 
 impl SubstringPredicate {
-    fn keep_mask(&self, index: &crate::indices::trigram::ColumnIndex, spans: usize) -> Vec<bool> {
+    pub(crate) fn keep_mask(
+        &self,
+        index: &crate::indices::trigram::ColumnIndex,
+        spans: usize,
+    ) -> Vec<bool> {
         match self {
             Self::Contains(needles) => {
                 let mut keep = vec![true; spans];
@@ -578,7 +568,7 @@ fn build_access_plans(
 /// the case that makes the decoupling worthwhile — partly covered, where it
 /// carries a row selection instead. `None` when the spans do not account for
 /// exactly the segment's rows, which means the section is stale.
-fn span_access_plan(
+pub(crate) fn span_access_plan(
     keep: &[bool],
     span_rows: usize,
     row_group_rows: &[usize],

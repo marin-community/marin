@@ -9,8 +9,6 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_datasource_parquet::source::ParquetSource;
-use datafusion_datasource_parquet::ParquetFileReaderFactory;
 use futures::TryStreamExt;
 use parquet::arrow::async_reader::{
     AsyncFileReader, ParquetObjectReader, ParquetRecordBatchStreamBuilder,
@@ -125,24 +123,6 @@ pub fn rewrite_parquet_files(
             .collect();
         FileScanConfigBuilder::from(config.clone())
             .with_file_groups(groups)
-            .build()
-    })
-}
-
-pub(crate) fn with_object_readers(
-    plan: Arc<dyn ExecutionPlan>,
-    readers: Arc<dyn ParquetFileReaderFactory>,
-) -> Arc<dyn ExecutionPlan> {
-    rewrite_parquet_scans(plan, |config| {
-        let source = config
-            .file_source()
-            .as_any()
-            .downcast_ref::<ParquetSource>()
-            .expect("namespace scans use Parquet")
-            .clone()
-            .with_parquet_file_reader_factory(Arc::clone(&readers));
-        FileScanConfigBuilder::from(config.clone())
-            .with_source(Arc::new(source))
             .build()
     })
 }

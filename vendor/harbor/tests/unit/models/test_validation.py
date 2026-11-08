@@ -17,6 +17,7 @@ from harbor.models.trial.config import (
     VerifierConfig,
 )
 from harbor.trial.trial import Trial
+from tests.unit.fake_agent import FakeAgent
 
 
 def _scaffold(task_dir: Path, toml: str = "") -> None:

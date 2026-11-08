@@ -257,3 +257,52 @@ def test_lm_data_config_prior_context_phase_resumes_without_repeating_tokens(tmp
 
     assert not before & _tokens(resumed, NEW_SEQ, NEW_BATCH, new_start, new_stop)
     assert before & _tokens(naive, NEW_SEQ, NEW_BATCH, new_start, new_stop)
+
+
+def _started_config(tmp_path: Path, start_step: int) -> LmDataConfig:
+    base = _cached_config(tmp_path, NEW_SEQ, stage_step=8)
+    return dataclasses.replace(base, train_weights=[(0, WEIGHTS_AFTER)], mixture_start_step=start_step)
+
+
+def _step_tokens(config: LmDataConfig, batch_size: int, start_step: int, stop_step: int) -> list[int]:
+    """Read steps as a run restored at ``start_step`` does: from a mixture built for that run."""
+    schedule = BatchSchedule(batch_size)
+    dataset = config.train_set(hax.Axis("position", NEW_SEQ), schedule, key=jax.random.PRNGKey(0)).as_sync_dataset()
+    return [
+        int(token)
+        for step in range(start_step, stop_step)
+        for example in dataset.get_batch(list(schedule.batch_indices_at_step(step)))
+        for token in np.asarray(example.tokens.array)
+    ]
+
+
+def test_mixture_start_step_restores_read_consecutive_data_and_a_retry_repeats(tmp_path):
+    config = _started_config(tmp_path, start_step=1000)
+
+    whole = _step_tokens(config, NEW_BATCH, 1000, 1040)
+
+    assert _step_tokens(config, NEW_BATCH, 1000, 1025) + _step_tokens(config, NEW_BATCH, 1025, 1040) == whole
+    assert _step_tokens(config, NEW_BATCH, 1025, 1040) == whole[25 * NEW_BATCH * NEW_SEQ :]
+
+
+def test_mixture_start_step_gives_every_batch_size_a_prefix_of_one_stream(tmp_path):
+    config = _started_config(tmp_path, start_step=1001)
+
+    wide = _step_tokens(config, 6, 1001, 1011)
+    narrow = _step_tokens(config, 2, 1001, 1031)
+
+    assert narrow == wide
+
+
+def test_mixture_start_step_starts_each_source_at_its_first_shuffled_sequence(tmp_path):
+    config = _started_config(tmp_path, start_step=1000)
+    unstarted = dataclasses.replace(config, mixture_start_step=None)
+
+    assert _step_tokens(config, NEW_BATCH, 1000, 1020) == _step_tokens(unstarted, NEW_BATCH, 0, 20)
+
+
+def test_mixture_start_step_rejects_a_restore_before_the_start(tmp_path):
+    config = _started_config(tmp_path, start_step=1000)
+
+    with pytest.raises(ValueError, match="precedes the mixture's first index"):
+        _step_tokens(config, NEW_BATCH, 999, 1000)
