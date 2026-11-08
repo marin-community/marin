@@ -8,6 +8,7 @@ import asyncio
 from pathlib import PurePosixPath
 
 from rolloutengine.models import TaskRolloutSpec, TraceMode
+from rolloutengine.validation import InvalidTaskSpec
 
 from forge.config import ForgeConfig
 from forge.effects.context import Context
@@ -19,7 +20,7 @@ from forge.lowering import host_requirements, lower_with_settings, lowering_sett
 from forge.model.controls import Control
 from forge.model.llm import Message, Role
 from forge.model.proposal import render
-from forge.model.review import AdversaryFinding, AdversaryResult, ControlResult, TrialResult, ValidationResult
+from forge.model.review import AdversaryFinding, AdversaryResult, Cause, ControlResult, TrialResult, ValidationResult
 from forge.model.workpiece import Conversation, Workpiece
 from forge.resources.bundle import Resources
 from forge.resources.env import WriteFile
@@ -140,7 +141,16 @@ async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, reso
     try:
         spec = lower_with_settings(task, settings, resources.factories).model_copy(update={"trace": TraceMode.MESSAGES})
     except (ValueError, NotImplementedError) as error:
-        return Validated(ValidationResult(submission.digest, (), (), (), lowering_error=str(error)))
+        return Validated(
+            ValidationResult(
+                submission.digest,
+                (),
+                (),
+                (),
+                lowering_error=str(error),
+                lowering_cause=Cause.INVALID_TASK if isinstance(error, InvalidTaskSpec) else Cause.GRADER_INFRA,
+            )
+        )
     k = config.policy.setting("solver.k", int)
     if k < 1:
         raise ValueError("Validation needs at least one solver trial")

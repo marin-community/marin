@@ -22,7 +22,10 @@ class Restart(EffectIssue):
 
 
 class Hold(EffectIssue):
-    """Publish held until explicit resume; exhausted resources require human review."""
+    """Publish held until explicit resume; exhausted resources require human review.
+
+    Host lowering refusals hold; InvalidTaskSpec is authored evidence returned for repair, not an effect retry.
+    """
 
 
 class LogFailure(EffectIssue):

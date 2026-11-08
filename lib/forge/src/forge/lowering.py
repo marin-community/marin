@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
+from rolloutengine.validation import InvalidTaskSpec
 from shellbox.machine import DEFAULT_WORKDIR, Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.models import (
     CommandSemantics,
@@ -148,10 +149,11 @@ def machine_runtime(settings: MachineSettings, requirements: EnvironmentRequirem
 
     Pass requirements already resolved for the available factories with ``host_requirements``.
     """
+    backend = machine_backend(requirements)
     return MachineRuntimeSpec(
-        backend=machine_backend(requirements).value,
+        backend=backend.value,
         network=settings.network,
-        cpus=settings.limits.cpus,
+        cpus=None if backend is Backend.SHELLSIM else settings.limits.cpus,
         memory_mb=settings.limits.memory_mb,
         storage_mb=settings.limits.storage_mb,
         gpus=settings.limits.gpus,
@@ -166,7 +168,7 @@ def machine_backend(requirements: EnvironmentRequirements) -> Backend:
     if requirements.docker_image is not None:
         return Backend.GVISOR
     if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
-        raise ValueError("Linux process requirements need a container image on Iris")
+        raise InvalidTaskSpec("Linux process requirements need a container image on Iris")
     return Backend.SHELLSIM
 
 
@@ -218,7 +220,9 @@ def lower_with_settings(
     """Lower with shared budgets and only the machines the task requires."""
     grader = grading_environment(task)
     if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
-        raise ValueError(f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}")
+        raise InvalidTaskSpec(
+            f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}"
+        )
     limits = settings.limits.model_copy(update={"verifier_timeout": verifier_timeout(task.grader)})
     return lower(
         task,

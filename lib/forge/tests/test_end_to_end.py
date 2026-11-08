@@ -30,7 +30,7 @@ from forge.harness.protocol import Stopped, StopReason
 from forge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, ToolCall
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal
-from forge.model.review import BandRules, Budget, Decision, Modify, Reject, RejectKind
+from forge.model.review import Abandon, BandRules, Budget, Decision, Modify
 from forge.model.stage import Stage
 from forge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from forge.policy import Policy, load_policy
@@ -182,6 +182,12 @@ async def test_modify_budget_ends_abandoned(proposal: TaskProposal) -> None:
     assert wp.terminal == Terminal.ABANDONED
     assert wp.round == 1
     assert len(wp.decisions) == 2
+    final = WORKPIECE.validate_json(WORKPIECE.dump_json(wp)).decisions[-1]
+    assert isinstance(final, Abandon)
+    assert final.reasons == (
+        "budget.max_modify_rounds exhausted after 1 modify rounds",
+        f"Revise {wp.evidence[-1].task_digest} for band {settings.band.low}-{settings.band.high}",
+    )
 
 
 async def test_validation_retry_budget_holds_without_restarting_author(proposal: TaskProposal) -> None:
@@ -308,10 +314,9 @@ def test_author_abandonment_publishes_stop_cause(proposal: TaskProposal, reason:
     session = Conversation((), ())
     stopped = edge[1](wp, Stopped(reason, session))
     published = WORKPIECE.validate_json(WORKPIECE.dump_json(stopped))
-    kind = RejectKind.BUDGET if reason == StopReason.CONTEXT_LIMIT else RejectKind.TASK
     assert published.terminal == Terminal.ABANDONED
     assert published.session == session
-    assert published.decisions == (previous, Reject(kind, (f"author stopped: {reason.value} after 0 turns",)))
+    assert published.decisions == (previous, Abandon((f"author stopped: {reason.value} after 0 turns",)))
 
 
 async def test_stage_restart_replays_on_fresh_machine_without_repeating_inference(proposal: TaskProposal) -> None:
