@@ -9,6 +9,7 @@ import logging
 import os
 import tempfile
 import time
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
@@ -113,12 +114,16 @@ async def main(
                             async with asyncio.timeout(60):
                                 await environment.stop(delete=True)
                 except Exception as error:
+                    detail = "".join(traceback.format_exception(error))
+                    for secret in host_capabilities.protected_values:
+                        if secret:
+                            detail = detail.replace(secret, "[redacted]")
                     failures.append(
                         {
                             "image_source_key": key,
                             "benchmark": row.benchmark,
                             "error_type": type(error).__name__,
-                            "message": str(error).replace(os.environ[credential_env], "[redacted]")[-16000:],
+                            "message": detail[-32000:],
                         }
                     )
                     logging.error("Preflight failed: %s %s", row.benchmark, type(error).__name__)

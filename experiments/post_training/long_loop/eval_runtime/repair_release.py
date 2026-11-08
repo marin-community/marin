@@ -23,6 +23,7 @@ from rolloutengine.models import TaskRolloutSpec
 from taskcompendium.models import TaskSpec
 
 from experiments.post_training.long_loop.eval_runtime.artifacts import publish
+from experiments.post_training.long_loop.eval_runtime.pi_image import with_pi_runtime
 from experiments.post_training.long_loop.eval_runtime.profile import DATASET, POLICY_INDEX, SOURCE_REVISION
 
 SOURCE_REQUIREMENTS = (
@@ -47,8 +48,8 @@ def released_task(serialized: str) -> TaskSpec:
 
     The schema change adds labels and script judge/empty-output fields. These
     tasks have no declared judge service; retain their existing script bindings
-    and the prior zero-score behavior for empty submissions. No prompts, source
-    identities, resources or grading programs change.
+    and the prior zero-score behavior for empty submissions. Harbor packages also
+    receive the pinned Pi image layer; prompts and grading programs stay intact.
     """
     task = json.loads(serialized)
     if task["schema_version"] != "0.28" or task["grader"]["kind"] not in ("script", "none"):
@@ -57,7 +58,8 @@ def released_task(serialized: str) -> TaskSpec:
     task["labels"] = {}
     if task["grader"]["kind"] == "script":
         task["grader"].update(empty_output="zero", judge=None)
-    return TaskSpec.model_validate(task)
+    converted = TaskSpec.model_validate(task)
+    return with_pi_runtime(converted) if "harbor" in converted.tags else converted
 
 
 def released_rollout(row: dict) -> TaskRolloutSpec:
