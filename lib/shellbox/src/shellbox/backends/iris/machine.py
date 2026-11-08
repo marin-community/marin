@@ -84,23 +84,26 @@ def _controller_unavailable(error: Exception) -> bool:
     )
 
 
+def _exec_transport_failure(error: Exception) -> bool:
+    return isinstance(error, (ConnectError, ConnectionError, httpx.TransportError))
+
+
 def _controller_call[T](call: Callable[[], T], *, exec_call: bool = False) -> T:
-    """Retry controller unavailability and exec admission shedding under the existing Iris budget."""
+    """Retry exec RPC transport failures under the existing Iris availability budget."""
     try:
         # Submit/status already own Iris's bounded retry; never stack another wait on them.
         if not exec_call:
             return call()
         return retry_with_backoff(
             call,
-            retryable=lambda error: _controller_unavailable(error)
-            or (isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED),
+            retryable=_exec_transport_failure,
             max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
             max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
             backoff=EXEC_SHED_BACKOFF,
             operation="Iris controller",
         )
     except Exception as error:
-        if _controller_unavailable(error):
+        if _controller_unavailable(error) or (exec_call and _exec_transport_failure(error)):
             raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
         raise
 
