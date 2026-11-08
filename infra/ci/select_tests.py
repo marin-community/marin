@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
     "rigging",
+    "forge",
     "haliax",
     "iris",
     "fray",
@@ -91,6 +92,7 @@ BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
+    "forge": "marin-forge",
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",
@@ -242,6 +244,23 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/verifyit/",
         "lib/rigging/",
         "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "forge-unit": (
+        "lib/forge/",
+        "lib/taskforge/",
+        "lib/taskcompendium/",
+        "lib/rolloutengine/",
+        "lib/shellbox/",
+        "lib/rigging/",
+        "lib/verifyit/",
+        "lib/iris/",
+        "lib/fray/",
+        "lib/zephyr/",
+        "lib/finelog/",
+        "lib/finestore/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,

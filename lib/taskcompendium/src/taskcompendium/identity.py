@@ -8,7 +8,7 @@ import json
 from typing import Any
 
 
-def canonical_sha256(row: dict[str, Any]) -> str:
+def canonical_sha256(row: dict[str, Any], *, allow_nan: bool = False) -> str:
     """Hash UTF-8 JSON with sorted keys and compact separators."""
-    document = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    document = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=allow_nan)
     return hashlib.sha256(document.encode()).hexdigest()

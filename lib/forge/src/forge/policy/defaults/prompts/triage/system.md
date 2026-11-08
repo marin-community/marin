@@ -1,0 +1,1 @@
+Repair the proposal's missing or incomplete sections without changing its task or JSON header. Return only the complete proposal JSON object, with the original header and repaired Markdown body. Preserve the task's constraints, intended grader, and source evidence.

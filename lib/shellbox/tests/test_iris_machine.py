@@ -7,10 +7,14 @@ import asyncio
 import json
 import os
 import pwd
+import re
+import shlex
+import signal
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,7 +32,16 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    ExecSetupFailed,
+    ExitReason,
+    MachineCancelled,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    UnsupportedMachineSpec,
+)
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -179,7 +192,10 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("private_credentials", [False, True])
-def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
+@pytest.mark.parametrize("has_timeout", [False, True])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(
+    tmp_path, monkeypatch, caplog, private_credentials, has_timeout
+):
     task_id = JobName.from_wire("/fixture/sandbox/0")
     status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
     job = LocalJob()
@@ -197,7 +213,14 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     endpoint.credentials = None
     monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
     monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
-    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
+
+    class ProbeRpc(LocalRpc):
+        def exec_in_container(self, request, timeout_ms):
+            if request.command == ["sh", "-c", "command -v timeout"]:
+                return SimpleNamespace(exit_code=0 if has_timeout else 1, stdout="", stderr="", error="")
+            return super().exec_in_container(request, timeout_ms)
+
+    monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: ProbeRpc())
     secret = "private-fixture-credential"
     monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
     factory = IrisMachineFactory(
@@ -209,6 +232,7 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     async def scenario():
         machine = await factory.create(spec)
         try:
+            assert machine._timeout_available is has_timeout
             assert secret not in json.dumps(asdict(machine.spec), default=str)
             result = await machine.run(Command(("sh", "-c", "printf ready")))
             assert result.stdout == b"ready"
@@ -246,12 +270,12 @@ def test_command_on_an_ended_sandbox_raises_machine_terminated(tmp_path: Path, s
         asyncio.run(machine.run(Command(("true",))))
 
 
-def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Path) -> None:
+def test_dead_container_exec_error_overrides_stale_running_status(tmp_path: Path) -> None:
     machine, _ = local_machine(tmp_path, FailingRpc(), LocalTask(TaskState.RUNNING))
 
     with pytest.raises(RuntimeError, match="Iris exec failed") as raised:
         asyncio.run(machine.run(Command(("true",))))
-    assert not isinstance(raised.value, MachineTerminated)
+    assert isinstance(raised.value, MachineTerminated)
 
 
 def test_exec_refused_by_a_full_controller_pool_is_retried(tmp_path: Path, monkeypatch) -> None:
@@ -417,15 +441,26 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(mon
     asyncio.run(scenario())
 
 
-def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.FAILED))
+@pytest.mark.parametrize(
+    "state,reason,error_type",
+    [
+        (TaskState.FAILED, "container exited", MachineTerminated),
+        (TaskState.FAILED, "PodDeleted: pod was deleted while the attempt was starting", MachineTerminated),
+        (TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted", MachineTerminated),
+        (TaskState.KILLED, "Parent job terminated", MachineCancelled),
+    ],
+)
+def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path, state, reason, error_type):
+    task = LocalTask(state)
+    task.status = lambda: SimpleNamespace(state=state, error_message=reason)
+    job = LocalJob(task)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
 
-    with pytest.raises(RuntimeError, match="container exited"):
+    with pytest.raises(error_type, match=reason.lower() if state is TaskState.KILLED else reason):
         asyncio.run(factory.create(spec))
     assert job.cancelled
 
@@ -443,3 +478,299 @@ def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> No
             await machine.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("exit_code", [124, 137])
+@pytest.mark.parametrize("elapsed", [10, 30])
+def test_command_timeout_keeps_output_and_machine_usable(tmp_path, monkeypatch, exit_code, elapsed):
+    machine, job = local_machine(tmp_path)
+    machine._timeout_available = True
+    scripts = []
+    deadlines = []
+    now = [0.0]
+    monkeypatch.setattr(iris_backend, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    async def script(text, timeout=None):
+        scripts.append(text)
+        deadlines.append(timeout)
+        now[0] += elapsed if "timeout -k" in text else 0
+        return iris_backend.ExecOutput(exit_code if "timeout -k" in text else 0, "", "")
+
+    async def download(path, limit=None, *, known_file=False):
+        return (b"partial output" if path.endswith("-out") else b"diagnostic"), False
+
+    monkeypatch.setattr(machine, "_script", script)
+    monkeypatch.setattr(machine, "_download_bytes", download)
+
+    async def scenario():
+        command = Command(("sh", "-c", "printf 'partial output'; sleep 90"), timeout=30)
+        result = await machine.run(command)
+        assert result.reason == (ExitReason.EXITED if exit_code == 137 and elapsed < 30 else ExitReason.TIMED_OUT)
+        assert result.exit_code == exit_code
+        assert result.stdout == b"partial output" and result.stderr == b"diagnostic"
+        assert not job.cancelled
+        assert (await machine.run(Command(("true",)))).reason == ExitReason.EXITED
+        assert not job.cancelled
+        assert deadlines[0] == 30 + iris_backend.RPC_PADDING_SECONDS
+        timed = shlex.split(scripts[0].splitlines()[-1])
+        assert timed[:6] == ["timeout", "-k", "5", "30s", "sh", "-c"]
+        assert shlex.split(timed[6]) == list(command.argv)
+        await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("has_timeout", [False, True])
+def test_missing_timeout_or_rpc_backstop_closes_the_machine(tmp_path, monkeypatch, has_timeout):
+    machine, job = local_machine(tmp_path)
+    machine._timeout_available = has_timeout
+    monkeypatch.setattr(iris_backend, "RPC_PADDING_SECONDS", 0.01)
+    deadlines = []
+    wait_for = asyncio.wait_for
+
+    async def record_wait(awaitable, timeout):
+        deadlines.append(timeout)
+        return await wait_for(awaitable, timeout=timeout)
+
+    async def stuck_script(text, timeout=None):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "wait_for", record_wait)
+    monkeypatch.setattr(machine, "_script", stuck_script)
+    result = asyncio.run(machine.run(Command(("true",), timeout=0.01)))
+    assert result.reason == ExitReason.TIMED_OUT
+    assert job.cancelled
+    assert deadlines == [0.02 if has_timeout else 0.01]
+
+
+def test_missing_download_is_a_file_error(tmp_path):
+    machine, _ = local_machine(tmp_path)
+    missing = str(tmp_path / "missing file.py")
+    with pytest.raises(FileNotFoundError, match=r"missing file\.py"):
+        asyncio.run(machine.download(missing, tmp_path / "download"))
+
+
+@pytest.mark.parametrize("memory_mb", [None, 4096])
+def test_oom_termination_reports_effective_memory_request(tmp_path, memory_mb):
+    task = LocalTask(TaskState.FAILED)
+    task.status = lambda: SimpleNamespace(state=TaskState.FAILED, error_message="OOMKilled")
+    machine, _ = local_machine(tmp_path, FailingRpc(), task)
+    machine.spec = replace(machine.spec, memory_mb=memory_mb)
+    with pytest.raises(MachineTerminated, match=f"memory request: {memory_mb or 2048} MiB"):
+        asyncio.run(machine.run(Command(("true",))))
+
+
+@pytest.mark.parametrize("timeout", [None, 180.1])
+def test_exec_rpc_sends_explicit_deadline_instead_of_controller_default(tmp_path, timeout):
+    machine, _ = local_machine(tmp_path)
+    requests = []
+
+    class Rpc:
+        def exec_in_container(self, request, timeout_ms):
+            requests.append((request.timeout_seconds, timeout_ms))
+            return SimpleNamespace(exit_code=0, stdout="ok", stderr="", error="")
+
+    machine.rpc = Rpc()
+    assert machine._exec_sync(["true"], timeout).stdout == "ok"
+    expected = iris_backend.DEFAULT_JOB_TTL if timeout is None else 181
+    assert requests == [(expected, (expected + iris_backend.RPC_PADDING_SECONDS) * 1000)]
+    asyncio.run(machine.close())
+
+
+def test_ranged_file_reads_transfer_only_slice_and_reject_directories(tmp_path):
+    class RecordingRpc(LocalRpc):
+        def __init__(self):
+            self.scripts = []
+
+        def exec_in_container(self, request, timeout_ms):
+            self.scripts.append(request.command[-1])
+            return super().exec_in_container(request, timeout_ms)
+
+    rpc = RecordingRpc()
+    machine, _ = local_machine(tmp_path, rpc=rpc)
+    path = tmp_path / "large.bin"
+    path.write_bytes(b"a" * 1_000_000 + b"slice" + b"z" * 1_000_000)
+
+    async def scenario():
+        assert await machine.read_file(str(path), offset=1_000_000, limit=5) == b"slice"
+        transfers = [script for script in rpc.scripts if "tail -c" in script]
+        assert len(transfers) == 1 and "tail -c +1000001" in transfers[0] and "head -c 5" in transfers[0]
+        assert await machine.read_file(str(path), offset=3_000_000, limit=5) == b""
+        rpc.scripts.clear()
+        with pytest.raises(IsADirectoryError):
+            await machine.read_file(str(tmp_path))
+        assert len(rpc.scripts) == 1 and "test -d" in rpc.scripts[0]
+        assert not any("tar " in script or "tail -c" in script for script in rpc.scripts)
+        with pytest.raises(FileNotFoundError):
+            await machine.read_file(str(tmp_path / "absent"), limit=5)
+        await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_process_cleanup_preserves_supervisor_and_current_exec_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # PID 2 was recycled: matching its old PID alone must not preserve the leaked process.
+    # The active Python reset (92), timeout wrapper (91), and exec shell (90)
+    # are all ancestors of the cleanup command and must survive it.
+    processes = {1: (0, "100"), 2: (1, "999"), 3: (1, "300"), 90: (1, "900"), 91: (90, "910"), 92: (91, "920")}
+    killed = []
+
+    def stat(path: Path, *args: object, **kwargs: object) -> str:
+        pid = int(path.parent.name)
+        parent, started = processes[pid]
+        fields = ["S", str(parent), *(["0"] * 17), started]
+        return f"{pid} (command with spaces) " + " ".join(fields)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "glob", lambda path, pattern: iter(Path(f"/proc/{pid}/stat") for pid in processes))
+        patch.setattr(Path, "read_text", stat)
+        patch.setattr(os, "getpid", lambda: 92)
+        patch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+        patch.setattr(sys, "argv", ["reset", json.dumps([{"1": ["0", "100"], "2": ["1", "200"]}, []])])
+        exec(iris_backend.RESET.split("task_roots =", 1)[0], {})
+    assert killed == [(2, signal.SIGKILL), (3, signal.SIGKILL)]
+
+
+def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
+    # Rewrite Python literals before run() shell-quotes the script.
+    reset = iris_backend.RESET.replace("Path('/proc')", f"Path({str(tmp_path / 'proc')!r})")
+    reset = reset.replace("os.listdir('/')", f"os.listdir({str(tmp_path)!r})")
+    reset = reset.replace("roots.update('/' + name", f"roots.update({str(tmp_path)!r} + '/' + name")
+    monkeypatch.setattr(iris_backend, "RESET", reset)
+
+    class SandboxRpc(LocalRpc):
+        def exec_in_container(self, request, timeout_ms):
+            command = [
+                re.sub(r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda m: str(tmp_path / m[1]), part)
+                for part in request.command
+            ]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
+
+    for name in ("tmp", "workspace", "tests", "app", "proc"):
+        (tmp_path / name).mkdir()
+    inodes = {name: (tmp_path / name).stat().st_ino for name in ("tmp", "workspace", "tests", "app")}
+    runtime = tmp_path / "tmp/.shellbox-state"
+    runtime.write_text("keep")
+    machine, job = local_machine(tmp_path, rpc=SandboxRpc())
+    machine.spec = replace(machine.spec, workdir="/app")
+
+    async def scenario():
+        try:
+            await machine.reset()
+            for name in inodes:
+                (tmp_path / name / "residue").write_text("old candidate")
+            (tmp_path / "new-file").write_text("old candidate")
+            for _ in range(2):
+                await machine.reset()
+                assert (await machine.run(Command(("printf", "after reset")))).stdout == b"after reset"
+                assert all((tmp_path / name).stat().st_ino == inode for name, inode in inodes.items())
+                assert all(not (tmp_path / name / "residue").exists() for name in inodes)
+                assert not (tmp_path / "new-file").exists()
+                assert runtime.read_text() == "keep"
+                assert not job.cancelled
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "message,kind",
+    [
+        ("Websocket setup failed (status 0): handshake refused", ExecSetupFailed),
+        ("'NoneType' object has no attribute 'decode'", ExecSetupFailed),
+        ("Non-integer exec status: invalid literal for int()", MachineTerminated),
+        ("invalid literal for int() with base 10: malformed envelope", MachineTerminated),
+        ("unexpected adapter bug", RuntimeError),
+        ("invalid literal for int(): error executing command in container: container not found", MachineTerminated),
+    ],
+)
+def test_controller_wire_errors_are_classified_at_shellbox_boundary(tmp_path: Path, message: str, kind) -> None:
+    class Rpc:
+        def exec_in_container(self, request, timeout_ms):
+            return SimpleNamespace(exit_code=0, stdout="", stderr="", error=message)
+
+    machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
+    with pytest.raises(kind, match="Iris exec failed") as caught:
+        asyncio.run(machine.run(Command(("true",))))
+    assert type(caught.value) is kind
+
+
+@pytest.mark.parametrize("script,count", [("true", 4), ("printf out", 5), ("printf out; printf err >&2", 6)])
+def test_command_capture_exec_rpc_count(tmp_path: Path, script: str, count: int) -> None:
+    class CountingRpc(LocalRpc):
+        calls = 0
+
+        def exec_in_container(self, request, timeout_ms):
+            self.calls += 1
+            return super().exec_in_container(request, timeout_ms)
+
+    rpc = CountingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+    result = asyncio.run(machine.run(Command(("sh", "-c", script))))
+    assert result.exit_code == 0
+    assert rpc.calls == count
+
+
+@pytest.mark.parametrize(
+    "code,message,cancelled",
+    [
+        (
+            Code.FAILED_PRECONDITION,
+            "Cannot submit job: parent job /user/pilot has terminated (state=JOB_STATE_KILLED)",
+            True,
+        ),
+        (Code.FAILED_PRECONDITION, "Cannot submit job: parent job /user/pilot is absent from the database", False),
+        (Code.UNAVAILABLE, "Cannot submit job: parent job /user/pilot has terminated (state=JOB_STATE_KILLED)", False),
+    ],
+)
+def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, message, cancelled):
+    error = ConnectError(code, message)
+    cleaned = []
+    client = RecordingClient()
+    endpoint = LocalEndpoint()
+
+    def submit(**kwargs):
+        raise error
+
+    client.submit = submit
+    client.shutdown = lambda: cleaned.append("client")
+    endpoint.close = lambda: cleaned.append("endpoint")
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: endpoint)
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    with pytest.raises(MachineCancelled if cancelled else ConnectError) as caught:
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
+    assert cleaned == ["client", "endpoint"]
+    if cancelled:
+        assert str(caught.value) == "parent job terminated"
+        assert caught.value.__cause__ is error
+    else:
+        assert caught.value is error
+
+
+@pytest.mark.parametrize("wrapper", ["", "Non-integer exec status: "])
+@pytest.mark.parametrize(
+    "detail",
+    [
+        'Internal error occurred: error executing command in container: failed to start exec "dead"',
+        "Internal error occurred: container's runtime failed\nsecond line",
+    ],
+)
+def test_noninteger_exec_status_preserves_server_text(tmp_path, wrapper, detail):
+    class Rpc:
+        def exec_in_container(self, request, timeout_ms):
+            return SimpleNamespace(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                error=wrapper + "invalid literal for int() with base 10: " + repr(detail),
+            )
+
+    machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
+    with pytest.raises(MachineTerminated) as caught:
+        machine._exec_sync(["true"])
+    assert str(caught.value) == "Iris exec failed: " + detail
+    assert str(caught.value.__cause__) == str(caught.value)

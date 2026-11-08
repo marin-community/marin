@@ -419,6 +419,69 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exit_code,reason,failure",
+    [
+        (2, ExitReason.EXITED, GradingFailure.GRADER_EXIT),
+        (137, ExitReason.EXITED, GradingFailure.EXECUTION),
+        (-9, ExitReason.EXITED, GradingFailure.EXECUTION),
+        (None, ExitReason.EXITED, GradingFailure.EXECUTION),
+        (None, ExitReason.TIMED_OUT, GradingFailure.TIMEOUT),
+    ],
+)
+async def test_authored_collection_exit_is_distinct_from_infrastructure_failure(exit_code, reason, failure):
+    class Collector:
+        async def run(self, command):
+            return Result(exit_code, b"collect output", b"collect error", False, False, reason)
+
+    task = arithmetic_task(
+        ScriptGrader(
+            argv=("grader",),
+            environment=GRADER_ENVIRONMENT,
+            collect=(VerifierCommand(argv=("collector",)),),
+        )
+    )
+    result = await grade_in_sandbox(
+        task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=Collector()
+    )
+    assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, failure)
+    assert result.diagnostics["exit_code"] == exit_code
+    assert result.diagnostics["stdout"] == "collect output"
+    assert result.diagnostics["stderr"] == "collect error"
+
+
+@pytest.mark.asyncio
+async def test_authored_collector_wrong_path_is_defect_even_when_solver_output_exists():
+    agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
+    try:
+        await agent.run(Command(("sh", "-c", "mkdir -p /app/results; echo '{}' > /app/results/results.json")))
+        task = arithmetic_task(
+            ScriptGrader(
+                argv=("grader",),
+                environment=GRADER_ENVIRONMENT,
+                collect=(VerifierCommand(argv=("sh", "-c", "ls -la /results > /lsroot.txt 2>&1")),),
+                artifacts=(
+                    VerifierArtifact(
+                        source="/results/results.json",
+                        target="/probe/results.json",
+                        kind=ArtifactKind.FILE,
+                        missing=MissingArtifactPolicy.SKIP,
+                    ),
+                ),
+            )
+        )
+        result = await grade_in_sandbox(
+            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+        )
+        assert result.failure is GradingFailure.GRADER_EXIT
+        assert result.diagnostics["exit_code"] == 2
+        assert result.diagnostics["stderr"] == ""
+        assert (await agent.run(Command(("cat", "/app/results/results.json")))).exit_code == 0
+    finally:
+        await agent.close()
+
+
+@pytest.mark.asyncio
 async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths():
     report = """jq --arg answer "$(cat /submission/final.txt)" \
     '{reward: 1, detail: {answer: $answer, conversation: .}}' \
@@ -456,8 +519,11 @@ DETAIL = {"cases": [{"passed": True}]}
     "reward,phase,exit_code,expected",
     [
         (ExitCodeReward(), "candidate", None, (Outcome.GRADED, 0.0, None)),
-        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
-        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "candidate", 1, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "candidate", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
+        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
         (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
         (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
     ],
