@@ -7,7 +7,6 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import override
 
-from pydantic import ValidationError
 from shellbox.machine import MachineFactory
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource
@@ -55,7 +54,7 @@ class GradeTool(ValidatedTool[CandidateArgs]):
             candidate = await read_candidate(ctx, args)
             check_candidates(task, (candidate,))
             spec = lower_with_settings(task, self.settings, self.factories)
-        except (ValidationError, ValueError, NotImplementedError) as error:
+        except (ValueError, NotImplementedError) as error:
             return ToolResult(f"Cannot grade draft: {error}")
         result = await ctx.emit(GradeCandidate(spec, candidate))
         try:

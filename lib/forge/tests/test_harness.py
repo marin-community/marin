@@ -78,6 +78,10 @@ def environment(ctx: Context) -> FakeEnv:
     ctx.handle(RunCommand, partial(run_command, notify=ctx.emit), uses=(env,))
     ctx.handle(ReadFile, partial(read_file, notify=ctx.emit), uses=(env,))
     ctx.handle(WriteFile, partial(write_file, notify=ctx.emit), uses=(env,))
+    web = FakeWeb({"query": "s" * 10000}, {"https://example.org": "f" * 10000})
+    ctx.resource(web, web.fingerprint)
+    ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
+    ctx.handle(WebFetch, partial(fetch, notify=ctx.emit), uses=(web,))
     return env
 
 
@@ -85,43 +89,8 @@ def call(name: str, args: object, identity: str) -> Completion:
     return Completion("", (ToolCall(identity, name, json.dumps(args)),), reasoning="plan")
 
 
-async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_path: Path) -> None:
-    script = (
-        call("shell", {"command": "task"}, "1"),
-        call("shell", {"command": "controls"}, "2"),
-        call(
-            "submit",
-            {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json", "notes": "done"},
-            "3",
-        ),
-    )
-    sink = JsonlSink(str(tmp_path / "session.jsonl"))
-    ctx = Context(log=EventLog(sink=sink))
-    env = environment(ctx)
-    harness = AgenticHarness(262144, LLMPolicy(), "continue", 20000)
-    tools = {
-        "shell": ShellTool(30, 120),
-        "submit": SubmitTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-    }
-    initial = Conversation((Message(Role.USER, "build"),), ())
-    result = await harness.run(ctx, initial, FakeInference(script), tools)
-    await ctx.drain()
-    assert isinstance(result, Submitted)
-    assert result.submission.task.id == arithmetic_task().id
-    assert [m.role for m in result.session.messages] == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
-    assert result.session.messages[-1].tool_calls[0].id == "3"
-    assert result.session.messages[-1].reasoning == "plan"
-    replay = Context(log=EventLog(replay_from=await sink.read()))
-    replay_env = environment(replay)
-    client = FakeInference(())
-    replay_result = await harness.run(replay, initial, client, tools)
-    await replay.drain()
-    assert replay_result == result
-    assert client.requests == []
-    assert replay_env.files == env.files
-
-
 async def test_malformed_report_and_schema_errors_recover_with_replayable_history() -> None:
+    # Pilot j: S/d05.contaminant_transport_fate/09 and T/d15.biomechanics.prosthetic_orthotic_design/10.
     malformed = '{"findings": '
     script = (
         Completion(
@@ -151,29 +120,6 @@ async def test_malformed_report_and_schema_errors_recover_with_replayable_histor
     assert "call report again" in history[1].content and "failed validation" in history[3].content
     assert any(isinstance(record.event, Resolved) and record.event.value == script[0] for record in log.records)
     assert not any(isinstance(record.event, RunCommand) for record in log.records)
-
-
-async def test_submit_gate_feedback_and_validate_capture_current_draft() -> None:
-    ctx = Context(log=EventLog())
-    environment(ctx)
-    await ctx.emit(RunCommand("task", 30))
-    await ctx.emit(RunCommand("controls", 30))
-    tool = SubmitTool(
-        lambda submission: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
-    )
-    result = await tool(ctx, {"task_path": "/workspace/task.json", "controls_path": "/workspace/controls.json"})
-    assert isinstance(result, ToolResult) and result.content == "Missing negative controls"
-    client = FakeInference((call("validate", {}, "validate-1"),))
-    outcome = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
-        ctx,
-        Conversation((), ()),
-        client,
-        {"validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json")},
-    )
-    await ctx.drain()
-    assert isinstance(outcome, Returned) and isinstance(outcome.payload, ValidateRequest)
-    assert outcome.payload.submission.task == arithmetic_task()
-    assert outcome.session.messages[-1].tool_calls[0].id == "validate-1"
 
 
 async def test_web_transport_and_replay_cache_http_results() -> None:
@@ -243,119 +189,92 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert resource_bytes(report.payload.findings[0].candidate.files[0]) == b"candidate"
 
 
-async def test_web_and_error_results_are_saved_before_the_next_inference() -> None:
-    log = EventLog()
-    ctx = Context(log=log)
-    web = FakeWeb({"query": "s" * 10000}, {"https://example.org": "f" * 10000})
-    ctx.resource(web, web.fingerprint)
-    ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
-    ctx.handle(WebFetch, partial(fetch, notify=ctx.emit), uses=(web,))
-    calls = (
-        call("web_search", {"query": "query"}, "1").tool_calls[0],
-        call("web_fetch", {"url": "https://example.org"}, "2").tool_calls[0],
-        call("unknown" * 100, {}, "3").tool_calls[0],
-    )
-    client = FakeInference((Completion("", calls), call("finish", {"reason": "done"}, "4")))
+@pytest.mark.parametrize(
+    "name,args,original",
+    [
+        ("web_search", {"query": "query"}, "s" * 10000),
+        ("web_fetch", {"url": "https://example.org"}, "f" * 10000),
+        ("unknown" * 100, {}, "Unknown tool: " + "unknown" * 100),
+        ("shell", {"command": "task"}, None),
+    ],
+    ids=["search", "fetch", "unknown", "shell"],
+)
+async def test_tool_output_spill_slices_and_persisted_replay(
+    tmp_path: Path, name: str, args: dict[str, object], original: str | None
+) -> None:
+    sink = JsonlSink(str(tmp_path / "outputs.jsonl"))
+    ctx = Context(log=EventLog(sink=sink))
     env = environment(ctx)
-    result = await AgenticHarness(262144, LLMPolicy(), "continue", 80).run(
-        ctx,
-        Conversation((), ()),
-        client,
-        {"web_search": WebSearchTool(), "web_fetch": WebFetchTool(), "finish": FinishTool()},
-    )
+    tools = {
+        "shell": ShellTool(30, 120),
+        "web_search": WebSearchTool(),
+        "web_fetch": WebFetchTool(),
+        "finish": FinishTool(),
+    }
+    harness, initial = AgenticHarness(1000, LLMPolicy(), "continue", 8), Conversation((), ())
+    client = FakeInference((call(name, args, "../../escape"), call("finish", {"reason": "done"}, "done")))
+    result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
-    assert isinstance(result, Stopped)
-    outputs = [message for message in client.requests[1].conversation if message.role == "tool"]
-    assert [message.tool_call_id for message in outputs] == ["1", "2", "3"]
-    originals = ("s" * 10000, "f" * 10000, "Unknown tool: " + "unknown" * 100)
-    assert len(env.files) == 3
-    for message, original in zip(outputs, originals, strict=True):
-        assert message.content.startswith(original[:80] + "\n[Full output saved to ")
-        saved = next(path for path, data in env.files.items() if data.decode() == original)
-        assert str(saved) in message.content
-        assert f"{len(original)} characters" in message.content
-        sliced = await ReadFileTool()(ctx, {"path": str(saved), "offset": 80, "limit": 60})
-        assert sliced == ToolResult(original[80:140])
+    [(path, data)] = [(path, data) for path, data in env.files.items() if path.parent == PurePosixPath(".tool-output")]
+    if original is None:
+        assert json.loads(data)["stdout"] == "task ready"
+        original = data.decode()
+    assert data.decode() == original and ".." not in path.parts
+    content = client.requests[1].conversation[-1].content
+    assert content.startswith(original[:8] + "\n[Full output saved to ") and str(path) in content
+    assert await ReadFileTool()(ctx, {"path": str(path), "offset": 8, "limit": 20}) == ToolResult(original[8:28])
     await ctx.drain()
+    replay = Context(log=EventLog(replay_from=await sink.read()))
+    replay_env, replay_client = environment(replay), FakeInference(())
+    assert await harness.run(replay, initial, replay_client, tools) == result
+    await replay.drain()
+    assert not replay_client.requests and replay_env.files == env.files
 
 
+@pytest.mark.parametrize("write", [False, True])
 @pytest.mark.parametrize(
     "failure",
     [
-        FileNotFoundError(2, "Missing", "/bad"),
-        IsADirectoryError(21, "Directory", "/bad"),
+        FileNotFoundError(2, "missing", "/bad"),
+        IsADirectoryError(21, "directory", "/bad"),
+        NotADirectoryError(20, "parent", "/bad"),
         AbsoluteLinkError(TarInfo("/bad")),
     ],
 )
-async def test_file_errors_are_feedback_at_the_shared_tool_boundary(failure: Exception) -> None:
+async def test_file_path_errors_return_feedback(write: bool, failure: Exception) -> None:
     ctx = Context(log=EventLog())
 
-    async def failed_read(event: ReadFile) -> bytes:
+    async def fail(event: ReadFile | WriteFile) -> bytes:
         raise failure
 
-    ctx.handle(ReadFile, failed_read)
-    result = await ReadFileTool()(ctx, {"path": "/bad"})
+    ctx.handle(ReadFile, fail)
+    ctx.handle(WriteFile, fail)
+    tool = WriteFileTool() if write else ReadFileTool()
+    result = await tool(ctx, {"path": "/bad", "content": "data"} if write else {"path": "/bad"})
     await ctx.drain()
     assert isinstance(result, ToolResult) and "/bad" in result.content
 
 
-async def test_cached_tokens_are_not_counted_twice_at_context_exit() -> None:
-    context_tokens = 262144
-    harness = AgenticHarness(context_tokens, LLMPolicy(), "continue", 20000)
-    budget = context_tokens
-    client = FakeInference(
-        tuple(
-            Completion(
-                "",
-                call("shell", {"command": "task"}, str(tokens)).tool_calls,
-                usage=Usage(prompt_tokens=tokens, cached_tokens=tokens - 1000),
-            )
-            for tokens in (budget - 1000, budget)
-        )
-    )
+@pytest.mark.parametrize("fails", [False, True])
+async def test_empty_turns_nudge_until_finish_or_three_consecutive_failures(fails: bool) -> None:
+    script = (Completion("first"), Completion(""), Completion("second"), Completion(""), Completion(""))
+    client = FakeInference((*script, Completion("") if fails else call("finish", {"reason": "done"}, "finish")))
     ctx = Context(log=EventLog())
-    environment(ctx)
-    result = await harness.run(ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120)})
+    harness = AgenticHarness(262144, LLMPolicy(), "use tools", 20000)
+    if fails:
+        with pytest.raises(Hold, match="provider returned 3 empty completions"):
+            await harness.run(ctx, Conversation((), ()), client, {"finish": FinishTool()})
+    else:
+        result = await harness.run(ctx, Conversation((), ()), client, {"finish": FinishTool()})
+        assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
     await ctx.drain()
-    assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
-    assert len(client.requests) == 2
-    assert not any(message.role == "user" for message in result.session.messages)
-
-
-async def test_text_and_isolated_empty_stops_keep_nudging_until_explicit_finish() -> None:
-    script = (
-        Completion("first"),
-        Completion(""),
-        Completion("second"),
-        Completion(""),
-        Completion(""),
-        call("finish", {"reason": "done"}, "finish"),
-    )
-    client = FakeInference(script)
-    ctx = Context(log=EventLog())
-    environment(ctx)
-    result = await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(
-        ctx, Conversation((), ()), client, {"finish": FinishTool()}
-    )
-    await ctx.drain()
-    assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
-    assert len(client.requests) == len(script)
+    assert len(client.requests) == 6
     assert all(request.messages[-1] == Message(Role.USER, "use tools") for request in client.requests[1:])
-    assert result.session.messages[-1].tool_calls[0].id == "finish"
-
-
-async def test_three_consecutive_empty_completions_hold_provider_failure() -> None:
-    client = FakeInference((Completion(""),) * 3)
-    ctx = Context(log=EventLog())
-    with pytest.raises(Hold, match="provider returned 3 empty completions"):
-        environment(ctx)
-        await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(ctx, Conversation((), ()), client, {})
-    await ctx.drain()
-    assert len(client.requests) == 3
 
 
 @pytest.mark.parametrize("recovers", [True, False])
 async def test_reasoning_only_length_retries_unchanged_conversation_and_replays(tmp_path: Path, recovers: bool) -> None:
+    # Pilot o: S/d34.insights.quant_research/06 exhausted the endpoint in reasoning only.
     failed = Completion(
         "",
         finish_reason=FinishReason.LENGTH,
@@ -413,55 +332,39 @@ async def test_candidate_files_without_task_machine_return_feedback(name: str) -
     assert isinstance(result, ToolResult) and "Candidate files require a task machine" in result.content
 
 
-async def test_provider_context_overflow_preserves_the_last_completed_conversation() -> None:
-    client = FakeInference(
-        (call("shell", {"command": "task"}, "1"), ContextExceeded("maximum context length: requested 383788 tokens"))
+@pytest.mark.parametrize("overflow", ["provider", "prompt", "reply", "tool"])
+async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overflow: str) -> None:
+    # Pilots i/j: T/d08.design.drawings_tolerances/04 and T/d17.procedures.preoperative/25.
+    initial = Conversation((Message(Role.ASSISTANT, "earlier"),), ())
+    first = Completion(
+        "", call("shell", {"command": "task"}, "1").tool_calls, usage=Usage(prompt_tokens=200000, cached_tokens=199000)
     )
-    ctx = Context(log=EventLog())
-    environment(ctx)
-    resumed = Conversation(
-        (
-            Message(Role.USER, "build"),
-            Message(Role.ASSISTANT, "", (ToolCall("prior", "validate", "{}"),)),
-            Message(Role.TOOL, "validated", tool_call_id="prior"),
-        ),
-        (),
-    )
-    result = await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(
-        ctx, resumed, client, {"shell": ShellTool(30, 120)}
-    )
-    await ctx.drain()
-    assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
-    assert result.turns == 3
-    assert "requested 383788 tokens" in result.summary
-    assert result.session.messages == client.requests[1].conversation
-    assert result.session.messages[-1].role == "tool"
-    assert result.session.messages[-1].tool_call_id == "1"
-
-
-@pytest.mark.parametrize("completion_tokens,output_chars", [(10, 20), (0, 40)])
-async def test_next_prompt_counts_reply_tokens_and_appended_tool_text(completion_tokens: int, output_chars: int) -> None:
-    ctx = Context(log=EventLog())
-    web = FakeWeb({"query": "x" * 1000}, {})
-    ctx.resource(web, web.fingerprint)
-    ctx.handle(WebSearch, partial(search, notify=ctx.emit), uses=(web,))
-    client = FakeInference(
-        (
-            Completion(
-                "",
-                call("web_search", {"query": "query"}, "1").tool_calls,
-                usage=Usage(prompt_tokens=90, completion_tokens=completion_tokens, cached_tokens=80),
+    second = (
+        ContextExceeded("requested 383788 tokens")
+        if overflow == "provider"
+        else Completion(
+            "answer" if overflow == "reply" else "",
+            () if overflow == "reply" else call("shell", {"command": "task"}, "2").tool_calls,
+            finish_reason=FinishReason.LENGTH,
+            usage=Usage(
+                prompt_tokens=262144 if overflow == "prompt" else 262143,
+                completion_tokens=1 if overflow == "reply" else 0,
             ),
         )
     )
+    ctx = Context(log=EventLog())
     environment(ctx)
-    result = await AgenticHarness(100, LLMPolicy(), "use tools", output_chars).run(
-        ctx, Conversation((), ()), client, {"web_search": WebSearchTool()}
+    client = FakeInference((first, second))
+    result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
+        ctx, initial, client, {"shell": ShellTool(30, 120)}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
-    assert len(client.requests) == 1
-    assert result.session.messages[-1].content.startswith("x" * output_chars + "\n[Full output saved to ")
+    assert result.turns == 3 and len(client.requests) == 2
+    assert result.session.messages[-1].tool_call_id == {"provider": "1", "reply": None}.get(overflow, "2")
+    if overflow == "provider":
+        assert "requested 383788 tokens" in result.summary
+        assert result.session.messages == client.requests[-1].conversation
 
 
 async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() -> None:
@@ -519,54 +422,6 @@ async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_
     assert json.loads(corrected.content)["grader_checks"] == [{"name": "A", "passed": False, "weight": 1}]
 
 
-async def test_large_shell_output_is_saved_and_replayed_without_inference(tmp_path: Path) -> None:
-    sink = JsonlSink(str(tmp_path / "outputs.jsonl"))
-    ctx = Context(log=EventLog(sink=sink))
-    env = environment(ctx)
-    harness = AgenticHarness(262144, LLMPolicy(), "continue", 8)
-    initial = Conversation((), ())
-    tools = {"shell": ShellTool(30, 120), "finish": FinishTool()}
-    client = FakeInference(
-        (call("shell", {"command": "task"}, "../../escape"), call("finish", {"reason": "done"}, "done"))
-    )
-    result = await harness.run(ctx, initial, client, tools)
-    await ctx.drain()
-    saved = [(path, data) for path, data in env.files.items() if path.parent == PurePosixPath(".tool-output")]
-    assert len(saved) == 1
-    path, data = saved[0]
-    assert json.loads(data)["stdout"] == "task ready"
-    assert str(path) in client.requests[1].conversation[-1].content
-    assert ".." not in path.parts
-    replay = Context(log=EventLog(replay_from=await sink.read()))
-    replay_env = environment(replay)
-    replay_client = FakeInference(())
-    assert await harness.run(replay, initial, replay_client, tools) == result
-    await replay.drain()
-    assert not replay_client.requests
-    assert replay_env.files == env.files
-
-
-@pytest.mark.parametrize(
-    "failure",
-    [
-        IsADirectoryError("directory"),
-        FileNotFoundError("missing"),
-        NotADirectoryError("parent"),
-    ],
-)
-async def test_write_path_errors_return_feedback(failure: OSError) -> None:
-    ctx = Context(log=EventLog())
-    environment(ctx)
-
-    async def fail_write(event: WriteFile) -> None:
-        raise type(failure)(1, str(failure), str(event.path))
-
-    ctx.handle(WriteFile, fail_write)
-    result = await WriteFileTool()(ctx, {"path": "/bad/path", "content": "data"})
-    await ctx.drain()
-    assert isinstance(result, ToolResult) and "/bad/path" in result.content
-
-
 async def test_read_file_ranges_are_bytes_before_text_or_base64_decoding() -> None:
     ctx = Context(log=EventLog())
     environment(ctx)
@@ -595,25 +450,40 @@ async def test_web_rejections_distinguish_author_errors_from_service_errors(stat
             assert str(status) in await web.fetch("bad")
 
 
-async def test_mixed_validate_turn_answers_every_call_before_retry() -> None:
-    log = EventLog()
+@pytest.mark.parametrize("name", ["submit", "validate"])
+async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(tmp_path: Path, name: str) -> None:
+    sink = JsonlSink(str(tmp_path / "draft.jsonl"))
+    log = EventLog(sink=sink)
     ctx = Context(log=log)
-    environment(ctx)
+    env = environment(ctx)
     await ctx.emit(RunCommand("task", 30))
     await ctx.emit(RunCommand("controls", 30))
+    tool_type = SubmitTool if name == "submit" else ValidateTool
+    rejected = await tool_type(
+        lambda _: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
+    )(ctx, {})
+    assert rejected == ToolResult("Missing negative controls")
     mixed = Completion(
-        "", (*call("validate", {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls)
+        "", (*call(name, {}, "a").tool_calls, *call("shell", {"command": "task", "timeout": 1000}, "b").tool_calls)
     )
-    client = FakeInference((mixed, call("validate", {}, "c")))
-    tools = {
-        "validate": ValidateTool(accept, "/workspace/task.json", "/workspace/controls.json"),
-        "shell": ShellTool(30, 120),
-    }
-    result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(ctx, Conversation((), ()), client, tools)
+    client = FakeInference((mixed, call(name, {}, "c")))
+    tools = {name: tool_type(accept, "/workspace/task.json", "/workspace/controls.json"), "shell": ShellTool(30, 120)}
+    harness, initial = AgenticHarness(262144, LLMPolicy(), "continue", 20000), Conversation((), ())
+    result = await harness.run(ctx, initial, client, tools)
     await ctx.drain()
     assert any(isinstance(record.event, RunCommand) and record.event.timeout == 120 for record in log.records)
-    assert isinstance(result, Returned)
+    if name == "submit":
+        assert isinstance(result, Submitted) and result.submission.task == arithmetic_task()
+    else:
+        assert isinstance(result, Returned) and isinstance(result.payload, ValidateRequest)
+        assert result.payload.submission.task == arithmetic_task()
     replies = [message for message in client.requests[1].conversation if message.role == "tool"]
-    assert [message.tool_call_id for message in replies] == ["a", "b"]
-    assert "called alone" in replies[0].content
-    assert result.session.messages[-1].tool_calls[0].id == "c"
+    assert [message.tool_call_id for message in replies] == ["a", "b"] and "called alone" in replies[0].content
+    assert result.session.messages[-1].tool_calls[0].id == "c" and result.session.messages[-1].reasoning == "plan"
+    replay = Context(log=EventLog(replay_from=await sink.read()))
+    replay_env, replay_client = environment(replay), FakeInference(())
+    await replay.emit(RunCommand("task", 30))
+    await replay.emit(RunCommand("controls", 30))
+    assert await harness.run(replay, initial, replay_client, tools) == result
+    await replay.drain()
+    assert not replay_client.requests and replay_env.files == env.files
