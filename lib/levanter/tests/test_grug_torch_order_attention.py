@@ -160,5 +160,5 @@ def test_hf_reload_keeps_the_attention_implementation():
     requested = _tiny(attention_implementation="torch_order")
     reloaded = SnowballConfig.from_hf_config(requested.to_hf_config(requested.vocab_size))
     assert reloaded.attention_implementation is None
-    restored = preserve_hf_runtime_settings(replace(reloaded, router_dot_fp32=False), requested, ())
+    restored = preserve_hf_runtime_settings(replace(reloaded, router_dot_fp32=False), requested)
     assert restored.attention_implementation == "torch_order"
