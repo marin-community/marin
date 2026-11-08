@@ -95,13 +95,8 @@ class AgenticHarness(Harness):
                 # Provider prompt_tokens already includes the cached portion.
                 prompt_tokens = result.usage.prompt_tokens + result.usage.completion_tokens
                 calls = tuple(replace(call, arguments=replay_arguments(call.arguments)) for call in result.tool_calls)
-                session = Conversation(
-                    (
-                        *session.messages,
-                        Message(Role.ASSISTANT, result.content, calls, reasoning=result.reasoning),
-                    ),
-                    schemas,
-                )
+                message = Message(Role.ASSISTANT, result.content, calls, reasoning=result.reasoning)
+                session = replace(session, messages=(*session.messages, message))
                 empty_completions = empty_completions + 1 if not result.content and not result.tool_calls else 0
                 if empty_completions == MAX_EMPTY_COMPLETIONS:
                     raise Hold(f"provider returned {MAX_EMPTY_COMPLETIONS} empty completions")
@@ -139,9 +134,9 @@ class AgenticHarness(Harness):
                     # Estimate only appended text; the provider counted the prior prompt and reply.
                     prompt_tokens += (len(content) + 3) // 4
                     await ctx.emit(ToolReturned(call.id, call.name, content))
-                    session = Conversation(
-                        (*session.messages, Message(Role.TOOL, content, tool_call_id=call.id)), schemas
+                    session = replace(
+                        session, messages=(*session.messages, Message(Role.TOOL, content, tool_call_id=call.id))
                     )
                 if not result.tool_calls and result.finish_reason == FinishReason.STOP:
                     prompt_tokens += (len(self.nudge) + 3) // 4
-                    session = Conversation((*session.messages, Message(Role.USER, self.nudge)), schemas)
+                    session = replace(session, messages=(*session.messages, Message(Role.USER, self.nudge)))
