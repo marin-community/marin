@@ -216,3 +216,31 @@ async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -
         raise
     finally:
         await pool.close()
+
+
+@pytest.mark.cluster
+@pytest.mark.timeout(1800)
+@pytest.mark.skipif(not os.environ.get("PROBE_OUTPUT"), reason="requires live Iris and storage")
+async def test_nested_command_timeout_keeps_sandbox_alive() -> None:
+    from shellbox.image import RegistryImage
+    from shellbox.machine import ExitReason
+
+    configure_coreweave_s3()
+    factory = Factory()
+    machine = await factory.create(MachineSpec(source=RegistryImage(GRADER_BASE_IMAGE), workdir="/workspace"))
+    result: dict[str, object] = {"passed": False, "machine": str(machine.job.job_id)}
+    try:
+        command = await machine.run(Command(("sh", "-c", "printf before; timeout 1 sh -c 'sleep 5'"), timeout=3))
+        result.update(exit_code=command.exit_code, reason=command.reason.value, stdout=command.stdout.decode())
+        assert command.reason is ExitReason.TIMED_OUT and command.exit_code == 124
+        assert command.stdout == b"before"
+        assert (await machine.run(Command(("true",)))).exit_code == 0
+        result["passed"] = True
+    except Exception as error:
+        result["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        await machine.close()
+        with open_url(os.environ["PROBE_OUTPUT"], "wt") as stream:
+            json.dump(result, stream)
+        print(json.dumps(result), flush=True)

@@ -329,11 +329,12 @@ class IrisMachine:
             )
             # GNU timeout returns 137 if its kill-after escalation was needed.
             expired = timed_command and command.timeout is not None and elapsed >= command.timeout
-            if timed_command and response.exit_code in (124, 137) and not expired:
-                raise MachineTerminated(
-                    f"Iris command cut after {elapsed}s before {command.timeout}s budget: exit={response.exit_code}"
-                )
-            reason = ExitReason.TIMED_OUT if expired and response.exit_code in (124, 137) else ExitReason.EXITED
+            # A nested timeout may return 124 before our own budget; this is tool feedback, not machine death.
+            reason = (
+                ExitReason.TIMED_OUT
+                if response.exit_code == 124 or (expired and response.exit_code == 137)
+                else ExitReason.EXITED
+            )
             return Result(response.exit_code, stdout, stderr, stdout_truncated, stderr_truncated, reason)
         except TimeoutError:
             await self.close()
