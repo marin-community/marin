@@ -7,11 +7,12 @@
 
 `build_tables` runs every exporter once. `write` replaces the build's data folder, writes each table (Parquet for the
 `fits` tables, the StarCoder dense grid and the trajectories; CSV with pandas' shortest round-trip float repr for the
-rest, so every value is bit-identical to the exported one), copies figures_tables.csv and writes the public manifest:
-per table its config, path, format, rows, columns, bytes, SHA-256, where its observation ids (W&B run ids) come from
-(`keying`), notes and repository-relative sources, and the cross-table consistency problems. SOURCES.json (every
-table's absolute source paths) goes to the private directory, which must lie outside the build. The command exits
-non-zero, after writing the manifest, when two tables disagree about a run.
+rest, so every value is bit-identical to the exported one), writes figures_tables.csv without the builder column
+that only the repository's copy keeps, and writes the public manifest: per table its config, path, format, rows,
+columns, bytes, SHA-256, where its observation ids (W&B run ids) come from (`keying`), notes and repository-relative
+sources, and the cross-table consistency problems. SOURCES.json (every table's absolute source paths) goes to the
+private directory, which must lie outside the build. The command exits non-zero, after writing the manifest, when two
+tables disagree about a run.
 """
 
 import argparse
@@ -39,6 +40,7 @@ from experiments.domain_phase_mix.release.configs import (
 )
 
 FIGURES_TABLES = paths.REPO / "experiments/domain_phase_mix/release/figures_tables.csv"
+FIGURES_INDEX_COLUMNS = ["label", "kind", "file", "configs"]  # published; `builder` names our internal scripts
 MANIFEST = "MANIFEST.json"
 SOURCES = "SOURCES.json"  # private
 # Configs whose tables share one folder: every `starcoder_*`, `fits_*` and `domain_sweeps_*` table.
@@ -248,9 +250,9 @@ RELEASE_NOTES = [
     "the same weights, or null where the source recorded none under those weights.",
     "Source paths are relative to the marin repository's root, those under mixture-selection/ to the "
     "mixture-selection repository's; `*` stands for a hash that names a folder.",
-    "figures_tables.csv lists the paper's 27 figures and 20 tables with their builders (paths in the paper folder, or "
-    "in the repository under experiments/ and .agents/) and the configs they read: deferred marks two-phase data "
-    "this release omits, and constant marks configuration constants typed into the paper.",
+    "figures_tables.csv lists the paper's 27 figures and 20 tables, the file name of each figure in the paper's "
+    "source, and the configs each one reads: deferred marks two-phase data this release omits, and constant marks "
+    "configuration constants typed into the paper.",
 ]
 
 
@@ -345,6 +347,11 @@ def _require_private_outside(out: Path, private_dir: Path) -> None:
         raise ValueError(f"the private directory {private_dir} is inside the build {out}")
 
 
+def _write_figures_index(path: Path) -> None:
+    index = pd.read_csv(FIGURES_TABLES, dtype=str, keep_default_na=False)
+    index[FIGURES_INDEX_COLUMNS].to_csv(path, index=False, lineterminator="\n")
+
+
 def write(tables: dict[str, pd.DataFrame], out: Path, private_dir: Path) -> dict:
     """Write the build under `out` and SOURCES.json under `private_dir`; return the manifest.
 
@@ -397,7 +404,7 @@ def write(tables: dict[str, pd.DataFrame], out: Path, private_dir: Path) -> dict
             }
         )
         private["tables"][name] = [str(p) for p in sources]
-    shutil.copyfile(FIGURES_TABLES, out / FIGURES_TABLES.name)
+    _write_figures_index(out / FIGURES_TABLES.name)
     manifest["consistency_problems"] = checks.consistency(tables)
     (out / MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n")
     private_dir.mkdir(parents=True, exist_ok=True)

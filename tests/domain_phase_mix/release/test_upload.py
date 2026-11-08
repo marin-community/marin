@@ -123,7 +123,7 @@ def tree(tmp_path) -> Tree:
     one table and its audit registry."""
     build = tmp_path / "build"
     _write_build(build, TABLES)
-    (build / "figures_tables.csv").write_text("label,kind,file,builder,configs\nfig:x,figure,x,build_x.py,heldout\n")
+    (build / "figures_tables.csv").write_text("label,kind,file,configs\nfig:x,figure,x,heldout\n")
     (build / "fits/llama_160m_1p2b").mkdir(parents=True)
     (build / "fits/llama_160m_1p2b/swarm_outcomes.csv").write_text(f"run,source\nrun_00125,{LEAK}\n")
     (tmp_path / "card.md").write_text(PROSE)

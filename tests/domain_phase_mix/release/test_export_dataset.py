@@ -84,7 +84,10 @@ def test_full_export_writes_every_config(build, manifest):
     bpb = [*(f"bpb__{task}" for task in naming.TASKS), "bpb__uncheatable", "bpb__obe_easy"]
     for name, columns in run_tables.items():
         assert [c for c in columns if c.startswith("bpb__")] == bpb, name
-    assert (out / "figures_tables.csv").read_bytes() == export_dataset.FIGURES_TABLES.read_bytes()
+    # The published index is the repository's without the builder column, which names our internal scripts.
+    published = tables.read_csv(out / "figures_tables.csv", keep_default_na=False)
+    index = tables.read_csv(export_dataset.FIGURES_TABLES, keep_default_na=False)
+    pd.testing.assert_frame_equal(published, index.drop(columns="builder"))
     # The absolute source paths stay in the private directory, never in the upload.
     sources = json.loads((build / "private/SOURCES.json").read_text())
     assert set(sources["tables"]) == set(layout) and all(p.startswith("/") for p in sources["context"])
