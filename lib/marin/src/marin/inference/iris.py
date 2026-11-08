@@ -19,14 +19,16 @@ from typing import cast
 import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from fray.client import JobHandle
+from fray.client import JobHandle, wait_all
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus, TpuConfig
+from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus, ResourceConfig, TpuConfig, create_environment
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER, HfModelCacheEntry, cache_hf_model
 from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
@@ -61,6 +63,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
+from marin.inference.model_cache import model_cache_entry
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -95,6 +98,12 @@ _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
+# The CPU job that mirrors uncached Hugging Face weights before accelerators are reserved.
+_MODEL_PREPARE_TIMEOUT_HOURS = 4
+_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS = 8 * 3600
+_MODEL_PREPARE_CPU = 4
+_MODEL_PREPARE_RAM = "8g"
+_MODEL_PREPARE_DISK = "40g"
 _BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
@@ -727,6 +736,7 @@ def remote_inference(
 
     if get_job_info() is None:
         raise RuntimeError("remote_inference must run inside an Iris job")
+    config = _prepared_inference_config(config)
     resolved_broker = _broker_config(config.instances, config.broker)
     if resolved_broker is None:
         with _start_direct_inference(config) as session:
@@ -734,6 +744,93 @@ def remote_inference(
         return
     with _start_brokered_inference(config, resolved_broker) as session:
         yield session
+
+
+def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInferenceConfig:
+    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts.
+
+    Accelerator workers then load the cache entries populated here instead of downloading on
+    reserved hardware. Models that are not Hugging Face ids, or with caching disabled, pass through.
+    """
+    try:
+        pinned, entries = _pinned_cache_entries(config)
+    except Exception as exc:
+        raise RemoteInferenceStartupError(f"Model cache preparation failed: {exc}", jobs=()) from exc
+    _populate_model_cache(entries, config.iris)
+    return pinned
+
+
+def _pinned_cache_entries(config: RemoteInferenceConfig) -> tuple[RemoteInferenceConfig, list[HfModelCacheEntry]]:
+    """Pin the served and speculative Hugging Face models to resolved commits; return their cache entries."""
+    ttl = config.iris.cache_ttl_days
+    model = config.model
+    engine = config.engine
+    entries: list[HfModelCacheEntry] = []
+    model_entry = model_cache_entry(model.weights, ttl, model.revision)
+    if model_entry is not None:
+        entries.append(model_entry)
+        model = replace(model, weights=model_entry.repo, revision=model_entry.revision, api_model=model.model_id)
+    if isinstance(engine, VllmEngineConfig) and engine.speculative is not None:
+        speculative = engine.speculative
+        draft_entry = model_cache_entry(speculative.model.uri, ttl)
+        if draft_entry is not None:
+            entries.append(draft_entry)
+            draft_model = replace(speculative.model, uri=f"{draft_entry.repo}@{draft_entry.revision}")
+            engine = replace(engine, speculative=replace(speculative, model=draft_model))
+    return replace(config, model=model, engine=engine), entries
+
+
+def _populate_model_cache(entries: list[HfModelCacheEntry], iris: IrisConfig) -> None:
+    """Run one CPU prepare job per uncached entry and wait until every marker is written."""
+    jobs: list[tuple[JobHandle, StoragePath]] = []
+    try:
+        for entry in entries:
+            marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
+            if marker.exists():
+                logger.info("model cache hit: %s", entry.path)
+                continue
+            jobs.append((_submit_model_prepare_job(entry, iris), marker))
+        wait_all([job for job, _ in jobs], timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
+        for job, marker in jobs:
+            if not marker.exists():
+                raise RuntimeError(f"prepare job {job.job_id} did not write completion marker at {marker}")
+    except Exception as exc:
+        for job, _ in jobs:
+            try:
+                job.terminate()
+            except Exception:
+                logger.warning("could not terminate model preparation job %s", job.job_id, exc_info=True)
+        raise RemoteInferenceStartupError(
+            f"Model cache preparation failed: {exc}", jobs=tuple(job for job, _ in jobs)
+        ) from exc
+
+
+def _submit_model_prepare_job(entry: HfModelCacheEntry, iris: IrisConfig) -> JobHandle:
+    worker_resources = iris.worker_resources
+    return current_client().submit(
+        JobRequest(
+            name=f"prepare-model-{uuid.uuid4().hex}",
+            entrypoint=Entrypoint.from_callable(
+                cache_hf_model, args=(entry.path, entry.repo), kwargs={"revision": entry.revision}
+            ),
+            resources=ResourceConfig.with_cpu(
+                cpu=_MODEL_PREPARE_CPU,
+                ram=_MODEL_PREPARE_RAM,
+                disk=_MODEL_PREPARE_DISK,
+                preemptible=False,
+                regions=worker_resources.regions,
+                target_cluster=worker_resources.target_cluster,
+            ),
+            environment=create_environment(
+                setup_scripts=[default_setup_script(packages=["marin-core"])],
+                env_vars=dict(iris.worker_environment.env_vars),
+                secrets=dict(iris.worker_environment.secrets),
+                secret_behavior=iris.worker_environment.secret_behavior,
+            ),
+            priority=iris.priority,
+            timeout=Duration.from_hours(_MODEL_PREPARE_TIMEOUT_HOURS),
+        )
+    )
 
 
 @contextlib.contextmanager

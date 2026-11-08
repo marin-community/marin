@@ -8,12 +8,13 @@ Run commands from the repository root. You need Iris access and permission to us
 the selected compute and storage. Daytona runs also need a credential; see
 [Harbor credentials](../../docs/tutorials/run-lm-evals.md#harbor-credentials).
 
-For Hugging Face checkpoints with caching enabled, the CPU orchestrator pins the
-resolved commit and checks the regional cache before starting inference. On a
-cache miss, it waits for a CPU mirror job with a four-hour execution deadline.
-Candidate and hosted-judge weights finish preparation before either serving job
-reserves accelerators. A preparation failure marks pending evaluations as
-`infra_failed` and records the child job and log tail.
+For Hugging Face checkpoints with caching enabled, `remote_inference` pins the
+resolved commit and checks the regional cache before starting a serving job. On a
+cache miss, it waits for a CPU mirror job with a four-hour execution deadline, so
+accelerators are never reserved while weights download. The candidate and a
+hosted judge each prepare inside their own `remote_inference` call. A preparation
+failure marks pending evaluations as `infra_failed` and records the child job and
+log tail.
 
 ## Launch
 
