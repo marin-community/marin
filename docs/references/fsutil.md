@@ -140,23 +140,31 @@ cross-backend artifacts such as checkpoint exports where the transfer may be int
 `cp -r` for ordinary recursive copies where partial destination contents are acceptable, or
 `rsync` when the destination should track later source changes.
 
-`verified-copy` uploads objects under a sibling `<DST>.verified-copy-staging` prefix. After every
-object has been verified, it promotes them to `<DST>` with within-store copies, removes the staged
-objects, and writes `<DST>/.verified-copy-manifest.json` last. Promotion adds an internal object-copy
-pass and briefly stores two copies, but it does not send the data through the client or back to the
-source store. Object stores cannot atomically rename a prefix, so consumers may still see final
-objects appear one at a time and must check for the manifest before using the destination.
+`verified-copy` writes each object once, directly to its final path under `<DST>`, and publishes
+it only after the whole source stream has been read and checked. S3 destinations use a multipart
+upload that is completed only then; GCS destinations use a resumable upload that is finalized only
+then; local destinations write `<path>.verified-copy-partial` and rename it. Before publication,
+the streamed size must equal the listed size, the source metadata must be unchanged, and the
+streamed digest must equal any checksum that the source publishes: the LFS SHA-256 of a Hugging
+Face repository file, or the MD5 (CRC32C for composite objects) of a GCS object. A failed stream
+aborts the upload, so no partial object appears at a final path. After publication, the command
+compares destination metadata with digests computed from the stream: the fixed-part multipart ETag
+on configured S3-compatible buckets (CoreWeave, R2) and the MD5 on GCS. Other S3 buckets and local
+destinations are read back and checked against the streamed SHA-256. A mismatched object is
+deleted. The command writes `<DST>/.verified-copy-manifest.json` last. Object stores cannot
+atomically publish a prefix, so consumers may see final objects appear one at a time and must
+check for the manifest before using the destination.
 
-The command hashes each source object while uploading it. For configured S3-compatible
-destinations, it uses fixed-size multipart parts, calculates the corresponding
-content-derived ETag, and compares that value with destination metadata after the upload. Other
-destinations are read back and checked against the source SHA-256. The command records the SHA-256
-and source and staging identities under a sibling `<DST>.verified-copy-status` prefix. A retry skips
-both object reads when those identities, the path and size of either the staged or already promoted
-object, and the verified record still match. Sources without stable generation, version, checksum,
-ETag, or modification metadata are read again. An existing completion manifest makes the
-destination immutable: the command returns immediately when source paths and sizes still match and
-fails if they changed. Use a fresh destination prefix for a changed export.
+The command records each verified object's SHA-256 and its source and destination identities
+under a sibling `<DST>.verified-copy-status` prefix. A retry reuses an object without reading the
+source when those identities, the path, and the size still match; a local destination file is read
+again to confirm its SHA-256. A retry first aborts unfinished S3 multipart uploads
+below `<DST>/` and deletes leftover local partial files that a killed attempt could not remove, so
+the destination prefix must belong to one verified copy at a time. Sources without stable
+generation, version, Hugging Face blob ID, checksum, ETag, or modification metadata are read
+again. An existing completion manifest makes the destination immutable: the command returns
+immediately when source paths and sizes still match and fails if they changed. Use a fresh
+destination prefix for a changed export.
 
 `hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
 by default. `--hex` selects hexadecimal output.
