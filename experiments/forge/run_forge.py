@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit one explicitly sized Iris driver per disjoint proposal shard."""
+"""Submit sized Iris drivers over stable SHA256 proposal-key buckets.
+
+--drivers N partitions 4096 buckets; --driver-range a:b launches only that half-open
+range of drivers. To resize the last quarter of 32 drivers to 16, cancel 24:32 and
+launch --drivers 64 --driver-range 48:64 under a new job prefix.
+"""
 
 import argparse
 import os
@@ -13,19 +18,18 @@ def main() -> None:
     for name in ("proposals", "output", "policy", "job-prefix"):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--arm", choices=("S", "T"), required=True)
-    for name in ("shards", "concurrency", "cpu"):
+    for name in ("drivers", "concurrency", "cpu"):
         parser.add_argument(f"--{name}", type=int, required=True)
+    parser.add_argument("--driver-range", type=lambda value: tuple(map(int, value.split(":"))))
     parser.add_argument("--memory", default="8GB")
     parser.add_argument("--disk", default="50GB")
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
-    parser.add_argument("--first-shard", type=int, default=0, help="Submit shards from this index (staged launches)")
     args = parser.parse_args()
-    if min(args.shards, args.concurrency, args.cpu) < 1:
-        raise ValueError("Shard count, concurrency and CPU must be positive")
-    if not 0 <= args.first_shard < args.shards:
-        raise ValueError("First shard must be within the shard count")
+    start, end = args.driver_range or (0, args.drivers)
+    if min(args.concurrency, args.cpu) < 1 or not 0 <= start < end <= args.drivers <= 4096:
+        raise ValueError("Positive concurrency/CPU and nonempty driver range within 1..4096 drivers required")
     endpoint = tuple(key for key in ("GLM_RELAY_JOB", "GLM_BASE_URL") if os.environ.get(key))
     if len(endpoint) != 1:
         raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
@@ -42,7 +46,7 @@ def main() -> None:
         "sync-package": "marin-forge",
     }
     driver = {name: str(getattr(args, name)) for name in ("proposals", "output", "policy", "arm", "concurrency")}
-    driver["shard-count"] = str(args.shards)
+    driver["buckets"] = "4096"
     if args.ranks:
         driver["ranks"] = args.ranks
     pins = [
@@ -50,8 +54,9 @@ def main() -> None:
         for key in ("OMP_NUM_THREADS", "RAYON_NUM_THREADS", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL")
         for item in ("-e", key, str(args.cpu))
     ]
-    for shard in range(args.first_shard, args.shards):
-        options["job-name"], driver["shard-index"] = f"{args.job_prefix}-{shard}", str(shard)
+    for index in range(start, end):
+        options["job-name"] = f"{args.job_prefix}-{index}"
+        driver["bucket-range"] = f"{4096 * index // args.drivers}:{4096 * (index + 1) // args.drivers}"
         command = "uv run --frozen iris --cluster=marin job run --no-wait --enable-extra-resources".split()
         command += [item for key, value in options.items() for item in (f"--{key}", value)]
         command += [*credentials, *pins, "--", "python", "-m", "forge.driver", "run"]

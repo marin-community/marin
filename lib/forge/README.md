@@ -91,14 +91,20 @@ for arm in S T; do
     --ranks "$(seq -s, 0 31 | sed 's/,$//')" --arm $arm \
     --output $ROOT/$arm --policy $ROOT/policy.json \
     --job-prefix forge-pilot-<date>-$(echo $arm | tr A-Z a-z) \
-    --shards 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
+    --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
 done
 ```
 
-Shard `i` of `n` takes ranks `ranks[i::n]`. The launcher passes `--max-retries 3`,
+Each proposal maps to `int(sha256(str(proposal_key)), 16) % 4096`; drivers process their
+half-open `--bucket-range a:b` in manifest order. The launcher splits buckets evenly
+across `--drivers N`; `--driver-range a:b` launches only those driver indices. To replace
+drivers 24–31 of a 32-driver fleet with 16 drivers, cancel them, then launch with
+`--drivers 64 --driver-range 48:64` and a new job prefix. This covers the same 3072:4096
+bucket span without changing the other drivers, output paths, or resume behavior.
+Keep `--buckets 4096` fixed across relaunches. The launcher passes `--max-retries 3`,
 `--sync-package marin-forge`, pins the build-parallelism variables to `--cpu`, and leaves jobs
 preemptible; a preempted driver resumes from its published checkpoints. Job names are
-`/muchanem/<prefix>-<shard>`.
+`/muchanem/<prefix>-<driver-index>`.
 
 The driver prints every policy value it resolves next to the declared one (`POLICY key
 declared=… resolved=…`) and the model each role uses (`MODEL role=author model=… endpoint=…`).

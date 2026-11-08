@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,10 @@ class SampleEntry:
 def proposal_key(path: str) -> PurePosixPath:
     file = PurePosixPath(urlsplit(path).path)
     return PurePosixPath(file.parent.name, file.name.removesuffix(".proposal.json").removeprefix("slot-"))
+
+
+def proposal_bucket(path: str, buckets: int) -> int:
+    return int.from_bytes(hashlib.sha256(str(proposal_key(path)).encode()).digest()) % buckets
 
 
 def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
@@ -162,9 +167,12 @@ async def one(args: argparse.Namespace) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     configure_coreweave_s3()
-    if args.concurrency < 1 or not 0 <= args.shard_index < args.shard_count:
-        raise ValueError("Concurrency and shard count must be positive, with shard index in range")
-    proposals = iter(inputs(args.proposals, args.ranks)[args.shard_index :: args.shard_count])
+    start, end = args.bucket_range or (0, args.buckets)
+    if args.concurrency < 1 or not 0 <= start < end <= args.buckets:
+        raise ValueError("Concurrency must be positive and bucket range nonempty within buckets")
+    proposals = (
+        path for path in inputs(args.proposals, args.ranks) if start <= proposal_bucket(path, args.buckets) < end
+    )
     active: dict[asyncio.Task[int], tuple[str, subprocess.Popen[bytes]]] = {}
     failures: list[str] = []
     _, policy = run_policy(args.policy)
@@ -182,22 +190,11 @@ async def run(args: argparse.Namespace) -> None:
                 if not eligible(proposal, policy):
                     skipped += 1
                     continue
-                command = [
-                    sys.executable,
-                    "-u",
-                    "-m",
-                    "forge.driver",
-                    "one",
-                    "--proposals",
-                    path,
-                    "--arm",
-                    args.arm,
-                    "--output",
-                    args.output,
-                    "--policy",
-                    args.policy,
-                    "--work-dir",
-                    args.work_dir,
+                command = [sys.executable, "-u", "-m", "forge.driver", "one", "--proposals", path]
+                command += [
+                    item
+                    for name in ("arm", "output", "policy", "work_dir")
+                    for item in (f"--{name.replace('_', '-')}", getattr(args, name))
                 ]
                 if args.resume_held:
                     command.append("--resume-held")
@@ -235,8 +232,8 @@ def main() -> None:
         command.add_argument("--resume-held", action="store_true", help="Explicitly resume published held workpieces")
         if name == "run":
             command.add_argument("--concurrency", type=int, required=True)
-            command.add_argument("--shard-index", type=int, default=0)
-            command.add_argument("--shard-count", type=int, default=1)
+            command.add_argument("--buckets", type=int, default=4096)
+            command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
     args = parser.parse_args()
     asyncio.run(run(args) if args.command == "run" else one(args))
