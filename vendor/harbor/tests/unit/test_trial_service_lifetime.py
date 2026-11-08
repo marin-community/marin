@@ -12,6 +12,7 @@ import httpx
 from harbor_config.errors import ErrorCategory, error_category
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.factory import AgentFactory
 from harbor.environments import local, model_relay
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import (
@@ -100,6 +101,15 @@ class BackgroundServerAgent(PartialAnswerAgent):
 
     async def cleanup(self, environment) -> None:
         await environment.exec("kill $(cat server.pid)")
+
+
+@pytest.fixture(autouse=True)
+def allow_trial_agents(monkeypatch):
+    agents = AgentFactory._AGENT_MAP | {
+        f"test-{agent.__name__}": agent
+        for agent in (PartialAnswerAgent, WaitingAgent, JudgeProbeAgent, BackgroundServerAgent)
+    }
+    monkeypatch.setattr(AgentFactory, "_AGENT_MAP", agents)
 
 
 class ProcessTaskFactory:

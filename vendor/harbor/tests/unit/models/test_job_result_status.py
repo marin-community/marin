@@ -3,7 +3,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from harbor.models.agent.context import AgentContext
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
@@ -25,6 +24,7 @@ def _trial_result(
     rewards: dict[str, float | int] | None = None,
 ) -> TrialResult:
     config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=Path(f"/tmp/{name}")),
         trial_name=name,
         job_id=uuid4(),
@@ -45,9 +45,7 @@ def _trial_result(
         task_checksum="abc123",
         config=config,
         agent_info=AgentInfo(name="test-agent", version="1.0"),
-        verifier_result=VerifierResult(rewards=rewards)
-        if rewards is not None
-        else None,
+        verifier_result=VerifierResult(rewards=rewards) if rewards is not None else None,
         exception_info=exception_info,
     )
 
@@ -89,6 +87,7 @@ def _heavy_rollout_detail(n_tokens: int = 4096) -> dict:
 def _heavy_single_step_trial() -> TrialResult:
     """Single-step trial with heavy agent and verifier payloads."""
     config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=Path("/tmp/heavy")),
         trial_name="heavy",
         job_id=uuid4(),
@@ -125,6 +124,7 @@ def _heavy_single_step_trial() -> TrialResult:
 def _heavy_multi_step_trial() -> TrialResult:
     """Multi-step trial: token scalars live on each step's agent_result."""
     config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=Path("/tmp/heavymulti")),
         trial_name="heavymulti",
         job_id=uuid4(),
@@ -164,24 +164,18 @@ def _heavy_multi_step_trial() -> TrialResult:
 
 @pytest.mark.unit
 def test_job_config_release_trial_payloads_defaults_false() -> None:
-    assert JobConfig().release_trial_payloads_in_memory is False
+    assert JobConfig(agents=[AgentConfig(name="pi")]).release_trial_payloads_in_memory is False
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial]
-)
+@pytest.mark.parametrize("make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial])
 def test_slimmed_preserves_token_cost_totals(make_trial) -> None:
     full = make_trial()
-    assert full.slimmed().compute_token_cost_totals() == (
-        full.compute_token_cost_totals()
-    )
+    assert full.slimmed().compute_token_cost_totals() == (full.compute_token_cost_totals())
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial]
-)
+@pytest.mark.parametrize("make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial])
 def test_slimmed_drops_heavy_fields_keeps_stats_fields(make_trial) -> None:
     full = make_trial()
     slim = full.slimmed()
@@ -228,9 +222,7 @@ def test_slimmed_keeps_exception_classification_without_diagnostics() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial]
-)
+@pytest.mark.parametrize("make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial])
 def test_increment_identical_for_full_and_slimmed(make_trial) -> None:
     full = make_trial()
     slim = full.slimmed()
@@ -244,9 +236,7 @@ def test_increment_identical_for_full_and_slimmed(make_trial) -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial]
-)
+@pytest.mark.parametrize("make_trial", [_heavy_single_step_trial, _heavy_multi_step_trial])
 def test_increment_then_remove_retry_roundtrip_matches(make_trial) -> None:
     # Simulate a retry: increment, then remove the previous attempt. The
     # removed copy is the slim one (what the job retains in

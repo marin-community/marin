@@ -4,9 +4,8 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-
 from harbor.models.job.config import RetryConfig
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.queue import TrialQueue
@@ -16,6 +15,7 @@ from harbor.trial.queue import TrialQueue
 def trial_config():
     """Create a basic trial config for testing."""
     return TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=Path("/test/task")),
         trial_name="test_trial",
         job_id=uuid4(),
@@ -80,9 +80,7 @@ class TestTrialQueue:
     @pytest.mark.unit
     async def test_submit_single_trial(self, queue, trial_config, trial_result):
         """Test submitting and awaiting a single trial."""
-        with patch.object(
-            queue, "_execute_trial_with_retries", return_value=trial_result
-        ):
+        with patch.object(queue, "_execute_trial_with_retries", return_value=trial_result):
             result = await queue.submit(trial_config)
             assert result == trial_result
 
@@ -91,6 +89,7 @@ class TestTrialQueue:
         """Test submitting multiple trials via gather."""
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -98,9 +97,7 @@ class TestTrialQueue:
             for i in range(3)
         ]
 
-        with patch.object(
-            queue, "_execute_trial_with_retries", return_value=trial_result
-        ):
+        with patch.object(queue, "_execute_trial_with_retries", return_value=trial_result):
             coros = queue.submit_batch(configs)
             assert len(coros) == 3
 
@@ -113,6 +110,7 @@ class TestTrialQueue:
         """Test submitting multiple trials via TaskGroup."""
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -120,9 +118,7 @@ class TestTrialQueue:
             for i in range(3)
         ]
 
-        with patch.object(
-            queue, "_execute_trial_with_retries", return_value=trial_result
-        ):
+        with patch.object(queue, "_execute_trial_with_retries", return_value=trial_result):
             coros = queue.submit_batch(configs)
             async with asyncio.TaskGroup() as tg:
                 tasks = [tg.create_task(coro) for coro in coros]
@@ -154,6 +150,7 @@ class TestTrialQueue:
 
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -161,9 +158,7 @@ class TestTrialQueue:
             for i in range(3)
         ]
 
-        with patch.object(
-            queue, "_execute_trial_with_retries", side_effect=mixed_execute
-        ):
+        with patch.object(queue, "_execute_trial_with_retries", side_effect=mixed_execute):
             with pytest.raises(ExceptionGroup):
                 async with asyncio.TaskGroup() as tg:
                     for coro in queue.submit_batch(configs):
@@ -230,6 +225,7 @@ class TestTrialQueue:
         """Test that trials execute concurrently."""
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -246,9 +242,7 @@ class TestTrialQueue:
             execution_times.append((start, end))
             return MagicMock(spec=TrialResult)
 
-        with patch.object(
-            queue, "_execute_trial_with_retries", side_effect=mock_execute_trial
-        ):
+        with patch.object(queue, "_execute_trial_with_retries", side_effect=mock_execute_trial):
             await asyncio.gather(*queue.submit_batch(configs))
 
         assert len(execution_times) == 5

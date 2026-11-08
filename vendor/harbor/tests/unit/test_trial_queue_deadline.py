@@ -11,7 +11,7 @@ import pytest
 from harbor.agents.base import TurnCapExhaustedError
 from harbor.environments.base import SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
@@ -90,6 +90,7 @@ def _config(
     cleanup_grace: float = 0.01,
 ) -> TrialConfig:
     return TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         trial_name=name,
         trials_dir=tmp_path / "trials",
