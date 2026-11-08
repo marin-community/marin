@@ -4,11 +4,14 @@
 """One round-owned verifier, acquired through the engine's prepared-machine hook."""
 
 import asyncio
+import logging
 from dataclasses import replace
 
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from shellbox.machine import Machine, MachineSpec, MachineTerminated, ResettableMachine
+
+from forge.resources.execution import Notify, close_resource
 
 
 class RoundVerifier:
@@ -18,12 +21,17 @@ class RoundVerifier:
         self.key: tuple[str, MachineSpec] | None = None
         self.lock = asyncio.Lock()
         self.index = 0
+        self.notify: Notify = logging.warning
 
     async def close(self) -> None:
         machine, self.machine, self.key = self.machine, None, None
         if machine is not None:
-            async with asyncio.timeout(self.cleanup_timeout):
-                await machine.close()
+
+            async def close() -> None:
+                async with asyncio.timeout(self.cleanup_timeout):
+                    await machine.close()
+
+            await close_resource(close, self.notify)
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
         selection = spec.verifier_machine

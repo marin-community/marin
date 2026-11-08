@@ -6,6 +6,7 @@
 import ast
 import asyncio
 import base64
+import logging
 import math
 import re
 import shlex
@@ -14,10 +15,12 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path, PurePosixPath
 
+import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
@@ -44,6 +47,7 @@ from shellbox.machine import (
     MachineResourceExhausted,
     MachineSpec,
     MachineTerminated,
+    MachineUnavailable,
     NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
@@ -74,12 +78,31 @@ EGRESS_POLICIES = {
 }
 
 
-def _exec_was_shed(error: Exception) -> bool:
-    """The controller refused the exec before running it because its exec pool was full.
+def _controller_unavailable(error: Exception) -> bool:
+    return (isinstance(error, ConnectError) and error.code == Code.UNAVAILABLE) or isinstance(
+        error, (ConnectionError, httpx.ConnectError)
+    )
 
-    Only this refusal is retried: after any other error the command may already have run.
-    """
-    return isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED
+
+def _controller_call[T](call: Callable[[], T], *, exec_call: bool = False) -> T:
+    """Retry controller unavailability and exec admission shedding under the existing Iris budget."""
+    try:
+        # Submit/status already own Iris's bounded retry; never stack another wait on them.
+        if not exec_call:
+            return call()
+        return retry_with_backoff(
+            call,
+            retryable=lambda error: _controller_unavailable(error)
+            or (exec_call and isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED),
+            max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
+            max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
+            backoff=EXEC_SHED_BACKOFF,
+            operation="Iris controller",
+        )
+    except Exception as error:
+        if _controller_unavailable(error):
+            raise MachineUnavailable(f"Iris controller unavailable: {error}") from error
+        raise
 
 
 @dataclass(frozen=True)
@@ -180,14 +203,7 @@ class IrisMachine:
                     self._admission.notify_all()
 
         try:
-            response = retry_with_backoff(
-                attempt,
-                retryable=_exec_was_shed,
-                max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
-                max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
-                backoff=EXEC_SHED_BACKOFF,
-                operation=f"Iris exec in {self.task.task_id}",
-            )
+            response = _controller_call(attempt, exec_call=True)
         except ConnectError as error:
             self._raise_if_terminated(error)
             raise
@@ -228,7 +244,7 @@ class IrisMachine:
 
     def _raise_if_terminated(self, cause: Exception) -> None:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
-        status = self.task.status()
+        status = _controller_call(self.task.status)
         if status.state != TaskState.RUNNING:
             detail = str(status.error_message or cause)
             kind = MachineTerminated
@@ -490,7 +506,7 @@ class IrisMachineFactory:
             deadline = time.monotonic() + self.scheduling_timeout
             while time.monotonic() < deadline:
                 try:
-                    status = await asyncio.to_thread(machine.task.status)
+                    status = await asyncio.to_thread(_controller_call, machine.task.status)
                 except ConnectError as error:
                     if error.code != Code.NOT_FOUND:
                         raise
@@ -508,8 +524,12 @@ class IrisMachineFactory:
                         raise MachineTerminated(f"Iris sandbox task failed before running: {status.error_message}")
                 await asyncio.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
-        except BaseException:
-            await machine.close()
+        except BaseException as error:
+            try:
+                await machine.close()
+            except Exception as cleanup_error:
+                error.add_note(f"Sandbox cleanup failed: {cleanup_error}")
+                logging.warning("Sandbox startup cleanup failed", exc_info=cleanup_error)
             raise
 
     def _submit_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
@@ -526,39 +546,46 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            job = client.submit(
-                # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
-                # capacity for the whole termination grace period.
-                entrypoint=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT),
-                name=f"shellbox-{uuid.uuid4().hex}",
-                environment=EnvironmentSpec(
-                    setup_scripts=[],
-                    env_vars={name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
-                ),
-                resources=ResourceSpec(
-                    cpu=spec.cpus or 1,
-                    memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
-                    disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
-                ),
-                task_image=source.reference,
-                container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
-                egress_policy=EGRESS_POLICIES[spec.network],
-                scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
-                timeout=Duration.from_seconds(self.job_ttl),
-                max_retries_failure=0,
-                max_retries_preemption=0,
+            job = _controller_call(
+                partial(
+                    client.submit,
+                    # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
+                    # capacity for the whole termination grace period.
+                    entrypoint=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT),
+                    name=f"shellbox-{uuid.uuid4().hex}",
+                    environment=EnvironmentSpec(
+                        setup_scripts=[],
+                        env_vars={name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
+                    ),
+                    resources=ResourceSpec(
+                        cpu=spec.cpus or 1,
+                        memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
+                        disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
+                    ),
+                    task_image=source.reference,
+                    container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
+                    egress_policy=EGRESS_POLICIES[spec.network],
+                    scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
+                    timeout=Duration.from_seconds(self.job_ttl),
+                    max_retries_failure=0,
+                    max_retries_preemption=0,
+                )
             )
             return IrisMachine(endpoint, client, rpc, job, job.task(0), spec)
         except BaseException as error:
             try:
-                if job is not None:
-                    job.cancel()
-            finally:
                 try:
-                    if client is not None:
-                        client.shutdown()
+                    if job is not None:
+                        job.cancel()
                 finally:
-                    endpoint.close()
+                    try:
+                        if client is not None:
+                            client.shutdown()
+                    finally:
+                        endpoint.close()
+            except Exception as cleanup_error:
+                error.add_note(f"Sandbox submission cleanup failed: {cleanup_error}")
+                logging.warning("Sandbox submission cleanup failed", exc_info=cleanup_error)
             # Contract on controller-owned text until Iris carries typed parent-termination status.
             if (
                 isinstance(error, ConnectError)

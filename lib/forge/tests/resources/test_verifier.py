@@ -358,3 +358,23 @@ async def test_solver_machines_run_concurrently_before_shared_grading() -> None:
     finally:
         await pool.close()
     assert all(machine.closed for machine in factory.machines)
+
+
+async def test_shared_verifier_cleanup_warns_and_releases_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    factory = CountedFactory()
+    holder, resource = setup(factory)
+    notes = []
+    holder.notify = notes.append
+    assert (await resource.grade(event())).reward == 1
+    machine = holder.machine
+    assert machine is not None
+    close = machine.close
+
+    async def failed_close() -> None:
+        await close()
+        raise RuntimeError("controller unavailable during close")
+
+    monkeypatch.setattr(machine, "close", failed_close)
+    await holder.close()
+    assert holder.machine is None and holder.key is None
+    assert len(notes) == 1

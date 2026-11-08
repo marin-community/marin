@@ -25,6 +25,7 @@ from forge.model.review import AdversaryFinding, AdversaryResult, Cause, Control
 from forge.model.workpiece import Conversation, Workpiece
 from forge.resources.bundle import Resources
 from forge.resources.env import WriteFile
+from forge.resources.execution import close_resource
 from forge.resources.grading import GradeCandidate
 from forge.resources.rollouts import SolverRollout
 from forge.stages.author import hydrate, install_env, sandbox_limits
@@ -142,7 +143,7 @@ async def run_adversary(
                 findings = [group.create_task(claim_result(ctx, spec, claim)) for claim in report.findings]
             return AdversaryResult(name, True, tuple(finding.result() for finding in findings))
     finally:
-        await env.close()
+        await close_resource(env.close, ctx.emit)
 
 
 async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resources: Resources) -> Validated:
