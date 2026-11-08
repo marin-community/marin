@@ -37,6 +37,18 @@ def test_primary_includes_malformed_final_zeros_but_omits_unscored_pairs() -> No
     assert graded["N"] == 2757
 
 
+def test_combined_matrix_keeps_existing_missingness_and_unique_respondents() -> None:
+    extra = [
+        {"model": f"m-{model:02d}", "task_id": f"task-{item:03d}", "grade_status": "graded", "score": 1}
+        for model in range(12, 32)
+        for item in range(230)
+    ]
+    data, models, items = build_data(_rows() + extra, include_submission_failures=True, expected_models=32)
+    assert (len(models), len(items), data["N"]) == (32, 230, 7358)
+    with pytest.raises(ValueError, match="Duplicate"):
+        build_data(_rows() + [extra[0], *extra[:-1]], include_submission_failures=True, expected_models=32)
+
+
 def test_rejects_duplicate_and_inconsistent_score() -> None:
     rows = _rows()
     with pytest.raises(ValueError, match="Duplicate"):

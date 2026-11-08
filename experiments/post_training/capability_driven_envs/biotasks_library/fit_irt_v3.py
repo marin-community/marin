@@ -17,22 +17,51 @@ MODELS = 12
 ITEMS = 230
 
 
-def load_responses(path: Path, *, include_submission_failures: bool) -> tuple[dict[str, Any], list[str], list[str]]:
-    """Validate the frozen matrix and select scored pairs without imputation."""
+def load_responses(
+    path: Path,
+    *,
+    include_submission_failures: bool,
+    additional_path: Path | None = None,
+    additional_sha256: str | None = None,
+) -> tuple[dict[str, Any], list[str], list[str], dict[str, Any]]:
+    """Verify frozen source hashes and join complete matrices without imputation."""
+    if (additional_path is None) != (additional_sha256 is None):
+        raise ValueError("The additional snapshot and its SHA-256 must be supplied together")
     content = path.read_bytes()
     if hashlib.sha256(content).hexdigest() != SNAPSHOT_SHA256:
         raise ValueError("Snapshot SHA-256 does not match frozen v3 response artifact")
     rows = [json.loads(line) for line in content.splitlines() if line]
-    return build_data(rows, include_submission_failures=include_submission_failures)
+    build_data(rows, include_submission_failures=include_submission_failures)
+    hashes = [SNAPSHOT_SHA256]
+    if additional_path is not None and additional_sha256 is not None:
+        new_content = additional_path.read_bytes()
+        if hashlib.sha256(new_content).hexdigest() != additional_sha256:
+            raise ValueError("Additional response snapshot SHA-256 mismatch")
+        additional = [json.loads(line) for line in new_content.splitlines() if line]
+        build_data(additional, include_submission_failures=include_submission_failures, expected_models=20)
+        if {row["task_id"] for row in rows} != {row["task_id"] for row in additional}:
+            raise ValueError("Additional snapshot uses different tasks")
+        rows.extend(additional)
+        hashes.append(additional_sha256)
+    data, models, items = build_data(
+        rows, include_submission_failures=include_submission_failures, expected_models=MODELS if len(hashes) == 1 else 32
+    )
+    metadata = {
+        "input_snapshot_sha256": hashes,
+        "n_submission_failure_zeros_included": (
+            sum(row["grade_status"] == "submission_failure" for row in rows) if include_submission_failures else 0
+        ),
+    }
+    return data, models, items, metadata
 
 
 def build_data(
-    rows: list[dict[str, Any]], *, include_submission_failures: bool
+    rows: list[dict[str, Any]], *, include_submission_failures: bool, expected_models: int = MODELS
 ) -> tuple[dict[str, Any], list[str], list[str]]:
     """Validate population and map observed scores into Stan's indexing."""
     models = sorted({r["model"] for r in rows})
     items = sorted({r["task_id"] for r in rows})
-    if len(models) != MODELS or len(items) != ITEMS or len(rows) != MODELS * ITEMS:
+    if len(models) != expected_models or len(items) != ITEMS or len(rows) != expected_models * ITEMS:
         raise ValueError("Unexpected model/item matrix dimensions")
     if len({(r["model"], r["task_id"]) for r in rows}) != len(rows):
         raise ValueError("Duplicate respondent/item pair")
@@ -127,6 +156,8 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True, help="Private frozen JSONL; hash verified before fitting")
+    parser.add_argument("--additional-input", type=Path, help="Private frozen 20-model JSONL")
+    parser.add_argument("--additional-sha256", help="SHA-256 from the effective20 frozen manifest")
     parser.add_argument(
         "--output", type=Path, required=True, help="Private local output directory; never commit raw draws"
     )
@@ -139,7 +170,12 @@ def main() -> None:
     if args.warmup < 100 or args.samples < 100:
         parser.error("At least 100 warmup and sampling iterations required")
     args.output.mkdir(parents=True, exist_ok=True)
-    data, models, items = load_responses(args.input, include_submission_failures=args.mode == "all_scored")
+    data, models, items, input_metadata = load_responses(
+        args.input,
+        include_submission_failures=args.mode == "all_scored",
+        additional_path=args.additional_input,
+        additional_sha256=args.additional_sha256,
+    )
     if args.reuse_csv:
         chains = sorted(args.output.glob("irt_v3-*.csv"))
         if len(chains) != 4:
@@ -161,6 +197,8 @@ def main() -> None:
             show_progress=False,
         )
     report, item_rows = summarize(fit, data, models, items, args.mode)
+    report.update(input_metadata)
+    report["n_models"] = len(models)
     (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     (args.output / "private_item_posteriors.json").write_text(json.dumps(item_rows, indent=2) + "\n")
     print(json.dumps(report, indent=2), flush=True)
