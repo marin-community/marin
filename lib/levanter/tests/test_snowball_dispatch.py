@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 from dataclasses import replace
 
 import equinox as eqx
@@ -12,54 +11,13 @@ import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh
 
-from levanter.data.text.datasets import ChatDataset
-from levanter.data.text.examples import named_lm_example_from_grug
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.lm_model import LmExample
-from levanter.models.snowball import (
-    SnowballConfig,
-    SnowballLMHeadModel,
-    dispatch_token_validity,
-    snowball_loss_with_dispatch_stats,
-)
-from levanter.store.cache import SerialCacheWriter
+from levanter.layers.attention import AttentionMask
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.devices import use_test_devices
 
 
-def test_unpacked_chat_validity_keeps_prompt_and_real_eos(tmp_path):
-    row = {
-        "input_ids": np.array([128000, 31, 32, 128001], np.int32),
-        "assistant_masks": np.array([0, 0, 1, 1], np.int32),
-    }
-    exemplar = {name: np.zeros((0,), np.int32) for name in row}
-    with SerialCacheWriter(str(tmp_path / "cache"), exemplar) as writer:
-        writer.write_batch([row])
-    position = hax.Axis("position", 8)
-    dataset = ChatDataset(
-        writer.result(),
-        position,
-        max_segments_per_example=1,
-        slice_strategy="raise",
-        block_cross_document_attention=True,
-    )
-    example = named_lm_example_from_grug(asyncio.run(dataset.getitem_async(0)), position)
-    np.testing.assert_array_equal(dispatch_token_validity(example).array, [True] * 4 + [False] * 4)
-    segments = example.attn_mask.segment_ids[0].array
-    assert np.all(segments[:4] >= 0)
-    np.testing.assert_array_equal(segments[4:], -np.ones(4))
-    assert example.tokens.array[3] == 128001
-    assert example.loss_weight.array[0] == 0
-    same_token_padding = eqx.tree_at(
-        lambda value: value.tokens, example, hax.named(jnp.array([128000, 31, 32] + [128001] * 5), (position,))
-    )
-    np.testing.assert_array_equal(
-        dispatch_token_validity(same_token_padding).array, dispatch_token_validity(example).array
-    )
-    with pytest.raises(ValueError, match="segment IDs"):
-        dispatch_token_validity(LmExample.causal(example.tokens))
-
-
-def test_stats_forward_preserves_observer_and_loss():
+def test_stats_forward_preserves_observer_and_packed_activations():
     config = SnowballConfig(
         vocab_size=32,
         hidden_dim=16,
@@ -89,15 +47,12 @@ def test_stats_forward_preserves_observer_and_loss():
         np.testing.assert_array_equal(measured.array, hidden.array)
         np.testing.assert_array_equal(stats.routes, routes)
         np.testing.assert_array_equal(stats.dropped, np.zeros(2))
-        example = hax.vmap(LmExample.causal, batch)(
-            ids,
-            segment_ids=hax.named(jnp.broadcast_to(jnp.arange(ids.array.shape[-1]) // 4, ids.array.shape), ids.axes),
-        )
-        example = hax.auto_sharded(example)
-        loss, metrics = eqx.filter_jit(snowball_loss_with_dispatch_stats)(model, example)
-        reference = eqx.filter_jit(model.compute_next_token_loss)(example)
-        np.testing.assert_allclose(loss.array, reference.array, rtol=1e-5, atol=1e-5)
-        np.testing.assert_array_equal(metrics["moe_dropped"], stats.dropped)
+        segments = hax.named(jnp.broadcast_to(jnp.arange(8) // 4, ids.array.shape), ids.axes)
+        mask = AttentionMask.causal().with_segment_ids(segments, segments)
+        measured, counts = eqx.filter_jit(lambda m: m.activations_with_stats(ids, valid, attn_mask=mask))(model)
+        reference = eqx.filter_jit(lambda m: m.activations(ids, mask))(model)
+        np.testing.assert_allclose(measured.array, reference.array, rtol=1e-5, atol=1e-5)
+        np.testing.assert_array_equal(counts.dropped, np.zeros(2))
 
 
 @pytest.mark.multidevice
@@ -163,7 +118,11 @@ def test_dropless_bos_routes_ignore_companions_and_padding():
             axes = (hax.Axis("batch", 8), hax.Axis("position", 8))
             tokens = hax.named(jnp.ones((8, 8), jnp.int32), axes)
             valid = hax.named(jnp.broadcast_to(jnp.arange(8) < 4, (8, 8)), axes)
-            _, counts = eqx.filter_jit(capped.activations_with_stats)(tokens, valid)
+            segments = hax.named(jnp.broadcast_to(jnp.array([0, 0, 1, 1, -1, -1, -1, -1]), (8, 8)), axes)
+            mask = AttentionMask.causal().with_segment_ids(segments, segments.rename({"position": "key_position"}))
+            _, counts = eqx.filter_jit(lambda m: m.activations_with_stats(tokens, valid, attn_mask=mask))(capped)
+            # 32 valid tokens choose two experts; each layer admits 16 of the
+            # 64 assignments and drops 48, all at receivers.
             np.testing.assert_array_equal(counts.sender_dropped, np.zeros(3))
             np.testing.assert_array_equal(counts.receiver_dropped, np.full(3, 48))
             np.testing.assert_array_equal(counts.dropped, np.full(3, 48))
