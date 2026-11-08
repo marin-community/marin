@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory, MachineSpec
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import SubmissionFailure
 from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
@@ -224,6 +225,8 @@ class RolloutEngine:
                     stop_reason=recorder.stop_reason,
                     verifier=attempt.verifier,
                 )
+        except SubmissionFailure as error:
+            grade = GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         except TimeoutError as error:
             attempt.grade = GradeResult(
                 Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT

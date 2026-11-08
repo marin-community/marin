@@ -460,6 +460,34 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
 
 
+@pytest.mark.parametrize("parent_link", [False, True])
+async def test_linked_output_is_a_zero_grade_without_restart(parent_link):
+    command = (
+        "mkdir -p /workspace/real; echo answer > /workspace/real/report; ln -s /workspace/real /workspace/out"
+        if parent_link
+        else "mkdir -p /workspace/out; echo answer > /workspace/real; ln -s /workspace/real /workspace/out/report"
+    )
+    factory = RecordingShellSimFactory()
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "ready"}]),
+        {"local": factory},
+        harnesses={"fixture": StepHarness(lambda context: OutputWritingEpisode(context, command))},
+    ).run_task(
+        rollout_spec(
+            report_task(output_paths=("/workspace/out/report",)),
+            machine=machine_runtime(),
+            verifier_machine=machine_runtime(),
+            harness="fixture",
+        )
+    )
+    assert (record.grade.status, record.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert "link" in record.grade.error and "/workspace/out/report" in record.grade.error
+    assert record.rollout.outputs == {}
+    assert len(factory.machines) == 1
+    with pytest.raises(RuntimeError):
+        await factory.machines[0].run(Command(("true",)))
+
+
 async def test_output_capture_over_the_file_budget_interrupts_grading():
     command = f"mkdir -p /workspace/out && cd /workspace/out && touch $(seq {MAX_OUTPUT_FILES + 1})"
     factory = RecordingShellSimFactory()
