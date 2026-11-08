@@ -31,6 +31,7 @@ from forge.model.proposal import TASK_PROPOSAL, TaskProposal
 from forge.model.review import Incomplete
 from forge.model.workpiece import WORKPIECE, Terminal, Workpiece
 from forge.policy import Policy, load_policy, parse_overlay
+from forge.report import report
 from forge.stages.classify import replayable_grade
 from forge.wiring import endpoint_source, install, runtime
 
@@ -222,6 +223,9 @@ def main() -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    summary = commands.add_parser("report")
+    summary.add_argument("output_root")
+    summary.add_argument("--since-hours", type=float)
     for name in ("run", "one"):
         command = commands.add_parser(name)
         command.add_argument("--proposals", required=True)
@@ -236,7 +240,11 @@ def main() -> None:
             command.add_argument("--bucket-range", type=lambda value: tuple(map(int, value.split(":"))))
             command.add_argument("--ranks", type=lambda value: tuple(map(int, value.split(","))), default=())
     args = parser.parse_args()
-    asyncio.run(run(args) if args.command == "run" else one(args))
+    if args.command == "report":
+        configure_coreweave_s3()
+        print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))
+    else:
+        asyncio.run(run(args) if args.command == "run" else one(args))
 
 
 if __name__ == "__main__":
