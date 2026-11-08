@@ -20,9 +20,12 @@ def main() -> None:
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
+    parser.add_argument("--first-shard", type=int, default=0, help="Submit shards from this index (staged launches)")
     args = parser.parse_args()
     if min(args.shards, args.concurrency, args.cpu) < 1:
         raise ValueError("Shard count, concurrency and CPU must be positive")
+    if not 0 <= args.first_shard < args.shards:
+        raise ValueError("First shard must be within the shard count")
     endpoint = tuple(key for key in ("GLM_RELAY_JOB", "GLM_BASE_URL") if os.environ.get(key))
     if len(endpoint) != 1:
         raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
@@ -47,7 +50,7 @@ def main() -> None:
         for key in ("OMP_NUM_THREADS", "RAYON_NUM_THREADS", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL")
         for item in ("-e", key, str(args.cpu))
     ]
-    for shard in range(args.shards):
+    for shard in range(args.first_shard, args.shards):
         options["job-name"], driver["shard-index"] = f"{args.job_prefix}-{shard}", str(shard)
         command = "uv run --frozen iris --cluster=marin job run --no-wait --enable-extra-resources".split()
         command += [item for key, value in options.items() for item in (f"--{key}", value)]
