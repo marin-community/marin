@@ -19,7 +19,6 @@ import logging
 from pathlib import Path
 
 import pytest
-
 from harbor.job import Job
 from harbor.models.job.reconciliation import (
     TrialPlanMismatchError,
@@ -86,9 +85,7 @@ def test_served_model_alias_drift_resume_proceeds() -> None:
     job = _reconcile(planned, existing)
 
     assert job._remaining_trial_configs == []
-    assert job._trial_configs[0].agent.model_alias == (
-        "hosted_vllm/laion/original-endpoint"
-    )
+    assert job._trial_configs[0].agent.model_alias == ("hosted_vllm/laion/original-endpoint")
 
 
 def test_model_name_drift_resume_rejected() -> None:
@@ -171,18 +168,20 @@ def test_hf_dataset_materialization_path_drift_resume_proceeds() -> None:
     """A pinned HF task retains its result after a fresh local materialization."""
     existing = [
         TrialConfig(
+            agent=AgentConfig(name="pi"),
             task=TaskConfig(
                 path=Path("/tmp/harbor-run-old/hf_dataset/astropy__astropy-13236"),
                 source="hf_dataset",
-            )
+            ),
         )
     ]
     planned = [
         TrialConfig(
+            agent=AgentConfig(name="pi"),
             task=TaskConfig(
                 path=Path("/tmp/harbor-run-new/hf_dataset/astropy__astropy-13236"),
                 source="hf_dataset",
-            )
+            ),
         )
     ]
 

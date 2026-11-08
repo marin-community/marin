@@ -61,8 +61,7 @@ def quote_windows_shell_arg(value: str | PurePath) -> str:
     for char in _WINDOWS_UNSAFE_CHARS:
         if char in s:
             raise ValueError(
-                f"Value {s!r} contains {char!r}, which cannot be safely "
-                "embedded in a cmd.exe command string"
+                f"Value {s!r} contains {char!r}, which cannot be safely " "embedded in a cmd.exe command string"
             )
     # Only quote if the value contains characters that require it
     needs_quotes = any(char in s for char in _WINDOWS_CHARS_REQUIRING_QUOTES)
@@ -140,9 +139,7 @@ def build_execution_command(
     """
     script_str = str(script_path)
     ext = _extension(script_str)
-    script_piece = (
-        quote_shell_arg(script_str, task_os) if task_os is not None else script_str
-    )
+    script_piece = quote_shell_arg(script_str, task_os) if task_os is not None else script_str
 
     if ext == ".bat":
         cmd = f"cmd /c {script_piece}"
@@ -152,9 +149,7 @@ def build_execution_command(
 
     if stdout_path is not None:
         stdout_str = str(stdout_path)
-        stdout_piece = (
-            quote_shell_arg(stdout_str, task_os) if task_os is not None else stdout_str
-        )
+        stdout_piece = quote_shell_arg(stdout_str, task_os) if task_os is not None else stdout_str
         cmd = f"({cmd}) > {stdout_piece} 2>&1"
 
     return cmd
@@ -168,67 +163,3 @@ def _extension(path: str | PurePath) -> str:
     Windows containers.
     """
     return PurePath(path).suffix.lower()
-
-
-# acpx and the claude-code ACP adapter need Node 20+ APIs
-MIN_ACP_NODE_MAJOR = 20
-_NVM_VERSION = "v0.40.2"
-
-
-def ensure_acp_node_command() -> str:
-    """Shell snippet (Linux) ensuring a Node >= 20 toolchain is active.
-
-    Bootstraps Node 22 via nvm when the active node is missing or too old.
-    A too-old *system* node is left untouched — the repository under test
-    may depend on it.
-    """
-    return (
-        'if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh"; fi; '
-        '_hb_node_major="$(node --version 2>/dev/null | sed "s/^v//" | cut -d. -f1 || true)"; '
-        f'if [ "${{_hb_node_major:-0}}" -lt {MIN_ACP_NODE_MAJOR} ]; then '
-        f"  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/{_NVM_VERSION}/install.sh | bash && "
-        '  export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && nvm install 22; '
-        "fi"
-    )
-
-
-def pinned_bin_wrapper_command(interpreter: str, target: str, dest: str) -> str:
-    """Shell snippet (Linux) writing an executable wrapper at ``dest`` that
-    runs ``target`` with the given ``interpreter``.
-
-    Unlike a symlink, the wrapper keeps npm bin shims (``#!/usr/bin/env
-    node``) on the node they were installed with rather than whatever node is
-    first on PATH. When ``target`` already resolves to ``dest`` (npm global
-    prefix ``/usr/local``), writing is skipped — a redirect would clobber the
-    package's entry script through npm's symlink. Any other pre-existing
-    ``dest`` is removed first so a symlink is replaced, never followed.
-    """
-    interp = shlex.quote(interpreter)
-    tgt = shlex.quote(target)
-    dst = shlex.quote(dest)
-    return (
-        f'_hb_tgt="$(readlink -f {tgt} 2>/dev/null || echo {tgt})"; '
-        f'_hb_dst="$(readlink -f {dst} 2>/dev/null || echo {dst})"; '
-        'if [ "$_hb_tgt" != "$_hb_dst" ]; then '
-        f"rm -f {dst} && "
-        f'printf \'#!/bin/sh\\nexec "%s" "%s" "$@"\\n\' {interp} {tgt} > {dst} '
-        f"&& chmod 755 {dst}; "
-        "fi"
-    )
-
-
-def safe_bin_symlink_command(source: str, dest: str) -> str:
-    """Shell snippet (Linux) that symlinks ``source`` to ``dest`` without ever
-    creating a symlink cycle.
-
-    A naive ``ln -sf`` self-loops when ``source`` is (or points back to)
-    ``dest`` — e.g. an image shipping ``/usr/bin/node ->
-    /usr/local/bin/node``. The source is resolved to its real path first, and
-    linking is skipped when that path is ``dest`` itself.
-    """
-    src = shlex.quote(source)
-    dst = shlex.quote(dest)
-    return (
-        f'_hb_real="$(readlink -f {src} 2>/dev/null || echo {src})" && '
-        f'if [ "$_hb_real" != {dst} ]; then ln -sf "$_hb_real" {dst}; fi'
-    )

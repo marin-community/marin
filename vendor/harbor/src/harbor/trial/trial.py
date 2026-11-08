@@ -18,7 +18,6 @@ from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
-from harbor.models.agent.name import AgentName
 from harbor.models.task.config import (
     EnvironmentConfig,
     StepConfig,
@@ -1204,12 +1203,6 @@ class Trial(ABC):
 
     def _init_agent(self) -> None:
         extra_kwargs = {}
-        if self.config.agent.name == AgentName.ORACLE.value:
-            extra_kwargs = {
-                "task_dir": self.task.task_dir,
-                "trial_paths": self.paths,
-                "agent_timeout_sec": self._agent_timeout_sec,
-            }
         mcp_servers = {
             server.name: server
             for server in [
