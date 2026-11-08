@@ -25,6 +25,7 @@ from marin.rollouts.evaluation import (
     EvaluationRunConfig,
     ModelIdentity,
 )
+from rigging.secrets import SecretResolutionError
 from rolloutengine.models import RolloutLimits
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
@@ -253,6 +254,38 @@ def test_submission_serializes_iris_timeout_and_separates_connection_secrets(iri
     for name, value in connections.items():
         assert request.environment.secrets[name] == value
         assert value.encode() not in request.entrypoint.SerializeToString()
+
+
+def test_regrade_without_an_endpoint_submits_and_runs_with_no_solver_secrets(
+    tmp_path, iris_submission, driver_config, monkeypatch
+):
+    client, requests = iris_submission
+    config_path = tmp_path / "run.json"
+    config_path.write_text(driver_config.model_dump_json())
+    for name in ("OPENAI_API_KEY", SOLVER_ENDPOINT, SOLVER_API_KEY):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(task_driver, "open_iris_client", lambda **_kwargs: nullcontext(client))
+    command = ["task_driver", "--config", str(config_path), "--dataset", "s3://fixture/corpus", "--no-wait"]
+    monkeypatch.setattr("sys.argv", [*command, "--output", "s3://fixture/regraded", "--responses-from", "local/run"])
+    with pytest.raises(ValueError, match="shared object-storage"):
+        task_driver.main()
+    monkeypatch.setattr(
+        "sys.argv", [*command, "--output", "s3://fixture/regraded", "--responses-from", "s3://fixture/results"]
+    )
+
+    task_driver.main()
+
+    (request,) = requests
+    assert not {SOLVER_ENDPOINT, SOLVER_API_KEY} & set(request.environment.secrets)
+    assert b"s3://fixture/results" in request.entrypoint.SerializeToString()
+    runs = []
+    monkeypatch.setattr(task_worker, "execute_with_retries", lambda *args, **kwargs: runs.append((args, kwargs)))
+    task_worker.run_worker(("s3://fixture/corpus",), "s3://fixture/regraded", driver_config, 1, "s3://fixture/results")
+    ((arguments, options),) = runs
+    assert arguments[3:5] == (None, None)
+    assert options["responses_from"] == "s3://fixture/results"
+    with pytest.raises(SecretResolutionError):
+        task_worker.run_worker(("s3://fixture/corpus",), "s3://fixture/results", driver_config, 1)
 
 
 def test_served_cli_submits_through_task_client_with_private_judge_connection(
