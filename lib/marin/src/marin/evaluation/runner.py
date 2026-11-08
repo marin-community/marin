@@ -73,7 +73,8 @@ _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 _MODEL_PREPARE_TIMEOUT_HOURS = 4
 _MODEL_PREPARE_WAIT_TIMEOUT_SECONDS = 8 * 3600
-_MODEL_PREPARE_DISK = "80g"
+_MODEL_PREPARE_DISK = "40g"
+_MODEL_PREPARE_RAM = "8g"
 
 
 # Stop evaluator attempts before their HTTP retries exhaust during a model reload.
@@ -635,7 +636,7 @@ def _prepare_inference_models(
                     ),
                     resources=ResourceConfig.with_cpu(
                         cpu=4,
-                        ram="16g",
+                        ram=_MODEL_PREPARE_RAM,
                         disk=_MODEL_PREPARE_DISK,
                         preemptible=False,
                         regions=worker_resources.regions,

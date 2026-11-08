@@ -412,7 +412,8 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
             assert isinstance(request.resources.device, CpuConfig)
             assert request.resources.regions == ["us-east1"]
             assert request.resources.target_cluster == "cw-rno2a"
-            assert request.resources.disk == "80g"
+            assert request.resources.disk == "40g"
+            assert request.resources.ram == "8g"
             assert request.environment.env_vars["HF_TOKEN"] == "test-token"
             assert request.entrypoint.callable_entrypoint.args == (entry.path, "org/candidate")
             assert request.entrypoint.callable_entrypoint.kwargs == {"revision": revision}
