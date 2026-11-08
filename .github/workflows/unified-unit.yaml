@@ -27,6 +27,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # The selector needs full commit history for the merge base and diff, but file
+          # contents only for the checked-out tree; git fetches any other file it reads
+          # (the base uv.lock) on demand. This skips about 1 GB of historical file versions.
+          filter: blob:none
           # A pull_request event checks out refs/pull/N/merge by default. Diffing the
           # base against that merge commit also yields every commit merged into main
           # since the branch point, which is not what this pull request changed.
@@ -363,11 +367,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Install local sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/harbor/uv.lock"
+      - name: Require local namespace support
+        run: |
+          uv run --isolated --project vendor/harbor --frozen --extra runtime python -c \
+            'from shellbox.backends.local.machine import LocalMachineFactory; LocalMachineFactory()'
       - name: Check Harbor lock and offline runtime
         run: uv run --no-project infra/ci/run_harbor_tests.py
 
@@ -508,9 +520,11 @@ jobs:
       - name: Install Playwright browsers
         # Always run: `playwright install` only downloads browsers it does not already
         # have, so a warm cache stays fast, while a partial or stale cache self-heals
-        # instead of leaving a missing browser binary. `--with-deps` reinstalls the system
-        # libraries that the browser cache cannot hold.
-        run: uv run --package marin-iris playwright install --with-deps chromium
+        # instead of leaving a missing browser binary. The tests launch Chromium
+        # headless, so only the headless shell is needed. No `--with-deps`: the runner
+        # image already has Chromium's libraries, and the flag also apt-installs
+        # Playwright's font packages, which some runners fetch at tens of kB/s.
+        run: uv run --package marin-iris playwright install --only-shell chromium
 
       - name: Run E2E smoke tests
         env:
@@ -551,7 +565,8 @@ jobs:
         run: |
           uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py skyrl-train/tests/test_*.py \
-            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py
+            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
+            skyrl-train/tests/cpu/test_compact_distillation.py
 
   unit_tests:
     name: unit-tests

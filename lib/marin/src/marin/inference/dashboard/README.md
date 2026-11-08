@@ -147,6 +147,16 @@ afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
 prepared on the first Python-tool invocation or shell command. Guest code has no
 ambient host filesystem, process, network, environment or clock access.
 
+If a call returns `503` with `Dashboard tool runtime preparation failed`, inspect
+the serving task's logs for the underlying package download or cache error.
+ShellSim 0.1.39 uses
+`https://public.oa.dev/shellsim/ports/catalog.json`; 0.1.38 uses
+`shellsim.rjp.io`, which can return HTTP 502. Relaunch the serving job with its
+original `uv run marin-serve iris ...` command from an updated checkout to use
+the current lockfile and catalog. A running dashboard keeps its catalog
+selection for the process lifetime. Transient preparation failures are retried
+on the next tool call.
+
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
 of rounds in that turn. The default value, `0`, allows unlimited rounds. For a

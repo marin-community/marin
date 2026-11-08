@@ -19,6 +19,7 @@ from levanter.schedule import BatchSchedule
 from levanter.utils.thread_utils import blocking_wait, future_from_value
 
 logger = logging.getLogger(__name__)
+_INTEGER_ALLOCATION_TOLERANCE = 1e-9
 
 
 T = TypeVar("T")
@@ -50,6 +51,9 @@ class MixtureDataset(AsyncDataset[T]):
         start_offsets: per-dataset index added to every sequence a dataset serves, so a dataset can resume
             at a chosen read position. When given, it must name exactly the datasets with positive weight
             in some stage.
+        first_index: the global index that reads the mixture's first sequence. Earlier indices raise. Unlike
+            ``start_offsets``, this moves the whole mixture, so the sequence at ``first_index + i`` depends only on
+            ``i``. Requires RESTART_STRATEGY.
     """
 
     def __init__(
@@ -62,7 +66,11 @@ class MixtureDataset(AsyncDataset[T]):
         key: PRNGKeyArray | int,
         stop_strategy: str = StopStrategy.RESTART_STRATEGY,
         start_offsets: Mapping[str, int] | None = None,
+        first_index: int = 0,
     ):
+        if first_index and stop_strategy != StopStrategy.RESTART_STRATEGY:
+            raise ValueError(f"first_index requires the restart strategy, got {stop_strategy}")
+        self.first_index = first_index
         if isinstance(weights, dict):
             weight_stages = [(0, weights)]
         else:
@@ -85,6 +93,9 @@ class MixtureDataset(AsyncDataset[T]):
         self.weight_stages = [
             (start_seq_index, self._normalize_weights(weights)) for start_seq_index, weights in weight_stages
         ]
+        missing = {name for _, stage in self.weight_stages for name in stage if name not in datasets}
+        if missing:
+            raise ValueError(f"Weighted datasets are missing: {sorted(missing)}")
         self.datasets = {
             name: dataset
             for name, dataset in datasets.items()
@@ -153,9 +164,15 @@ class MixtureDataset(AsyncDataset[T]):
         return counts_per_block_per_stage, counts_after_stage, unpermuted_ids_per_stage
 
     def _compute_expected_counts_per_block(self, weights: dict[str, float], block_size: int):
-        _expected_values_per_block = np.zeros(len(self.datasets), dtype=np.int32)
-        for i, dsname in enumerate(self.dataset_index):
-            _expected_values_per_block[i] = weights.get(dsname, 0) * block_size
+        expected = np.array([weights.get(name, 0) * block_size for name in self.dataset_index])
+        # Normalizing integer allocations can put an exact count just below its
+        # integer (e.g. 1001 / 64000 * 64000). Preserve those allocations before
+        # truncating genuinely fractional counts and assigning the remainder.
+        nearest = np.rint(expected)
+        expected = np.where(
+            np.isclose(expected, nearest, rtol=0, atol=_INTEGER_ALLOCATION_TOLERANCE), nearest, expected
+        )
+        _expected_values_per_block = expected.astype(np.int32)
 
         # handle remainder by adding to the largest dataset
         largest_dataset = np.argmax(_expected_values_per_block)
@@ -256,7 +273,16 @@ class MixtureDataset(AsyncDataset[T]):
         counts += blocks_in_stage * self._counts_per_block_per_stage[stage].astype(np.int64)
         return {name: int(count) for name, count in zip(self.dataset_index, counts, strict=True)}
 
+    def first_readable_index(self) -> int:
+        return self.first_index
+
+    def _relative_index(self, index: int) -> int:
+        if index < self.first_index:
+            raise ValueError(f"Mixture index {index} precedes the mixture's first index {self.first_index}")
+        return index - self.first_index
+
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
+        indices = [self._relative_index(idx) for idx in indices]
         block_ids = np.array([idx // self.block_size for idx in indices])
         blocks = [self._get_block(int(block_id)) for block_id in block_ids]
 
@@ -298,6 +324,7 @@ class MixtureDataset(AsyncDataset[T]):
 
     async def getitem_async(self, index: int) -> T:
         # simpler implementation because there's only one
+        index = self._relative_index(index)
         block_id = index // self.block_size
         index = index % self.block_size
         permuted_ids = self._get_block(block_id)

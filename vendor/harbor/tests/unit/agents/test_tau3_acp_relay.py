@@ -2,27 +2,73 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
 from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import anyio
 import pytest
+from mcp import Client
+from mcp.server import MCPServer
 
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.tau3_acp_relay.acpx import ACPXPromptClient
 from harbor.agents.tau3_acp_relay.harbor_agent import (
     Tau3HarborACPRelay,
-    Tau3RuntimeInfrastructureError,
     extract_policy,
 )
-from harbor.agents.tau3_acp_relay.relay import RuntimeStatus, RuntimeTurn, Tau3ACPRelay
+from harbor.agents.tau3_acp_relay.relay import (
+    RuntimeStatus,
+    RuntimeTurn,
+    Tau3ACPRelay,
+    Tau3RuntimeInfrastructureError,
+)
+from harbor.agents.tau3_acp_relay.runtime_client import (
+    MCPRuntimeClient,
+    runtime_http_errors,
+)
 from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
 from harbor.trial.errors import AgentTimeoutError
 
 pytestmark = pytest.mark.unit
+
+
+async def test_runtime_http_boundary_preserves_acp_process_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acpx = tmp_path / "acpx"
+    acpx.write_text("#!/bin/sh\ncat >/dev/null\necho candidate-failure >&2\nexit 7\n")
+    acpx.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    with pytest.raises(ExceptionGroup) as error:
+        with runtime_http_errors():
+            async with anyio.create_task_group():
+                await ACPXPromptClient(5).prompt("Please help.")
+    assert error.value.subgroup(Tau3RuntimeInfrastructureError) is None
+    assert error.value.subgroup(RuntimeError).exceptions[0].args == (
+        "acpx prompt failed with exit code 7: candidate-failure",
+    )
+
+
+async def test_runtime_http_boundary_preserves_caller_cancellation() -> None:
+    entered = asyncio.Event()
+
+    async def relay():
+        with runtime_http_errors():
+            async with anyio.create_task_group():
+                entered.set()
+                await asyncio.Event().wait()
+
+    task = asyncio.create_task(relay())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.parametrize(
@@ -89,6 +135,9 @@ class FakeRuntime:
     async def start(self) -> tuple[str, RuntimeStatus]:
         return self.observations[0], RuntimeStatus(None, 1, 0)
 
+    async def status(self) -> RuntimeStatus:
+        return RuntimeStatus(None, len(self.submitted) + 1, 0)
+
     async def submit_message(self, message: str) -> RuntimeTurn:
         self.submitted.append(message)
         index = len(self.submitted)
@@ -135,6 +184,132 @@ async def test_empty_target_response_records_scoreable_agent_failure() -> None:
     assert runtime.recorded_terminations == ["agent_error"]
     assert result.turns == ()
     assert result.status.termination_reason == "agent_error"
+
+
+@dataclass
+class MCPRuntimeState:
+    termination_reason: str | None = None
+    submitted: list[str] = field(default_factory=list)
+    status_response: str | None = None
+    submission_error: Exception | None = None
+    status_gate: asyncio.Event | None = None
+
+    def status_json(self) -> str:
+        return json.dumps(
+            {
+                "termination_reason": self.termination_reason,
+                "step_count": 3,
+                "num_errors": 0,
+            }
+        )
+
+
+@pytest.fixture
+def mcp_runtime():
+    state = MCPRuntimeState()
+    server = MCPServer("tau3-runtime")
+
+    @server.tool()
+    def configure_run(seed: int | None, max_steps: int, max_errors: int) -> str:
+        return state.status_json()
+
+    @server.tool()
+    def start_conversation() -> str:
+        return "I need help."
+
+    @server.tool()
+    async def get_runtime_status() -> str:
+        if state.status_gate is not None:
+            await state.status_gate.wait()
+        return (
+            state.status_response
+            if state.status_response is not None
+            else state.status_json()
+        )
+
+    @server.tool()
+    def send_message_to_user(message: str) -> str:
+        state.termination_reason = "user_stop"
+        return "###OUT-OF-SCOPE###"
+
+    @server.tool()
+    def submit_assistant_message(message: str) -> str:
+        state.submitted.append(message)
+        if state.submission_error is not None:
+            raise state.submission_error
+        if state.termination_reason is not None:
+            raise RuntimeError("Conversation has already ended")
+        state.termination_reason = "user_stop"
+        return state.status_json()
+
+    @asynccontextmanager
+    async def connect():
+        async with Client(server, mode="legacy") as client:
+            yield state, MCPRuntimeClient(client.session, 10), client
+
+    return connect
+
+
+async def test_runtime_termination_during_target_turn_avoids_duplicate_submit(
+    mcp_runtime,
+):
+    async with mcp_runtime() as (state, runtime, client):
+
+        class Target:
+            async def prompt(self, message: str) -> str:
+                await client.call_tool(
+                    "send_message_to_user", {"message": "I can help."}
+                )
+                return "I have transferred your request."
+
+        result = await Tau3ACPRelay(runtime, Target()).run("Resolve the request.")
+
+    assert result.status == RuntimeStatus("user_stop", 3, 0)
+    assert result.turns[0].target_response == "I have transferred your request."
+    assert state.submitted == []
+
+
+async def test_active_runtime_mcp_error_remains_infrastructure(mcp_runtime):
+    async with mcp_runtime() as (state, runtime, _):
+        state.submission_error = RuntimeError("Runtime storage unavailable")
+
+        with pytest.raises(Tau3RuntimeInfrastructureError):
+            await Tau3ACPRelay(runtime, FakeTarget(["Please refund the order."])).run(
+                "Resolve the request."
+            )
+    assert state.termination_reason is None
+    assert state.submitted == ["Please refund the order."]
+
+
+@pytest.mark.parametrize(
+    "response", ["not-json", "[]", '{"termination_reason": null, "num_errors": 0}']
+)
+async def test_malformed_mcp_status_is_infrastructure(mcp_runtime, response):
+    async with mcp_runtime() as (state, runtime, _):
+
+        class Target:
+            async def prompt(self, message: str) -> str:
+                state.status_response = response
+                return "Please refund the order."
+
+        with pytest.raises(Tau3RuntimeInfrastructureError):
+            await Tau3ACPRelay(runtime, Target()).run("Resolve the request.")
+    assert state.submitted == []
+
+
+async def test_mcp_status_deadline_is_infrastructure(mcp_runtime):
+    async with mcp_runtime() as (state, _, client):
+        runtime = MCPRuntimeClient(client.session, 0.05)
+
+        class Target:
+            async def prompt(self, message: str) -> str:
+                state.status_gate = asyncio.Event()
+                return "Please refund the order."
+
+        with pytest.raises(Tau3RuntimeInfrastructureError) as failure:
+            await Tau3ACPRelay(runtime, Target()).run("Resolve the request.")
+        assert isinstance(failure.value.__cause__, TimeoutError)
+    assert state.submitted == []
 
 
 @pytest.mark.parametrize(

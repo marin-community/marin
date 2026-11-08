@@ -10,8 +10,11 @@ for declaration fields and artifact outputs.
 
 ## Adding a dataset
 
-1. Add an `RlDataSource` to the closest family module for runnable sources, or
-   [unconverted.py](unconverted.py) for inventory-only entries.
+1. Add an `RlDataSource` to the closest family module for runnable sources; for
+   inventory-only entries use [unconverted.py](unconverted.py) when the conversion is
+   unfinished or excluded, or [campaign_releases.py](campaign_releases.py) when the
+   entry records an externally published campaign release whose admission lives in the
+   release itself and must not be re-converted.
    Set `SourceInfo`'s stable `id`, display `title`, `origin`, family and tags.
    Leave `count=None` unless the pinned input population has been counted.
    Keep an existing ID when updating a source so its Atlas reviews remain linked.
@@ -67,6 +70,7 @@ ones stay out of `final/`.
 | [arc/arc.py](arc/arc.py) | TaskTrove ARC-AGI tasks and the Ultra NVARC components' converter, graded by the vendored NVARC scorer through `arc_grade.py`. |
 | [reasoning_gym/tasks.py](reasoning_gym/tasks.py) | TaskTrove Reasoning Gym tasks, and entries generated from the pinned `reasoning_gym` wheel, which `reasoning_gym_grade.py` regenerates with the grader packages before scoring. |
 | [structure_closure.py](structure_closure.py) | Snowball v0.1 structural train and development-validation splits. Assistant text prefills use the serving model's tokenizer; verifyit grades the first completed outer region in process. |
+| [thoughtcrime.py](thoughtcrime.py) | Evaluation prefixes mined from Marin pi trajectories, one per benchmark task, before a reply that closed its reasoning span twice or opened a second span; one-turn tool-calling tasks that verifyit's `reasoning_markup` mode grades in process. |
 | [tasktrove/code.py](tasktrove/code.py) | TaskTrove competitive programming (Code Contests, Codeforces, Nemotron competitive coding, TACO), graded by stdio cases with `COMPILER_GRADER_PACKAGES`. |
 | [tasktrove/python_tests.py](tasktrove/python_tests.py) | TaskTrove Python unit-test sources as one table, graded by pytest. |
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |
@@ -89,6 +93,9 @@ it receives the endpoint and credentials is follow-up work.
 ## Sources without conversion recipes
 
 [unconverted.py](unconverted.py) retains excluded sources and available releases
-whose TaskSpec conversions are unfinished. These entries remain visible in the
+whose TaskSpec conversions are unfinished. [campaign_releases.py](campaign_releases.py)
+declares externally published campaign releases kept as data pointers: their admission,
+split and qualification evidence lives in the pinned release itself, so a conversion
+recipe would invent a second provenance. These entries remain visible in the
 Atlas and are omitted from campaign execution. Add a recipe when a source's
 conversion is implemented, retaining its stable source ID.
