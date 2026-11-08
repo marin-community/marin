@@ -113,13 +113,17 @@ def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, .
     return [StagedFile(path, data) for path, data in selected.items()]
 
 
-async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
+async def _run_checked(machine: Machine, command: Command, failure: str, *, authored: bool = False) -> None:
     result = await machine.run(command)
     if result.reason == ExitReason.TIMED_OUT:
         raise _StepFailed(_infra_error(f"{failure}: timed out", GradingFailure.TIMEOUT, _diagnostics(result)))
     if result.exit_code != 0:
         raise _StepFailed(
-            _infra_error(f"{failure}: exit={result.exit_code}", GradingFailure.EXECUTION, _diagnostics(result))
+            _infra_error(
+                f"{failure}: exit={result.exit_code}",
+                _grader_failure(result) if authored else GradingFailure.EXECUTION,
+                _diagnostics(result),
+            )
         )
 
 
@@ -576,6 +580,7 @@ async def _grade_staged(
                     user=ROOT,
                 ),
                 "Cannot collect grading inputs",
+                authored=True,
             )
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)
