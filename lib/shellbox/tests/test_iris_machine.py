@@ -98,6 +98,7 @@ class LocalTask:
 
 class LocalJob:
     def __init__(self, task: LocalTask | None = None):
+        self.job_id = JobName.from_wire("/user/shellbox")
         self.cancelled = False
         self.killed = threading.Event()
         self._task = task
@@ -352,7 +353,8 @@ class HeldRpc:
         return SimpleNamespace(exit_code=0, stdout="", stderr="", error="")
 
 
-def test_close_returns_only_after_admitted_execs_end(tmp_path: Path) -> None:
+def test_close_returns_only_after_admitted_execs_end(tmp_path: Path, caplog) -> None:
+    caplog.set_level("INFO")
     job = LocalJob()
     # Terminating the sandbox ends the exec the controller already admitted.
     rpc = HeldRpc(release=job.killed)
@@ -366,6 +368,7 @@ def test_close_returns_only_after_admitted_execs_end(tmp_path: Path) -> None:
 
         assert rpc.returned.is_set()
         exec_future.result(timeout=10)
+    assert "Iris kill job=/user/shellbox result=acknowledged returned_state=not_provided" in caplog.text
 
 
 def test_close_raises_when_an_admitted_exec_outlives_the_sandbox(tmp_path: Path, monkeypatch) -> None:
