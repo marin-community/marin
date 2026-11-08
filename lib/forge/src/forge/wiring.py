@@ -19,6 +19,7 @@ from iris.cluster.client import get_job_info
 from iris.cluster.types import JobName
 from pydantic import TypeAdapter
 from rolloutengine.models import ModelRequest, ModelTurn
+from rolloutengine.validation import InvalidTaskSpec
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
 from taskcompendium.models import EnvironmentRequirements, TaskResource
@@ -29,12 +30,14 @@ from taskforge.llm.rollout_model import model_turn
 from forge.arms import transitions
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
+from forge.effects.issues import Hold
 from forge.harness.loop import AgenticHarness
 from forge.harness.tools import adversary_tools, standard_tools
 from forge.harness.tools.validate import ValidateTool
 from forge.lowering import (
     LoweringSettings,
     host_requirements,
+    lower_with_settings,
     lowering_settings,
     machine_backend,
     machine_runtime,
@@ -164,8 +167,18 @@ def build_resources(
     )
 
 
-def submit_gate(submission: Submission) -> tuple[str, ...]:
-    return () if submission.controls else ("Supply at least one control candidate",)
+def submit_gate(
+    submission: Submission, *, settings: LoweringSettings, factories: Mapping[str, MachineFactory]
+) -> tuple[str, ...]:
+    if not submission.controls:
+        return ("Supply at least one control candidate",)
+    try:
+        lower_with_settings(submission.task, settings, factories)
+    except InvalidTaskSpec as error:
+        return (str(error),)
+    except (ValueError, NotImplementedError) as error:
+        raise Hold(f"Lowering failed: {error}") from error
+    return ()
 
 
 def hydration(_wp: Workpiece, _policy: Policy) -> tuple[TaskResource, ...]:
@@ -180,6 +193,7 @@ def prompt_limit(policy: Policy, role: str = "author") -> int:
 def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactory]) -> ForgeConfig:
     settings = lowering_settings(policy)
     sampling = policy_sampling(policy)
+    gate = partial(submit_gate, settings=settings, factories=factories)
     author = AgenticHarness(
         prompt_limit(policy),
         sampling,
@@ -204,13 +218,13 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
             policy=policy,
             factories=factories,
             settings=settings,
-            gate=submit_gate,
+            gate=gate,
         )
     }
     if arm == "T":
         tools["author"] = {
             **tools["author"],
-            "validate": ValidateTool(submit_gate, task_path, controls_path),
+            "validate": ValidateTool(gate, task_path, controls_path),
         }
     tools.update(
         {
@@ -236,7 +250,7 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
         adversaries,
         WorkspaceHydration((), hydration),
         tools,
-        submit_gate,
+        gate,
         default_review,
         band,
         budget,

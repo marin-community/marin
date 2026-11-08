@@ -7,10 +7,10 @@ from functools import partial
 from types import MappingProxyType
 
 from forge.config import Transitions, transition
-from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
+from forge.harness.protocol import Returned, Stopped, Submitted
 from forge.harness.tools.validate import ValidateRequest
 from forge.model.llm import Message, Role, ToolCall
-from forge.model.review import Accept, BandOutcome, Budget, Incomplete, Modify, Reject, RejectKind, Retry
+from forge.model.review import Abandon, Accept, BandOutcome, Budget, Incomplete, Modify, Reject, Retry
 from forge.model.stage import Stage
 from forge.model.workpiece import Conversation, Terminal, Workpiece
 from forge.policy import Policy
@@ -47,6 +47,8 @@ def after_validation(wp: Workpiece) -> Stage:
 
 def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -> Workpiece:
     decision = result.decision
+    if isinstance(decision, Modify) and wp.round >= budget.max_modify_rounds:
+        decision = Abandon((f"budget.max_modify_rounds exhausted after {wp.round} modify rounds", *decision.findings))
     wp = wp.with_(decisions=(*wp.decisions, decision))
     match decision:
         case Accept():
@@ -59,9 +61,9 @@ def decided(wp: Workpiece, result: Decided, *, budget: Budget, policy: Policy) -
             )
         case Reject():
             return wp.with_(terminal=Terminal.REJECTED)
+        case Abandon():
+            return wp.with_(terminal=Terminal.ABANDONED)
         case Modify(findings):
-            if wp.round >= budget.max_modify_rounds:
-                return wp.with_(terminal=Terminal.ABANDONED)
             previous = wp.session
             if previous is None:
                 raise ValueError("Cannot revise without an author session")
@@ -87,8 +89,7 @@ def after_review(wp: Workpiece) -> Stage | None:
 
 
 def stopped(wp: Workpiece, result: Stopped) -> Workpiece:
-    kind = RejectKind.BUDGET if result.reason == StopReason.CONTEXT_LIMIT else RejectKind.TASK
-    decision = Reject(kind, (f"author stopped: {result.summary}",))
+    decision = Abandon((f"author stopped: {result.summary}",))
     return wp.with_(session=result.session, terminal=Terminal.ABANDONED, decisions=(*wp.decisions, decision))
 
 

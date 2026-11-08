@@ -8,6 +8,7 @@ from typing import override
 import pytest
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
 from taskcompendium.models import (
     CommandSemantics,
@@ -101,3 +102,10 @@ def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs() -> N
     assert spec.task_machine.memory_mb == spec.verifier_machine.memory_mb == memory_mb
     assert spec.task_machine.cpus == spec.verifier_machine.cpus == 1
     assert spec.limits.verifier_timeout == 1500
+
+
+def test_shellsim_binding_omits_host_cpu_allocation() -> None:
+    policy = load_policy(Path(__file__).parents[1] / "src/forge/policy/defaults")
+    task = arithmetic_task(environment_requirements=requirements(image=None))
+    spec = lower_with_settings(task, lowering_settings(policy), {"shellsim": ShellSimMachineFactory()})
+    assert spec.task_machine is not None and spec.task_machine.cpus is None

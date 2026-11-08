@@ -7,8 +7,9 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Annotated, Literal
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 from taskcompendium.grading_result import GradeResult
 
 from forge.model.controls import Candidate, RewardBand
@@ -50,32 +51,47 @@ class Accept:
     band: BandOutcome
     reasons: tuple[str, ...] = ()
     revert: bool = False
+    kind: Literal["accept"] = "accept"
 
 
 @dataclass(frozen=True, slots=True)
 class Reject:
-    kind: RejectKind
+    category: RejectKind
     reasons: tuple[str, ...]
+    kind: Literal["reject"] = "reject"
 
 
 @dataclass(frozen=True, slots=True)
 class Modify:
     findings: tuple[str, ...]
     placement: BandOutcome | None = None
+    kind: Literal["modify"] = "modify"
 
 
 @dataclass(frozen=True, slots=True)
 class Retry:
     cause: Cause
     count: int
+    kind: Literal["retry"] = "retry"
 
 
 @dataclass(frozen=True, slots=True)
 class Incomplete:
     reasons: tuple[str, ...]
+    kind: Literal["incomplete"] = "incomplete"
 
 
-type Decision = Accept | Reject | Modify | Retry | Incomplete
+@dataclass(frozen=True, slots=True)
+class Abandon:
+    reasons: Annotated[tuple[str, ...], Field(min_length=1)]
+    kind: Literal["abandon"] = "abandon"
+
+    def __post_init__(self) -> None:
+        if not self.reasons or any(not reason.strip() for reason in self.reasons):
+            raise ValueError("Abandon requires non-empty reasons")
+
+
+type Decision = Annotated[Accept | Reject | Modify | Retry | Incomplete | Abandon, Field(discriminator="kind")]
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +156,7 @@ class ValidationResult:
     controls: tuple[ControlResult, ...]
     adversary: tuple[AdversaryResult, ...]
     lowering_error: str | None = None
+    lowering_cause: Cause | None = None
 
 
 @dataclass(frozen=True, slots=True)
