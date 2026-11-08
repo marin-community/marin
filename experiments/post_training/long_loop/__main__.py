@@ -14,10 +14,9 @@ from marin.rl.cli import _skyrl_executions, rl_build_options
 from marin.rl.skyrl import ArtifactHfModel
 from rigging.secrets import require_secret
 
-from experiments.post_training.inventory.train_quick_loop import DEFAULT_SELECTION_URI, SELECTION_PREFIX
 from experiments.post_training.long_loop.endpoint_probe import endpoint_step
 from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
-from experiments.post_training.long_loop.rl import smoke_rl_step
+from experiments.post_training.long_loop.rl import DEFAULT_SELECTION_URI, SELECTION_PREFIX, smoke_rl_step
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
 from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, sft_steps
 

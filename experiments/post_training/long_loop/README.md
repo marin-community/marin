@@ -21,8 +21,8 @@ command adopts that job instead of creating another coordinator. Failed stages
 are not automatically replayed. Reconcile a failed or ambiguous attempt before
 using a new version.
 
-Peak stage requests are 8 H100 for the base import, 256 for SFT, zero for the
-CPU export, 8 for the endpoint probe, 40 for RL, and 16 for evaluation including
+Peak stage requests are 8 H100 for the base import, 256 for SFT, 8 for the
+CPU export host, 8 for the endpoint probe, 40 for RL, and 16 for evaluation including
 the judge. Dependencies serialize these stages. Every GPU job uses RNO2A at
 **interactive** priority; the aggregate limit is **256 H100**. Neither priority
 changes nor PR creation are authorized. Keep all changes in this worktree and
@@ -54,3 +54,17 @@ still required to separate queue, compilation, learner, rollout, sandbox, judge,
 and allocation-release measurements; stage-wall spans must not be reported as
 compute time. Full phase collection and the 102,400-token CP4 qualification are
 not yet complete. The full 50B round and its task budget remain unmeasured.
+
+## Experiment-owned RL recipe
+
+`rl.py` owns role geometry and launch bindings; `rl-smoke.yaml` owns the local
+three-update recipe, copied from the quick-loop composition at main commit
+`1cf5c009d358261bd41f368bcd033197ecd731f0`. It no longer imports the quick-loop or
+async-RL recipe. Shared Marin/SkyRL execution remains reused. GS8, staleness2,
+per-turn training, thinking and dual EOS settings remain explicit.
+
+Training task sessions use `DAYTONA_RL_API_KEY`. Micro210 and its environment
+preflight use `DAYTONA_EVAL_API_KEY`. Both are dedicated organization credentials;
+never substitute `DAYTONA_API_KEY`. Inline evaluation through the training factory
+is disabled; evaluation is the separate Eval-org graph stage. A fresh live run
+still requires verified organization identity and an explicit Daytona target.

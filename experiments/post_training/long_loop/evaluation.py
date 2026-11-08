@@ -154,7 +154,7 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
             coordinator_timeout_hours=36,
             coordinator_name=f"long-loop-plumbing-{version}",
             job_timeout_seconds=86400,
-            required_env_vars=("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY", "MARIN_PREFIX"),
+            required_env_vars=("DAYTONA_EVAL_API_KEY", "DAYTONA_TARGET", "TOGETHER_API_KEY", "MARIN_PREFIX"),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
         export_hf=False,
@@ -197,7 +197,9 @@ def micro_inputs(version: str) -> ArtifactStep:
             prepare_micro,
             name=f"long-loop-micro-inputs-{version}",
             env_vars={
-                name: os.environ[name] for name in ("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY") if name in os.environ
+                name: os.environ[name]
+                for name in ("DAYTONA_EVAL_API_KEY", "DAYTONA_TARGET", "TOGETHER_API_KEY")
+                if name in os.environ
             },
             resources=ResourceConfig.with_gpu("H100", count=1, cpu=4, ram="16GB", disk="64GB", target_cluster=None),
         ),

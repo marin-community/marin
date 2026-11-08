@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plumbing-smoke RL binding using the maintained task-compendium recipe."""
+"""Experiment-owned asynchronous GS8 RL recipe and artifact binding."""
 
-from dataclasses import replace
+from pathlib import Path
 
 import yaml
 from iris.rpc import job_pb2
@@ -16,6 +16,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
+    SkyRLRolePlan,
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
@@ -23,23 +24,29 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 
-from experiments.post_training.async_rl import SNOWBALL_RECIPE
-from experiments.post_training.inventory.train_quick_loop import training_recipe
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
-SMOKE_PLAN = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=64, policy_mini_batch_size=64, n_samples_per_prompt=8)
+SELECTION_PREFIX = "rl-data/task-selection"
+DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
+SMOKE_PLAN = SkyRLRolePlan(
+    colocate_all=False,
+    policy_num_nodes=4,
+    policy_num_gpus_per_node=8,
+    num_inference_engines=1,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=8,
+    inference_engine_expert_parallel_size=8,
+    train_batch_size=64,
+    policy_mini_batch_size=64,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=8,
+)
 
 
 def smoke_recipe() -> dict:
-    """Retain the quick-loop task/runtime policy; change only GS8 and staleness."""
-    config = training_recipe(3)
-    config["trainer"]["rollout_buffer"]["max_staleness_steps"] = 2
-    config["trainer"]["step_wise_training"] = True
-    config["trainer"]["dump_data_batch"] = True
-    config["trainer"]["project_name"] = "marin-long-loop"
-    config["generator"]["chat_template_kwargs"] = {"enable_thinking": True}
-    config["generator"]["sampling_params"].update(stop_token_ids=[128001, 128009], skip_special_tokens=False)
-    config["generator"]["eval_sampling_params"] = {"stop_token_ids": [128001, 128009], "skip_special_tokens": False}
+    """Load the local recipe; final evaluation belongs to the separate Eval-org stage."""
+    config = yaml.safe_load(Path(__file__).with_name("rl-smoke.yaml").read_text())
     _materialize_role_plan_config(config, SMOKE_PLAN)
     return config
 
@@ -72,7 +79,7 @@ def smoke_rl_step(
             cluster="cw-rno2a",
             cluster_config="lib/iris/config/cw-rno2a.yaml",
             cpu=32,
-            memory=SNOWBALL_RECIPE.host_memory,
+            memory="1800GB",
             disk="2TB",
             priority="interactive",
             max_retries=0,
@@ -83,7 +90,13 @@ def smoke_rl_step(
             job_timeout_seconds=36 * 60 * 60,
             wandb_entity="marin-community",
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-            required_env_vars=("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY", "MARIN_PREFIX"),
+            required_env_vars=(
+                "DAYTONA_RL_API_KEY",
+                "DAYTONA_EVAL_API_KEY",
+                "DAYTONA_TARGET",
+                "TOGETHER_API_KEY",
+                "MARIN_PREFIX",
+            ),
         ),
         export_hf=True,
     )

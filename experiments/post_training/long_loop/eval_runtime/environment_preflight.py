@@ -13,6 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+from harbor.host_capabilities import DAYTONA_API_URL, DaytonaConnection, HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
 
@@ -32,8 +33,14 @@ async def main(
     smoke: bool, credential_env: str, data_uri: str, benchmarks: list[str], report_name: str, output_prefix: str
 ):
     logging.basicConfig(level=logging.INFO)
-    os.environ.update(counterpart_environment())
-    os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
+    host_capabilities = HostCapabilities(
+        daytona=DaytonaConnection(
+            api_key=os.environ[credential_env],
+            api_url=DAYTONA_API_URL,
+            target=os.environ["DAYTONA_TARGET"],
+        ),
+        protected_values=frozenset((os.environ[credential_env], os.environ["TOGETHER_API_KEY"])),
+    )
     receipts = []
     failures = []
     semaphore = asyncio.Semaphore(4)
@@ -53,7 +60,6 @@ async def main(
                 config = EnvironmentConfig(
                     type="daytona",
                     override_storage_mb=row.storage_override_mb,
-                    kwargs={"api_key_env": credential_env},
                 )
                 started = time.monotonic()
                 try:
@@ -71,11 +77,17 @@ async def main(
                                     "kwargs": {
                                         **pi_agent_config()["kwargs"],
                                         "api_base": "http://unused-during-setup.invalid/v1",
-                                        "api_key": "not-needed-during-setup",
+                                        "api_key": "EMPTY",
                                     },
                                 }
                             ),
-                        )
+                        ),
+                        host_capabilities=host_capabilities,
+                        guest_environment={
+                            **counterpart_environment(),
+                            "OPENAI_API_KEY": "EMPTY",
+                            "OPENAI_BASE_URL": "http://unused-during-setup.invalid/v1",
+                        },
                     )
                     environment = trial.agent_environment
                     agent = trial.agent
