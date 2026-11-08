@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
-from rolloutengine.validation import InvalidTaskSpec
+from rolloutengine.validation import InvalidTaskSpec, check_grader
 from shellbox.machine import DEFAULT_WORKDIR, Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.models import (
     CommandSemantics,
@@ -19,7 +19,9 @@ from taskcompendium.models import (
     Grader,
     ScriptGrader,
     TaskSpec,
+    judge_spec,
 )
+from verifyit.modes.grade_judge import JudgeConnection
 
 from forge.model.controls import Candidate
 from forge.policy import GRADER_BASE_IMAGE, Policy
@@ -112,6 +114,7 @@ def lower(
     verifier_machine: MachineSettings | None,
     limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
+    judge_connection: JudgeConnection | None = None,
 ) -> TaskRolloutSpec:
     """The ``TaskRolloutSpec`` that runs ``task`` on ``factories`` under ``TOOL_HARNESS``.
 
@@ -134,6 +137,7 @@ def lower(
     spec = TaskRolloutSpec(
         task=task,
         harness=TOOL_HARNESS,
+        judge_connection=judge_connection,
         task_machine=(None if task_machine is None else machine_runtime(task_machine, task.environment_requirements)),
         verifier_machine=(
             None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading)
@@ -193,6 +197,7 @@ class LoweringSettings:
     task_machine: MachineSettings
     verifier_machine: MachineSettings
     limits: RolloutLimits
+    judge_model: str = ""
 
 
 def lowering_settings(policy: Policy) -> LoweringSettings:
@@ -211,25 +216,44 @@ def lowering_settings(policy: Policy) -> LoweringSettings:
     if memory_mb <= 0:
         raise ValueError("sandbox.memory_mb must be positive")
     settings = replace(GRADING_MACHINE, limits=MachineLimits(memory_mb=memory_mb, cpus=1))
-    return LoweringSettings(settings, settings, limits)
+    return LoweringSettings(settings, settings, limits, policy.setting("judge.model", str))
 
 
 def lower_with_settings(
     task: TaskSpec, settings: LoweringSettings, factories: Mapping[str, MachineFactory]
 ) -> TaskRolloutSpec:
     """Lower with shared budgets and only the machines the task requires."""
+    check_grader(task.grader)
+    judge = judge_spec(task.grader)
+    connection = None
+    if judge is not None:
+        if isinstance(task.grader, ScriptGrader):
+            raise InvalidTaskSpec("Script judge graders are not supported: use a host VerifyitGrader with mode=judge")
+        if not settings.judge_model:
+            raise InvalidTaskSpec("Judge grading is disabled: set policy judge.model or submit a deterministic grader")
+        if judge.model and judge.model != settings.judge_model:
+            raise InvalidTaskSpec(
+                f"Judge model must be empty or {settings.judge_model!r}, as selected by policy judge.model"
+            )
+        connection = JudgeConnection(
+            "http://forge-judge.invalid/v1", "inference-effect", default_model=settings.judge_model
+        )
     grader = grading_environment(task)
     if grader is not None and grader.docker_image not in (None, GRADER_BASE_IMAGE):
         raise InvalidTaskSpec(
             f"grader image must be {GRADER_BASE_IMAGE} or null for ShellSim; got {grader.docker_image}"
         )
-    limits = settings.limits.model_copy(update={"verifier_timeout": verifier_timeout(task.grader)})
+    timeout = verifier_timeout(task.grader)
+    if judge is not None:
+        timeout = max(timeout, settings.limits.model_turn_timeout or 0)
+    limits = settings.limits.model_copy(update={"verifier_timeout": timeout})
     return lower(
         task,
         task_machine=settings.task_machine if SHELL_CAPABILITY in task.environment_requirements.capabilities else None,
         verifier_machine=settings.verifier_machine if grading_environment(task) is not None else None,
         limits=limits,
         factories=factories,
+        judge_connection=connection,
     )
 
 

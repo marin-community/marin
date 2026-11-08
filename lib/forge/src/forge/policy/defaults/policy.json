@@ -12,6 +12,7 @@
   "sandbox.memory_mb": 8192,
   "sandbox.output_budget_mb": 1024,
   "proposals.environments": ["reasoning", "shellsim"],
+  "proposals.verifications": ["code", "decision_model", "answer_in_box"],
   "author.image": "${GRADER_BASE_IMAGE}",
   "author.packages": [],
   "author.workdir": "/workspace",
@@ -37,5 +38,7 @@
   "sampling.temperature": 1.0,
   "sampling.top_p": 0.95,
   "sampling.reasoning_effort": "high",
-  "sampling.max_continuations": 0
+  "sampling.max_continuations": 0,
+  "judge.model": "",
+  "judge.pool": "high"
 }

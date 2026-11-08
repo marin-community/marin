@@ -21,6 +21,6 @@ def shellsim_factory(*, output_budget_mb: int = 128) -> MachineFactory:
 
 def grading_environment(task: TaskSpec) -> EnvironmentRequirements | None:
     grader = task.grader
-    if isinstance(grader, ScriptGrader | VerifyitGrader) and not grades_with_judge(grader):
+    if isinstance(grader, ScriptGrader) or (isinstance(grader, VerifyitGrader) and not grades_with_judge(grader)):
         return grader.environment
     return None

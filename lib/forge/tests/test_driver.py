@@ -4,6 +4,7 @@
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Never
@@ -14,8 +15,28 @@ from iris.cluster.types import JobName
 from shellbox.backends.iris.machine import IrisMachineFactory
 
 from forge import wiring
-from forge.driver import inputs, proposal_key
+from forge.driver import eligible, inputs, proposal_key
+from forge.model.proposal import Environment, TaskProposal, Verification
 from forge.policy import load_policy
+from forge.policy.defaults import DEFAULTS_DIR
+
+pytest_plugins = ("lib.forge.tests.test_proposal",)
+
+
+@pytest.mark.parametrize("verification", list(Verification))
+def test_proposal_verification_policy_filters_before_execution(
+    proposal: TaskProposal, verification: Verification, caplog: pytest.LogCaptureFixture
+) -> None:
+    proposal = replace(
+        proposal, header=replace(proposal.header, environment=Environment.SHELLSIM, verification=verification)
+    )
+    policy = load_policy(DEFAULTS_DIR)
+    allowed = verification.value in {"code", "decision_model", "answer_in_box"}
+    with caplog.at_level("INFO"):
+        assert eligible(proposal, policy) is allowed
+    if not allowed:
+        assert f"SKIP {proposal.header.id}: verification={verification.value}" in caplog.text
+    assert eligible(proposal, policy.overlaid({"proposals.verifications": [verification.value]}))
 
 
 def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path: Path) -> None:
