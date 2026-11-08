@@ -261,7 +261,7 @@ class FinelogConfig:
     # fills the disk on a busy hub; set it on any server with a bounded disk.
     object_cache_gb: int | None = None
     # Server ceiling for one Query or FetchLogs RPC, in milliseconds. Unset keeps
-    # the server's 10-second default. A table's `max_query_time` still bounds reads.
+    # the server's 10-second default. A table's `max_query_time_ms` still bounds reads.
     query_timeout_ms: int | None = None
     telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
 
