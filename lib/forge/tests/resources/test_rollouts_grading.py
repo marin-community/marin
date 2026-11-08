@@ -214,24 +214,23 @@ def test_empty_interruption_causes_keep_exception_types() -> None:
     assert str(decision) == "Rollout interrupted during grade: TimeoutError <- CancelledError"
 
 
+# Pilots m/n: parent cancellation and controller gaps; o: only agent output exhaustion is failed evidence.
 @pytest.mark.parametrize("operation", list(RolloutOperation))
-def test_parent_cancellation_is_transient_in_every_rollout_phase(operation: RolloutOperation) -> None:
-    error = RolloutInterrupted(Rollout("cancelled", (), "interrupted"), operation)
-    error.__cause__ = MachineCancelled("parent job terminated")
+@pytest.mark.parametrize(
+    "failure",
+    [
+        MachineCancelled("parent job terminated"),
+        MachineUnavailable("controller unavailable"),
+        MachineOutputLimitExceeded("output budget exhausted"),
+    ],
+)
+def test_machine_failure_policy(operation: RolloutOperation, failure: RuntimeError | ConnectionError) -> None:
+    error = RolloutInterrupted(Rollout("failure", (), "interrupted"), operation)
+    error.__cause__ = failure
+    expected = (
+        (OutputBudgetExhausted if operation is RolloutOperation.ADVANCE else Restart)
+        if isinstance(failure, MachineOutputLimitExceeded)
+        else Transient
+    )
     decision = interruption(error)
-    assert isinstance(decision, Transient)
-    assert "parent job terminated" in str(decision)
-
-
-@pytest.mark.parametrize("operation", [RolloutOperation.ADVANCE, RolloutOperation.GRADE])
-def test_only_agent_output_exhaustion_counts_as_agent_failure(operation: RolloutOperation) -> None:
-    error = RolloutInterrupted(Rollout("output", (), "interrupted"), operation)
-    error.__cause__ = MachineOutputLimitExceeded("ShellSim terminated: output_limit_exceeded")
-    assert isinstance(interruption(error), OutputBudgetExhausted) is (operation is RolloutOperation.ADVANCE)
-
-
-@pytest.mark.parametrize("operation", list(RolloutOperation))
-def test_controller_unavailability_is_transient_in_every_phase(operation: RolloutOperation) -> None:
-    error = RolloutInterrupted(Rollout("unavailable", (), "interrupted"), operation)
-    error.__cause__ = MachineUnavailable("Iris controller unavailable: Controller is shutting down")
-    assert isinstance(interruption(error), Transient)
+    assert type(decision) is expected and str(failure) in str(decision)

@@ -63,10 +63,9 @@ class RolloutResource:
 
     async def run(self, event: SolverRollout) -> GradedRollout:
         try:
-            result = await self.engine.run_task(
+            return await self.engine.run_task(
                 event.spec, self.model, run_id=f"{event.spec.task.id}:{event.trial}:{event.attempt}"
             )
-            return result
         except RolloutInterrupted as error:
             raise interruption(error) from error
 

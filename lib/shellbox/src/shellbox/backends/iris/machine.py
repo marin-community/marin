@@ -93,7 +93,7 @@ def _controller_call[T](call: Callable[[], T], *, exec_call: bool = False) -> T:
         return retry_with_backoff(
             call,
             retryable=lambda error: _controller_unavailable(error)
-            or (exec_call and isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED),
+            or (isinstance(error, ConnectError) and error.code == Code.RESOURCE_EXHAUSTED),
             max_attempts=DEFAULT_RETRY_MAX_ATTEMPTS,
             max_elapsed=DEFAULT_RETRY_MAX_ELAPSED,
             backoff=EXEC_SHED_BACKOFF,

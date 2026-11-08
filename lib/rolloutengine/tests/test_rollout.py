@@ -460,6 +460,7 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
 
 
+# Pilot l: confirmed leaf or parent links are submission failures, not infrastructure loss.
 @pytest.mark.parametrize("parent_link", [False, True])
 async def test_linked_output_is_a_zero_grade_without_restart(parent_link):
     command = (

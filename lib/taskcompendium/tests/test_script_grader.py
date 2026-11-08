@@ -370,7 +370,8 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 
 @pytest.mark.asyncio
-async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
+@pytest.mark.parametrize("wrong_path", [False, True])
+async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading(wrong_path):
     agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(
@@ -389,7 +390,15 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
     grader = ScriptGrader(
         argv=("sh", "-c", report),
         environment=GRADER_ENVIRONMENT,
-        collect=(VerifierCommand(argv=("sh", "-c", "printf collected > /app/collected.txt")),),
+        collect=(
+            VerifierCommand(
+                argv=(
+                    "sh",
+                    "-c",
+                    "ls /results > /lsroot.txt 2>&1" if wrong_path else "printf collected > /app/collected.txt",
+                )
+            ),
+        ),
         artifacts=(
             VerifierArtifact(source="/app/collected.txt", target="/grader/collected.txt", kind=ArtifactKind.FILE),
             VerifierArtifact(source="/app/out", target="/grader/out", kind=ArtifactKind.DIRECTORY),
@@ -408,6 +417,13 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
         task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
     )
 
+    if wrong_path:
+        # Pilot k2: optional /results probe fails despite valid solver outputs in /app.
+        assert result.failure is GradingFailure.GRADER_EXIT and result.diagnostics["exit_code"] == 2
+        assert result.diagnostics["stderr"] == ""
+        assert (await agent.run(Command(("cat", "/app/out/a.txt")))).stdout == b"a"
+        await agent.close()
+        return
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
     assert result.detail == {
         "collected": "collected",
@@ -416,69 +432,6 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
     }
     collected = await agent.run(Command(("cat", "/app/collected.txt")))
     assert collected.stdout == b"collected"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "exit_code,reason,failure",
-    [
-        (2, ExitReason.EXITED, GradingFailure.GRADER_EXIT),
-        (137, ExitReason.EXITED, GradingFailure.EXECUTION),
-        (-9, ExitReason.EXITED, GradingFailure.EXECUTION),
-        (None, ExitReason.EXITED, GradingFailure.EXECUTION),
-        (None, ExitReason.TIMED_OUT, GradingFailure.TIMEOUT),
-    ],
-)
-async def test_authored_collection_exit_is_distinct_from_infrastructure_failure(exit_code, reason, failure):
-    class Collector:
-        async def run(self, command):
-            return Result(exit_code, b"collect output", b"collect error", False, False, reason)
-
-    task = arithmetic_task(
-        ScriptGrader(
-            argv=("grader",),
-            environment=GRADER_ENVIRONMENT,
-            collect=(VerifierCommand(argv=("collector",)),),
-        )
-    )
-    result = await grade_in_sandbox(
-        task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=Collector()
-    )
-    assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, failure)
-    assert result.diagnostics["exit_code"] == exit_code
-    assert result.diagnostics["stdout"] == "collect output"
-    assert result.diagnostics["stderr"] == "collect error"
-
-
-@pytest.mark.asyncio
-async def test_authored_collector_wrong_path_is_defect_even_when_solver_output_exists():
-    agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
-    try:
-        await agent.run(Command(("sh", "-c", "mkdir -p /app/results; echo '{}' > /app/results/results.json")))
-        task = arithmetic_task(
-            ScriptGrader(
-                argv=("grader",),
-                environment=GRADER_ENVIRONMENT,
-                collect=(VerifierCommand(argv=("sh", "-c", "ls -la /results > /lsroot.txt 2>&1")),),
-                artifacts=(
-                    VerifierArtifact(
-                        source="/results/results.json",
-                        target="/probe/results.json",
-                        kind=ArtifactKind.FILE,
-                        missing=MissingArtifactPolicy.SKIP,
-                    ),
-                ),
-            )
-        )
-        result = await grade_in_sandbox(
-            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
-        )
-        assert result.failure is GradingFailure.GRADER_EXIT
-        assert result.diagnostics["exit_code"] == 2
-        assert result.diagnostics["stderr"] == ""
-        assert (await agent.run(Command(("cat", "/app/results/results.json")))).exit_code == 0
-    finally:
-        await agent.close()
 
 
 @pytest.mark.asyncio
@@ -526,9 +479,15 @@ DETAIL = {"cases": [{"passed": True}]}
         (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
         (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
         (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        # Pilot k2: authored collection exits are distinct from signal/unknown infrastructure failure.
+        (StdoutReward(), "collect", 2, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "collect", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "collect-unknown", None, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
     ],
 )
-async def test_test_command_timeout_is_candidate_failure_but_preparation_failure_is_infra(
+async def test_command_failure_classification_by_phase(
     monkeypatch,
     reward,
     phase,
@@ -538,11 +497,12 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     original_run = VerifyitImageMachine.run
     preparation = ("sh", "-c", "prepare-tests")
     candidate = ("candidate-tests",)
+    collecting = phase.startswith("collect")
 
     async def run(machine, command):
-        if command.argv == (candidate if phase == "candidate" else preparation):
-            reason = ExitReason.TIMED_OUT if exit_code is None else ExitReason.EXITED
-            return Result(exit_code, b"", b"command failure", False, False, reason)
+        if command.argv == (candidate if phase == "candidate" or collecting else preparation):
+            reason = ExitReason.TIMED_OUT if exit_code is None and phase != "collect-unknown" else ExitReason.EXITED
+            return Result(exit_code, b"command output", b"command failure", False, False, reason)
         if command.argv == preparation:
             return Result(0, b"", b"", False, False, ExitReason.EXITED)
         return await original_run(machine, command)
@@ -551,12 +511,23 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     grader = ScriptGrader(
         argv=candidate,
         reward=reward,
+        collect=(VerifierCommand(argv=candidate),) if collecting else (),
         environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("prepare-tests",)}),
     )
     task = arithmetic_task(grader)
-    result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
+    agent = await FixtureImageFactory().create(GRADER_MACHINE) if collecting else None
+    try:
+        result = await grade_in_sandbox(
+            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+        )
+    finally:
+        if agent is not None:
+            await agent.close()
     assert (result.status, result.reward, result.failure) == expected
     assert result.diagnostics["stderr"] == "command failure"
+    assert result.diagnostics["stdout"] == "command output"
+    if collecting:
+        assert result.diagnostics["exit_code"] == exit_code
 
 
 @pytest.mark.asyncio

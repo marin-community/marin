@@ -6,6 +6,7 @@
 import inspect
 import logging
 from asyncio import sleep
+from asyncio import timeout as deadline
 from collections.abc import Awaitable, Callable
 
 from forge.effects.events import Event, Note, Retrying
@@ -41,10 +42,11 @@ def has_cause(error: BaseException, kind: type[BaseException]) -> bool:
     return False
 
 
-async def close_resource(action: Callable[[], Awaitable[None]], notify: Notify) -> None:
+async def close_resource(action: Callable[[], Awaitable[None]], notify: Notify, *, timeout: float | None = None) -> None:
     """Warn about failed cleanup without replacing the result or the primary failure."""
     try:
-        await action()
+        async with deadline(timeout):
+            await action()
     except Exception as error:
         message = f"Cleanup failed: {describe_exception(error)}"
         logging.warning(message, exc_info=error)

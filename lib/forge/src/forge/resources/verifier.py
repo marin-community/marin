@@ -26,12 +26,7 @@ class RoundVerifier:
     async def close(self) -> None:
         machine, self.machine, self.key = self.machine, None, None
         if machine is not None:
-
-            async def close() -> None:
-                async with asyncio.timeout(self.cleanup_timeout):
-                    await machine.close()
-
-            await close_resource(close, self.notify)
+            await close_resource(machine.close, self.notify, timeout=self.cleanup_timeout)
 
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
         selection = spec.verifier_machine

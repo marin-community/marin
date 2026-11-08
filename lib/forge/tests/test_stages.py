@@ -3,10 +3,10 @@
 
 import asyncio
 import json
-from collections.abc import Mapping
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
+from unittest.mock import AsyncMock
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
@@ -23,7 +23,7 @@ from forge.effects.context import Context
 from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold, OutputBudgetExhausted, Restart
 from forge.effects.log import EventLog
-from forge.harness.protocol import Returned, Stopped, StopReason, Submitted, Tool
+from forge.harness.protocol import Returned, Stopped, StopReason, Submitted
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport
 from forge.lowering import machine_backend, requirements
 from forge.model.controls import CONTROL, CONTROLS, Candidate, Control, ControlKind, RewardBand
@@ -56,16 +56,14 @@ from forge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from forge.model.stage import Exit
 from forge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
-from forge.resources.env import FakeEnv
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
-from forge.resources.inference import FakeInference, InferenceClient
+from forge.resources.inference import FakeInference
 from forge.resources.rollouts import RolloutResource, SolverRollout
 from forge.resources.web import FakeWeb
 from forge.stages.author import author
@@ -733,59 +731,42 @@ def test_generation_limited_solver_is_failed_pass_rate_evidence(workpiece: Workp
     assert not isinstance(default_review(workpiece.with_(evidence=(unavailable,)), setup.band, setup.budget), Accept)
 
 
+# Pilot o-w6: each output-exhausted agent gets one fresh-machine retry, then failed evidence.
+@pytest.mark.parametrize("solver", [False, True])
 @pytest.mark.parametrize("failures", [1, 2])
-async def test_output_budget_retries_solver_once_then_records_failed_trial(failures: int) -> None:
-    ctx = Context(log=EventLog())
-    calls = 0
-    success = await CandidateEngine().run_task(rollout_spec(arithmetic_task()), solver_model)
-
-    async def execute(event: SolverRollout) -> GradedRollout:
-        nonlocal calls
-        calls += 1
-        if calls <= failures:
-            raise OutputBudgetExhausted("output budget exhausted")
-        return success
-
-    ctx.handle(SolverRollout, execute)
-    result = await solver_result(ctx, rollout_spec(arithmetic_task()), 0, 0)
-    await ctx.drain()
-    assert calls == 2
-    assert result.cause is None
-    assert result.grade == (
-        success.grade if failures == 1 else GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted")
-    )
-
-
-@pytest.mark.parametrize("failures", [1, 2])
-async def test_output_budget_replaces_adversary_once_and_does_not_hold(workpiece: Workpiece, failures: int) -> None:
-    class Harness(RecordingHarness):
-        calls = 0
-
-        async def run(
-            self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
-        ) -> Exit:
-            self.calls += 1
-            if self.calls <= failures:
-                raise OutputBudgetExhausted("output budget exhausted")
-            return Returned("report", AdversaryReport(()), session)
-
-    harness = Harness(OutputBudgetExhausted("output budget exhausted"))
-    setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
+async def test_output_budget_retry(workpiece: Workpiece, solver: bool, failures: int) -> None:
     ctx = Context(log=EventLog())
     bundle = resources(ctx)
-    result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+    success = await CandidateEngine().run_task(rollout_spec(arithmetic_task()), solver_model)
+    outcome = success if solver else Returned("report", AdversaryReport(()), Conversation((), ()))
+    run = AsyncMock(side_effect=[*[OutputBudgetExhausted("output budget exhausted")] * failures, outcome])
+    if solver:
+        ctx.handle(SolverRollout, run)
+        trial = await solver_result(ctx, rollout_spec(arithmetic_task()), 0, 0)
+        assert trial.cause is None
+        assert trial.grade == (
+            success.grade if failures == 1 else GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "output budget exhausted")
+        )
+    else:
+        assert isinstance(outcome, Returned)
+        harness = RecordingHarness(outcome)
+        harness.run = run
+        setup = replace(config(), adversaries={"finder": harness}, tools={"finder": {}})
+        result = await adversary_result(ctx, workpiece, setup, bundle, rollout_spec(arithmetic_task()), "finder")
+        assert result == AdversaryResult("finder", True, (), ("output budget exhausted",) if failures == 2 else ())
+        assert isinstance(bundle.envs, Environments) and len(bundle.envs.created) == 2
+        assert all(env.closed for env in bundle.envs.created)
+        evidence = ValidationResult(
+            "task",
+            (TrialResult(0, GradeResult(Outcome.GRADED, 0)),),
+            (ControlResult(0, GradeResult(Outcome.GRADED, 1), True),),
+            (result,),
+        )
+        assert not isinstance(
+            default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete
+        )
     await ctx.drain()
-    assert result.completed and not result.findings
-    assert result.reasons == (("output budget exhausted",) if failures == 2 else ())
-    assert isinstance(bundle.envs, Environments)
-    assert len(bundle.envs.created) == 2 and all(env.closed for env in bundle.envs.created)
-    evidence = ValidationResult(
-        "task",
-        (TrialResult(0, GradeResult(Outcome.GRADED, 0)),),
-        (ControlResult(0, GradeResult(Outcome.GRADED, 1), True),),
-        (result,),
-    )
-    assert not isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)
+    assert run.await_count == 2
 
 
 @pytest.mark.parametrize("primary_failure", [False, True])
@@ -801,20 +782,10 @@ async def test_author_cleanup_warns_without_replacing_result(
     ctx.observe(Note, note)
     bundle = resources(ctx)
     assert isinstance(bundle.envs, Environments)
-    original = bundle.envs.create
-
-    async def create(requirements: EnvironmentRequirements) -> FakeEnv:
-        env = await original(requirements)
-        close = env.close
-
-        async def failed_close() -> None:
-            await close()
-            raise RuntimeError("Machine cleanup failed: ['machine_close']")
-
-        monkeypatch.setattr(env, "close", failed_close)
-        return env
-
-    monkeypatch.setattr(bundle.envs, "create", create)
+    # Pilots n/o: cleanup after an authored result must not replace it (or its primary failure).
+    env = await bundle.envs.create(EnvironmentRequirements())
+    monkeypatch.setattr(env, "close", AsyncMock(side_effect=RuntimeError("Machine cleanup failed: ['machine_close']")))
+    monkeypatch.setattr(bundle.envs, "create", AsyncMock(return_value=env))
     outcome = Restart("primary failure") if primary_failure else Stopped(StopReason.FINISHED, Conversation((), ()))
     if primary_failure:
         with pytest.raises(Restart, match="primary failure"):

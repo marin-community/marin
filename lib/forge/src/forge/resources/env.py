@@ -134,6 +134,15 @@ class _RecordedEnv(Env):
         self.closed = True
 
 
+def _machine_issue(error: RuntimeError) -> Hold | Restart | Transient:
+    if isinstance(error, MachineOutputLimitExceeded):
+        return OutputBudgetExhausted("output budget exhausted")
+    if isinstance(error, MachineTerminated):
+        kind = Hold if isinstance(error, MachineResourceExhausted) else Restart
+        return kind(f"environment terminated: {error}")
+    return Transient(str(error))
+
+
 class ShellboxEnv(_RecordedEnv):
     """An owned Shellbox machine; nonzero command exits remain ordinary results."""
 
@@ -151,14 +160,8 @@ class ShellboxEnv(_RecordedEnv):
             yield
         except IsADirectoryError as error:
             raise IsADirectoryError(errno.EISDIR, "Is a directory", str(path)) from error
-        except MachineOutputLimitExceeded as error:
-            raise OutputBudgetExhausted("output budget exhausted") from error
-        except MachineResourceExhausted as error:
-            raise Hold(f"environment terminated: {error}") from error
-        except MachineTerminated as error:
-            raise Restart(f"environment terminated: {error}") from error
-        except (ExecSetupFailed, MachineCancelled) as error:
-            raise Transient(str(error)) from error
+        except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
+            raise _machine_issue(error) from error
         except (RuntimeError, SimulationError) as error:
             detail = str(error)
             if "is a directory" in detail.lower():
@@ -240,14 +243,8 @@ class ShellboxEnvFactory(EnvFactory):
             machine = await owned.enter_async_context(
                 prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
             )
-        except MachineOutputLimitExceeded as error:
-            raise OutputBudgetExhausted("output budget exhausted") from error
-        except MachineResourceExhausted as error:
-            raise Hold(f"environment terminated: {error}") from error
-        except MachineTerminated as error:
-            raise Restart(f"environment terminated: {error}") from error
-        except (ExecSetupFailed, MachineCancelled) as error:
-            raise Transient(str(error)) from error
+        except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
+            raise _machine_issue(error) from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = digest((requirements, self.runtime))

@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -450,21 +451,32 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(mon
         (TaskState.FAILED, "PodDeleted: pod was deleted while the attempt was starting", MachineTerminated),
         (TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted", MachineTerminated),
         (TaskState.KILLED, "Parent job terminated", MachineCancelled),
+        (TaskState.PENDING, "Controller is shutting down", MachineUnavailable),
     ],
 )
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path, state, reason, error_type):
     task = LocalTask(state)
-    task.status = lambda: SimpleNamespace(state=state, error_message=reason)
+    # Pilots k/l: PodDeleted; m: parent killed; n/o: gap plus failed cleanup.
+    unavailable = state is TaskState.PENDING
+    task.status = (
+        Mock(side_effect=ConnectError(Code.UNAVAILABLE, reason))
+        if unavailable
+        else Mock(return_value=SimpleNamespace(state=state, error_message=reason))
+    )
     job = LocalJob(task)
+    job.cancel = Mock(wraps=job.cancel, side_effect=RuntimeError("cancel unavailable") if unavailable else None)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
 
-    with pytest.raises(error_type, match=reason.lower() if state is TaskState.KILLED else reason):
+    with pytest.raises(error_type, match=reason.lower() if state is TaskState.KILLED else reason) as caught:
         asyncio.run(factory.create(spec))
-    assert job.cancelled
+    assert job.cancel.called
+    if unavailable:
+        assert caught.value.__cause__ is task.status.side_effect
+        assert any("cancel unavailable" in note for note in caught.value.__notes__)
 
 
 def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> None:
@@ -677,26 +689,41 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+# Pilots k/k2/l: old controllers wrap the server's exec failure in ValueError text.
 @pytest.mark.parametrize(
-    "message,kind",
+    "message,kind,detail",
     [
-        ("Websocket setup failed (status 0): handshake refused", ExecSetupFailed),
-        ("'NoneType' object has no attribute 'decode'", ExecSetupFailed),
-        ("Non-integer exec status: invalid literal for int()", MachineTerminated),
-        ("invalid literal for int() with base 10: malformed envelope", MachineTerminated),
-        ("unexpected adapter bug", RuntimeError),
-        ("invalid literal for int(): error executing command in container: container not found", MachineTerminated),
+        ("Websocket setup failed (status 0): handshake refused", ExecSetupFailed, None),
+        ("'NoneType' object has no attribute 'decode'", ExecSetupFailed, None),
+        ("Non-integer exec status: invalid literal for int()", MachineTerminated, None),
+        ("invalid literal for int() with base 10: malformed envelope", MachineTerminated, None),
+        ("unexpected adapter bug", RuntimeError, None),
+        (
+            "invalid literal for int(): error executing command in container: container not found",
+            MachineTerminated,
+            None,
+        ),
+    ]
+    + [
+        (prefix + "invalid literal for int() with base 10: " + repr(detail), MachineTerminated, detail)
+        for prefix in ("", "Non-integer exec status: ")
+        for detail in (
+            'Internal error occurred: failed to start exec "dead"',
+            "Internal error: container's runtime failed\nsecond line",
+        )
     ],
 )
-def test_controller_wire_errors_are_classified_at_shellbox_boundary(tmp_path: Path, message: str, kind) -> None:
-    class Rpc:
-        def exec_in_container(self, request, timeout_ms):
-            return SimpleNamespace(exit_code=0, stdout="", stderr="", error=message)
-
-    machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
-    with pytest.raises(kind, match="Iris exec failed") as caught:
-        asyncio.run(machine.run(Command(("true",))))
+def test_controller_wire_errors(tmp_path, message, kind, detail):
+    rpc = SimpleNamespace(
+        exec_in_container=Mock(return_value=SimpleNamespace(exit_code=0, stdout="", stderr="", error=message))
+    )
+    machine, _ = local_machine(tmp_path, rpc, LocalTask(TaskState.RUNNING))
+    with pytest.raises(kind) as caught:
+        machine._exec_sync(["true"])
     assert type(caught.value) is kind
+    assert str(caught.value) == "Iris exec failed: " + (message if detail is None else detail)
+    if detail is not None:
+        assert str(caught.value.__cause__) == str(caught.value)
 
 
 @pytest.mark.parametrize("script,count", [("true", 4), ("printf out", 5), ("printf out; printf err >&2", 6)])
@@ -727,16 +754,14 @@ def test_command_capture_exec_rpc_count(tmp_path: Path, script: str, count: int)
         (Code.INTERNAL, "Cannot submit job: parent job /user/pilot has terminated (state=JOB_STATE_KILLED)", False),
     ],
 )
+# Pilot m-w4: only the parent-terminated submit response is cancellation.
 def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, message, cancelled):
     error = ConnectError(code, message)
     cleaned = []
     client = RecordingClient()
     endpoint = LocalEndpoint()
 
-    def submit(**kwargs):
-        raise error
-
-    client.submit = submit
+    client.submit = Mock(side_effect=error)
     client.shutdown = lambda: cleaned.append("client")
     endpoint.close = lambda: cleaned.append("endpoint")
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: endpoint)
@@ -753,85 +778,22 @@ def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, 
         assert caught.value is error
 
 
-@pytest.mark.parametrize("wrapper", ["", "Non-integer exec status: "])
-@pytest.mark.parametrize(
-    "detail",
-    [
-        'Internal error occurred: error executing command in container: failed to start exec "dead"',
-        "Internal error occurred: container's runtime failed\nsecond line",
-    ],
-)
-def test_noninteger_exec_status_preserves_server_text(tmp_path, wrapper, detail):
-    class Rpc:
-        def exec_in_container(self, request, timeout_ms):
-            return SimpleNamespace(
-                exit_code=0,
-                stdout="",
-                stderr="",
-                error=wrapper + "invalid literal for int() with base 10: " + repr(detail),
-            )
-
-    machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
-    with pytest.raises(MachineTerminated) as caught:
-        machine._exec_sync(["true"])
-    assert str(caught.value) == "Iris exec failed: " + detail
-    assert str(caught.value.__cause__) == str(caught.value)
-
-
-@pytest.mark.parametrize("exec_call,expected_calls", [(False, 1), (True, 2)])
+# Pilot n-w5: existing submit/status retry must not acquire a second wait budget.
+@pytest.mark.parametrize("exec_call", [False, True])
+@pytest.mark.parametrize("attempts", [2, 240])
 @pytest.mark.parametrize(
     "error", [ConnectError(Code.UNAVAILABLE, "Controller is shutting down"), ConnectionRefusedError("refused")]
 )
-def test_unavailability_budget_exhaustion_is_typed_without_stacking(monkeypatch, exec_call, expected_calls, error):
-    monkeypatch.setattr(iris_backend, "DEFAULT_RETRY_MAX_ATTEMPTS", 2)
-    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
-    calls = 0
-
-    def call():
-        nonlocal calls
-        calls += 1
-        raise error
-
-    with pytest.raises(MachineUnavailable) as caught:
-        iris_backend._controller_call(call, exec_call=exec_call)
-    assert caught.value.__cause__ is error
-    assert calls == expected_calls
-
-
-def test_exec_unavailability_uses_one_elapsed_wait_budget(monkeypatch):
+def test_controller_wait_budget(monkeypatch, exec_call, attempts, error):
     clock = [0.0]
+    monkeypatch.setattr(iris_backend, "DEFAULT_RETRY_MAX_ATTEMPTS", attempts)
     monkeypatch.setattr(iris_backend.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(iris_backend.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     monkeypatch.setattr(iris_backend, "DEFAULT_RETRY_MAX_ELAPSED", 0.003)
-    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.002, maximum=0.002))
-
-    def unavailable():
-        raise ConnectError(Code.UNAVAILABLE, "Controller is shutting down")
-
-    with pytest.raises(MachineUnavailable):
-        iris_backend._controller_call(unavailable, exec_call=True)
-    assert clock[0] == 0.003
-
-
-def test_startup_cleanup_cannot_replace_controller_unavailability(monkeypatch, tmp_path):
-    task = LocalTask(TaskState.PENDING)
-    error = ConnectError(Code.UNAVAILABLE, "Controller is shutting down")
-
-    def status():
-        raise error
-
-    def cancel():
-        raise RuntimeError("cancel unavailable")
-
-    task.status = status
-    job = LocalJob(task)
-    job.cancel = cancel
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.002, maximum=0.002, jitter=0))
+    call = Mock(side_effect=error)
     with pytest.raises(MachineUnavailable) as caught:
-        asyncio.run(
-            IrisMachineFactory(controller_url="http://controller").create(MachineSpec(RegistryImage("ubuntu:24.04")))
-        )
+        iris_backend._controller_call(call, exec_call=exec_call)
     assert caught.value.__cause__ is error
-    assert "cancel unavailable" in caught.value.__notes__[0]
+    assert call.call_count == (min(attempts, 3) if exec_call else 1)
+    assert clock[0] == ((0.002 if attempts == 2 else 0.003) if exec_call else 0)
