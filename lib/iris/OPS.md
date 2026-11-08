@@ -1006,6 +1006,40 @@ An established BGP session that advertises the public VIP, combined with an
 external TCP timeout, requires a CoreWeave route-export escalation. Restarting
 Iris or Traefik does not repair that layer.
 
+### CoreWeave root filesystem full
+
+`NodeRuntimeFilesystemAlmostFull` alerts when a node's `/` or separately mounted
+`/tmp` filesystem has less than 5% available space for five minutes. The node
+agent publishes `node_filesystem_available_bytes` and
+`node_filesystem_total_bytes` with a `mountpoint` attribute. These are separate
+from `node_disk_*`, which normally measures the large `/mnt/local` NVMe disk.
+Deploy the updated node agents as well as Grafana to enable the alert. Only
+samples from the last five minutes participate; missing samples do not establish
+disk pressure. Finelog fleet and relay alerts cover query-path failures.
+
+CoreWeave's root filesystem can be a 15 GiB RAM disk. Filling it can prevent
+container execs with `write /tmp/runc-process…: no space left on device` while
+the node remains Ready, DiskPressure stays False, and `/mnt/local` has space.
+Check both bytes and inodes. When exec cannot start, run a diagnostic container
+directly through the node-debug path rather than execing into a Pod:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
+  debug node/<node> --image=busybox:1.37 --profile=sysadmin --attach=false -- \
+  sh -c 'df -h /host /host/tmp /host/mnt/local; df -i /host /host/tmp; du -x -h -d 2 /host/var/log | sort -h | tail -20'
+kubectl --kubeconfig <kubeconfig> --context <context> -n iris logs <debug-pod>
+kubectl --kubeconfig <kubeconfig> --context <context> -n iris delete pod <debug-pod>
+```
+
+On `gb960a0`, `/var/log/runsc` consumed 8.2 GiB of the full root disk while
+`/tmp` used only 32 KiB. The runtime's shim and gVisor logs persisted in thousands
+of per-runtime directories after their runtime objects were gone. Inspect
+`/etc/containerd/runsc.toml`, log sizes, and the current `crictl pods` and
+`crictl ps -a` inventories before choosing retention or cleanup. Diagnostic
+containers mount host filesystems; keep the commands read-only and obtain
+approval before removing host data or changing the runtime. See the
+[incident record](https://marina.oa.dev/echo/wiki/947).
+
 ### CoreWeave kernel deadlock pending reboot
 
 `CoreWeaveNodeKernelDeadlock` means CoreWeave reported the structured node
