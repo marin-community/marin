@@ -37,7 +37,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_act
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from levanter.trainer_state import FrozenParameterStorage, cast_params_by_trainability, trainables_only
+from levanter.trainer_state import trainables_only
 from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
@@ -111,22 +111,16 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
-def preserve_hf_runtime_settings(
-    reloaded: LmConfig, requested: LmConfig, compute_dtype_overrides: dict[str, str] | None
-) -> LmConfig:
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
     """Reapply the requested Snowball runtime settings after an HF config reload.
 
-    The HF config is authoritative for every architecture field. The FP32 router dot,
-    and activations flags, the MoE implementation and the MoE capacity factor are
-    not in HF metadata, so they are copied from the requested config. The requested
-    reference checkpoint and tokenizer are kept too.
+    HF metadata supplies architecture fields. Keep the requested runtime settings,
+    reference checkpoint, and tokenizer.
     """
     if not isinstance(requested, SnowballConfig):
         return reloaded
     if not isinstance(reloaded, SnowballConfig):
         raise ValueError("HF reload changed the Snowball model type")
-    if requested.router_dot_fp32 and compute_dtype_overrides != {"router_bias": "float32"}:
-        raise ValueError("FP32 router dot requires native FP32 router biases after HF reload")
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
@@ -148,7 +142,6 @@ def _load_lm_model_from_configured_source(
     parameter_axis_mapping,
     trainer: Trainer,
 ) -> LmHeadModel:
-    frozen_storage = config.trainer.frozen_parameter_storage
     if config.initialize_from_hf:
         assert converter is not None
         model = converter.load_pretrained(
@@ -157,10 +150,10 @@ def _load_lm_model_from_configured_source(
             # Passing None here would reload a second time and discard those settings.
             config=config.model,
             axis_mapping=parameter_axis_mapping,
-            dtype=None if frozen_storage == FrozenParameterStorage.NATIVE else trainer.mp.compute_dtype,
+            # Load fp32 fields at their stored dtype; casting the whole model to compute dtype here would round them.
+            dtype=None if config.trainer.fp32_fields else trainer.mp.compute_dtype,
         )
-        if frozen_storage == FrozenParameterStorage.COMPUTE:
-            model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+        model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
         config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
     ):
@@ -171,27 +164,20 @@ def _load_lm_model_from_configured_source(
         model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
         model = load_checkpoint(model, checkpoint_path, subpath="model", axis_mapping=parameter_axis_mapping)
         model = hax.shard(model, parameter_axis_mapping)
-        if frozen_storage == FrozenParameterStorage.COMPUTE:
-            model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+        model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     else:
         model = config.model.build(Vocab, key=model_key)
 
     if not isinstance(config.adapter, NoAdaptorConfig):
         model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
 
-    if frozen_storage == FrozenParameterStorage.NATIVE:
-        cast_model = functools.partial(
-            cast_params_by_trainability,
-            mp=trainer.mp,
-            is_trainable=config.adapter.trainable_filter(model),
-            frozen_parameter_storage=frozen_storage,
-        )
-        model = named_jit(cast_model, parameter_axis_mapping)(model)
-
     return model
 
 
 def main(config: TrainLmConfig):
+    if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
+        if "router_bias" not in config.trainer.fp32_fields:
+            raise ValueError("FP32 router dot requires trainer.fp32_fields to include router_bias")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
@@ -236,7 +222,6 @@ def main(config: TrainLmConfig):
             config.model = preserve_hf_runtime_settings(
                 converter.config_from_hf_config(converter.default_hf_config),
                 config.model,
-                config.trainer.compute_dtype_overrides,
             )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
@@ -388,7 +373,7 @@ def main(config: TrainLmConfig):
                 trainer.device_mesh,
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.compute_policy,
+                mp=trainer.mp,
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
@@ -446,14 +431,14 @@ def main(config: TrainLmConfig):
             eval_harness = config.eval_harness
             trainer.add_hook(
                 levanter.eval_harness.lm_eval_harness(
-                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, config.trainer.compute_policy
+                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
                 ),
                 every=config.eval_harness_steps,
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
-            model = trainer.compute_model(model)
+            model = trainer.mp.cast_to_compute(model)
             activations, _ = split_activations(
                 model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
             )
