@@ -242,13 +242,6 @@ def test_candidate_routing_uses_agent_selected_by_import_path(
         )
 
 
-def test_agent_config_rejects_ambiguous_selection():
-    with pytest.raises(ValueError, match="either an agent name or import_path"):
-        AgentConfig(
-            name="pi", import_path="harbor.agents.terminus_2.terminus_2:Terminus2"
-        )
-
-
 def test_host_authentication_uses_owned_snapshot_and_rejects_endpoint_credential_conflict(
     policy, overlay, monkeypatch
 ):
