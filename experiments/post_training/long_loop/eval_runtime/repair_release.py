@@ -20,6 +20,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name, parse_wheel_filename
 from rolloutengine.models import TaskRolloutSpec
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.long_loop.eval_runtime.artifacts import publish
 from experiments.post_training.long_loop.eval_runtime.profile import DATASET, POLICY_INDEX, SOURCE_REVISION
@@ -41,11 +42,37 @@ NLTK_RESOURCES = (
 )
 
 
+def released_task(serialized: str) -> TaskSpec:
+    """Convert this frozen release's 0.28 script/Harbor tasks to schema 0.30.
+
+    The schema change adds labels and script judge/empty-output fields. These
+    tasks have no declared judge service; retain their existing script bindings
+    and the prior zero-score behavior for empty submissions. No prompts, source
+    identities, resources or grading programs change.
+    """
+    task = json.loads(serialized)
+    if task["schema_version"] != "0.28" or task["grader"]["kind"] not in ("script", "none"):
+        raise ValueError("Expected the pinned Micro210 schema-0.28 script/Harbor release")
+    task["schema_version"] = "0.30"
+    task["labels"] = {}
+    if task["grader"]["kind"] == "script":
+        task["grader"].update(empty_output="zero", judge=None)
+    return TaskSpec.model_validate(task)
+
+
+def released_rollout(row: dict) -> TaskRolloutSpec:
+    payload = json.loads(row["task_rollout_spec"])
+    if payload["task"] != json.loads(row["task_spec"]):
+        raise ValueError("Published task and rollout task disagree")
+    payload["task"] = released_task(row["task_spec"]).model_dump(mode="json")
+    return TaskRolloutSpec.model_validate(payload)
+
+
 def retarget_evalchemy(output: Path) -> None:
     """Keep evaluator code identical while replacing its Git dependency with the pinned wheel."""
     parquet = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=SOURCE_REVISION)
     row = next(row for row in pq.read_table(parquet).to_pylist() if row["benchmark"] == "math500")
-    rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+    rollout = released_rollout(row)
     requirements = rollout.task.grader.environment.package_spec.pypi_packages
     source = next(Requirement(value).url for value in requirements if Requirement(value).name == "evalchemy")
     with tempfile.TemporaryDirectory() as temporary:
@@ -105,9 +132,9 @@ def build_wheels():
 
 
 def repaired_row(row: dict, wheel_requirements: dict[str, str]) -> dict:
-    rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+    rollout = released_rollout(row)
     if rollout.verifier_machine is None or rollout.verifier_machine.backend != "local":
-        return row
+        return {**row, "task_spec": rollout.task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()}
     environment = rollout.task.grader.environment
     packages = environment.package_spec
     requirements = []
@@ -184,7 +211,7 @@ def export_repaired(output: Path, wheels_revision: str) -> None:
             if repaired.num_rows != expected:
                 raise ValueError(f"Unexpected {dataset} row count")
             for before, after in zip(original.to_pylist(), repaired.to_pylist(), strict=True):
-                before_task = TaskRolloutSpec.model_validate_json(before["task_rollout_spec"]).task
+                before_task = released_rollout(before).task
                 after_task = TaskRolloutSpec.model_validate_json(after["task_rollout_spec"]).task
                 if before_task.model_copy(update={"grader": after_task.grader}) != after_task:
                     raise ValueError(f"Repair changed task content: {before['task_id']}")

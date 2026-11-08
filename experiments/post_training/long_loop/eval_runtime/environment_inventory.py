@@ -19,7 +19,6 @@ from harbor.utils.container_cache import environment_dir_hash_truncated
 from huggingface_hub import hf_hub_download
 from rigging.config_discovery import find_project_root
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
-from taskcompendium.models import TaskSpec
 
 from experiments.post_training.long_loop.eval_runtime.artifacts import publish
 from experiments.post_training.long_loop.eval_runtime.profile import (
@@ -28,6 +27,7 @@ from experiments.post_training.long_loop.eval_runtime.profile import (
     POLICY_INDEX_REVISION,
     REVISION,
 )
+from experiments.post_training.long_loop.eval_runtime.repair_release import released_task
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
     for row in rows:
         if row["agent"] != "pi":
             continue
-        task = TaskSpec.model_validate_json(row["task_spec"])
+        task = released_task(row["task_spec"])
         directory = Path(temporary) / str(row["selection_order"])
         importer.restore_harbor_trial_task(task, directory)
         config = importer.TaskConfig.model_validate_toml((directory / "task.toml").read_text())
