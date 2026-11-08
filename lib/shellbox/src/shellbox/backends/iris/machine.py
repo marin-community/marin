@@ -462,6 +462,9 @@ class IrisMachineFactory:
     with secrets must be reserved for trusted private grading, never actor jobs.
     """
 
+    fixed_execution_user = True
+    """Exec uses the container user, including commands that request setup as root."""
+
     backend: Backend = Backend.GVISOR
 
     def __init__(

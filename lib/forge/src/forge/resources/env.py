@@ -4,6 +4,7 @@
 """Single-writer environments with replayable command and binary-file effects."""
 
 import errno
+import shlex
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -11,9 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Protocol, override
+from uuid import uuid4
 
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
+from shellbox.backends.iris.machine import IrisMachine
 from shellbox.machine import (
     DEFAULT_WORKDIR,
     Command,
@@ -29,6 +32,7 @@ from shellbox.machine import (
 )
 from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.runtime.staging import StagedFile, write_archive
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
 from forge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
@@ -57,6 +61,11 @@ class WriteFile(Event[None]):
 
 
 @dataclass(frozen=True, slots=True)
+class WriteFiles(Event[None]):
+    files: tuple[tuple[PurePosixPath, bytes], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ReadFile(Event[bytes]):
     path: PurePosixPath
     offset: int = 0
@@ -71,6 +80,7 @@ class Env(Protocol):
     async def run(self, cmd: str, *, timeout: float) -> CommandResult: ...
     async def read(self, path: PurePosixPath, *, offset: int = 0, limit: int | None = None) -> bytes: ...
     async def write(self, path: PurePosixPath, data: bytes) -> None: ...
+    async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None: ...
     async def restore(self, events: Sequence[Mutation]) -> None:
         """Replay mutations, excluding ReadFile; mismatch Notes leave the log authoritative.
 
@@ -113,7 +123,9 @@ class _RecordedEnv(Env):
             if expected != current:
                 raise Hold(f"Restore step {index}: expected {expected}, found {current.digest}")
             request = resolved.request
-            if isinstance(request, WriteFile):
+            if isinstance(request, WriteFiles):
+                await self.write_many(request.files)
+            elif isinstance(request, WriteFile):
                 await self.write(request.path, request.data)
             elif isinstance(request, RunCommand) and isinstance(resolved.value, CommandResult):
                 result = await self.run(request.cmd, timeout=request.timeout)
@@ -124,6 +136,11 @@ class _RecordedEnv(Env):
                     self._record_command(request.cmd, request.timeout, resolved.value)
             else:
                 raise Hold(f"Restore step {index} is not a resolved environment mutation")
+
+    @override
+    async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None:
+        for path, data in files:
+            await self.write(path, data)
 
     def _check_open(self) -> None:
         if self.closed:
@@ -222,6 +239,37 @@ class ShellboxEnv(_RecordedEnv):
         self._record_write(path, data)
 
     @override
+    async def write_many(self, files: Sequence[tuple[PurePosixPath, bytes]]) -> None:
+        # Small/native writes are cheaper individually. Iris pays two RPCs per small file.
+        if len(files) < 4 or not isinstance(self.machine, IrisMachine):
+            await super().write_many(files)
+            return
+        remote = f"/tmp/forge-hydration-{uuid4().hex}"
+        archive = remote + ".tar"
+        commands = [shlex.join(("mkdir", "-p", remote)), shlex.join(("tar", "-xf", archive, "-C", remote))]
+        for index, (path, _) in enumerate(files):
+            target = self.workdir / path
+            commands.extend(
+                (
+                    shlex.join(("mkdir", "-p", str(target.parent))),
+                    f"cat {shlex.quote(remote + '/' + str(index))} > {shlex.quote(str(target))}",
+                )
+            )
+        # Ordered redirection retains duplicate-write, symlink and existing-mode semantics of Iris upload.
+        cleanup = shlex.join(("rm", "-rf", remote, archive))
+        script = " && ".join(commands) + f'; status=$?; {cleanup}; exit "$status"'
+        async with self._operation():
+            with TemporaryDirectory() as directory:
+                source = Path(directory) / "files.tar"
+                write_archive(source, [StagedFile(str(index), data) for index, (_, data) in enumerate(files)], [])
+                await self.machine.upload(source, archive)
+                result = await self.machine.run(Command(("sh", "-c", script), cwd="/"))
+                if result.exit_code != 0:
+                    raise RuntimeError(f"Could not hydrate files: {result.stderr.decode(errors='replace')}")
+        for path, data in files:
+            self._record_write(path, data)
+
+    @override
     async def close(self) -> None:
         await super().close()
         await self.owned.aclose()
@@ -300,6 +348,10 @@ async def run_command(event: RunCommand, env: Env, *, notify: Notify) -> Command
 
 async def write_file(event: WriteFile, env: Env, *, notify: Notify) -> None:
     await retry_effect(event, lambda: env.write(event.path, event.data), notify)
+
+
+async def write_files(event: WriteFiles, env: Env, *, notify: Notify) -> None:
+    await retry_effect(event, lambda: env.write_many(event.files), notify)
 
 
 async def read_file(event: ReadFile, env: Env, *, notify: Notify) -> bytes:

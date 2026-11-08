@@ -22,7 +22,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -342,8 +342,17 @@ async def _script_reward(
     if isinstance(grader.reward, FileReward):
         paths = tuple(file.path for file in grader.reward.files)
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
-        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+        mkdir = "mkdir -p " + " ".join(f'"${{{index}}}"' for index in range(1, len(directories) + 1))
+        remove = "rm -f " + " ".join(
+            f'"${{{index}}}"' for index in range(len(directories) + 1, len(directories) + len(paths) + 1)
+        )
+        await _run_checked(
+            machine,
+            Command(
+                ("sh", "-c", mkdir + " && " + remove, "reward-files", *directories, *paths), timeout=preparation_timeout
+            ),
+            "Cannot prepare reward files",
+        )
     started = time.monotonic()
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
@@ -633,6 +642,8 @@ async def _grade_staged(
                     grading.limit,
                     preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
+                    combine_workspace=factory.backend is Backend.LOCAL
+                    or getattr(factory, "fixed_execution_user", False),
                 )
             finally:
                 await machine.close()
@@ -653,24 +664,30 @@ async def _grade_on(
     *,
     preparation_timeout: float | None,
     user: str | None,
+    combine_workspace: bool = False,
 ) -> GradeResult:
     await machine.upload(archive_path, STAGING_ARCHIVE)
+    # Docker/QEMU can use root for staging and a different execution user for workspace creation.
+    # Iris cannot switch users; local setup uses the host user, so those can batch all three steps.
+    script = 'tar -xf "$1" -C "$2" && rm -f "$1"'
+    if combine_workspace:
+        script += ' && mkdir -p "$3"'
     await _run_checked(
         machine,
-        Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=preparation_timeout, user=user),
-        "Could not unpack grading inputs",
+        Command(
+            ("sh", "-c", script, "grading-inputs", STAGING_ARCHIVE, "/", workspace),
+            cwd="/",
+            timeout=preparation_timeout,
+            user=user,
+        ),
+        "Could not prepare grading inputs",
     )
-    # The archive holds references and tests; protecting /tests does not protect a copy in /tmp.
-    await _run_checked(
-        machine,
-        Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=preparation_timeout, user=user),
-        "Could not remove the grading archive",
-    )
-    await _run_checked(
-        machine,
-        Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
-        "Could not initialize the grading workspace",
-    )
+    if not combine_workspace:
+        await _run_checked(
+            machine,
+            Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
+            "Could not initialize the grading workspace",
+        )
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
