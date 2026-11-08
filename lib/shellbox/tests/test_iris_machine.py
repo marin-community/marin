@@ -699,17 +699,21 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
     [
         ("Websocket setup failed (status 0): handshake refused", ExecSetupFailed, None),
         ("'NoneType' object has no attribute 'decode'", ExecSetupFailed, None),
-        ("Non-integer exec status: invalid literal for int()", MachineTerminated, None),
-        ("invalid literal for int() with base 10: malformed envelope", MachineTerminated, None),
+        ("Non-integer exec status: invalid literal for int()", RuntimeError, None),
+        ("invalid literal for int() with base 10: malformed envelope", RuntimeError, None),
         ("unexpected adapter bug", RuntimeError, None),
         (
             "invalid literal for int(): error executing command in container: container not found",
-            MachineTerminated,
+            RuntimeError,
             None,
         ),
     ]
     + [
-        (prefix + "invalid literal for int() with base 10: " + repr(detail), MachineTerminated, detail)
+        (
+            prefix + "invalid literal for int() with base 10: " + repr(detail),
+            MachineUnavailable if detail.startswith("Internal error occurred") else RuntimeError,
+            detail,
+        )
         for prefix in ("", "Non-integer exec status: ")
         for detail in (
             'Internal error occurred: failed to start exec "dead"',
@@ -718,16 +722,21 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
     ],
 )
 def test_controller_wire_errors(tmp_path, message, kind, detail):
-    rpc = SimpleNamespace(
-        exec_in_container=Mock(return_value=SimpleNamespace(exit_code=0, stdout="", stderr="", error=message))
-    )
-    machine, _ = local_machine(tmp_path, rpc, LocalTask(TaskState.RUNNING))
-    with pytest.raises(kind) as caught:
-        machine._exec_sync(["true"])
-    assert type(caught.value) is kind
-    assert str(caught.value) == "Iris exec failed: " + (message if detail is None else detail)
-    if detail is not None:
-        assert str(caught.value.__cause__) == str(caught.value)
+    for field in (("error", "stderr") if kind is MachineUnavailable else ("error",)):
+        rpc = SimpleNamespace(
+            exec_in_container=Mock(
+                return_value=SimpleNamespace(
+                    **{"exit_code": int(field == "stderr"), "stdout": "", "stderr": "", "error": "", field: message}
+                )
+            )
+        )
+        machine, _ = local_machine(tmp_path, rpc, LocalTask(TaskState.RUNNING))
+        with pytest.raises(kind) as caught:
+            machine._exec_sync(["true"])
+        assert type(caught.value) is kind
+        assert str(caught.value) == "Iris exec failed: " + (message if detail is None else detail)
+        if kind is MachineUnavailable:
+            assert str(caught.value.__cause__) == str(caught.value)
 
 
 @pytest.mark.parametrize("script,count", [("true", 4), ("printf out", 5), ("printf out; printf err >&2", 6)])
@@ -783,6 +792,24 @@ def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, 
 
 
 # Pilot n-w5: existing submit/status retry must not acquire a second wait budget.
+def test_sandbox_collision_retry_mints_a_fresh_id(monkeypatch):
+    client, names = RecordingClient(), []
+
+    def submit(**kwargs):
+        names.append(kwargs["name"])
+        raise ConnectError(Code.ALREADY_EXISTS, "Job already exists and is still running")
+
+    client.submit = submit
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    for _ in range(2):
+        with pytest.raises(MachineUnavailable, match="fresh sandbox id"):
+            asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
+    assert len(set(names)) == 2
+
+
 @pytest.mark.parametrize("exec_call", [False, True])
 @pytest.mark.parametrize("attempts", [2, 240])
 @pytest.mark.parametrize(
