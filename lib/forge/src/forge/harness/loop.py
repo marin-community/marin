@@ -53,7 +53,8 @@ class AgenticHarness(Harness):
     async def run(
         self, ctx: Context, session: Conversation, client: InferenceClient, tools: Mapping[str, Tool[object]]
     ) -> Exit:
-        prompt_tokens, empty_completions, turns = 0, 0, 0
+        prompt_tokens, empty_completions = 0, 0
+        turns = sum(message.role == Role.ASSISTANT for message in session.messages)
         previous: InferenceRequest | None = None
         consumed = 0
         schemas = tuple(tool.schema for tool in tools.values())

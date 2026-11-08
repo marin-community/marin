@@ -370,12 +370,20 @@ async def test_provider_context_overflow_preserves_the_last_completed_conversati
     )
     ctx = Context(log=EventLog())
     environment(ctx)
+    resumed = Conversation(
+        (
+            Message(Role.USER, "build"),
+            Message(Role.ASSISTANT, "", (ToolCall("prior", "validate", "{}"),)),
+            Message(Role.TOOL, "validated", tool_call_id="prior"),
+        ),
+        (),
+    )
     result = await AgenticHarness(262144, LLMPolicy(), "use tools", 20000).run(
-        ctx, Conversation((Message(Role.USER, "build"),), ()), client, {"shell": ShellTool(30, 120)}
+        ctx, resumed, client, {"shell": ShellTool(30, 120)}
     )
     await ctx.drain()
     assert isinstance(result, Stopped) and result.reason == StopReason.CONTEXT_LIMIT
-    assert result.turns == 2
+    assert result.turns == 3
     assert "requested 383788 tokens" in result.summary
     assert result.session.messages == client.requests[1].conversation
     assert result.session.messages[-1].role == "tool"
