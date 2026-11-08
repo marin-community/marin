@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import override
 
 import pytest
+from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.machines import _machine_spec
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from rolloutengine.validation import InvalidTaskSpec
@@ -24,6 +25,7 @@ from taskcompendium.models import (
     ShellToolBinding,
     StdoutReward,
 )
+from verifyit.spec import JudgeSpec
 
 from forge.effects.context import Context
 from forge.effects.log import EventLog
@@ -129,7 +131,9 @@ def test_shellsim_binding_omits_host_cpu_allocation() -> None:
 
 
 @pytest.mark.parametrize("tool_type", [SubmitTool, ValidateTool])
-@pytest.mark.parametrize("defect", ["shell", "final_action"])
+# Full S 20261108 d01.discrete.graph-analysis/06 (also cardinality-analysis/04 and optimization.formulation/04):
+# a missing judge reference must return author feedback during parsing and programmatic preflight.
+@pytest.mark.parametrize("defect", ["shell", "final_action", "reference", "blank_reference", "checklist"])
 async def test_authored_interface_errors_return_tool_feedback(
     tool_type: type[SubmitTool] | type[ValidateTool], defect: str
 ) -> None:
@@ -153,8 +157,18 @@ async def test_authored_interface_errors_return_tool_feedback(
             tool_bindings={"Bash": ShellToolBinding(command_parameter="cmd")},
         )
         message = "Shell tools require exactly one required string argument and no additional properties"
+    if defect in {"reference", "blank_reference", "checklist"}:
+        judge = JudgeSpec(
+            rubric="checklist" if defect == "checklist" else "reference",
+            references=(" ",) if defect == "blank_reference" else (),
+        )
+        grader = ScriptGrader(argv=("true",), environment=requirements(image=None)).model_copy(update={"judge": judge})
+        task = arithmetic_task().model_copy(update={"grader": grader})
+        message = "needs non-empty criteria" if defect == "checklist" else "needs non-empty reference answers"
     settings = LoweringSettings(GRADING_MACHINE, GRADING_MACHINE, rollout_limits())
     factories = {"shellsim": AvailableFactory(Backend.SHELLSIM)}
+    with pytest.raises(InvalidTaskSpec, match=message):
+        ShellHarness(command_timeout=None).check(task, settings.limits)
     with pytest.raises(InvalidTaskSpec, match=message):
         lower_with_settings(task, settings, factories)
     controls = (Control(Candidate("12"), RewardBand(Outcome.GRADED, 1), ControlKind.POSITIVE),)

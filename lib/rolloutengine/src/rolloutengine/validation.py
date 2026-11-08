@@ -11,13 +11,17 @@ from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
     EnvironmentRequirements,
+    Grader,
     NoGrader,
     ScriptGrader,
     VerifyitGrader,
     grades_with_judge,
+    judge_spec,
     require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_judge import validate_judge_spec
 
 from rolloutengine.grading import judge_connection
 from rolloutengine.machines import _machine_spec
@@ -30,6 +34,16 @@ class InvalidTaskSpec(ValueError):
     """Authored task requirements are inconsistent or unsupported; return them to the author."""
 
 
+def check_grader(grader: Grader) -> None:
+    """Reject authored judge contracts before machine or provider admission."""
+    try:
+        judge = judge_spec(grader)
+        if judge is not None:
+            validate_judge_spec(judge)
+    except (ValueError, InvalidTask) as error:
+        raise InvalidTaskSpec(str(error)) from error
+
+
 def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader.
 
@@ -38,6 +52,7 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     """
     task = spec.task
     grader = task.grader
+    check_grader(grader)
     judge = grades_with_judge(grader)
     host_judge = judge and isinstance(grader, VerifyitGrader)
     grader_environment = (
