@@ -3,14 +3,12 @@
 
 """The paper's main-text table, ``tab:scaling-main``: each mixture's loss across the compute ladder and its accuracy.
 
-Each of the table's 44 numbers is one query of the research code's number audit, a row labelled ``tab:scaling-main``
-in its ``experiments/domain_phase_mix/release/paper_cells.csv``, so the printed table and the audited numbers share
-one recipe; the README's "Research code" section gives the research code's location. A loss entry selects the
-``ladder`` runs of one mixture at one compute scale: the proportional or UniMax-8 mixture (proposal objective
-``none``), or Olmix's or MARINER's proposal for the column's objective. At 3e18 FLOPs the entry is the runs' mean and
-standard deviation (ddof 1), over the eleven proportional runs or the three trainer seeds of the other mixtures; at
-the larger scales it is the one run's value. The accuracy is the mean over the OlmoBaseEval Easy components of the
-mixture's 1e21 run (``ladder_accuracy``), which trains Olmix's and MARINER's OlmoBaseEval Easy proposals.
+Each of the table's 44 numbers is one query of the dataset. A loss entry selects the ``ladder`` runs of one mixture
+at one compute scale: the proportional or UniMax-8 mixture (proposal objective ``none``), or Olmix's or MARINER's
+proposal for the column's objective. At 3e18 FLOPs the entry is the runs' mean and standard deviation (ddof 1), over
+the eleven proportional runs or the three trainer seeds of the other mixtures; at the larger scales it is the one
+run's value. The accuracy is the mean over the OlmoBaseEval Easy components of the mixture's 1e21 run
+(``ladder_accuracy``), which trains Olmix's and MARINER's OlmoBaseEval Easy proposals.
 """
 
 from __future__ import annotations
@@ -52,7 +50,7 @@ PLUS_MINUS = "\N{PLUS-MINUS SIGN}"
 
 
 class Statistic(StrEnum):
-    """How a table entry aggregates the values it selects, as the audit's queries name it."""
+    """How a table entry aggregates the values it selects."""
 
     MEAN = "mean"
     STD = "std"  # ddof 1

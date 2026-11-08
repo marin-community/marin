@@ -93,17 +93,7 @@ mariner figures --data mariner-data --out figures --only fig:b6
 mariner tables --data mariner-data
 ```
 
-`mariner tables` prints the paper's Table 2: the Uncheatable Eval and OlmoBaseEval Easy BPB of each mixture at the four compute scales, and the mean downstream accuracy at $10^{21}$ FLOPs. Its 44 numbers come from the same queries as the number audit, which checks the numbers in all of the paper's tables against the dataset. The audit runs from the research code (below) at its tag, against the paper's LaTeX source from arXiv (`https://arxiv.org/e-print/XXXX.XXXXX`). It reads every table of the dataset, including those that `mariner download` leaves on the Hub, so download the whole dataset first:
-
-```bash
-hf download marin-community/mariner-data --repo-type dataset --local-dir ~/mariner-data-full
-git clone --branch TAG https://github.com/marin-community/marin.git marin-research
-cd marin-research
-uv run python -m experiments.domain_phase_mix.release.verify_paper_numbers --build ~/mariner-data-full \
-  --sections <arXiv source>/sections
-```
-
-On this release's dataset the audit traces 1,706 of the 1,795 numbers in the paper's 20 tables and finds no differences. The other 89 are configuration constants typed into the paper and results of the two-phase swarms, which the dataset does not hold.
+`mariner tables` prints the paper's Table 2: the Uncheatable Eval and OlmoBaseEval Easy BPB of each mixture at the four compute scales, and the mean downstream accuracy at $10^{21}$ FLOPs.
 
 ## Fitting your own swarm
 
@@ -170,7 +160,7 @@ The second command compares refits of all three swarms and of the Olmix laws wit
 
 ## Research code
 
-The code that ran the paper's experiments is on Marin's branch [`calvin/swarm-olmo3-regmix-test`](https://github.com/marin-community/marin/tree/TAG) at tag `TAG`: the swarm and ladder launchers, the 39-bucket partition and Stack-Edu preparation, the OlmoBaseEval Easy evaluator, the research versions of the baselines (RegMix, splines, and others), and the dataset export (`experiments/domain_phase_mix/release/`). It runs on Marin's earlier experiment executor, which `main` no longer has.
+The code that ran the paper's experiments is on Marin's branch [`calvin/swarm-olmo3-regmix-test`](https://github.com/marin-community/marin/tree/TAG) at tag `TAG`: the swarm and ladder launchers, the 39-bucket partition and Stack-Edu preparation, the OlmoBaseEval Easy evaluator, and the research versions of the baselines (RegMix, splines, and others). It runs on Marin's earlier experiment executor, which `main` no longer has.
 
 ## Citation
 
