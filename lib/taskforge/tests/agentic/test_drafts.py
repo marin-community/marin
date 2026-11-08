@@ -20,6 +20,7 @@ from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUs
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     Boxed,
@@ -434,6 +435,27 @@ async def test_submit_refuses_a_judge_that_gives_the_right_answer_less_than_full
     assert "fails the criteria ['States the saving']" in problem
     replies[:] = ["SCORE: 1"]
     assert await tools.control_problems(checklist, "You pay 90 euros and save 10.") == []
+
+
+async def test_submit_refuses_a_script_grader_that_prints_no_reward_with_its_output(monkeypatch):
+    # Script graders run in a bubblewrap machine, which these tests do not start: the grade is the one that
+    # taskcompendium gives a script whose last stdout line is not a number.
+    crashed = GradeResult(
+        Outcome.INFRA_ERROR,
+        None,
+        "The last line of grader stdout must be a finite numeric reward",
+        diagnostics={"stdout": "", "stderr": "KeyError: 'strain'"},
+        failure=GradingFailure.INVALID_REWARD,
+    )
+
+    async def run_task(spec, model):
+        return dataclasses.make_dataclass("Run", ["grade"])(crashed)
+
+    tools = DraftTools(proposal(solver_machine="none"), config(ScriptedAgent([])))
+    monkeypatch.setattr(tools.solver_engine, "run_task", run_task)
+
+    [problem] = await tools.control_problems(script_task("example"), "2 3 5")
+    assert "finite numeric reward" in problem and "KeyError: 'strain'" in problem
 
 
 def test_a_full_precision_number_of_an_answer_is_not_moved():

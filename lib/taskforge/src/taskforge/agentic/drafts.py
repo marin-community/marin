@@ -29,7 +29,7 @@ from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContex
 from rolloutengine.models import Model, Rollout, RolloutInterrupted, RolloutLimits, TaskRolloutSpec, TraceMode
 from shellbox.machine import Backend, Machine, MachineFactory, PackageSpec
 from taskcompendium.grading import grade_answer
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     Boxed,
@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "13"
+DRAFT_REVISION = "14"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -134,6 +134,11 @@ EXAMPLE_CUE = re.compile(r"\be\.g\.|\bfor example\b|\bsuch as\b|\bfor instance\b
 EXAMPLE_CUE_CHARS = 60
 """How far after a cue a number still counts as its example."""
 """The significant digits at which an exact form of the prompt is compared with the reference."""
+GRADER_DEFECTS = frozenset(
+    {GradingFailure.EXECUTION, GradingFailure.INVALID_REWARD, GradingFailure.MISSING_REWARD, GradingFailure.EMPTY_REWARD}
+)
+"""The grading failures of a grader that ran and gave no reward, which are the grader's defects: a timeout or a
+machine that did not start is not."""
 MAX_SHIFTED_NUMBERS = 12
 MAX_SHIFTED_DIGITS = 6
 """The most significant digits of a number that ``submit`` moves: beyond them a number is a full-precision value."""
@@ -341,10 +346,17 @@ class DraftTools:
         if right.status == Outcome.INVALID_TASK:
             return [f"The grader cannot grade right_answer: {right.error}"]
         if not grade_passed(right):
+            output = ""
+            if right.failure in GRADER_DEFECTS:
+                output = (
+                    f" Its stdout ends {str(right.diagnostics.get('stdout', ''))[-300:]!r} and its stderr ends "
+                    f"{str(right.diagnostics.get('stderr', ''))[-600:]!r}. A script grader prints its reward, a "
+                    "number from 0 to 1, as the last line of stdout, and exits 0 for every answer, right or wrong."
+                )
             return [
                 f"The grader fails right_answer {right_answer[:200]!r}: outcome {right.status}, reward {right.reward}, "
-                f"{right.error or 'no error'}. Fix the grader, or give right_answer exactly as a correct solver replies "
-                "in the answer format"
+                f"{right.error or 'no error'}.{output} Fix the grader, or give right_answer exactly as a correct "
+                "solver replies in the answer format"
             ]
         shifted = shifted_answers(right_answer)
         if not shifted:
@@ -391,7 +403,7 @@ class DraftTools:
         except RolloutInterrupted as error:
             logger.warning("A control of %s did not run: %s", task.id, error.rollout.failure)
             return None
-        if grade.status == Outcome.INFRA_ERROR:
+        if grade.status == Outcome.INFRA_ERROR and grade.failure not in GRADER_DEFECTS:
             logger.warning("A control of %s did not grade: %s", task.id, grade.error)
             return None
         return grade
