@@ -146,9 +146,16 @@ While a driver is working on a workpiece, its `status.json` reads `terminal: nul
 `upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
 `running` indefinitely, so judge progress by these files and by the driver's pods, not by job state.
 
-Tallying: `fsutil find '<output>/**/status.json'`, download, group by `terminal@stage` and by
-the last decision's reasons in `workpiece.json`. A `held` whose reason starts with `bug:` is a
-driver-level exception with its traceback; everything else is a typed hold.
+Run `uv run --frozen python -m forge.driver report <output-root> [--since-hours N]`
+with the storage credentials above. It reads published snapshots and event parts concurrently,
+then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
+stage durations, and consecutive-event latency proxies. Replayed results do not add token
+spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
+their scopes. Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
+`--since-hours` includes workpieces active in that window and filters metric events by time;
+acceptance windows are clipped to it, with rates divided by the clipped duration. Acceptance
+uses the terminal decision timestamp, not file upload time. Empty roots and unreadable artifacts
+fail instead of silently producing an incomplete tally.
 
 ## What the policy controls
 
