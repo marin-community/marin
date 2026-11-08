@@ -47,8 +47,8 @@ class PDBThinkBenchmark(BaseBenchmark):
             raise ValueError("PDBThink preserves its versioned system prompt")
         generation = canonical_generation_kwargs(options.generation)
         requested_cap = generation.pop("max_gen_toks", options.max_tokens)
-        if generation.get("tools") or generation.get("tool_choice", "none") != "none":
-            raise ValueError("PDBThink requires tools=[] and tool_choice=none")
+        if generation.pop("tools", None) or generation.get("tool_choice", "none") != "none":
+            raise ValueError("PDBThink requires no tools and tool_choice=none")
         selected_options = replace(options, max_tokens=None, generation=generation)
         specs = text_specs(
             self._bundle["renders"],
@@ -57,7 +57,7 @@ class PDBThinkBenchmark(BaseBenchmark):
             prompt=lambda row: row["messages"],
             target=lambda row: row["gold_answer"],
             grader="pdbthink",
-            generation_kwargs={"do_sample": True, "temperature": 0.7, "tools": [], "tool_choice": "none"},
+            generation_kwargs={"do_sample": True, "temperature": 0.7, "tool_choice": "none"},
             repeats=self.n_repeat,
             seed_repeats=False,
             reference=lambda row: {"answer_schema": row["answer_schema"], "parameters": row["parameters"]},

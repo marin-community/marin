@@ -128,7 +128,8 @@ def test_pdbthink_wire_preserves_prompts_tools_and_budget_in_saved_results(endpo
     assert len(endpoint.requests) == 3
     for payload in endpoint.requests:
         assert payload["messages"] == row["messages"]
-        assert payload["tools"] == []
+        # vLLM rejects an empty tools array; no tools are offered on the wire.
+        assert "tools" not in payload
         assert payload["tool_choice"] == "none"
         assert payload["temperature"] == 0.7
         assert payload["max_tokens"] == budget["output_tokens"]

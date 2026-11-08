@@ -84,9 +84,9 @@ configuration and launch options.
 ## Generation and scoring
 
 Each render receives three sampled completions at temperature 0.7, preserving
-the upstream system and user messages. Requests set `tools: []` and
-`tool_choice: none`. An unexpected tool call scores zero. No tool execution or
-LLM judge is involved.
+the upstream system and user messages. Requests omit `tools` and set
+`tool_choice: none`; vLLM rejects an empty tools array. An unexpected tool call
+scores zero. No tool execution or LLM judge is involved.
 
 Before the first request, Evalchemy counts every selected prompt with the served
 model's tokenizer and chat template. An oversized prompt fails the task; it is
