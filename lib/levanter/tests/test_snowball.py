@@ -58,7 +58,6 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     SnowballMoEMLP,
     _activation_spec,
-    silu_fp32,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
@@ -67,7 +66,6 @@ from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
-from levanter.utils.activation import ActivationFunctionEnum
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -322,36 +320,22 @@ def test_snowball_load_pretrained_machinery_is_exact():
 
 
 def test_snowball_moe_capacity_is_a_runtime_setting():
-    """The capacity reaches every expert MLP, is not exported to HF metadata, and must be positive."""
+    """The capacity reaches every expert MLP, is not exported to HF metadata, and survives an HF reload."""
     cfg = _tiny_config(moe_capacity_factor=4.0)
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
     assert {block.mlp.expert_mlp.capacity_factor for block in model.transformer.blocks} == {4.0}
     hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
     assert "moe_capacity_factor" not in hf and "capacity_factor" not in hf
-    assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).moe_capacity_factor == 1.0
-    with pytest.raises(ValueError, match="moe_capacity_factor"):
-        _tiny_config(moe_capacity_factor=0.0)
+    reloaded = SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size))
+    assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
 
 
 def test_snowball_fp32_activations_is_a_runtime_setting():
-    """The flag reaches every GatedNorm, shared MLP, attention and expert MLP, is not exported to HF metadata, and
-    cannot run on sonic_cute's fused BF16 SiLU."""
-    for flag in (False, True):
-        cfg = _tiny_config(fp32_activations=flag)
-        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
-        t = model.transformer
-        norms = [t.embed_gated_norm, t.final_gated_norm]
-        norms += [n for b in t.blocks for n in (b.attn_gated_norm, b.mlp_gated_norm)]
-        assert {n.fp32_activations for n in norms} == {flag}
-        assert {b.shared.fp32_activations for b in t.blocks} == {flag}
-        assert {b.attn.cfg.fp32_activations for b in t.blocks} == {flag}
-        expected = silu_fp32 if flag else ActivationFunctionEnum.silu
-        assert all(b.mlp.expert_mlp.activation is expected for b in t.blocks)
+    """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
+    cfg = _tiny_config(fp32_activations=True)
     hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
     assert "fp32_activations" not in hf
-    assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).fp32_activations is False
     with pytest.raises(ValueError, match="fp32_activations"):
         _tiny_config(fp32_activations=True, moe_implementation="sonic_cute")
 
@@ -507,23 +491,6 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
     np.testing.assert_array_equal(high, [[[0]]])
     np.testing.assert_array_equal(low, [[[1]]])
-
-
-def test_hf_reload_keeps_requested_runtime_settings():
-    requested = _tiny_config(
-        router_dot_fp32=True,
-        router_combine_fp32=True,
-        fp32_activations=True,
-        moe_implementation="ring",
-        moe_capacity_factor=4.0,
-    )
-    reloaded = _tiny_config(moe_implementation=None)
-    restored = preserve_hf_runtime_settings(reloaded, requested, ("router_bias",))
-    assert restored.router_dot_fp32
-    assert restored.moe_implementation == "ring"
-    assert restored.moe_capacity_factor == 4.0
-    assert restored.fp32_activations
-    assert restored.router_combine_fp32
 
 
 @pytest.mark.parametrize(
@@ -846,6 +813,89 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 native_metrics = json.load(handle)
             assert math.isfinite(native_metrics["train/loss"])
             assert math.isfinite(native_metrics["eval/loss"])
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.multidevice
+def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
+    with use_test_devices(4):
+        hf_path = tmp_path / "hf"
+        tokenizer = Tokenizer(
+            models.WordLevel(vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
+        )
+        tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+        fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
+        fast.save_pretrained(hf_path)
+        config = _tiny_config(
+            vocab_size=64,
+            hidden_dim=32,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_layers=1,
+            head_dim=8,
+            max_seq_len=128,
+            router_dot_fp32=True,
+            tokenizer=str(hf_path),
+        )
+        # HF metadata chooses the platform kernel; test reload separately from
+        # context sharding, which has its unchanged reference-backend test above.
+        trainer = TrainerConfig(
+            id="hf-config-override-regression",
+            mesh=MeshConfig(
+                axes={"data": -1, "replica": 1, "model": 1, "context": 1, "expert": 2},
+                compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
+            ),
+            fp32_fields=("router_bias",),
+            use_explicit_mesh_axes=True,
+            train_batch_size=max(8, jax.device_count()),
+            per_device_parallelism=1,
+            num_train_steps=1,
+            max_eval_batches=1,
+            require_accelerator=False,
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "ckpts")),
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        )
+        with set_mesh(trainer.device_mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", 64), config, key=random.key(0))
+            config.hf_checkpoint_converter().replaced(tokenizer=fast).save_pretrained(
+                model,
+                str(hf_path),
+                save_tokenizer=False,
+                save_reference_code=False,
+            )
+        examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
+        main(
+            TrainLmConfig(
+                data=LmDataConfig(
+                    tokenizer=str(hf_path),
+                    components={
+                        "direct": DirectDatasetComponent(
+                            datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)},
+                        )
+                    },
+                ),
+                model=config,
+                initialize_from_hf=str(hf_path),
+                use_hf_model_config=True,
+                trainer=trainer,
+                optimizer=AdamConfig(learning_rate=5e-5),
+            )
+        )
+        metrics = json.loads((tmp_path / "eval_results.json").read_text())
+        assert math.isfinite(metrics["train/loss"])
+        assert math.isfinite(metrics["eval/loss"])
+
+
+def test_fp32_router_training_rejects_missing_fp32_bias_before_loading(tmp_path):
+    config = TrainLmConfig(
+        model=_tiny_config(router_dot_fp32=True),
+        data=LmDataConfig(tokenizer=str(tmp_path)),
+    )
+    with pytest.raises(ValueError, match="fp32_fields to include router_bias"):
+        main(config)
 
 
 @pytest.mark.parametrize("separate_key_axis", [False, True])

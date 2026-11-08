@@ -11,6 +11,7 @@ from fractions import Fraction
 from typing import Any
 
 import numpy as np
+from levanter.data.text.datasets import DatasetComponent, _effective_pack
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.tokenizers import MarinTokenizer
 
@@ -85,28 +86,26 @@ def account_chat_row(
     identity: RowIdentity,
     *,
     tokenizer: MarinTokenizer,
-    chat_format: ChatLmDatasetFormat,
+    component: DatasetComponent,
     context_length: int,
     expected_template_sha256: str,
 ) -> RowAccounting:
     """Count exact causal targets, labeling prior and final assistant turns separately.
 
-    Uses the training processor and public message-span instrumentation, requiring
+    Uses the component's effective packing and training processor, requiring
     identical token IDs and masks. Only non-packed, untruncated, assistant-masked
     conversations ending in an assistant reply are supported. Labels are caller
     provenance, not inferred intent. No input fields are changed.
     """
+    chat_format = component.format
+    if not isinstance(chat_format, ChatLmDatasetFormat):
+        raise ValueError("Accounting requires a chat dataset component")
     if not all(
         (identity.occurrence_id, identity.sample_id, identity.prompt_id, identity.final_label, identity.history_label)
     ):
         raise ValueError("Occurrence, sample, prompt IDs and both labels must be nonempty")
-    if (
-        context_length <= 0
-        or chat_format.pack is not False
-        or chat_format.slice_strategy != "raise"
-        or not chat_format.mask_user_turns
-    ):
-        raise ValueError("Accounting requires positive context, pack=false, slice=raise and assistant masking")
+    if context_length <= 0 or _effective_pack(component) or not chat_format.mask_user_turns:
+        raise ValueError("Accounting requires positive context, unpacked training and assistant masking")
     template = chat_format.chat_template or tokenizer.chat_template
     if template is None or hashlib.sha256(template.encode()).hexdigest() != expected_template_sha256:
         raise ValueError("Chat template does not match the pinned hash")

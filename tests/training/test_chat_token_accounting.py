@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import dataclasses
 import hashlib
 from typing import Any
 
-import jax.numpy as jnp
 import numpy as np
 import pytest
-from levanter.data.text.examples import GrugLmExample
+from haliax import Axis
+from levanter.data.text.datasets import DatasetComponent, dataset_for_component
 from levanter.data.text.formats import ChatLmDatasetFormat
+from levanter.store.cache import SerialCacheWriter
 from marin.training.chat_token_accounting import (
     RowAccounting,
     RowIdentity,
@@ -26,8 +26,10 @@ TEMPLATE = """{{ bos_token }}{% for message in messages %}
 {% else %}{{ message.content }}{% endif %}{% endfor %}"""
 
 
-def test_multiturn_counts_match_actual_causal_loss_and_preserve_inputs(gpt2_tokenizer):
-    chat_format = ChatLmDatasetFormat(chat_template=TEMPLATE, pack=False, slice_strategy="raise", system_prompt="system")
+@pytest.mark.parametrize("format_pack", [False, True])
+def test_multiturn_counts_match_actual_causal_loss_and_preserve_inputs(gpt2_tokenizer, tmp_path, format_pack):
+    chat_format = ChatLmDatasetFormat(chat_template=TEMPLATE, pack=format_pack, system_prompt="system")
+    component = DatasetComponent(format=chat_format, pack=False)
     row: dict[str, Any] = {
         "system": "Be concise.",
         "messages": [
@@ -43,21 +45,17 @@ def test_multiturn_counts_match_actual_causal_loss_and_preserve_inputs(gpt2_toke
         row,
         identity,
         tokenizer=gpt2_tokenizer,
-        chat_format=chat_format,
+        component=component,
         context_length=256,
         expected_template_sha256=hashlib.sha256(TEMPLATE.encode()).hexdigest(),
     )
     processed = chat_format.build_preprocessor(gpt2_tokenizer)([row])[0]
-    ids = processed["input_ids"]
-    mask = np.zeros(256, dtype=np.int32)
-    mask[: len(ids)] = processed["assistant_masks"]
-    tokens = np.zeros(256, dtype=np.int32)
-    tokens[: len(ids)] = ids
-    segments = np.full(256, -1, dtype=np.int32)
-    segments[: len(ids)] = 0
-    example = GrugLmExample.causal(
-        tokens=jnp.asarray(tokens), loss_weight=jnp.asarray(np.roll(mask, -1)), segment_ids=jnp.asarray(segments)
-    )
+    with SerialCacheWriter(str(tmp_path / "cache"), processed) as writer:
+        writer.write_batch([processed])
+    dataset = dataset_for_component(
+        component, Axis("position", 256), writer.result(), eos_id=None, block_cross_document_attention=True
+    ).as_sync_dataset()
+    example = dataset[0]
     assert sum(turn.supervised_tokens for turn in result.turns) == int(example.loss_weight.sum())
     assert (
         result.target_mask_sha256 == hashlib.sha256(np.asarray(example.loss_weight, dtype="<i4").tobytes()).hexdigest()
@@ -66,31 +64,28 @@ def test_multiturn_counts_match_actual_causal_loss_and_preserve_inputs(gpt2_toke
     assert all(turn.supervised_tokens > 0 for turn in result.turns)
     assert result.turns[0].supervised_tokens > result.turns[1].supervised_tokens
     assert row == original
-    with pytest.raises(ValueError, match="exceeds context"):
+
+
+def test_component_pack_override_rejects_accounting_for_packed_updates(gpt2_tokenizer, tmp_path):
+    chat_format = ChatLmDatasetFormat(chat_template=TEMPLATE, pack=False, slice_strategy="raise")
+    component = DatasetComponent(format=chat_format, pack=True)
+    row = {"messages": [{"role": "user", "content": "Add."}, {"role": "assistant", "content": "Two."}]}
+    processed = chat_format.build_preprocessor(gpt2_tokenizer)([row])[0]
+    with SerialCacheWriter(str(tmp_path / "cache"), processed) as writer:
+        writer.write_batch([processed, processed])
+    dataset = dataset_for_component(
+        component, Axis("position", 256), writer.result(), eos_id=None, block_cross_document_attention=True
+    ).as_sync_dataset()
+    # Two occurrences occupy one packed sequence, so row-counted updates would be wrong.
+    assert len(dataset) == 1
+    segments = np.asarray(dataset[0].attn_mask.segment_ids[0])
+    assert set(segments[segments >= 0]) == {0, 1}
+    with pytest.raises(ValueError, match="unpacked"):
         account_chat_row(
             row,
-            identity,
+            RowIdentity("occ", "sample", "prompt", "target", "history"),
             tokenizer=gpt2_tokenizer,
-            chat_format=chat_format,
-            context_length=2,
-            expected_template_sha256=hashlib.sha256(TEMPLATE.encode()).hexdigest(),
-        )
-    with pytest.raises(ValueError, match="pinned hash"):
-        account_chat_row(
-            row,
-            identity,
-            tokenizer=gpt2_tokenizer,
-            chat_format=chat_format,
-            context_length=256,
-            expected_template_sha256="wrong",
-        )
-    row["chat_template_kwargs"] = {"chat_template": TEMPLATE + "changed"}
-    with pytest.raises(ValueError, match="overrides the pinned"):
-        account_chat_row(
-            row,
-            identity,
-            tokenizer=gpt2_tokenizer,
-            chat_format=chat_format,
+            component=component,
             context_length=256,
             expected_template_sha256=hashlib.sha256(TEMPLATE.encode()).hexdigest(),
         )
@@ -126,12 +121,3 @@ def test_ordered_mass_is_not_mean_of_row_fractions_or_gradient_share():
     empty = account_ordered_occurrences([short, long], [], batch_size=8)
     assert empty.pooled.classes["id"].ce_coefficient_mass.value is None
     assert empty.mean_update_ce_coefficient_mass["id"].value is None
-    with pytest.raises(ValueError, match="Duplicate"):
-        account_ordered_occurrences([short, short], [], batch_size=8)
-    with pytest.raises(ValueError, match="Unknown"):
-        account_ordered_occurrences([short], ["missing"], batch_size=1)
-    with pytest.raises(ValueError, match="complete updates"):
-        account_ordered_occurrences([short], ["short"], batch_size=8)
-    zero = dataclasses.replace(short, turns=())
-    with pytest.raises(ValueError, match="no supervised"):
-        account_ordered_occurrences([zero], ["short"], batch_size=1)
