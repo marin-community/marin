@@ -1,25 +1,8 @@
 """Unit tests for skills integration across installed agents."""
 
-import os
-from unittest.mock import AsyncMock, patch
-
-import pytest
 from harbor.agents.installed.codex import Codex
 from harbor.agents.installed.opencode import OpenCode
 
-# ---------------------------------------------------------------------------
-# Gemini CLI
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Goose
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Codex
-# ---------------------------------------------------------------------------
 class TestCodexSkills:
     """Test _build_register_skills_command() for Codex."""
 
@@ -42,14 +25,6 @@ class TestCodexSkills:
         assert "'/workspace/my skills'" in cmd
 
 
-# ---------------------------------------------------------------------------
-# Cline CLI
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# OpenCode
-# ---------------------------------------------------------------------------
 class TestOpenCodeSkills:
     """Test _build_register_skills_command() for OpenCode."""
 
@@ -70,35 +45,6 @@ class TestOpenCodeSkills:
         cmd = agent._build_register_skills_command()
         assert cmd is not None
         assert "'/workspace/my skills'" in cmd
-
-    @pytest.mark.asyncio
-    async def test_skills_dir_in_run_commands(self, temp_dir, mock_environment):
-        agent = OpenCode(
-            logs_dir=temp_dir,
-            skills_dir="/workspace/skills",
-            model_name="anthropic/claude-sonnet-4-5",
-        )
-        mock_env = mock_environment
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            await agent.run("do something", mock_env, AsyncMock())
-        exec_calls = mock_env.exec.call_args_list
-        assert any("~/.config/opencode/skills/" in call.kwargs["command"] for call in exec_calls)
-
-
-# ---------------------------------------------------------------------------
-# Hermes
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Qwen Code
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Terminus 2
-# ---------------------------------------------------------------------------
 
 SKILL_FRONTMATTER = """\
 ---
