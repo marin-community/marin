@@ -1035,10 +1035,49 @@ On `gb960a0`, `/var/log/runsc` consumed 8.2 GiB of the full root disk while
 `/tmp` used only 32 KiB. The runtime's shim and gVisor logs persisted in thousands
 of per-runtime directories after their runtime objects were gone. Inspect
 `/etc/containerd/runsc.toml`, log sizes, and the current `crictl pods` and
-`crictl ps -a` inventories before choosing retention or cleanup. Diagnostic
-containers mount host filesystems; keep the commands read-only and obtain
-approval before removing host data or changing the runtime. See the
+`crictl ps -a` inventories before choosing retention or cleanup. See the
 [incident record](https://marina.oa.dev/echo/wiki/947).
+
+Task `/tmp` is separate from host `/tmp`: all Kubernetes profiles, including
+Shellbox's `SANDBOX`, mount a private disk-backed `emptyDir` there. CoreWeave's
+kubelet and containerd storage use NVMe. A gVisor probe on `gb960a0` confirmed
+that a file written to guest `/tmp` appeared in the kubelet volume on
+`/dev/md127`. Do not replace sandbox scratch with a shared host cache.
+
+CoreWeave supplies `/etc/containerd/runsc.toml` independently of Iris. Its
+shim `log_path` and `runsc_config.debug-log` can still point at the RAM-disk
+root, even with `debug = "false"`. The host maintenance script defaults these
+two destinations to `/mnt/local/iris-runtime/runsc`, preserving the provider's
+NVIDIA runtime and other options. It requires `/mnt/local` to be a separate
+filesystem, saves the old config on NVMe, and writes the config atomically.
+It does not restart containerd or move logs belonging to existing shims.
+
+After authorization for the named node, run the script through a diagnostic
+pod's main process. Both commands default to a dry run. If root is already full,
+run `prune --apply` first so the atomic configuration update has room:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
+  debug node/<node> --image=busybox:1.37 --profile=sysadmin --attach=false -- \
+  chroot /host python3 -B -c \
+  "$(cat lib/iris/src/iris/cluster/node_agent/runsc_logs.py)" configure
+```
+
+Read the pod logs and delete the diagnostic pod. Repeat with `configure
+--apply` to redirect new shims' logs. Launch a disposable gVisor pod and check
+for logs under `/mnt/local/iris-runtime/runsc` to verify the installed runtime
+picked up the config; existing shims retain their previous destinations.
+CoreWeave can reset provider configuration when replacing or reprovisioning a
+node, so include this step in node provisioning and recheck after replacements.
+Deploying Iris or Grafana alone does not change the host runtime configuration.
+
+Use `prune` in the same command to inspect orphan logs in both the old and new
+locations; add `--apply` to remove them. The default minimum age is 24 hours;
+`--min-age 3600` permits a one-hour cutoff during recovery. The script preserves
+CRI sandbox/container IDs, IDs referenced by running processes, directories with
+open log files, recent logs, symlinks, and unrecognized entries. Failed or empty
+CRI inventories abort cleanup. Repeat pruning for retention; redirecting logs
+does not impose a size limit. Remove each task-created diagnostic pod afterward.
 
 ### CoreWeave kernel deadlock pending reboot
 
