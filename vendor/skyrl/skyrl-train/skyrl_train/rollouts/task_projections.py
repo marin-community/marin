@@ -24,6 +24,7 @@ from skyrl_train.rollouts.training_record import (
 )
 
 from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.telemetry import record_event
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
@@ -308,6 +309,23 @@ class StepTaskProjection:
                 projected_ids.append(projected_id)
                 final_steps.append(last)
         batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, None)
+        expected_turns = [
+            step.turn
+            for rollout in rollouts
+            for step in (
+                tuple(step for conversation in rollout.conversations[:-1] for step in conversation_steps(conversation))
+                + rollout.steps
+            )
+        ]
+        if all(rollout.steps for rollout in rollouts):
+            if len(expected_turns) != len(samples):
+                raise ValueError("Per-turn projection dropped an assistant action")
+            for turn, sample in zip(expected_turns, samples, strict=True):
+                if turn.response_token_ids != sample.response_token_ids or turn.prompt_token_ids != sample.prompt_token_ids:
+                    raise ValueError("Per-turn projection changed the served action or prompt")
+                if turn.logprobs != sample.logprobs:
+                    raise ValueError("Per-turn projection changed behavior log probabilities")
+        record_event("projection_audit", {"source_turns": len(expected_turns), "projected_rows": len(samples)})
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
         _attach_reasoning_violations(batch, samples, ends_attempt=final_steps)

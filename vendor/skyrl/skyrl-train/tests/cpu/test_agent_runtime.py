@@ -11,6 +11,7 @@ from harbor.models.trial.config import AgentConfig
 from omegaconf import OmegaConf
 from shellbox.machine import ExitReason, Result
 from taskcompendium.models import Source
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
@@ -36,7 +37,8 @@ class UnusedDecoder:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["train", "eval"])
-async def test_original_trial_uses_captured_phase_connection_at_provider_startup(tmp_path, monkeypatch, phase):
+@pytest.mark.parametrize("with_judge", [False, True])
+async def test_original_trial_uses_captured_phase_connection_at_provider_startup(tmp_path, monkeypatch, phase, with_judge):
     package = tmp_path / "package"
     package.mkdir()
     (package / "environment").mkdir()
@@ -48,6 +50,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
     settings = InstalledAgentSettings(
         agent=AgentConfig(name="pi", kwargs={"thinking_format": "qwen-chat-template"}),
+        judge_model="fixture-judge" if with_judge else None,
         output_path=str(tmp_path / "attempts"),
         setup_timeout=5,
         run_timeout=5,
@@ -63,6 +66,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         settings,
         AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
         128,
+        judge=JudgeConnection("http://127.0.0.1:2/v1", "host-only-judge-key") if with_judge else None,
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
     )

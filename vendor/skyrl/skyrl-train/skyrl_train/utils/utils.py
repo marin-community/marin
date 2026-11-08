@@ -19,6 +19,7 @@ from ray.util.placement_group import (
     placement_group_table,
 )
 
+from skyrl_train.telemetry import record_event
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
@@ -269,6 +270,7 @@ class Timer:
 
     def __enter__(self):
         self.start_time = time.monotonic()
+        self.started_unix_ms = round(time.time() * 1000)
         if self.log_events:
             logger.opt(depth=1).info(f"Started: '{self.message}'")
         return self
@@ -276,6 +278,14 @@ class Timer:
     def _finish(self, exc_type) -> None:
         duration = time.monotonic() - self.start_time
         self._duration = duration
+        if self.log_events:
+            record_event("native_timer", {
+                "phase": self.message,
+                "started_unix_ms": self.started_unix_ms,
+                "finished_unix_ms": round(time.time() * 1000),
+                "duration_seconds": duration,
+                "succeeded": exc_type is None,
+            })
         if self.log_events:
             log = logger.opt(depth=2).info if exc_type is None else logger.opt(depth=2).error
             outcome = "Finished" if exc_type is None else "Failed"
@@ -287,10 +297,7 @@ class Timer:
         self._finish(exc_type)
 
     async def __aenter__(self):
-        self.start_time = time.monotonic()
-        if self.log_events:
-            logger.opt(depth=1).info(f"Started: '{self.message}'")
-        return self
+        return self.__enter__()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self._finish(exc_type)

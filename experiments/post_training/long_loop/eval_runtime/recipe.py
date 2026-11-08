@@ -24,9 +24,7 @@ from experiments.post_training.long_loop.eval_runtime.profile import (
 )
 
 
-def recipe(
-    environment_overrides: dict, agent_mcp_servers: dict, verifier_env: dict, judge_base_url: str, credential_env: str
-) -> tuple[dict, SkyRLRolePlan]:
+def recipe(judge_base_url: str, credential_env: str) -> tuple[dict, SkyRLRolePlan]:
     plan = SkyRLRolePlan(
         colocate_all=True,
         policy_num_nodes=1,
@@ -108,20 +106,7 @@ def recipe(
                 "cleanup_timeout": CLEANUP_TIMEOUT,
                 "service_startup_timeout": 60,
                 "service_shutdown_timeout": 60,
-                "environment_snapshots": {},
-                "environment_overrides": environment_overrides,
-                "agent_mcp_servers": agent_mcp_servers,
-                "verifier_env": {
-                    source: {
-                        "values": {name: value for name, value in environment.items() if not value.startswith("${")},
-                        "variables": {
-                            name: value[2:-1]
-                            for name, value in environment.items()
-                            if value.startswith("${") and value.endswith("}")
-                        },
-                    }
-                    for source, environment in verifier_env.items()
-                },
+                "judge_model": "MiniMaxAI/MiniMax-M3-MXFP8",
                 "trial_reward_key": "reward",
             },
         },

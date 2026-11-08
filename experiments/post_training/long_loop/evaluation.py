@@ -116,7 +116,7 @@ class TerminalPolicy:
 
 
 def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: ArtifactStep) -> ArtifactStep:
-    config, plan = recipe({}, {}, {}, "runtime://minimax-judge", "DAYTONA_EVAL_API_KEY")
+    config, plan = recipe("runtime://minimax-judge", "DAYTONA_EVAL_API_KEY")
     plan = replace(
         plan,
         policy_num_gpus_per_node=8,
@@ -173,19 +173,6 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
         if not ctx.is_fingerprint:
             manifest = read_json(ctx.artifact_path(data) + "/environment.json")
             validate_environment_preflight(manifest, ctx.artifact_path(data))
-            launch = yaml.safe_load(run.launch_config_yaml)
-            native = launch["skyrl"]["terminal_bench"]["installed_agent"]
-            native["environment_overrides"] = manifest["environment_overrides"]
-            native["agent_mcp_servers"] = manifest["agent_mcp_servers"]
-            # Reuse the runtime's credential-variable lowering rather than serialize secrets.
-            native["verifier_env"] = recipe(
-                manifest["environment_overrides"],
-                manifest["agent_mcp_servers"],
-                manifest["verifier_env"],
-                "runtime://minimax-judge",
-                manifest["credential_env"],
-            )[0]["terminal_bench"]["installed_agent"]["verifier_env"]
-            run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         return JudgedEvaluation(run, judge, cluster["dashboard_url"])
 
     return replace(step, run=run_judged, build_config=build_config)

@@ -671,6 +671,7 @@ class TaskRolloutWorkerSpec:
                     inference.model_name, generation_context_limit(runner_config), inference.tokenize, tokenizer
                 ),
                 int(runner_config.sampling_params.max_generate_length),
+                judge=judge,
                 daytona_connection=daytona_connection,
                 eval_daytona_connection=replace(
                     daytona_connection,

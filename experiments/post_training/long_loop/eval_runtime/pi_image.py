@@ -21,6 +21,13 @@ def with_pi_runtime(task: TaskSpec) -> TaskSpec:
     environment = config.setdefault("environment", {})
     if "environment/docker-compose.yaml" in files or "environment/docker-compose.yml" in files:
         return task  # Compose tasks are excluded by the smoke selection.
+    if task.source.dataset == "bixbench-pi" or "bixbench" in task.id:
+        environment["storage_mb"] = 10240
+        config["verifier"]["env"] = {
+            "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+            "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
+            "MODEL_NAME": "MiniMaxAI/MiniMax-M3-MXFP8",
+        }
     original = environment.pop("docker_image", None)
     dockerfile = f"FROM {original}\n" if original else resource_bytes(files["environment/Dockerfile"]).decode()
     dockerfile = (

@@ -2266,6 +2266,22 @@ class RayPPOTrainer:
             },
             routed_expert_rows=rollout_routed_experts_rows,
         )
+        if self.cfg.trainer.dump_data_batch:
+            for row, expected_mask in enumerate(loss_masks):
+                positions = response_masks_tensor[row].bool()
+                if training_input["loss_mask"][row][positions].tolist() != expected_mask:
+                    raise ValueError("Learner collation changed rollout action loss positions")
+                if logprobs is not None:
+                    actual = training_input["rollout_logprobs"][row][positions]
+                    expected = torch.as_tensor(logprobs[row], dtype=actual.dtype, device=actual.device)
+                    if not torch.equal(actual, expected):
+                        raise ValueError("Learner collation changed behavior log probabilities")
+            record_event("learner_projection_audit", {
+                "step": self.global_step,
+                "rows": len(response_ids),
+                "action_tokens": sum(sum(mask) for mask in loss_masks),
+                "router_replay_enabled": moe_router_replay,
+            })
         training_input.update(distillation_tensors)
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
