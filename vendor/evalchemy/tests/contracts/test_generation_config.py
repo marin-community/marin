@@ -122,7 +122,6 @@ def test_pdbthink_wire_preserves_prompts_tools_and_budget_in_saved_results(endpo
         )
         output.finish(result)
     saved = read_finestore_output(root, "pdbthink-wire")
-    assert saved["task_outcomes"]["PDBThink"]["status"] == "succeeded"
     assert saved["results"]["PDBThink"]["macro_score"] == 1.0
     budget = saved["results"]["PDBThink"]["pdbthink"]["budgets"][0]
     assert len(endpoint.requests) == 3

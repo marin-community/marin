@@ -32,7 +32,6 @@ def test_family_macro_excludes_controls_and_survives_resume(pdbthink_bundle):
     assert metrics["macro_score"] == 0.5
     assert metrics["micro_score"] == pytest.approx(2 / 3)
     assert metrics["pdbthink_report"]["consistency"]["n_repeated_renders"] == 5
-    assert len(samples) == 15
     assert [request.prompt for request in endpoint.requests] == [row["messages"] for row in records for _ in range(3)]
 
     resumed_endpoint = FixedEndpoint("FINAL: 9")

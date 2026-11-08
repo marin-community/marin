@@ -18,7 +18,7 @@ from eval.chat_benchmarks.PDBThink.data import BUNDLE_PATH, PDBTHINK_REVISION, m
 
 
 def prepare_bundle(dataset: Path) -> tuple[bytes, dict]:
-    """Validate and serialize prompts, references and report metadata separately."""
+    """Validate the dataset and serialize its evaluation records."""
     validation = validate_dataset(dataset)
     if not validation.ok:
         raise ValueError(f"PDBThink validation failed: {validation.errors}")
