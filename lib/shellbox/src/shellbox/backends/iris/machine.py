@@ -210,25 +210,28 @@ class IrisMachine:
         except ConnectError as error:
             self._raise_if_terminated(error)
             raise
+        detail = response.error or (response.stderr if response.exit_code else "")
+        # Contract on controller-owned ValueError text until Iris carries typed exec-status failure.
+        status = detail.removeprefix("Non-integer exec status: ")
+        prefix = "invalid literal for int() with base 10: "
+        if status.startswith(prefix):
+            try:
+                decoded = ast.literal_eval(status.removeprefix(prefix))
+                if isinstance(decoded, str):
+                    detail = decoded
+            except (ValueError, SyntaxError):
+                pass
+        if status.startswith("invalid literal for int()"):
+            error = RuntimeError(f"Iris exec failed: {detail}")
+            if status.startswith(prefix) and detail.startswith("Internal error occurred"):
+                raise MachineUnavailable(str(error)) from error
+            raise error
         if response.error:
-            detail = response.error
-            # Contract on controller-owned ValueError text until Iris carries typed exec-status failure.
-            status = detail.removeprefix("Non-integer exec status: ")
-            prefix = "invalid literal for int() with base 10: "
-            if status.startswith(prefix):
-                try:
-                    decoded = ast.literal_eval(status.removeprefix(prefix))
-                    if isinstance(decoded, str):
-                        detail = decoded
-                except (ValueError, SyntaxError):
-                    pass
             error = RuntimeError(f"Iris exec failed: {detail}")
             self._raise_if_terminated(error)
             if any(
                 marker in response.error
                 for marker in (
-                    "Non-integer exec status:",
-                    "invalid literal for int() with base 10:",
                     "error executing command in container",
                     "cannot exec in a",
                     "not running",
@@ -599,6 +602,8 @@ class IrisMachineFactory:
             except Exception as cleanup_error:
                 error.add_note(f"Sandbox submission cleanup failed: {cleanup_error}")
                 logging.warning("Sandbox submission cleanup failed", exc_info=cleanup_error)
+            if isinstance(error, ConnectError) and error.code == Code.ALREADY_EXISTS:
+                raise MachineUnavailable("Iris sandbox name collision; retry with a fresh sandbox id") from error
             # Contract on controller-owned text until Iris carries typed parent-termination status.
             if (
                 isinstance(error, ConnectError)

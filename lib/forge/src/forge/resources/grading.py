@@ -54,7 +54,7 @@ def candidate_turns(candidate: Candidate, spec: TaskRolloutSpec) -> tuple[Mappin
         target = PurePosixPath(spec.task.environment_requirements.working_directory or "/workspace", file.path)
         path, parent = shlex.quote(str(target)), shlex.quote(str(target.parent))
         source = shlex.quote(f"/.forge-candidates/{index}")
-        command = f"mkdir -p {parent} && cp -p {source} {path} && chmod {file.mode or '644'} {path}"
+        command = f"mkdir -p {parent} && cp {source} {path} && chmod {file.mode or '644'} {path}"
         turns.append(
             {
                 "role": "assistant",

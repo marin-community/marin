@@ -87,6 +87,7 @@ def test_candidate_file_calls_do_not_collide_with_conversation_history() -> None
         calls = turn["tool_calls"]
         assert isinstance(calls, list)
         call = calls[0]
+        assert " cp " in call["function"]["arguments"] and " cp -p " not in call["function"]["arguments"]
         event = AssistantToolCalls(calls=(ConversationToolCall(call_id=call["id"], name="shell", arguments={}),))
         ConversationTrace(events=(*history, event))
         history += (event, ToolResult(call_id=call["id"], content="done"))
