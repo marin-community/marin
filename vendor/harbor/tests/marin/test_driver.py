@@ -33,6 +33,16 @@ _CANDIDATE_ENDPOINT = "https://candidate.test/proxy/t/private-capability/v1"
 _JUDGE_ENDPOINT = "https://judge.test/v1"
 
 
+def test_checked_in_policies_select_supported_agents():
+    paths = sorted((_ROOT / "experiments/evaluation/configs/harbor").glob("*.yaml"))
+    assert paths
+    for path in paths:
+        config = JobConfig.model_validate(yaml.safe_load(path.read_text()))
+        assert config.user_agent is None, path
+        for agent in config.agents:
+            AgentFactory.get_agent_class_from_config(agent)
+
+
 @pytest.fixture
 def policy():
     return JobConfig.model_validate(
@@ -153,7 +163,7 @@ def test_host_agent_receives_live_capability_while_saved_config_redacts_it(
 
 
 @pytest.mark.parametrize(
-    "agent_name", ["pi", "opencode", "mini-swe-agent", "acp:pi-acp", "sotopia"]
+    "agent_name", ["pi", "opencode", "mini-swe-agent"]
 )
 def test_installed_candidate_cannot_receive_host_endpoint_or_credentials(
     policy, overlay, agent_name
@@ -167,13 +177,6 @@ def test_installed_candidate_cannot_receive_host_endpoint_or_credentials(
             },
         }
     )
-    if agent_name == "sotopia":
-        configured = configured.model_copy(
-            update={
-                "name": None,
-                "import_path": "harbor.agents.installed.sotopia:SotopiaAgent",
-            }
-        )
     if agent_name == "opencode":
         configured = configured.model_copy(
             update={
@@ -207,16 +210,10 @@ def test_installed_candidate_cannot_receive_host_endpoint_or_credentials(
         (
             "terminus-2",
             "harbor.agents.installed.pi:Pi",
-            "Terminus2",
-            _CANDIDATE_ENDPOINT,
-        ),
-        ("pi", "harbor.agents.terminus_2:Terminus2", "Pi", "http://127.0.0.1:8788/v1"),
-        (
-            "acp:pi-acp",
-            "harbor.agents.terminus_2:Terminus2",
-            "AcpAgent",
+            "Pi",
             "http://127.0.0.1:8788/v1",
         ),
+        ("pi", "harbor.agents.terminus_2.terminus_2:Terminus2", "Terminus2", _CANDIDATE_ENDPOINT),
     ],
 )
 def test_candidate_routing_agrees_with_factory_precedence(
@@ -301,34 +298,6 @@ async def test_candidate_transport_keeps_the_policy_openai_key_for_its_judge(
         _CANDIDATE_ENDPOINT + "/chat/completions": "Bearer candidate-private",
         _JUDGE_ENDPOINT + "/chat/completions": "Bearer judge-private",
     }
-
-
-def test_tau3_candidate_and_simulated_user_have_separate_model_capabilities(
-    prepared_task, overlay
-):
-    campaign = (
-        _ROOT
-        / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs/tau3-pi.yaml"
-    )
-    document = yaml.safe_load(campaign.read_text())
-    document.update(
-        environment={"type": "local"}, datasets=[{"path": str(prepared_task.parent)}]
-    )
-    policy = JobConfig.model_validate(document)
-    config = effective_job_config(policy, overlay)
-    assert config.agents[0].kwargs["api_base"] == "http://127.0.0.1:8788/v1"
-    assert config.user_agent.env["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
-    assert config.user_agent.env["OPENAI_API_KEY"] == "EMPTY"
-    assert config.environment.kwargs["judge_access"] == "runtime"
-    assert "private" not in config.agents[0].model_dump_json()
-    untrusted = policy.user_agent.model_copy(
-        update={"env": {"OPENAI_BASE_URL": "http://outside.test/v1"}}
-    )
-    with pytest.raises(ValueError):
-        effective_job_config(
-            policy.model_copy(update={"user_agent": untrusted}), overlay
-        )
-
 
 def test_tau2_compose_and_verifier_models_use_hosted_judge_without_parent_secrets(
     prepared_task, policy, overlay
@@ -480,22 +449,6 @@ async def test_verifier_roles_reach_fixed_provider_with_host_authentication(
             )
             assert response.choices[0].message.content == role
     assert provider_models == ["judge-alias"] * len(roles)
-
-
-def test_local_acp_shorthand_survives_preflight_normalization(tmp_path, prepared_task):
-    path = tmp_path / "policy.json"
-    path.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "local"},
-                "agents": [{"name": "acp:pi-acp@0.0.33"}],
-                "datasets": [{"path": "dataset"}],
-            }
-        )
-    )
-    report = _preflight_one(path, {}, None, host_environment={})
-    assert report["benchmark_metadata"]["n_benchmark"] == 1
-
 
 @pytest.mark.parametrize(
     ("backend", "location"),
