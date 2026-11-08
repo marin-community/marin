@@ -444,7 +444,9 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(mon
 @pytest.mark.parametrize(
     "state,reason,error_type",
     [
-        (TaskState.FAILED, "container exited", RuntimeError),
+        (TaskState.FAILED, "container exited", MachineTerminated),
+        (TaskState.FAILED, "PodDeleted: pod was deleted while the attempt was starting", MachineTerminated),
+        (TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted", MachineTerminated),
         (TaskState.KILLED, "Parent job terminated", MachineCancelled),
     ],
 )
@@ -458,7 +460,7 @@ def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path, stat
     factory = IrisMachineFactory(controller_url="http://controller")
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
 
-    with pytest.raises(error_type, match=reason.lower()):
+    with pytest.raises(error_type, match=reason.lower() if state is TaskState.KILLED else reason):
         asyncio.run(factory.create(spec))
     assert job.cancelled
 
@@ -679,6 +681,8 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
         ("Websocket setup failed (status 0): handshake refused", ExecSetupFailed),
         ("'NoneType' object has no attribute 'decode'", ExecSetupFailed),
         ("Non-integer exec status: invalid literal for int()", MachineTerminated),
+        ("invalid literal for int() with base 10: malformed envelope", MachineTerminated),
+        ("unexpected adapter bug", RuntimeError),
         ("invalid literal for int(): error executing command in container: container not found", MachineTerminated),
     ],
 )
@@ -688,8 +692,9 @@ def test_controller_wire_errors_are_classified_at_shellbox_boundary(tmp_path: Pa
             return SimpleNamespace(exit_code=0, stdout="", stderr="", error=message)
 
     machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
-    with pytest.raises(kind, match="Iris exec failed"):
+    with pytest.raises(kind, match="Iris exec failed") as caught:
         asyncio.run(machine.run(Command(("true",))))
+    assert type(caught.value) is kind
 
 
 @pytest.mark.parametrize("script,count", [("true", 4), ("printf out", 5), ("printf out; printf err >&2", 6)])
@@ -744,3 +749,28 @@ def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, 
         assert caught.value.__cause__ is error
     else:
         assert caught.value is error
+
+
+@pytest.mark.parametrize("wrapper", ["", "Non-integer exec status: "])
+@pytest.mark.parametrize(
+    "detail",
+    [
+        'Internal error occurred: error executing command in container: failed to start exec "dead"',
+        "Internal error occurred: container's runtime failed\nsecond line",
+    ],
+)
+def test_noninteger_exec_status_preserves_server_text(tmp_path, wrapper, detail):
+    class Rpc:
+        def exec_in_container(self, request, timeout_ms):
+            return SimpleNamespace(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                error=wrapper + "invalid literal for int() with base 10: " + repr(detail),
+            )
+
+    machine, _ = local_machine(tmp_path, Rpc(), LocalTask(TaskState.RUNNING))
+    with pytest.raises(MachineTerminated) as caught:
+        machine._exec_sync(["true"])
+    assert str(caught.value) == "Iris exec failed: " + detail
+    assert str(caught.value.__cause__) == str(caught.value)

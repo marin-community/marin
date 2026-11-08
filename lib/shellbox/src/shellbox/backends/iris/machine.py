@@ -3,6 +3,7 @@
 
 """Run a registry image as a gVisor Iris job and exec into its container."""
 
+import ast
 import asyncio
 import base64
 import math
@@ -191,12 +192,24 @@ class IrisMachine:
             self._raise_if_terminated(error)
             raise
         if response.error:
-            error = RuntimeError(f"Iris exec failed: {response.error}")
+            detail = response.error
+            # Contract on controller-owned ValueError text until Iris carries typed exec-status failure.
+            status = detail.removeprefix("Non-integer exec status: ")
+            prefix = "invalid literal for int() with base 10: "
+            if status.startswith(prefix):
+                try:
+                    decoded = ast.literal_eval(status.removeprefix(prefix))
+                    if isinstance(decoded, str):
+                        detail = decoded
+                except (ValueError, SyntaxError):
+                    pass
+            error = RuntimeError(f"Iris exec failed: {detail}")
             self._raise_if_terminated(error)
             if any(
                 marker in response.error
                 for marker in (
                     "Non-integer exec status:",
+                    "invalid literal for int() with base 10:",
                     "error executing command in container",
                     "cannot exec in a",
                     "not running",
@@ -492,7 +505,7 @@ class IrisMachineFactory:
                     if status.state is TaskState.KILLED:
                         raise MachineCancelled(status.error_message.lower() or "sandbox job terminated")
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
+                        raise MachineTerminated(f"Iris sandbox task failed before running: {status.error_message}")
                 await asyncio.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
         except BaseException:
