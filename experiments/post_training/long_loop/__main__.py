@@ -12,6 +12,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import graph_handles
 from marin.rl.cli import _skyrl_executions, rl_build_options
 from marin.rl.skyrl import ArtifactHfModel
+from rigging.secrets import require_secret
 
 from experiments.post_training.inventory.train_quick_loop import DEFAULT_SELECTION_URI, SELECTION_PREFIX
 from experiments.post_training.long_loop.endpoint_probe import endpoint_step
@@ -49,6 +50,7 @@ def plumbing_loop(version: str, source_revision: str) -> ArtifactStep:
 def main(source_revision: str, stage: str) -> ArtifactStep:
     if len(source_revision) != 40 or any(c not in "0123456789abcdef" for c in source_revision):
         raise click.BadParameter("Expected a full Git commit SHA", param_hint="--source-revision")
+    require_secret("HF_TOKEN")
     version = resolve_version("long-loop/micro-smoke", None)
     loop = plumbing_loop(version, source_revision)
     if stage == "loop":
