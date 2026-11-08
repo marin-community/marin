@@ -5,6 +5,7 @@
 """Classify completed grades and interrupted trials without discarding evidence."""
 
 import math
+from types import MappingProxyType
 
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
@@ -17,20 +18,27 @@ from taskcompendium.models import NoGrader, TaskSpec
 
 from forge.effects.events import Resolved
 from forge.effects.issues import Hold
-from forge.model.review import Cause
+from forge.model.review import Cause, Incomplete, Modify, Reject, Retry
 from forge.model.verdict import grader_checks
 
-TASK_DEFECTS = frozenset(
+# One review disposition per cause; solver generation limits are handled as failed trials.
+CAUSE_DECISIONS = MappingProxyType(
     {
-        Cause.GRADER_MISSING_REWARD,
-        Cause.GRADER_EMPTY_REWARD,
-        Cause.GRADER_INVALID_REWARD,
-        Cause.GRADER_INVALID_CHECKS,
-        Cause.GRADER_TIMEOUT,
-        Cause.GRADER_EXECUTION,
-        Cause.GRADER_REWARD_RANGE,
-        Cause.INVALID_TASK,
-        Cause.VERIFIER_SKIPPED,
+        None: None,
+        Cause.AGENT_TIMEOUT: Retry,
+        Cause.GRADER_INFRA: Retry,
+        Cause.NO_GRADE: Retry,
+        Cause.BUDGET_EXHAUSTED: Reject,
+        Cause.GENERATION_LIMIT: Incomplete,
+        Cause.GRADER_MISSING_REWARD: Modify,
+        Cause.GRADER_EMPTY_REWARD: Modify,
+        Cause.GRADER_INVALID_REWARD: Modify,
+        Cause.GRADER_INVALID_CHECKS: Modify,
+        Cause.GRADER_TIMEOUT: Modify,
+        Cause.GRADER_EXECUTION: Modify,
+        Cause.GRADER_REWARD_RANGE: Modify,
+        Cause.INVALID_TASK: Modify,
+        Cause.VERIFIER_SKIPPED: Modify,
     }
 )
 
