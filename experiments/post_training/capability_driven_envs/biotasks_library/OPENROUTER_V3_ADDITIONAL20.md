@@ -11,11 +11,12 @@ any v1/v2 records. The pinned 20 identities and provider tags are in
 original panel. Only fixed model IDs (no rolling aliases), tool-capable routes,
 disabled fallback, and verified generation metadata qualify.
 
-**Ability mix:** small and mid-size OpenAI OSS, Qwen, Mistral, Llama, Gemini,
+**Initial candidate mix:** small and mid-size OpenAI OSS, Qwen, Mistral, Llama, Gemini,
 DeepSeek, GLM, MiniMax, Cohere, and Nemotron models; a few stronger anchors.
-Selection biases toward lower/middle performance compared with the first
-mostly frontier-class 12, targeting an approximately 50% *scored* correct
-rate. Size and label do not prove ability. Low-ability models can fail the
+Selection initially biased toward lower/middle performance compared with the
+first mostly frontier-class 12, targeting an approximately 50% *scored*
+correct rate. As the results below show, the final selection did not achieve
+that target. Size and label do not prove ability. Low-ability models can fail the
 tool/submission contract altogether; the pilot is a measurement gate, not a
 promise of a particular rate. Tool/format failures are scored zero when
 terminal; upstream missingness and ungraded nonterminal attempts stay
@@ -69,7 +70,9 @@ Preserve all attempts and choose a versioned effective 20 with fewer
 weak/format-failing models. `openrouter_v3_topup16.json` freezes 16
 non-overlapping additional candidate routes for another 12-item pilot using
 *the same* frozen tasks, policy, and $40 budget baseline. Their pilot is
-separate and no original model/task is called twice. **Second pilot complete.** The 16 new routes produced 113/175 scored
+separate and no original model/task is called twice.
+
+**Second pilot complete.** The 16 new routes produced 113/175 scored
 correct, with 16 ungraded and one infrastructure-missing. The versioned
 `openrouter_v3_effective20.json` selects **seven** initial models and
 **13** top-up models, excluding the unroutable Scout, the MiniMax route
@@ -83,10 +86,31 @@ includes both pilots under the shared **$40** ceiling. The full drivers
 submit only the 218 non-pilot items for each of these 20; immutable batch
 sizes in the selection keep premium reserve checks below the ceiling.
 
-This remains a *provisional* research bank. After all 20 batches, freeze a
-separate scored snapshot with raw-source hashes and provider evidence; refit
-the exploratory Bayesian 2PL and report new slope posterior intervals plus
-format and missingness sensitivity. Do not merge old and new matrices by
-mutating frozen response files. Do not infer biological ability until
+**Full 20-model panel completed 2026-11-08.** The two full drivers succeeded
+(`/zack/biotasks-v3-effective20-initial7` and
+`/zack/biotasks-v3-effective20-topup13`). The effective-20 frozen snapshot is
+under `s3://marin-us-east-02a/marin4sc/taskforge/task-library/campaigns/biotasks/combined/v3/calibration/openrouter-effective20-v2/snapshots/complete-1/`;
+`item-responses.jsonl` SHA-256:
+`e6f79c5d8556f2d4f163b7819909f3b30431871dfb9bed40ad6d7aebec211408`.
+Its manifest records the selection hash, 57 hashed inputs, source panel
+identities, and provider evidence; both original panels/pilots remain intact.
+The **4,600 assigned pairs** comprise **3,008 correct, 963 scored zero**
+(including 337 failed final submissions), **453 ungraded, and 176
+infrastructure-missing**. Scored accuracy was **75.8%**, versus 57.1% in
+the stratified selected pilot; the hoped-for ~50% full-bank scored rate was
+**not reached**. The full bank was substantially easier for these models than
+the pilot. OpenRouter API spend since the shared pre-pilot baseline was about
+**$29.16**, below the $40 gate (excluding Iris/CPU overhead). No completed
+pilot or full batch was called again.
+
+Missingness is concentrated: **164 of the 176 infrastructure-missing pairs**
+are on the pinned `mistralai/mistral-large-2512` route; 161 involved upstream
+HTTP 429 rate-limiting. That model has only 64 scored pairs and two additional
+ungraded pairs. Do **not** convert those missing pairs to scored zeros, silently
+retry them, or treat its observed subset as representative. The exploratory
+combined IRT results and sensitivity are in `IRT_V3_EXPLORATORY.md`.
+
+This remains a *provisional* research bank. Do not merge old and new matrices
+by mutating frozen response files. Do not infer biological ability until
 references, task key wording, and format/tool failures have independent
 validation.

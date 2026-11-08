@@ -23,10 +23,13 @@ def load_responses(
     include_submission_failures: bool,
     additional_path: Path | None = None,
     additional_sha256: str | None = None,
+    exclude_model: str | None = None,
 ) -> tuple[dict[str, Any], list[str], list[str], dict[str, Any]]:
     """Verify frozen source hashes and join complete matrices without imputation."""
     if (additional_path is None) != (additional_sha256 is None):
         raise ValueError("The additional snapshot and its SHA-256 must be supplied together")
+    if exclude_model is not None and additional_path is None:
+        raise ValueError("Only an additional respondent may be excluded for route-missingness sensitivity")
     content = path.read_bytes()
     if hashlib.sha256(content).hexdigest() != SNAPSHOT_SHA256:
         raise ValueError("Snapshot SHA-256 does not match frozen v3 response artifact")
@@ -41,13 +44,19 @@ def load_responses(
         build_data(additional, include_submission_failures=include_submission_failures, expected_models=20)
         if {row["task_id"] for row in rows} != {row["task_id"] for row in additional}:
             raise ValueError("Additional snapshot uses different tasks")
+        if exclude_model is not None:
+            if exclude_model not in {row["model"] for row in additional}:
+                raise ValueError("Excluded respondent is not in the additional snapshot")
+            additional = [row for row in additional if row["model"] != exclude_model]
         rows.extend(additional)
         hashes.append(additional_sha256)
+    expected_models = MODELS if len(hashes) == 1 else 31 if exclude_model else 32
     data, models, items = build_data(
-        rows, include_submission_failures=include_submission_failures, expected_models=MODELS if len(hashes) == 1 else 32
+        rows, include_submission_failures=include_submission_failures, expected_models=expected_models
     )
     metadata = {
         "input_snapshot_sha256": hashes,
+        "excluded_model": exclude_model,
         "n_submission_failure_zeros_included": (
             sum(row["grade_status"] == "submission_failure" for row in rows) if include_submission_failures else 0
         ),
@@ -158,6 +167,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True, help="Private frozen JSONL; hash verified before fitting")
     parser.add_argument("--additional-input", type=Path, help="Private frozen 20-model JSONL")
     parser.add_argument("--additional-sha256", help="SHA-256 from the effective20 frozen manifest")
+    parser.add_argument("--exclude-model", help="Explicit 31-model sensitivity to one incomplete additional route")
     parser.add_argument(
         "--output", type=Path, required=True, help="Private local output directory; never commit raw draws"
     )
@@ -175,6 +185,7 @@ def main() -> None:
         include_submission_failures=args.mode == "all_scored",
         additional_path=args.additional_input,
         additional_sha256=args.additional_sha256,
+        exclude_model=args.exclude_model,
     )
     if args.reuse_csv:
         chains = sorted(args.output.glob("irt_v3-*.csv"))

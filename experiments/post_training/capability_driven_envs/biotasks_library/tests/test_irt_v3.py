@@ -46,7 +46,9 @@ def test_combined_matrix_keeps_existing_missingness_and_unique_respondents() -> 
     data, models, items = build_data(_rows() + extra, include_submission_failures=True, expected_models=32)
     assert (len(models), len(items), data["N"]) == (32, 230, 7358)
     with pytest.raises(ValueError, match="Duplicate"):
-        build_data(_rows() + [extra[0], *extra[:-1]], include_submission_failures=True, expected_models=32)
+        build_data([*_rows(), extra[0], *extra[:-1]], include_submission_failures=True, expected_models=32)
+    sensitivity, _, _ = build_data(_rows() + extra[230:], include_submission_failures=True, expected_models=31)
+    assert sensitivity["N"] == 7128
 
 
 def test_rejects_duplicate_and_inconsistent_score() -> None:
