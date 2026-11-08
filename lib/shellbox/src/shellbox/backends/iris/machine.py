@@ -447,7 +447,14 @@ class IrisMachine:
                 return
             self._closed = True
         try:
-            await asyncio.to_thread(self.job.cancel)
+            try:
+                await asyncio.to_thread(self.job.cancel)
+            except Exception:
+                logging.info(
+                    "Iris kill job=%s result=failed returned_state=not_provided", self.job.job_id, exc_info=True
+                )
+                raise
+            logging.info("Iris kill job=%s result=acknowledged returned_state=not_provided", self.job.job_id)
             # Terminating the task ends execs the controller already admitted and refuses later ones,
             # so attempts that passed the closed check return; once they have, none can start.
             await asyncio.to_thread(self._drain_in_flight)
