@@ -46,6 +46,7 @@ class _IrisSubmissionRoute:
     priority: str
     timeout_hours: int
     container_profile: job_pb2.ContainerProfile | None
+    coordinator_name: str | None
 
 
 def _module_name(module: ModuleType) -> str:
@@ -83,11 +84,15 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     priorities = {execution.priority for execution in executions}
     if len(priorities) != 1:
         raise ValueError(f"one RL main cannot use multiple coordinator priorities: {sorted(priorities)!r}")
+    names = {execution.coordinator_name for execution in executions}
+    if len(names) != 1:
+        raise ValueError("one RL main must use one coordinator name")
     cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
+        coordinator_name=names.pop(),
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
         container_profile=container_profile,
     )
@@ -108,7 +113,9 @@ def _coordinator_request(
             selected_env[name] = env_vars[name]
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
-    job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
+    job_name = sanitize_job_name(
+        route.coordinator_name or f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}"
+    )
     request = JobRequest(
         name=job_name,
         entrypoint=Entrypoint.from_binary(
@@ -135,7 +142,8 @@ def _submit_or_run(
     module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
 ) -> None:
     if get_job_info() is not None:
-        run(*handles, max_concurrent=max_concurrent)
+        named = _submission_route(_skyrl_executions(handles)).coordinator_name is not None
+        run(*handles, max_concurrent=max_concurrent, force_run_failed=not named)
         return
 
     workspace = find_project_root()
@@ -148,7 +156,8 @@ def _submit_or_run(
         coordinator_env,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
-        handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)
+        named = _submission_route(_skyrl_executions(handles)).coordinator_name is not None
+        handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=named)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
 
 

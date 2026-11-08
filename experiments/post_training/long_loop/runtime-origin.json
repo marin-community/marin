@@ -1,0 +1,82 @@
+{
+  "sft_source_commit": null,
+  "sft_source_commit_note": "Archived worktree git pointer is unavailable; exact source bytes are pinned below.",
+  "sft_config_sha256": "0abce298e480f1555a43d82131e1e37c226636be0da335c14a3f5d28eeeceb05",
+  "files": [
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/__init__.py",
+      "source_sha256": "057f07d472a73c03b998d62d1ed1aa37ae897cfaab405b2de734388e20ef4a6f",
+      "destination": "experiments/post_training/long_loop/sft_runtime/__init__.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/moe_hero_ep/ops/export_vllm.py",
+      "source_sha256": "afd1e7b1bb4e1b316cd909dc35e142741f8af08d7e4ca96886ece1cd9debf94d",
+      "destination": "experiments/post_training/long_loop/sft_runtime/export_writer.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/model.py",
+      "source_sha256": "f7ad69a6ba508ff4ec7ec06f265d41fc6f8758e519673c3216c7bb3aa1fcdd8c",
+      "destination": "experiments/post_training/long_loop/sft_runtime/model.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/test_gradient_accumulation.py",
+      "source_sha256": "372a221554d00ae929b42a3d9c6fd8fb0d4fe9d17576db2b985718028865cd2d",
+      "destination": "experiments/post_training/long_loop/sft_runtime/test_gradient_accumulation.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/test_sft_updates.py",
+      "source_sha256": "adc67f969c549fe1fc2e587ad0a9104a0b7a2293b434e44fc599061cf5ab58c0",
+      "destination": "experiments/post_training/long_loop/sft_runtime/test_sft_updates.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/test_validation_checkpoint.py",
+      "source_sha256": "8069870c54778cede87db5c8e3788a95725394cf82cae51bf70eb971a54cd49f",
+      "destination": "experiments/post_training/long_loop/sft_runtime/test_validation_checkpoint.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/train.py",
+      "source_sha256": "b94da9cff1a7df92467eaf51b4c8c8bba42168742ffd3e4ee525445901617584",
+      "destination": "experiments/post_training/long_loop/sft_runtime/train.py"
+    },
+    {
+      "source": "/Users/benfeuer/Documents/experiments/complete/sft-pipe-repro/artifacts/worktrees/marin/experiments/grug/snowball_sft/validation_checkpoint.py",
+      "source_sha256": "b5ecf796ddefc381b1bed17c61b9aabe7dc13b880098e157d4a440620cbbe077",
+      "destination": "experiments/post_training/long_loop/sft_runtime/validation_checkpoint.py"
+    }
+  ],
+  "micro_source_commit": "36ce62ecb793ef31def1b87ea7847e643e08691e",
+  "micro_files": [
+    {
+      "source": "profile.py",
+      "sha256": "0cda3de73ea366dfa270e63a62acb61ffcaf9216e5dde661821ae72bb1ce488b"
+    },
+    {
+      "source": "artifacts.py",
+      "sha256": "4dc7cf988b54daed9e5ad99c4674ba9cee3f7aac38884b01a5dfcc2a7a2ef3f1"
+    },
+    {
+      "source": "repair_release.py",
+      "sha256": "801ec2da29c920ee783a3a09bfcbf1e7a67d8d201bad7dfe85fd4390f0728fb3"
+    },
+    {
+      "source": "environment_inventory.py",
+      "sha256": "38f3f7bf40b160268a2f35b0ddbdfdf40cf8afcb3bcc5f70762709c1ae726b01"
+    },
+    {
+      "source": "environment_preflight.py",
+      "sha256": "6969a459251ddd9a982f2b67d620d518e12666f493709508c714e5728569c5cc"
+    },
+    {
+      "source": "judge.py",
+      "sha256": "c80e0830eaac11e0ca9280a7ce9bda79910720841a05bd30ef3bd2ca2e84436e"
+    },
+    {
+      "source": "audit_results.py",
+      "sha256": "37711415c2109571eb5cdaccbe50bd0f2ec83afb7910c418e6c3e12125f62a44"
+    },
+    {
+      "source": "launch.py",
+      "sha256": "1ba28238a61558158c82b7da814a5ea5012cc66dcf3fc19091a4725ccec68f40"
+    }
+  ]
+}

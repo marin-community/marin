@@ -6,6 +6,7 @@
 from dataclasses import replace
 
 import yaml
+from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
@@ -33,7 +34,12 @@ def smoke_recipe() -> dict:
     """Retain the quick-loop task/runtime policy; change only GS8 and staleness."""
     config = training_recipe(3)
     config["trainer"]["rollout_buffer"]["max_staleness_steps"] = 2
+    config["trainer"]["step_wise_training"] = True
+    config["trainer"]["dump_data_batch"] = True
     config["trainer"]["project_name"] = "marin-long-loop"
+    config["generator"]["chat_template_kwargs"] = {"enable_thinking": True}
+    config["generator"]["sampling_params"].update(stop_token_ids=[128001, 128009], skip_special_tokens=False)
+    config["generator"]["eval_sampling_params"] = {"stop_token_ids": [128001, 128009], "skip_special_tokens": False}
     _materialize_role_plan_config(config, SMOKE_PLAN)
     return config
 
@@ -73,8 +79,10 @@ def smoke_rl_step(
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=36,
+            coordinator_name=f"long-loop-plumbing-{version}",
             job_timeout_seconds=36 * 60 * 60,
             wandb_entity="marin-community",
+            container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             required_env_vars=("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY"),
         ),
         export_hf=True,

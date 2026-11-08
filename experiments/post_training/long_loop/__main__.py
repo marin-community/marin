@@ -1,49 +1,60 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inspect the local long-loop plan or render worker timing events."""
+"""Build the Snowball SFT → GS8 RL → Micro210 plumbing loop."""
 
-import argparse
-from pathlib import Path
+from dataclasses import replace
 
-from experiments.post_training.long_loop.timing import read_events, report
+import click
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.cli import graph_handles
+from marin.rl.cli import _skyrl_executions, rl_build_options
+from marin.rl.skyrl import ArtifactHfModel
 
-STAGES = (
-    "resolve/preflight",
-    "SFT",
-    "committed SFT handoff",
-    "RL endpoint/mask preflight",
-    "async RL",
-    "drain/committed RL handoff",
-    "eval endpoint preflight",
-    "Micro210",
-    "report",
-)
+from experiments.post_training.inventory.train_quick_loop import DEFAULT_SELECTION_URI, SELECTION_PREFIX
+from experiments.post_training.long_loop.endpoint_probe import endpoint_step
+from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
+from experiments.post_training.long_loop.rl import smoke_rl_step
+from experiments.post_training.long_loop.runtime_timing import report_step, timed
+from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, sft_steps
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("plumbing", "qualification", "full"), default="plumbing")
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--run", action="store_true")
-    parser.add_argument("--events", type=Path, nargs="+")
-    parser.add_argument("--report", type=Path)
-    parser.add_argument("--synthetic", action="store_true")
-    args = parser.parse_args()
-    if args.run:
-        parser.error("Cluster execution is not wired: pin SFT/handoff and Snowball Micro210 bindings first.")
-    if args.events:
-        if args.report is None:
-            parser.error("--events requires --report")
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(report(read_events(args.events), synthetic=args.synthetic))
-        return
-    print(f"Long-loop {args.version}: {args.profile}; PLAN ONLY, no submissions")
-    print(" → ".join(STAGES))
-    print("GS8; 64 groups/update; staleness 2; max 256 H100; interactive priority")
-    print("Plumbing: 15 SFT updates, 3 RL updates at 24,576 context, 21 eval paths")
-    print("Unresolved: source/runtime pins, remote stage bindings, allocation-release and submit reconciliation,")
-    print("live evidence collectors, full Micro210 integration, native phase timing adapters.")
+def plumbing_loop(version: str, source_revision: str) -> ArtifactStep:
+    """Sequence real artifact bindings, including the live SFT endpoint check."""
+    inputs = timed(micro_inputs(version))
+    trained, exported = sft_steps(version, source_revision, prerequisites=(inputs,))
+    endpoint = timed(endpoint_step(version, exported))
+    selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/snowball-100k", "2026.11.04", DEFAULT_SELECTION_URI)
+    rl = smoke_rl_step(
+        version=version,
+        model=ArtifactHfModel(
+            step=exported,
+            tokenizer_uri=TOKENIZER_REPO,
+            tokenizer_revision=TOKENIZER_REVISION,
+            relative_path="hf",
+        ),
+        selection=selection,
+    )
+    rl = timed(replace(rl, deps=(*rl.deps, endpoint)))
+    evaluated = timed(smoke_evaluation(version, rl, inputs))
+    return report_step(version, [inputs, trained.deps[0], trained, exported, endpoint, rl, evaluated])
+
+
+@click.command(help=__doc__)
+@click.option("--stage", type=click.Choice(["inputs", "loop"]), default="loop", show_default=True)
+@click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
+@rl_build_options
+def main(source_revision: str, stage: str) -> ArtifactStep:
+    if len(source_revision) != 40 or any(c not in "0123456789abcdef" for c in source_revision):
+        raise click.BadParameter("Expected a full Git commit SHA", param_hint="--source-revision")
+    version = resolve_version("long-loop/micro-smoke", None)
+    loop = plumbing_loop(version, source_revision)
+    if stage == "loop":
+        return loop
+    inputs = next(step for step in graph_handles([loop]) if step.name == "long-loop/micro-inputs")
+    execution = replace(_skyrl_executions([loop])[0], coordinator_name=f"long-loop-inputs-{version}")
+    return replace(inputs, runtime_args={**inputs.runtime_args, "skyrl_execution": execution})
 
 
 if __name__ == "__main__":

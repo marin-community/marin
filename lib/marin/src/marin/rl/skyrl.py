@@ -16,7 +16,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 import fsspec
 import yaml
@@ -309,6 +309,14 @@ def _validate_relative_file_path(name: str, value: str) -> None:
         raise ValueError(f"TaskTrove {name} must identify a file below the release root: {value!r}")
 
 
+class ArtifactModel(Protocol):
+    """Model identity and dependency resolved when its producer has committed."""
+
+    def deps(self) -> tuple[ArtifactStep, ...]: ...
+
+    def resolve(self, ctx: StepContext) -> ResolvedModelLocator: ...
+
+
 @dataclass(frozen=True)
 class ArtifactHfModel:
     """An exact HF export; an empty relative path selects the artifact root."""
@@ -410,7 +418,7 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    model: ArtifactHfModel
+    model: ArtifactModel
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
     topology: SkyRLTopology
@@ -435,6 +443,7 @@ class IrisSkyRLExecution:
     target_cluster: str | None
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
+    coordinator_name: str | None = None
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()

@@ -1,61 +1,56 @@
 # Long-loop prototype
 
-Local implementation in progress: Snowball SFT → async RLOO-N (GS8) → Micro210.
-The quick-loop recipe is unchanged. No cluster jobs have been submitted.
+Snowball SFT → asynchronous RLOO-N (GS8) → Micro210. All stages use the
+Marin artifact runner and the `rl_build_options` submission path.
 
-`graph.py` binds stage builders through the existing Marin artifact runner. Local
-integration tests exercise real artifact execution, predecessor propagation,
-committed-cache reuse, and failure blocking. This is not a second scheduler.
-`preflight.py` checks measured endpoint and learner projection evidence, including
-the dual-EOS and missing-earlier-actions regressions. Evidence collectors still
-need connecting to the real serving and learner adapters.
-
-`timing.py` writes durable, per-writer JSONL and renders paired durations, overlap
-unions, allocation GPU-hours, failures and incomplete spans. Reports label synthetic
-inputs and do not equate work sums with elapsed wall time. Native phase adapters,
-full timing coverage, admitted-round boundaries and allocation enforcement remain
-unfinished. GPU peak reporting alone is not allocation enforcement.
-
-Inspect the plan without cluster access:
-
-```bash
-uv run python -m experiments.post_training.long_loop --profile plumbing --version 2026.11.08
-```
-
-Render events:
+The plumbing graph prepares the 21 benchmark environments, imports the pinned
+pre-SFT model, runs 15 SFT updates, exports BF16 parameters with frozen router
+biases, checks the served tokenizer/thinking template and both EOS tokens, runs
+three RL updates, and evaluates one task on each of the 21 Micro210 paths.
+The final report rejects incomplete or unverified benchmark coverage. This is a
+runtime test, not a Micro210 score or a completed 36-hour experiment.
 
 ```bash
 uv run python -m experiments.post_training.long_loop --version 2026.11.08 \
-  --events /path/to/events.jsonl --report /path/to/report.md --synthetic
+  --source-revision "$(git rev-parse HEAD)"
 ```
 
-Omit `--synthetic` only for real measurements. Each worker writes its own file;
-pass multiple files to `--events`. Preserve source files and unfinished spans.
+The default prints the graph. Add `--run --max-concurrent 1` to submit after
+validation. Each calendar version uses one named coordinator; repeating the
+command adopts that job instead of creating another coordinator. Failed stages
+are not automatically replayed. Reconcile a failed or ambiguous attempt before
+using a new version.
 
-## Before a cluster smoke
+Peak stage requests are 8 H100 for the base import, 256 for SFT, zero for the
+CPU export, 8 for the endpoint probe, 40 for RL, and 16 for evaluation including
+the judge. Dependencies serialize these stages. Every GPU job uses RNO2A at
+**interactive** priority; the aggregate limit is **256 H100**. Neither priority
+changes nor PR creation are authorized. Keep all changes in this worktree and
+merge current main regularly.
 
-`--run` deliberately fails before submission. A runnable smoke command cannot yet
-be provided: main lacks the completed general-model Micro210 runtime, and the
-SFT/handoff source pins and real stage bindings have not been wired here.
+SFT uses the archived tested 262k trainer, 256 sequences per update, and the
+initial phase of the 10-05 reproduction composition: 20.4734375% replay.
+The original 4,750-step learning-rate schedule and special-token treatment are
+preserved; this smoke stops at step 15 (~1.007B scheduled token positions).
+`runtime-origin.json` records the reused source bytes. The deleted native base
+import is reconstructed from HF revision `058ecaf27b9e4f37219df221a51e7d490d58ec3d`.
+The import must verify every one of the 502 tensor mappings.
 
-The concrete plumbing RL builder in `rl.py` uses the maintained quick-loop
-recipe at GS8 and staleness 2 on 40 H100s, interactive priority on RNO2A.
-Its model is the supplied preceding handoff. Topology validation passes locally.
-Next connect concrete SFT, frozen-router conversion and Micro210 builders. Each must forward the predecessor checkpoint, verify committed payloads,
-persist submission identity before launch, reconcile ambiguous attempts without
-resubmission, and prove allocation release before advancing. Bind real endpoint
-and all-turn projection probes. Add native timing adapters rather than replacing
-them with synthetic timers. Then review the exact pinned configuration and command
-with the coordinator before any cluster submission.
+RL uses the maintained quick-loop data selection `snowball-100k@2026.11.04`,
+64 groups per update, GS8, staleness 2, and 24,576/8,192 input/output geometry.
+It enables per-turn training, including earlier conversations after an agent
+reset. Regression tests cover their action masks, logprobs, behavior versions,
+router evidence, and malformed-reasoning penalties. The quick-loop defaults
+remain unchanged. Actual learner inputs are dumped for the smoke audit.
 
-The proposed plumbing workload remains 15 SFT updates (~1.007B positions), three
-async RL updates (64 groups × GS8, staleness 2, 24,576 context), then 21 Micro210
-paths. Peak budget: 256 H100 including transition overlap and judge; research
-priority. SFT steady work projects to 22 minutes; startup, conversion, RL and eval
-must be measured before giving a defensible total ETA. Proposed job prefix:
-`long-loop-plumbing-<run-version>`.
+Micro210 reuses the Mini runtime from branch commit
+`36ce62ecb793ef31def1b87ea7847e643e08691e` associated with issue #10933,
+adapted to Snowball and the pinned Micro210 dataset. The policy tokenizer is the
+original SFT tokenizer at `3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09`.
 
-All implementation stays in this worktree. Fetch and merge origin/main regularly.
-No pull request may be opened without explicit user approval. The aggregate
-allocation limit is 256 GPUs; priority is interactive and may not be changed
-without explicit user approval.
+`runtime_timing.py` persists coordinator stage-wall JSONL even when a stage fails.
+These spans include queue and startup time. Native SFT/SkyRL/Iris telemetry is
+still required to separate queue, compilation, learner, rollout, sandbox, judge,
+and allocation-release measurements; stage-wall spans must not be reported as
+compute time. Full phase collection and the 102,400-token CP4 qualification are
+not yet complete. The full 50B round and its task budget remain unmeasured.

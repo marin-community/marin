@@ -19,6 +19,8 @@ from rolloutengine.models import RolloutContractError
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
+    conversation_steps,
+    REASONING_VIOLATIONS_DIAGNOSTIC,
 )
 
 from skyrl_train.error_treatment import ErrorTreatment
@@ -577,11 +579,19 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
 
 def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
     """Use exact served prompts and score each transition at its final action token."""
-    if not rollout.steps:
+    steps = tuple(
+        step for conversation in rollout.conversations[:-1] for step in conversation_steps(conversation)
+    ) + rollout.steps
+    if not steps:
         return [rollout]
+    if REASONING_VIOLATIONS_DIAGNOSTIC in rollout.grade.diagnostics:
+        steps = tuple(
+            replace(step, transition=replace(step.transition, reward=None, token_rewards=None, reward_components={}))
+            for step in steps
+        )
     outputs = []
-    for index, step in enumerate(rollout.steps):
-        last = index == len(rollout.steps) - 1
+    for index, step in enumerate(steps):
+        last = index == len(steps) - 1
         grade = rollout.grade
         if grade.status == Outcome.GRADED or grade_skipped(grade):
             grade = step.transition.grade or (grade if last else skipped_grade("No intermediate verifier"))
@@ -601,6 +611,8 @@ def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
             stop_reason=rollout.stop_reason if last else turn.stop_reason,
             steps=(replace(step, response_end=len(turn.response_token_ids) - 1, transition=transition),),
             metrics=step.transition.metrics,
+            # Every conversation now has its own rows; do not charge earlier violations twice.
+            conversations=(),
         )
         outputs.append(output)
     return outputs
