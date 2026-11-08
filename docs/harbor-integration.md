@@ -200,9 +200,9 @@ unless Compose overrides them. The evaluator does not build images or start nest
 A sidecar exit closes the whole local task, including the agent. Grading cannot continue
 inside that task.
 
-The prepared local path accepts the supported Harbor agents listed in the
-[vendored runtime](../vendor/harbor/README.md). Preflight rejects unsupported
-agents and simulated users before task allocation.
+The prepared local path accepts Pi, Mini-SWE-Agent, Codex, OpenCode,
+Terminus-2, and Terminus-Kira. Preflight rejects unsupported agents and
+simulated users before task allocation.
 
 Standalone Pi tasks, including single-container tasks, must declare a digest-pinned
 `main` image with Pi installed in `environment/shellbox-images.json`.
