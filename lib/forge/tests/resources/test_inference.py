@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import override
 
@@ -13,7 +14,7 @@ from taskforge.llm.client import Usage as ProviderUsage
 from taskforge.llm.policy import LLMPolicy
 
 from forge.effects.events import Event, Retrying
-from forge.effects.issues import Hold, Restart
+from forge.effects.issues import Restart
 from forge.model.llm import Completion, Message, Role, ToolCall, ToolSchema
 from forge.resources.inference import (
     CompletionBackend,
@@ -133,14 +134,33 @@ async def test_provider_exhaustion_is_not_retried_by_executor() -> None:
     assert len(retries.events) == 1 and "secret" not in retries.events[0].cause
 
 
-async def test_request_rejection_holds_without_retry() -> None:
-    body = "invalid tool schema: " + "x" * 500 + "excluded suffix"
-    backend = Backend((ModelRequestRejected(400, body, ()),))
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+async def test_request_rejection_remains_a_typed_bug_without_retry(status: int) -> None:
+    error = ModelRequestRejected(status, "malformed request", ())
+    backend = Backend((error,))
     retries = Retries()
-    with pytest.raises(Hold) as caught:
+    with pytest.raises(ModelRequestRejected) as caught:
         await complete(request(), GlmInference(backend, "provider-config"), notify=retries)
-    assert caught.value.args[0] == f"GLM request rejected with status 400: {body[:500]}"
+    assert caught.value is error
     assert len(backend.calls) == 1 and not retries.events
+
+
+async def test_truncated_tool_arguments_remain_evidence_but_replay_as_valid_json() -> None:
+    broken = '{"findings": '
+    original = request()
+    event = InferenceRequest(
+        (
+            Message(Role.ASSISTANT, "", (ToolCall("report-1", "report", broken),)),
+            Message(Role.TOOL, "Invalid arguments: Expecting value", tool_call_id="report-1"),
+        ),
+        original.tools,
+        original.sampling,
+    )
+    backend = Backend((provider_completion(),))
+    await GlmInference(backend, "test").complete(event)
+    wire = json.loads(json.dumps(backend.calls[0][0][0]))
+    assert broken in json.loads(wire["tool_calls"][0]["function"]["arguments"]).values()
+    assert event.messages[0].tool_calls[0].arguments == broken
 
 
 async def test_fake_inference_records_requests_and_stops_at_script_end() -> None:

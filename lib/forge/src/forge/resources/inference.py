@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol, override
 
+from taskforge.llm.agent import replay_arguments
 from taskforge.llm.client import (
     RETRYABLE_STATUSES,
     Attempt,
@@ -82,7 +83,11 @@ def _message(message: Message) -> dict[str, object]:
         wire["tool_call_id"] = message.tool_call_id
     if message.tool_calls:
         wire["tool_calls"] = [
-            {"id": call.id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": replay_arguments(call.arguments)},
+            }
             for call in message.tool_calls
         ]
     return wire
@@ -90,7 +95,7 @@ def _message(message: Message) -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class GlmInference(InferenceClient):
-    """Hold on non-retryable rejection: a human must inspect the request or provider configuration."""
+    """Translate retryable transport failures; invalid requests remain typed bugs."""
 
     client: CompletionBackend
     provider_digest: str
@@ -118,10 +123,10 @@ class GlmInference(InferenceClient):
         except ContextExhausted as error:
             raise ContextExceeded(error.body) from error
         except ModelRequestRejected as error:
-            decision = Transient if error.status in RETRYABLE_STATUSES else Hold
-            detail = f": {error.body[:500]}" if decision is Hold else ""
-            raise decision(
-                f"GLM request rejected with status {error.status}{detail}", retries=_retries(error.attempts)
+            if error.status not in RETRYABLE_STATUSES:
+                raise
+            raise Transient(
+                f"GLM request rejected with status {error.status}", retries=_retries(error.attempts)
             ) from error
         return Completion(
             result.content,
