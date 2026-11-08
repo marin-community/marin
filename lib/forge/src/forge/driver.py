@@ -100,11 +100,12 @@ def run_policy(path: str) -> tuple[Policy, Policy]:
 
 
 def eligible(proposal: TaskProposal, policy: Policy) -> bool:
-    environment = proposal.header.environment.value
-    if environment in policy.setting("proposals.environments", tuple):
-        return True
-    logging.info("SKIP %s: environment=%s", proposal.header.id, environment)
-    return False
+    for field, key in (("environment", "proposals.environments"), ("verification", "proposals.verifications")):
+        value = getattr(proposal.header, field).value
+        if value not in policy.setting(key, tuple):
+            logging.info("SKIP %s: %s=%s", proposal.header.id, field, value)
+            return False
+    return True
 
 
 async def one(args: argparse.Namespace) -> None:

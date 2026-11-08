@@ -57,6 +57,7 @@ from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids, NewId, new_id
 from forge.resources.inference import CompletionBackend, GlmInference, InferenceRequest, complete
+from forge.resources.judge import JudgeEngine
 from forge.resources.provider import WaitingBackend
 from forge.resources.rollouts import RolloutResource, SolverRollout, run_rollout
 from forge.resources.sandbox.factories import (
@@ -99,19 +100,36 @@ def endpoint_source(base_url: str | None, relay_job: str | None, token: str, mod
     return FixedEndpoint(GlmEndpoint(base_url, token, Pool(pool)))
 
 
+@dataclass(frozen=True, slots=True)
+class PooledEndpoint(EndpointSource):
+    source: EndpointSource
+    pool: Pool
+
+    def current(self) -> GlmEndpoint:
+        return replace(self.source.current(), pool=self.pool)
+
+
 def install(ctx: Context, resources: Resources) -> None:
     async def cleanup_notes(event: Resolved[object]) -> None:
         value = event.value.grade if isinstance(event.value, GradedRollout) else event.value
         if isinstance(value, GradeResult) and value.diagnostics.get("cleanup_errors"):
             await ctx.emit(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
 
+    rollouts, grading = resources.rollouts, resources.grading
+    if (judge := resources.role_inference.get("judge")) is not None:
+        rollouts = replace(rollouts, engine=JudgeEngine(rollouts.engine, ctx, judge))
+        grading = replace(
+            grading,
+            engine=JudgeEngine(grading.engine, ctx, judge),
+            fresh_engine=JudgeEngine(grading.fresh_engine, ctx, judge) if grading.fresh_engine else None,
+        )
     ctx.observe(Resolved, cleanup_notes)
     if resources.verifiers is not None:
         resources.verifiers.notify = ctx.emit
     for event, execute, resource in (
         (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference_for("author")),
-        (SolverRollout, partial(run_rollout, notify=ctx.emit), resources.rollouts),
-        (GradeCandidate, partial(grade, notify=ctx.emit), resources.grading),
+        (SolverRollout, partial(run_rollout, notify=ctx.emit), rollouts),
+        (GradeCandidate, partial(grade, notify=ctx.emit), grading),
         (Now, now, resources.clock),
         (NewId, new_id, resources.ids),
         (WebSearch, partial(search, notify=ctx.emit), resources.web),
@@ -157,7 +175,17 @@ def build_resources(
     provider = {key: value for key, value in policy.entries.items() if key.startswith("provider.")}
     sampling = policy_sampling(policy)
     inference = {
-        role: GlmInference(client, digest((provider, role, policy.setting(f"{role}.context_tokens", int))))
+        role: GlmInference(
+            client,
+            digest(
+                (
+                    provider,
+                    role,
+                    policy.setting(f"{'solver' if role == 'judge' else role}.context_tokens", int),
+                    policy.entries.get(f"{role}.pool", policy.setting("provider.pool", str)),
+                )
+            ),
+        )
         for role, client in clients.items()
     }
     return Resources(
@@ -312,10 +340,17 @@ async def runtime(
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         clients: dict[str, CompletionBackend] = {}
-        for role in ("author", "solver", "adversary"):
+        roles = (
+            ("author", "solver", "adversary", "judge")
+            if policy.setting("judge.model", str)
+            else ("author", "solver", "adversary")
+        )
+        for role in roles:
             model = policy.setting(f"{role}.model", str)
             provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
             role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
+            if role == "judge":
+                role_source = PooledEndpoint(role_source, Pool(policy.setting("judge.pool", str)))
             logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
             client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
             clients[role] = WaitingBackend(
