@@ -22,6 +22,7 @@ from forge.model.workpiece import Conversation, Workpiece
 from forge.policy import GRADER_BASE_IMAGE, Policy
 from forge.resources.bundle import Resources
 from forge.resources.env import Env, ReadFile, RunCommand, WriteFile, read_file, run_command, write_file
+from forge.resources.execution import close_resource
 from forge.stages.summary import validation_path
 
 
@@ -115,4 +116,4 @@ async def author(ctx: Context, workpiece: Workpiece, config: ForgeConfig, resour
             )
             return await config.author.run(ctx, session, resources.inference_for("author"), tools)
     finally:
-        await env.close()
+        await close_resource(env.close, ctx.emit)

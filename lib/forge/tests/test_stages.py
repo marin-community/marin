@@ -20,7 +20,7 @@ from taskcompendium.runtime.resources import inline_resource
 from forge.arms import decided, validated
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
-from forge.effects.events import Resolved
+from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold, OutputBudgetExhausted, Restart
 from forge.effects.log import EventLog
 from forge.harness.protocol import Returned, Stopped, StopReason, Submitted, Tool
@@ -62,6 +62,7 @@ from forge.policy import GRADER_BASE_IMAGE, Policy, load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.bundle import Resources
 from forge.resources.clock import Clock
+from forge.resources.env import FakeEnv
 from forge.resources.grading import GradeCandidate, GradingResource, grade
 from forge.resources.ids import Ids
 from forge.resources.inference import FakeInference, InferenceClient
@@ -785,3 +786,40 @@ async def test_output_budget_replaces_adversary_once_and_does_not_hold(workpiece
         (result,),
     )
     assert not isinstance(default_review(workpiece.with_(evidence=(evidence,)), setup.band, setup.budget), Incomplete)
+
+
+@pytest.mark.parametrize("primary_failure", [False, True])
+async def test_author_cleanup_warns_without_replacing_result(
+    workpiece: Workpiece, monkeypatch: pytest.MonkeyPatch, primary_failure: bool
+) -> None:
+    ctx = Context(log=EventLog())
+    notes: list[Note] = []
+
+    async def note(record: Note) -> None:
+        notes.append(record)
+
+    ctx.observe(Note, note)
+    bundle = resources(ctx)
+    assert isinstance(bundle.envs, Environments)
+    original = bundle.envs.create
+
+    async def create(requirements: EnvironmentRequirements) -> FakeEnv:
+        env = await original(requirements)
+        close = env.close
+
+        async def failed_close() -> None:
+            await close()
+            raise RuntimeError("Machine cleanup failed: ['machine_close']")
+
+        monkeypatch.setattr(env, "close", failed_close)
+        return env
+
+    monkeypatch.setattr(bundle.envs, "create", create)
+    outcome = Restart("primary failure") if primary_failure else Stopped(StopReason.FINISHED, Conversation((), ()))
+    if primary_failure:
+        with pytest.raises(Restart, match="primary failure"):
+            await author(ctx, workpiece, config(RecordingHarness(outcome)), bundle)
+    else:
+        assert await author(ctx, workpiece, config(RecordingHarness(outcome)), bundle) == outcome
+    await ctx.drain()
+    assert len(notes) == 1 and "machine_close" in notes[0].msg

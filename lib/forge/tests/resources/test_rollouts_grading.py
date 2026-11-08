@@ -21,7 +21,13 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.test_support import arithmetic_task, rollout_spec
-from shellbox.machine import ExecSetupFailed, MachineCancelled, MachineOutputLimitExceeded, MachineTerminated
+from shellbox.machine import (
+    ExecSetupFailed,
+    MachineCancelled,
+    MachineOutputLimitExceeded,
+    MachineTerminated,
+    MachineUnavailable,
+)
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -222,3 +228,10 @@ def test_only_agent_output_exhaustion_counts_as_agent_failure(operation: Rollout
     error = RolloutInterrupted(Rollout("output", (), "interrupted"), operation)
     error.__cause__ = MachineOutputLimitExceeded("ShellSim terminated: output_limit_exceeded")
     assert isinstance(interruption(error), OutputBudgetExhausted) is (operation is RolloutOperation.ADVANCE)
+
+
+@pytest.mark.parametrize("operation", list(RolloutOperation))
+def test_controller_unavailability_is_transient_in_every_phase(operation: RolloutOperation) -> None:
+    error = RolloutInterrupted(Rollout("unavailable", (), "interrupted"), operation)
+    error.__cause__ = MachineUnavailable("Iris controller unavailable: Controller is shutting down")
+    assert isinstance(interruption(error), Transient)

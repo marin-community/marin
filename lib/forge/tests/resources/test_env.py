@@ -18,6 +18,7 @@ from shellbox.machine import (
     MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineTerminated,
+    MachineUnavailable,
     PackageSpec,
     Result,
 )
@@ -197,6 +198,7 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
         (MachineTerminated("Machine is closed"), Restart),
         (MachineResourceExhausted("ShellSim terminated: cpu_exhausted"), Hold),
         (TimeoutError("busy"), Transient),
+        (MachineUnavailable("Controller is shutting down"), Transient),
     ],
 )
 async def test_shellbox_failure_preserves_unresolved_history(

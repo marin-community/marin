@@ -17,11 +17,13 @@ import httpx
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import JobName
+from iris.rpc.errors import DEFAULT_RETRY_MAX_ELAPSED
 from pydantic import TypeAdapter
-from rolloutengine.models import ModelRequest, ModelTurn
+from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
 from rolloutengine.validation import InvalidTaskSpec
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import MachineFactory
+from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
@@ -30,6 +32,7 @@ from taskforge.llm.rollout_model import model_turn
 from forge.arms import transitions
 from forge.config import ForgeConfig, WorkspaceHydration
 from forge.effects.context import Context
+from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold
 from forge.harness.loop import AgenticHarness
 from forge.harness.tools import adversary_tools, standard_tools
@@ -97,6 +100,14 @@ def endpoint_source(base_url: str | None, relay_job: str | None, token: str, mod
 
 
 def install(ctx: Context, resources: Resources) -> None:
+    async def cleanup_notes(event: Resolved[object]) -> None:
+        value = event.value.grade if isinstance(event.value, GradedRollout) else event.value
+        if isinstance(value, GradeResult) and value.diagnostics.get("cleanup_errors"):
+            await ctx.emit(Note(f"Cleanup failed: {value.diagnostics['cleanup_errors']}"))
+
+    ctx.observe(Resolved, cleanup_notes)
+    if resources.verifiers is not None:
+        resources.verifiers.notify = ctx.emit
     for event, execute, resource in (
         (InferenceRequest, partial(complete, notify=ctx.emit), resources.inference_for("author")),
         (SolverRollout, partial(run_rollout, notify=ctx.emit), resources.rollouts),
@@ -276,6 +287,12 @@ async def runtime(
     policy = provider_policy(policy)
     declared = load_policy(Path(__file__).parent / "policy/defaults")
     logging.info("\n".join(resolution_lines(declared, policy)))
+    logging.info(
+        "provider.unavailable_wait declared=%s resolved=%s iris_call_cap=%gs",
+        declared.setting("provider.unavailable_wait", float),
+        policy.setting("provider.unavailable_wait", float),
+        DEFAULT_RETRY_MAX_ELAPSED,
+    )
     provider_fields = {
         key.removeprefix("provider."): value
         for key, value in policy.entries.items()
