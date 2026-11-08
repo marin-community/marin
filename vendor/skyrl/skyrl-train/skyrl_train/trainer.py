@@ -62,7 +62,9 @@ from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
 from skyrl_train.utils.algorithm_registry import AdvantageEstimator
-from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
+from skyrl_train.utils.advantage_estimators import (
+    GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns, expand_outcome_to_steps,
+)
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
@@ -2640,6 +2642,7 @@ class RayPPOTrainer:
             lambd = self.cfg.trainer.algorithm.lambd
             grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
             last_step_rewards = token_level_rewards[is_last_step]
+            excluded = data.metadata.get("exclude_from_baseline")
             # compatible with any advantage estimator
             last_step_advantages, last_step_returns = compute_advantages_and_returns(
                 token_level_rewards=last_step_rewards,
@@ -2652,6 +2655,7 @@ class RayPPOTrainer:
                 lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
+                exclude_from_baseline=None if excluded is None else excluded[is_last_step.cpu().numpy()],
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -2662,6 +2666,10 @@ class RayPPOTrainer:
             )
             advantages = last_step_advantages[traj_ids]
             returns = last_step_returns[traj_ids]
+            if adv_estimator == AdvantageEstimator.RLOO_N:
+                final_mask = response_mask[is_last_step]
+                advantages = expand_outcome_to_steps(last_step_advantages, final_mask, response_mask, traj_ids)
+                returns = expand_outcome_to_steps(last_step_returns, final_mask, response_mask, traj_ids)
         else:
             # For RLOO-N: pass exclude_from_baseline if present in metadata
             exclude_from_baseline = data.metadata.get("exclude_from_baseline", None)

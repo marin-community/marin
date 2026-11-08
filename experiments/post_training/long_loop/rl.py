@@ -83,7 +83,7 @@ def smoke_rl_step(
             job_timeout_seconds=36 * 60 * 60,
             wandb_entity="marin-community",
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-            required_env_vars=("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY"),
+            required_env_vars=("DAYTONA_EVAL_API_KEY", "TOGETHER_API_KEY", "MARIN_PREFIX"),
         ),
         export_hf=True,
     )
