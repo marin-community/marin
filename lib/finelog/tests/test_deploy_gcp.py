@@ -100,3 +100,19 @@ def test_bootstrap_sets_the_configured_telemetry_migration_mode() -> None:
     script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
 
     assert "-e FINELOG_TELEMETRY_MIGRATION_MODE=dual-write" in script
+
+
+def test_bootstrap_passes_the_configured_query_timeout() -> None:
+    cfg = FinelogConfig(
+        name="finelog-marin",
+        port=10001,
+        image="ghcr.io/example/finelog:latest",
+        remote_log_dir="gs://bucket/finelog/marin",
+        deployment=Deployment(gcp=GcpDeployment(project="proj", zone="us-central1-a")),
+        query_timeout_ms=60_000,
+    )
+
+    script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
+
+    assert "-e FINELOG_QUERY_TIMEOUT_MS=60000" in script
+

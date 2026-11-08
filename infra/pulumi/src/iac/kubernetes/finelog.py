@@ -106,6 +106,8 @@ def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
                 value=str(config.object_cache_gb),
             )
         )
+    if config.query_timeout_ms is not None:
+        env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_QUERY_TIMEOUT_MS", value=str(config.query_timeout_ms)))
     if config.auth:
         env.append(k8s.core.v1.EnvVarArgs(name="FINELOG_AUTH_POLICY", value=auth_policy_json(config.auth)))
     if config.forwarding:

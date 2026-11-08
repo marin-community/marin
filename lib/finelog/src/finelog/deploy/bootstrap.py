@@ -159,6 +159,7 @@ def render_bootstrap(
     query_metadata_cache_mb: int | None,
     query_index_cache_mb: int | None,
     object_cache_gb: int | None = None,
+    query_timeout_ms: int | None = None,
     telemetry_migration_mode: str = "normal",
 ) -> str:
     """Render the finelog bootstrap script.
@@ -169,7 +170,8 @@ def render_bootstrap(
     tunnel. It is passed single-quoted, so it must not contain a single quote
     (the JSON never does — CIDR prefixes, cluster names, PEM public keys).
     ``query_metadata_cache_mb`` leaves DataFusion's default in place when unset,
-    and ``query_index_cache_mb`` the server's decoded index-cache default.
+    ``query_index_cache_mb`` the server's decoded index-cache default, and
+    ``query_timeout_ms`` the server's 10-second query ceiling.
     """
     if not image:
         raise ValueError("image is required")
@@ -185,6 +187,8 @@ def render_bootstrap(
         query_env += f"-e FINELOG_INDEX_CACHE_MB={query_index_cache_mb} "
     if object_cache_gb is not None:
         query_env += f"-e FINELOG_OBJECT_CACHE_GB={object_cache_gb} "
+    if query_timeout_ms is not None:
+        query_env += f"-e FINELOG_QUERY_TIMEOUT_MS={query_timeout_ms} "
     migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
     return render_template(
         BOOTSTRAP_SCRIPT,
