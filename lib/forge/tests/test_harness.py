@@ -16,6 +16,7 @@ from taskforge.llm.policy import LLMPolicy
 from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
+from forge.effects.events import Resolved
 from forge.effects.issues import Hold, Transient
 from forge.effects.log import EventLog, JsonlSink
 from forge.harness.loop import AgenticHarness
@@ -120,21 +121,36 @@ async def test_shell_submit_session_and_persisted_replay_spend_no_inference(tmp_
     assert replay_env.files == env.files
 
 
-async def test_argument_and_unknown_tool_errors_return_to_model_before_finish() -> None:
+async def test_malformed_report_and_schema_errors_recover_with_replayable_history() -> None:
+    malformed = '{"findings": '
     script = (
-        Completion("", (ToolCall("1", "shell", "{"), ToolCall("2", "missing", "{}"), ToolCall("3", "shell", "{}"))),
-        call("finish", {"reason": "done"}, "4"),
+        Completion(
+            "",
+            (
+                ToolCall("1", "report", malformed),
+                ToolCall("2", "missing", "{}"),
+                ToolCall("3", "report", '{"findings": "wrong"}'),
+                ToolCall("4", "shell", '{"command": "must not execute", "timeout": "30"}'),
+            ),
+        ),
+        call("report", {"findings": []}, "5"),
     )
-    ctx = Context(log=EventLog())
+    log = EventLog()
+    ctx = Context(log=log)
     client = FakeInference(script)
     environment(ctx)
     result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
-        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "finish": FinishTool()}
+        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task())}
     )
     await ctx.drain()
-    assert isinstance(result, Stopped) and result.reason == StopReason.FINISHED
-    assert [m.tool_call_id for m in client.requests[1].conversation if m.role == "tool"] == ["1", "2", "3"]
-    assert result.session.messages[-1].tool_calls[0].id == "4"
+    assert isinstance(result, Returned) and result.payload == AdversaryReport(())
+    history = client.requests[1].conversation
+    assert [m.tool_call_id for m in history if m.role == Role.TOOL] == ["1", "2", "3", "4"]
+    assert all(isinstance(json.loads(call.arguments), dict) for message in history for call in message.tool_calls)
+    assert malformed in json.loads(history[0].tool_calls[0].arguments).values()
+    assert "call report again" in history[1].content and "failed validation" in history[3].content
+    assert any(isinstance(record.event, Resolved) and record.event.value == script[0] for record in log.records)
+    assert not any(isinstance(record.event, RunCommand) for record in log.records)
 
 
 async def test_submit_gate_feedback_and_validate_capture_current_draft() -> None:

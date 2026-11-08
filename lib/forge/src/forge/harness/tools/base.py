@@ -3,6 +3,7 @@
 
 """Validate model arguments before a tool performs effects."""
 
+import json
 from abc import abstractmethod
 from collections.abc import Mapping
 from tarfile import TarError
@@ -30,9 +31,9 @@ class ValidatedTool[A](Tool[object]):
     @override
     async def __call__(self, ctx: Context, args: Mapping[str, object]) -> Outcome:
         try:
-            parsed = TypeAdapter(self.args_type).validate_python(dict(args))
+            parsed = TypeAdapter(self.args_type).validate_json(json.dumps(dict(args)), strict=True)
         except ValidationError as error:
-            return ToolResult(f"Invalid arguments: {error}")
+            return ToolResult(f"{self.name} arguments failed validation: {error}; call {self.name} again.")
         try:
             return await self.run(ctx, parsed)
         except (OSError, TarError) as error:
