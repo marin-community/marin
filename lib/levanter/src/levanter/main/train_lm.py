@@ -111,20 +111,16 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
-def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig, fp32_fields: tuple[str, ...]) -> LmConfig:
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
     """Reapply the requested Snowball runtime settings after an HF config reload.
 
-    The HF config is authoritative for every architecture field. The FP32 router dot,
-    combine and activations flags, the attention and MoE implementations and the MoE
-    capacity factor are not in HF metadata, so they are copied from the requested config.
-    The requested reference checkpoint and tokenizer are kept too.
+    HF metadata supplies architecture fields. Keep the requested runtime settings,
+    reference checkpoint, and tokenizer.
     """
     if not isinstance(requested, SnowballConfig):
         return reloaded
     if not isinstance(reloaded, SnowballConfig):
         raise ValueError("HF reload changed the Snowball model type")
-    if requested.router_dot_fp32 and "router_bias" not in fp32_fields:
-        raise ValueError("FP32 router dot requires trainer.fp32_fields to include router_bias after HF reload")
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
@@ -181,6 +177,9 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
+    if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
+        if "router_bias" not in config.trainer.fp32_fields:
+            raise ValueError("FP32 router dot requires trainer.fp32_fields to include router_bias")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
@@ -225,7 +224,6 @@ def main(config: TrainLmConfig):
             config.model = preserve_hf_runtime_settings(
                 converter.config_from_hf_config(converter.default_hf_config),
                 config.model,
-                config.trainer.fp32_fields,
             )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
