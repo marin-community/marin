@@ -46,12 +46,12 @@ def score_reference(example: ReferenceExample, logprobs: Sequence[Mapping[int, f
     if len(logprobs) != len(example.token_ids):
         raise ValueError(f"Reference {example.id}: prompt logprobs do not align with token IDs")
     chosen = []
-    for token, probabilities in zip(
+    for token, position_logprobs in zip(
         example.token_ids[example.reference_start :], logprobs[example.reference_start :], strict=True
     ):
-        if probabilities is None or token not in probabilities:
+        if position_logprobs is None or token not in position_logprobs:
             raise ValueError(f"Reference {example.id}: missing chosen-token logprob")
-        value = float(probabilities[token])
+        value = float(position_logprobs[token])
         if not math.isfinite(value) or value > 0:
             raise ValueError(f"Reference {example.id}: invalid chosen-token logprob")
         chosen.append(value)
@@ -133,10 +133,10 @@ class ReferenceLikelihoodCallback(TrainerCallback):
                     "sampling_params": {"temperature": 0.0, "max_tokens": 1, "prompt_logprobs": 0},
                 }
             )
-            probabilities = output["prompt_logprobs"]
-            if probabilities is None or len(probabilities) != len(batch):
+            prompt_logprobs = output["prompt_logprobs"]
+            if prompt_logprobs is None or len(prompt_logprobs) != len(batch):
                 raise ValueError("Reference likelihood did not receive every prompt's scores")
-            scores.extend(score_reference(row, probs) for row, probs in zip(batch, probabilities, strict=True))
+            scores.extend(score_reference(row, logprobs) for row, logprobs in zip(batch, prompt_logprobs, strict=True))
         payload = "".join(
             json.dumps({"step": state.global_step, **asdict(score)}, allow_nan=False) + "\n" for score in scores
         )
