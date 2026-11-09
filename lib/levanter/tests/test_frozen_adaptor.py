@@ -23,6 +23,8 @@ from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.main.model_init import ModelInitContext, load_model_from_source
+from levanter.main.train_dpo import _install_separate_reference_export_hooks
+from levanter.dpo import DpoModel
 from levanter.main.train_lm import (
     TrainLmConfig,
     _load_lm_model_from_configured_source,
@@ -209,6 +211,39 @@ def resumed(env, state, grads):
     return restored.take_step(grads, key=jax.random.PRNGKey(3))[0]
 
 
+def load_through_dpo_source(env, mp):
+    """Load the bf16 Snowball HF source through the DPO load function."""
+    return load_model_from_source(
+        context=ModelInitContext(
+            model=env.lm_config.model,
+            converter=env.source_kwargs["converter"],
+            use_hf_model_config=False,
+        ),
+        Vocab=hax.Axis("vocab", 16),
+        model_key=jax.random.PRNGKey(0),
+        parameter_axis_mapping={},
+        mp=mp,
+        hf_ref=True,
+    )
+
+
+def assert_bf16_export_with_fp32_biases(env, export_dir, expected):
+    """The saved router biases keep their original float32 bits; every other tensor is ``expected`` in bf16."""
+    actual = {}
+    for filename in export_dir.glob("*.safetensors"):
+        with safetensors.safe_open(filename, framework="jax", device="cpu") as shard:
+            actual.update({name: shard.get_tensor(name) for name in shard.keys()})
+    assert set(actual) == set(env.original)
+    for name, value in actual.items():
+        if name in env.fp32_keys:
+            assert value.dtype == jnp.float32
+            np.testing.assert_array_equal(value, env.original[name])
+            assert not np.array_equal(value, env.original[name].astype(jnp.bfloat16).astype(jnp.float32))
+        else:
+            assert value.dtype == jnp.bfloat16
+            np.testing.assert_array_equal(value, expected[name].astype(jnp.bfloat16))
+
+
 def test_without_field_dtype_overrides_frozen_biases_round_to_compute_dtype(fp32_snowball):
     env = fp32_snowball
     compute_config = dataclasses.replace(env.trainer_config, field_dtype_overrides={})
@@ -231,24 +266,36 @@ def test_load_model_from_source_honours_field_dtype_overrides(fp32_snowball, ove
     """The DPO load path keeps overridden biases at their stored float32 bits and rounds them otherwise."""
     env = fp32_snowball
     mp = env.trainer.mp if overridden else env.trainer_config.mp
-    loaded = load_model_from_source(
-        context=ModelInitContext(
-            model=env.lm_config.model,
-            converter=env.source_kwargs["converter"],
-            use_hf_model_config=False,
-        ),
-        Vocab=hax.Axis("vocab", 16),
-        model_key=jax.random.PRNGKey(0),
-        parameter_axis_mapping={},
-        mp=mp,
-        hf_ref=True,
-    )
+    loaded = load_through_dpo_source(env, mp)
     for block, original_block in zip(loaded.transformer.blocks, env.model.transformer.blocks):
         original = original_block.mlp.router_bias
         expected = original if overridden else original.astype(jnp.bfloat16).astype(jnp.float32)
         assert block.mlp.router_bias.dtype == jnp.float32
         np.testing.assert_array_equal(block.mlp.router_bias, expected)
         assert np.array_equal(block.mlp.router_bias, original) == overridden
+
+
+def test_dpo_load_and_export_hook_keep_overridden_biases(fp32_snowball):
+    """Load through the DPO load function, then export through the real DPO HF hook and read the saved tensors."""
+    env = fp32_snowball
+    loaded = load_through_dpo_source(env, env.trainer.mp)
+    hooks = []
+    trainer = types.SimpleNamespace(
+        run_id="dpo-export",
+        config=env.trainer_config,
+        add_hook=lambda hook, *, every: hooks.append(hook),
+    )
+    export_path = env.tmp_path / "dpo-export"
+    _install_separate_reference_export_hooks(
+        trainer=trainer,
+        converter=env.converter,
+        export=AdaptorExportConfig(hf_save_path=str(export_path), hf_save_steps=1, hf_save_dtype="bfloat16"),
+    )
+    [hook] = hooks
+    with jax.set_mesh(compact_grug_mesh()):
+        hook(types.SimpleNamespace(step=1, next_step=2, eval_model=DpoModel(policy=loaded, reference=env.model)))
+    [step_dir] = export_path.glob("**/step-1")
+    assert_bf16_export_with_fp32_biases(env, step_dir, to_torch_compatible_state_dict(loaded))
 
 
 def test_fp32_frozen_biases_receive_gradients_but_stay_fixed(fp32_snowball):
@@ -275,18 +322,7 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(fp32_snowball):
     )
     with jax.set_mesh(compact_grug_mesh()):
         callback(StepInfo(state=restored, loss=0.0, step_duration=0.0))
-    actual = {}
-    for filename in (env.tmp_path / "step-2").glob("*.safetensors"):
-        with safetensors.safe_open(filename, framework="jax", device="cpu") as shard:
-            actual.update({name: shard.get_tensor(name) for name in shard.keys()})
-    assert set(actual) == set(env.original)
-    for name, value in actual.items():
-        if name in env.fp32_keys:
-            assert value.dtype == jnp.float32
-            np.testing.assert_array_equal(value, env.original[name])
-        else:
-            assert value.dtype == jnp.bfloat16
-            np.testing.assert_array_equal(value, updated[name].astype(jnp.bfloat16))
+    assert_bf16_export_with_fp32_biases(env, env.tmp_path / "step-2", updated)
     assert not np.array_equal(updated["model.embed_tokens.weight"], env.original["model.embed_tokens.weight"])
 
 

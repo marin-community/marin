@@ -118,7 +118,8 @@ def _install_full_model_export_hook(
     converter: HFCheckpointConverter | None,
     export: AdaptorExportConfig,
 ) -> None:
-    """Register the HF export of a complete model; the trainer's fp32 fields are exported in float32."""
+    """Register the HF export of a complete model; each field in the trainer's ``field_dtype_overrides`` is exported
+    in its own dtype."""
     if export.peft_save_path is not None or export.merged_hf_save_path is not None:
         raise ValueError("peft_save_path and merged_hf_save_path require adapter.type: lora.")
 
@@ -181,7 +182,6 @@ class FrozenParameterAdaptorConfig(AdaptorConfig):
     """
 
     frozen_field_names: tuple[str, ...]
-    hf_config_overrides: dict | None = None
 
     def apply(self, model, *, key, axis_mapping=None):
         del key, axis_mapping
@@ -218,10 +218,6 @@ class FrozenParameterAdaptorConfig(AdaptorConfig):
         export: AdaptorExportConfig,
     ) -> None:
         del tokenizer
-        if self.hf_config_overrides is not None:
-            if converter is None:
-                raise ValueError("HF config overrides require an HF checkpoint converter")
-            converter = converter.with_config_overrides(self.hf_config_overrides)
         _install_full_model_export_hook(trainer=trainer, converter=converter, export=export)
 
 
@@ -293,6 +289,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
                     generation_config=export.generation_config,
                     chat_template=export.chat_template,
                     model_getter=export_model,
+                    field_dtype_overrides=trainer.config.field_dtype_overrides,
                 ),
                 every=export.hf_save_steps,
             )
