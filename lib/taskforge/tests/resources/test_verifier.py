@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import override
 
 import pytest
-from lib.taskforge.tests.resources.test_rollouts_grading import FakeEngine
+from lib.taskforge.tests.resources.rollout_fakes import FakeEngine
 from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, Rollout, TraceMode
 from rolloutengine.test_support import arithmetic_task, machine_runtime, rollout_limits
 from shellbox.machine import (
