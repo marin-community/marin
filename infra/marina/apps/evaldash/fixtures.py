@@ -60,6 +60,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.rollouts.evaluation import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
+from rigging.filesystem.storage_path import prefix_join
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection
 from taskcompendium.evaluation.spec import EvaluationProtocol, LikelihoodMetric, Metric, Sampling, TrialPolicy
 from taskcompendium.grading_result import Outcome
@@ -431,6 +432,7 @@ _HEADLINE = {
     "arc-challenge": ("acc_norm,none", "acc_norm_stderr,none"),
     "gsm8k": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
+    "gsm8k-5shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
     "humaneval": ("pass@1", "pass@1_stderr"),
     "math500": ("accuracy", None),
     "aime24": ("accuracy_avg", "accuracy_std_err"),
@@ -1003,7 +1005,7 @@ def build_native_fixtures(dest: str) -> list[str]:
         ("gsm8k-5shot", 5, "exact_match,strict-match"),
     ):
         run_id = f"native-fixture-{name}"
-        root = f"{dest}/{run_id}/results"
+        root = prefix_join(dest, f"{run_id}/results")
         dataset = f"fixture-{name}"
         likelihood = name == "mmlu"
         protocol = EvaluationProtocol(
