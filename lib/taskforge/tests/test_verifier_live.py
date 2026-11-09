@@ -10,12 +10,12 @@ import time
 import traceback
 from dataclasses import replace
 from pathlib import Path
-from typing import override
 
 import pytest
+from lib.taskforge.tests.live_iris import RecordingIrisFactory
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from shellbox.backends.iris.machine import ExecOutput, IrisMachine, IrisMachineFactory
+from shellbox.backends.iris.machine import ExecOutput, IrisMachine
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, ExitReason, MachineSpec
 from taskcompendium.models import (
@@ -63,18 +63,6 @@ print(1)
 """
 
 
-class Factory(IrisMachineFactory):
-    def __init__(self) -> None:
-        super().__init__(controller_url=os.environ["IRIS_CONTROLLER_URL"], scheduling_timeout=1200)
-        self.created: list[IrisMachine] = []
-
-    @override
-    async def create(self, spec: MachineSpec) -> IrisMachine:
-        machine = await super().create(spec)
-        self.created.append(machine)
-        return machine
-
-
 @pytest.mark.cluster
 @pytest.mark.timeout(3300)
 @pytest.mark.skipif(
@@ -83,7 +71,7 @@ class Factory(IrisMachineFactory):
 )
 async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     configure_coreweave_s3()
-    factory = Factory()
+    factory = RecordingIrisFactory()
     engine = rollout_engine({"gvisor": factory}, command_timeout=30)
     pool = RoundVerifier(engine, 60)
     resource = GradingResource(pool, "live-probe")
@@ -224,7 +212,7 @@ async def test_verifier_reuse_and_replacement(monkeypatch: pytest.MonkeyPatch) -
 @pytest.mark.skipif(not os.environ.get("PROBE_OUTPUT"), reason="requires live Iris and storage")
 async def test_nested_command_timeout_keeps_sandbox_alive() -> None:
     configure_coreweave_s3()
-    factory = Factory()
+    factory = RecordingIrisFactory()
     machine = await factory.create(MachineSpec(source=RegistryImage(GRADER_BASE_IMAGE), workdir="/workspace"))
     result: dict[str, object] = {"passed": False, "machine": str(machine.job.job_id)}
     try:
