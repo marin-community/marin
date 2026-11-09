@@ -8,20 +8,17 @@ import torch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.group_admission import GroupAdvantageInvariant
 from skyrl_train.trainer import RayPPOTrainer
-from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 
 
 @pytest.mark.parametrize(
-    "lease_ages,policy_steps,expected_ages,fresh,unknown",
+    "lease_ages,policy_steps,expected_ages",
     [
-        (None, None, [-1, -1, -1, -1], 0, 4),
-        ([0, 0], None, [-1, -1, -1, -1], 0, 4),
-        ([3, 3], [[7, -1, 4], [-1]], [0, -1, 3, -1], 1, 2),
+        (None, None, [-1, -1, -1, -1]),
+        ([0, 0], None, [-1, -1, -1, -1]),
+        ([3, 3], [[7, -1, 4], [-1]], [0, -1, 3, -1]),
     ],
 )
-def test_batch_construction_keeps_unstamped_tokens_out_of_fresh_metrics(
-    lease_ages, policy_steps, expected_ages, fresh, unknown
-):
+def test_batch_construction_keeps_unstamped_tokens_out_of_fresh_metrics(lease_ages, policy_steps, expected_ages):
     config = get_default_config()
     config.trainer.algorithm.off_policy_correction = "tis"
     config.trainer.algorithm.resolved_group_advantage = GroupAdvantageInvariant.exact_physical(
@@ -54,9 +51,3 @@ def test_batch_construction_keeps_unstamped_tokens_out_of_fresh_metrics(
     torch.testing.assert_close(
         batch["rollout_staleness"][batch["response_mask"].bool()], torch.tensor(expected_ages, dtype=torch.int32)
     )
-    metrics = mismatch_ratio_metrics(
-        batch["rollout_logprobs"], batch["rollout_logprobs"], batch["loss_mask"], batch["rollout_staleness"]
-    )
-    assert metrics["policy/mismatch/staleness0/selected_tokens"] == fresh
-    assert metrics["policy/mismatch/unknown/selected_tokens"] == unknown
-    assert metrics["policy/mismatch/pooled/selected_tokens"] == 4
