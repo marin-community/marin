@@ -25,7 +25,7 @@ from rigging.log_setup import configure_logging
 from forge.checkpoint import CheckpointSink
 from forge.coordinator import reasons, run_workpiece
 from forge.effects.events import StageCompleted
-from forge.effects.issues import Hold, LogFailure, Restart, Transient
+from forge.effects.issues import DriverCancelled, Hold, LogFailure, Restart, Transient
 from forge.effects.log import EventLog, JsonlSink, Status, fold
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal
 from forge.model.review import Incomplete
@@ -77,6 +77,7 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
 
 SNAPSHOT_FILES = ("events.jsonl", "workpiece.json", "status.json")
 """Published in this order, so an interrupted publish leaves the stream without its status."""
+DRIVER_CANCELLED_EXIT_CODE = 42
 
 
 def publish(workdir: Path, destination: str, names: tuple[str, ...] = SNAPSHOT_FILES) -> None:
@@ -124,13 +125,13 @@ def eligible(proposal: TaskProposal, policy: Policy) -> bool:
     return True
 
 
-async def one(args: argparse.Namespace) -> None:
+async def one(args: argparse.Namespace) -> int:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
         proposal = TASK_PROPOSAL.validate_json(source.read())
     _, policy = run_policy(args.policy)
     if not eligible(proposal, policy):
-        return
+        return 0
     identity = proposal_key(args.proposals)
     if identity.is_absolute() or ".." in identity.parts:
         raise ValueError("Proposal id must be a relative path without '..'")
@@ -141,12 +142,13 @@ async def one(args: argparse.Namespace) -> None:
     wp = Workpiece(proposal.header.id, proposal)
     log: EventLog | None = None
     skipped = False
+    cancelled = False
     try:
         restored = await recover(workdir, destination)
         if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
             logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
             skipped = True
-            return
+            return 0
         previous = await sink.read() if Path(sink.path).exists() else ()
         checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
         log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
@@ -160,6 +162,12 @@ async def one(args: argparse.Namespace) -> None:
             )
             async with runtime(policy, args.arm, source, os.environ.get("PARALLEL_API_KEY", "")) as (config, resources):
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
+    except* DriverCancelled as error:
+        cancelled = True
+        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
+        if log is not None:
+            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        logging.warning("Forge driver cancelled while holding %s: %s", proposal.header.id, reasons(error))
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
         if log is not None:
@@ -183,6 +191,7 @@ async def one(args: argparse.Namespace) -> None:
             )
             (workdir / "status.json").write_text(json.dumps(asdict(status)))
             publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
+    return DRIVER_CANCELLED_EXIT_CODE if cancelled else 0
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -197,6 +206,7 @@ async def run(args: argparse.Namespace) -> None:
     failures: list[str] = []
     _, policy = run_policy(args.policy)
     skipped = completed = submitted = 0
+    cancelled = False
     try:
         exhausted = False
         while active or not exhausted:
@@ -226,14 +236,21 @@ async def run(args: argparse.Namespace) -> None:
                 for task in done:
                     path, _ = active.pop(task)
                     completed += 1
-                    if task.result() != 0:
+                    result = task.result()
+                    if result == DRIVER_CANCELLED_EXIT_CODE:
+                        cancelled = True
+                    if result != 0:
                         failures.append(path)
+                if cancelled:
+                    break
     finally:
         for _, process in active.values():
             if process.poll() is None:
                 process.terminate()
         await asyncio.gather(*active, return_exceptions=True)
     print(f"SUMMARY submitted={submitted} completed={completed} failed={len(failures)} skipped={skipped}", flush=True)
+    if cancelled:
+        raise RuntimeError("Iris parent job terminated; stopped claiming proposals")
     if failures:
         raise RuntimeError(f"{len(failures)} workpieces failed: {failures}")
 
@@ -262,8 +279,10 @@ def main() -> None:
     if args.command == "report":
         configure_coreweave_s3()
         print("\n".join(asyncio.run(report(args.output_root, args.since_hours))))
+    elif args.command == "one":
+        sys.exit(asyncio.run(one(args)))
     else:
-        asyncio.run(run(args) if args.command == "run" else one(args))
+        asyncio.run(run(args))
 
 
 if __name__ == "__main__":

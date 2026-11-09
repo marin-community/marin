@@ -4,6 +4,7 @@
 import json
 import subprocess
 import sys
+from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,9 +16,9 @@ from experiments.forge import run_forge
 from iris.cluster.types import JobName
 from shellbox.backends.iris.machine import IrisMachineFactory
 
-from forge import wiring
-from forge.driver import eligible, inputs, proposal_bucket, proposal_key
-from forge.model.proposal import Environment, TaskProposal, Verification
+from forge import driver, wiring
+from forge.driver import DRIVER_CANCELLED_EXIT_CODE, eligible, inputs, proposal_bucket, proposal_key, run
+from forge.model.proposal import TASK_PROPOSAL, Environment, TaskProposal, Verification
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
 from forge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
@@ -70,6 +71,45 @@ def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path
 def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No proposal"):
         inputs(str(tmp_path))
+
+
+async def test_driver_stops_claiming_after_parent_job_cancellation(
+    tmp_path: Path, proposal: TaskProposal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proposal = replace(proposal, header=replace(proposal.header, environment=Environment.SHELLSIM))
+    paths = tuple(tmp_path / f"slot-{index}.proposal.json" for index in range(3))
+    for path in paths:
+        path.write_bytes(TASK_PROPOSAL.dump_json(proposal))
+    manifest = tmp_path / "proposals.txt"
+    manifest.write_text("\n".join(map(str, paths)))
+    overlay = tmp_path / "policy.json"
+    overlay.write_text("{}")
+    claims = tmp_path / "claims.txt"
+    child = tmp_path / "child"
+    child.write_text(
+        "#!/bin/sh\n"
+        'while [ "$1" != "--proposals" ]; do shift; done\n'
+        'printf "%s\\n" "$2" >> "$FORGE_TEST_CLAIMS"\n'
+        f"exit {DRIVER_CANCELLED_EXIT_CODE}\n"
+    )
+    child.chmod(0o755)
+    monkeypatch.setenv("FORGE_TEST_CLAIMS", str(claims))
+    monkeypatch.setattr(driver.sys, "executable", str(child))
+    args = Namespace(
+        proposals=str(manifest),
+        ranks=(),
+        bucket_range=None,
+        buckets=1,
+        concurrency=1,
+        policy=str(overlay),
+        arm="S",
+        output=str(tmp_path / "output"),
+        work_dir=str(tmp_path / "work"),
+        resume_held=False,
+    )
+    with pytest.raises(RuntimeError):
+        await run(args)
+    assert claims.read_text().splitlines() == [str(paths[0])]
 
 
 @pytest.mark.parametrize("drivers,span", [(7, None), (32, "24:32"), (64, "48:64")])

@@ -29,13 +29,14 @@ from shellbox.machine import (
     MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineTerminated,
+    ParentJobTerminated,
 )
 from shellsim import SimulationError
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
 from forge.effects.events import Event, Fingerprint, Note, ReplayPolicy, Resolved, digest
-from forge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
+from forge.effects.issues import DriverCancelled, Hold, OutputBudgetExhausted, Restart, Transient
 from forge.resources.execution import Notify, retry_effect
 
 
@@ -151,7 +152,9 @@ class _RecordedEnv(Env):
         self.closed = True
 
 
-def _machine_issue(error: RuntimeError) -> Hold | Restart | Transient:
+def _machine_issue(error: RuntimeError) -> DriverCancelled | Hold | Restart | Transient:
+    if isinstance(error, ParentJobTerminated):
+        return DriverCancelled(str(error))
     if isinstance(error, MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
     if isinstance(error, MachineTerminated):
