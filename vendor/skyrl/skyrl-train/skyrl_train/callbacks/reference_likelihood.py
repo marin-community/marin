@@ -105,9 +105,11 @@ class ReferenceLikelihoodCallback(TrainerCallback):
     Inputs contain id, validation_domain, reference_token_ids (prompt + answer),
     and reference_start.
     Output JSONL retains token IDs and answer logprobs for each training step.
+    A scoring failure logs a warning and omits that step's reference metrics
+    instead of stopping training.
     """
 
-    error_behavior = CallbackErrorBehavior.RAISE
+    error_behavior = CallbackErrorBehavior.WARN
 
     def __init__(self, *, reference_paths: list[str], output_path: str, batch_size: int = 8):
         if batch_size < 1:

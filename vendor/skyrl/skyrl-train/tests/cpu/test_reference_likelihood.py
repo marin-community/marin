@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from skyrl_train.callbacks.base import TrainerState
+from skyrl_train.callbacks.base import CallbackHandler, TrainerState
 from skyrl_train.callbacks.builtin import create_callback_from_config
 from skyrl_train.callbacks.reference_likelihood import ReferenceExample, score_reference
 
@@ -78,3 +78,29 @@ async def test_reference_callback_preserves_token_evidence_and_distinct_averages
 def test_reference_scoring_rejects_missing_or_misaligned_evidence(scores):
     with pytest.raises(ValueError):
         score_reference(ReferenceExample("example", "facts", (1, 2), 1), scores)
+
+
+class MisalignedEngine:
+    async def generate(self, request):
+        return {"prompt_logprobs": [[None] for _ in request["prompt_token_ids"]]}
+
+
+@pytest.mark.asyncio
+async def test_reference_scoring_failure_does_not_stop_evaluation(tmp_path):
+    source = tmp_path / "references.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"id": "a", "validation_domain": "facts", "reference_token_ids": [1, 2], "reference_start": 1}]
+        ),
+        source,
+    )
+    output = tmp_path / "scores"
+    callback = create_callback_from_config(
+        {"type": "reference_likelihood", "reference_paths": [str(source)], "output_path": str(output)}
+    )
+    state = TrainerState(global_step=5, epoch=0, total_steps=20, num_steps_per_epoch=20)
+    metrics = await CallbackHandler([callback]).collect_evaluation(
+        callback, state, trainer=SimpleNamespace(inference_engine_client=MisalignedEngine()), pool=None
+    )
+    assert metrics == {}
+    assert not output.exists()

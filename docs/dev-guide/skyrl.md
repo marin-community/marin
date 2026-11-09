@@ -167,3 +167,5 @@ records contain the full token IDs, answer start, and chosen answer-token logpro
 Use them to locate distribution changes. Lower NLL does not establish factual
 correctness, better generated answers, or preserved behavior. The callback does
 not select checkpoints, enforce preservation gates, or stop training.
+Missing or misaligned scores fail that step's scoring: the trainer logs a
+warning, omits the step's reference metrics and JSONL, and continues training.
