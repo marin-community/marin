@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from lib.taskforge.tests.test_verifier_live import Factory
+from lib.taskforge.tests.live_iris import RecordingIrisFactory
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.models import ModelRequest, ModelTurn, TraceMode
@@ -31,7 +31,7 @@ from taskforge.resources.verifier import RoundVerifier
 @pytest.mark.skipif(not os.environ.get("PROBE_OUTPUT"), reason="requires live Iris and storage")
 async def test_three_solver_machines_share_one_verifier() -> None:
     configure_coreweave_s3()
-    factory = Factory()
+    factory = RecordingIrisFactory()
     samples: list[int] = []
     original_create = factory.create
 

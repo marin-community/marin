@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 from typing import override
 
 import pytest
-from lib.taskforge.tests.resources.test_rollouts_grading import twelve
+from lib.taskforge.tests.resources.rollout_fakes import twelve
 from rolloutengine.models import GradedRollout, Model, Rollout, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
 from taskcompendium.grading_result import GradeResult, Outcome

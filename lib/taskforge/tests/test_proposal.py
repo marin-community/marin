@@ -11,68 +11,19 @@ from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
+from lib.taskforge.tests.proposal_fakes import BODY
 
 from taskforge.model.proposal import (
     BuildItem,
-    Environment,
-    Grounding,
     ProposalFormatError,
-    ProposalHeader,
-    ResearchItem,
-    ResearchKind,
     ResearchNeed,
     SourceKind,
-    SourceRef,
     TaskProposal,
     Verification,
     body_sections,
     parse,
     render,
 )
-
-BODY = """## Task
-Find the kernel of the map.
-
-## Realism and workflow
-A lab handout.
-
-## Research plan
-### Sources
-Two handouts, research[0].
-
-## Build plan
-Generate fixtures.
-
-## Grader design and controls
-check.py scores the JSON.
-
-## Risks and null conditions
-None known.
-"""
-
-SOURCE = SourceRef(SourceKind.CAPABILITY, "d01.algebra.linear-transformations", "9f3a12")
-PROPOSAL_ID = "d01.algebra.linear-transformations/3"
-
-
-@pytest.fixture
-def proposal() -> TaskProposal:
-    return TaskProposal(
-        ProposalHeader(
-            id=PROPOSAL_ID,
-            source=SOURCE,
-            environment=Environment.CONTAINER,
-            verification=Verification.CODE,
-            grounding=Grounding.UNVERIFIED,
-            research_need=ResearchNeed.NEEDED,
-            research_reason="Follow real handouts",
-            research=(ResearchItem(ResearchKind.WEB, "two real lab handouts"),),
-            build=(BuildItem("fixtures", "30 matrices"), BuildItem("grader", "check.py")),
-            resources=("fixtures/data.json", "grader/*.py"),
-            null_reason=None,
-            composite=(),
-        ),
-        BODY,
-    )
 
 
 def test_json_round_trip_preserves_typed_content_and_digest(proposal: TaskProposal) -> None:

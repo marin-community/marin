@@ -28,7 +28,7 @@ class _EffectFailure(BaseException):
         self.error = error
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class JudgeEngine:
     engine: Engine
     ctx: Context
