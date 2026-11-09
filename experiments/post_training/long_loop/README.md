@@ -3,10 +3,10 @@
 Snowball SFT → asynchronous RLOO-N (GS8) → Micro210. All stages use the
 Marin artifact runner and the `rl_build_options` submission path.
 
-The plumbing graph prepares the 21 benchmark environments, imports the pinned
+The plumbing graph prepares the supported benchmark environments, imports the pinned
 pre-SFT model, runs 15 SFT updates, exports BF16 parameters with frozen router
 biases, checks the served tokenizer/thinking template and both EOS tokens, runs
-three RL updates, and evaluates one task on each of the 21 Micro210 paths.
+three RL updates, and evaluates one task on each of the 20 supported Micro210 paths.
 The final report rejects incomplete or unverified benchmark coverage. This is a
 runtime test, not a Micro210 score or a completed 36-hour experiment.
 
@@ -24,9 +24,9 @@ using a new version.
 Peak stage requests are 8 H100 for the base import, 32 for SFT, 8 for the
 CPU export host, 8 for the endpoint probe, 40 for RL, and 16 for evaluation including
 the judge. Dependencies serialize these stages. Every GPU job uses RNO2A at
-**interactive** priority; the aggregate limit is **256 H100**. Neither priority
-changes nor PR creation are authorized. Keep all changes in this worktree and
-merge current main regularly.
+**interactive** priority; the aggregate limit is **256 H100**. Priority changes require approval. Keep changes in the experiment worktree and
+merge current main regularly. This branch is published as a draft; it is not
+authorization to merge or launch the full experiment.
 
 Plumbing SFT geometry (32k/32 GPU), not target, uses the archived trainer, 256 sequences per update, and the
 initial phase of the 10-05 reproduction composition: 20.4734375% replay.
@@ -57,6 +57,27 @@ still required to separate queue, compilation, learner, rollout, sandbox, judge,
 and allocation-release measurements; stage-wall spans must not be reported as
 compute time. Full phase collection and the 102,400-token CP4 qualification are
 not yet complete. The full 50B round and its task budget remain unmeasured.
+
+## Current evidence
+
+The plumbing smoke verified all 20 supported paths, including the BixBench-only
+repair. Nineteen results were preserved byte-for-byte from the preceding eval;
+the merge checks input-row hashes and model/runtime/verifier configuration.
+One sample per path establishes runtime coverage, not benchmark performance.
+
+The archive smoke is running as `/benfeuer/long-loop-archive-20261109-post1`.
+Target qualification is next, gated on archive verification and native timing
+coverage. The 50B SFT / 100k-context mixed RL / final evaluation target remains
+unmeasured; a full run requires separate approval.
+
+Campaign status and evidence are in
+`/Users/benfeuer/Documents/experiments/active/long-loop-prototype/`, especially
+`artifacts/plumbing-20261109-10/` and `artifacts/archive-smoke-20261109/`.
+The merged evaluation is at
+`s3://marin-us-east-02a/marin/long-loop/merged-micro-report/2026.11.09.10-post1`
+([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Flong-loop%2Fmerged-micro-report%2F2026.11.09.10-post1)).
+Historical RL retention is biased, W&B native history is incomplete, and some
+allocation/phase timings are unavailable. The archive records these limitations.
 
 ## Experiment-owned RL recipe
 
