@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Datakit nemotron ferry: weekly reference-DAG run on the Nemotron-CC high split.
+"""Datakit nemotron ferry: weekly reference-DAG run on the Nemotron-CC high-quality actual split.
 
-The first step confirms the ``quality=high`` subtree of the Nemotron-CC dump is
-already staged at ``NEMOTRON_RAW_PATH`` and refuses to initiate a Common Crawl
-download. Normalize and every reference stage after it write one-day TTL outputs;
-see :mod:`experiments.ferries.datakit_reference_ferry`.
+The input is the normalized Nemotron-CC v1 ``hq_actual`` split in eu-west4. The raw
+Common Crawl dump that the ferry read before is no longer in GCS. The first step
+confirms that the split is at ``NEMOTRON_HQ_ACTUAL_PATH`` and never rebuilds it.
+Normalize runs again on those Parquet shards. Normalize and every reference stage
+after it write one-day TTL outputs; see :mod:`experiments.ferries.datakit_reference_ferry`.
 """
 
 import logging
@@ -35,17 +36,20 @@ logger = logging.getLogger(__name__)
 FERRY_NAME = "datakit-nemotron-smoke"
 SOURCE_NAME = "nemotron-cc-high"
 
-# Canonical, region-pinned location of the staged Nemotron-CC raw dump. The
-# dump was populated by a one-off download into marin-eu-west4; the ferry only
-# reads from it and will fail-fast if it isn't there.
-NEMOTRON_RAW_PATH = "gs://marin-eu-west4/raw/nemotro-cc-eeb783"
-NEMOTRON_DATA_SUBDIR = "contrib/Nemotron/Nemotron-CC/data-jsonl"
-NEMOTRON_QUALITY_DIR = "quality=high"
+# Region-pinned output of ``normalize_nemotron_v1_step(split="hq_actual")``: 3,741
+# Parquet files, 704M documents. The ferry only reads it and fails fast if it is absent.
+NEMOTRON_HQ_ACTUAL_PATH = "gs://marin-eu-west4/normalized/nemotron_v1/hq_actual_d6502d2c"
+NEMOTRON_HQ_ACTUAL_DATA_SUBDIR = "outputs/main"
 
-# The yaml sets FERRY_TEST_MAX_FILES=1000 to cap the input shard count
-# (quality=high has ~2,755 shards / ~960 GB). ~1,380 normalized shards. Every Marin
-# VM has a 100 GB disk, so small disk requests set how many workers share a host;
-# Zephyr stages pull shards, so a partly scheduled pool is slower, not stuck.
+# The yaml sets FERRY_TEST_MAX_FILES=1600: about 301M documents in 655 GB. Normalize
+# hash-partitions by document ID, so each file is a uniform sample of the split. The
+# raw-dump runs normalized 301M documents from 371 GB of JSONL into 1,382 shards. At
+# 448 MiB per partition, the Parquet input also gives about 1,390 shards of 216K
+# documents.
+NORMALIZE_TARGET_PARTITION_BYTES = 448 * 1024 * 1024
+
+# Every Marin VM has a 100 GB disk, so small disk requests set how many workers share
+# a host; Zephyr stages pull shards, so a partly scheduled pool is slower, not stuck.
 TIER3_SCALE = PipelineScale(
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
     pool=PoolConfig(
@@ -68,43 +72,46 @@ TIER3_SCALE = PipelineScale(
 )
 
 
-def _verify_nemotron_quality_present(output_path: str) -> None:
-    """Confirm the quality split is staged at ``output_path``; never downloads.
+def _verify_nemotron_hq_actual_present(output_path: str) -> None:
+    """Confirm the normalized split is at ``output_path``; never rebuilds it.
 
-    Invoked by StepRunner only on a cache miss. Raises with a clear message so
-    that an accidental cache eviction can never trigger a multi-TB Common Crawl
-    re-download.
+    StepRunner calls this only on a cache miss, which means the split's
+    ``.executor_status`` is gone. The ferry then fails instead of normalizing
+    multi-TB data that is no longer in GCS.
     """
-    quality_dir = f"{output_path}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}"
-    fs, _ = url_to_fs(quality_dir)
-    if not fs.exists(quality_dir):
+    data_dir = f"{output_path}/{NEMOTRON_HQ_ACTUAL_DATA_SUBDIR}"
+    fs, _ = url_to_fs(data_dir)
+    if not fs.exists(data_dir):
         raise RuntimeError(
-            f"Nemotron-CC {NEMOTRON_QUALITY_DIR} not found at {quality_dir}. "
-            "The nemotron ferry refuses to download Common Crawl — stage the raw dump externally first."
+            f"Normalized Nemotron-CC hq_actual not found at {data_dir}. "
+            "The nemotron ferry does not rebuild its input; restore the split or point the ferry at another copy."
         )
-    sample = fs.glob(f"{quality_dir}/**/*.jsonl.*", maxdepth=4)
+    sample = fs.glob(f"{data_dir}/*.parquet")
     if not sample:
-        raise RuntimeError(f"Nemotron-CC {NEMOTRON_QUALITY_DIR} at {quality_dir} contains no .jsonl.* files.")
-    logger.info("Nemotron-CC %s confirmed at %s (e.g. %s)", NEMOTRON_QUALITY_DIR, quality_dir, sample[0])
+        raise RuntimeError(f"Normalized Nemotron-CC hq_actual at {data_dir} contains no .parquet files.")
+    logger.info("Normalized Nemotron-CC hq_actual confirmed at %s (e.g. %s)", data_dir, sample[0])
 
 
 def build_sources(output_prefix: str) -> dict[str, StepSpec]:
-    # Verify-only raw step. Uses an absolute override so it points at the
-    # pre-staged dump regardless of MARIN_PREFIX.
+    # Verify-only input step. The absolute override points at the normalized split
+    # regardless of MARIN_PREFIX.
     download = StepSpec(
         name=f"{FERRY_NAME}/download",
-        fn=_verify_nemotron_quality_present,
-        override_output_path=NEMOTRON_RAW_PATH,
+        fn=_verify_nemotron_hq_actual_present,
+        override_output_path=NEMOTRON_HQ_ACTUAL_PATH,
     )
-    # Sizes mirror validate_normalize_phase1.py, which ran successfully on
-    # nemotron_v1 in eu-west4. FERRY_TEST_MAX_FILES is read at execution time
-    # by `_discover_files`.
+    # The input already has a content-hash ``id`` and keeps the WARC record ID in
+    # ``source_id``. Reading ``source_id`` as the ID field gives the same output
+    # schema as normalizing the raw dump. FERRY_TEST_MAX_FILES is read at execution
+    # time by ``_discover_files``.
     normalized = normalize_step(
         name=f"{FERRY_NAME}/normalize",
         download=download,
         text_field="text",
-        id_field="id",
-        relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}",
+        id_field="source_id",
+        relative_input_path=NEMOTRON_HQ_ACTUAL_DATA_SUBDIR,
+        file_extensions=(".parquet",),
+        target_partition_bytes=NORMALIZE_TARGET_PARTITION_BYTES,
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=prefix_join(output_prefix, "normalize"),
@@ -114,10 +121,10 @@ def build_sources(output_prefix: str) -> dict[str, StepSpec]:
 
 def main() -> None:
     configure_logging()
-    # Guard against accidental cross-region reads of the multi-TB raw dump.
+    # Guard against accidental cross-region reads of the multi-TB input.
     region = region_from_metadata()
     if region:
-        check_path_in_region("nemotron_raw", NEMOTRON_RAW_PATH, region)
+        check_path_in_region("nemotron_hq_actual", NEMOTRON_HQ_ACTUAL_PATH, region)
 
     output_prefix = ferry_output_prefix(FERRY_NAME, os.environ["SMOKE_RUN_ID"])
     run_reference_ferry(
