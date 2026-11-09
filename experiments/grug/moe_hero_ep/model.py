@@ -101,8 +101,6 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-# Schema 3 adds the log_scaling_* fields, null when off. Readers that predate it reject schema 3 instead of
-# ignoring the fields and serving the wrong temperature past the floor.
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 3
 
 
