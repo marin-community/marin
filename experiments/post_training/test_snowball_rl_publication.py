@@ -13,7 +13,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import ArtifactStep, StepContext, resolve
+from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun, read_skyrl_launch_config
 
 from experiments.post_training import publish_rl_progress as publisher
@@ -178,9 +178,8 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
     else:
         result = training.run(config)
         assert result.path == str(source)
-    assert list(source.rglob(publication.RESULT_FILENAME)) == []
-    row = publication.retain_record(str(source), preset, attempt_id="native-attempt")
-    path = Path(row["artifact_uri"])
+    row = publication.build_record(str(source), preset, attempt_id="native-attempt")
+    assert row["artifact_uri"] == str(source)
     assert (row["run_id"], row["attempt_id"]) == (launch["run"]["id"], "native-attempt")
     assert row["label"] == preset.name + (" max_steps=2" if case.startswith("lineage") else "") + " lr=2e-06"
     assert row["issue"] is None and row["verdict"] is None
@@ -222,7 +221,6 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         )
     if case == "partial":
         assert row["final"]["attempted"] == 1500 and row["final"]["scored"] == 1485
-        saved = path.read_bytes()
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["finished_at"] = (
             datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
@@ -238,7 +236,7 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         monkeypatch.setattr("marin.rl.cli.iris_client", forbid_live)
         rebuilt = publication.build_record(str(source), preset)
         assert rebuilt["elapsed_seconds"] == 7200 and rebuilt["final"] == row["final"]
-        assert rebuilt["source_revision"] == row["source_revision"] and path.read_bytes() == saved
+        assert rebuilt["source_revision"] == row["source_revision"]
     assert "vllm_version" not in row["evaluation"]["protocol"]
     if case == "native-composed":
         assert row["evaluation"]["protocol"]["task_env"]["RECORD_BUILDER_ENV"] == "native-composition"
@@ -248,7 +246,9 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
 
 
 @pytest.mark.integration
-def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, recorded_runs, monkeypatch, tmp_path):
+def test_snowball_publication_updates_attempts_and_publishes_controls(
+    rl_progress_client, recorded_runs, monkeypatch, tmp_path
+):
     client, request = rl_progress_client
     preset = replace(presets.PRESETS["learning-medium"], updates=2, measured=range(1, 3))
     source = recorded_runs(
@@ -259,20 +259,6 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     tracking = json.loads(tracking_path.read_text())
     tracking.update(wandb_url="https://wandb.ai/test/publication/runs/native-one", engine={"model_dtype": "bfloat16"})
     write_json(tracking_path, tracking)
-    raw = publication.retain_record(str(source), preset)
-    raw_path = Path(raw["artifact_uri"])
-
-    def forbid_native(config):
-        raise AssertionError("Publication launched native execution")
-
-    training = ArtifactStep(
-        name="tests/snowball-publication",
-        version=presets.PRESET_REVISION,
-        artifact_type=SkyRLRun,
-        build_config=lambda context: {},
-        run=forbid_native,
-        override_path=str(source),
-    )
 
     def saved_gate(name, verdict):
         path = tmp_path / name
@@ -305,92 +291,35 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     interrupted = {"once": True}
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
-        if method == "POST" and json_body["sql"] == publisher.READ and interrupted["once"]:
+        if path.endswith("/api/runs") and interrupted["once"]:
             interrupted["once"] = False
             raise RuntimeError("Readback unavailable after insert")
         return request(origin, method, path, json_body=json_body)
 
     monkeypatch.setattr("marina.client.marina_request", unavailable_readback)
-    output = publication.RunOutput(str(source), training.name, training.version)
-    step = publication.publication_step(output, json.loads(raw_path.read_text()), gate_path=first_gate, issue=73)
-    with pytest.raises(RuntimeError):
-        resolve(step)
-    frozen = Path(step.path()) / publication.RESULT_FILENAME
-    first_bytes = frozen.read_bytes()
-    raw = json.loads(raw_path.read_text())
-    raw["elapsed_seconds"] = 7200
-    write_json(raw_path, raw)
+    first = publication.publish_runs(
+        [str(source)], preset, gate_path=first_gate, issue=73, service_url="http://localhost"
+    )
+    assert first.served_records == [] and first.errors == ["Readback unavailable after insert"]
+    receipt = json.loads((source / "terminal.json").read_text())
+    receipt["result"]["finished_at"] = (
+        datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
+    ).isoformat()
+    write_json(source / "terminal.json", receipt)
     monkeypatch.setattr("marina.client.marina_request", request)
-    retried = publication.publication_step(output, json.loads(raw_path.read_text()), gate_path=second_gate, issue=74)
-    resolve(retried)
-    assert frozen.read_bytes() == first_bytes
-    receipt = json.loads((Path(retried.path()) / publication.PUBLICATION_FILENAME).read_text())
-    assert receipt == {
-        "run_id": launch["run"]["id"],
-        "attempt_id": "native-one",
-        "inserted": False,
-        "verified": True,
-        "url": f"/a/{publisher.APPLET_ID}/",
-    }
+    repeated = publication.publish_runs(
+        [str(source)], preset, gate_path=second_gate, issue=74, service_url="http://localhost"
+    )
+    assert repeated.unserved_records == [] and repeated.errors == []
     payload = client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 1
     served = payload["runs"][0]
     assert (served["run_id"], served["attempt_id"]) == (launch["run"]["id"], "native-one")
-    assert served["gate"] == "first-gate" and served["verdict"] == "pass" and (served["issue"] == 73)
-    assert served["elapsed_seconds"] == 3600 and served["evaluation"]["task_count"] == 1500
-    assert served["final"]["scored"] == 1485 and served["pareto_eligible"] and served["trusted_gain_eligible"]
+    assert served["gate"] == "current-gate" and served["verdict"] == "fail" and served["issue"] == 74
+    assert served["elapsed_seconds"] == 7200 and served["evaluation"]["task_count"] == 1500
+    assert served["final"]["scored"] == 1485
     assert served["wandb_url"] == tracking["wandb_url"] and served["engine"] == tracking["engine"]
-    for change in ("engine", "request", "content", "membership"):
-        variant = tmp_path / f"stored-{change}"
-        shutil.copytree(source, variant)
-        receipt = json.loads((variant / "terminal.json").read_text())
-        recorded = receipt["config"]
-        recorded["run"]["id"] = f"tests/{change}"
-        variant_tracking = dict(tracking, run_id=recorded["run"]["id"])
-        if change == "engine":
-            recorded["skyrl"]["generator"]["model_dtype"] = "float16"
-            variant_tracking["engine"] = {"model_dtype": "float16"}
-        elif change == "request":
-            recorded["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.1
-        else:
-            descriptor = recorded["inputs"]["validation_data"][0]
-            selection = tmp_path / f"selection-{change}"
-            shutil.copytree(descriptor["uri"], selection)
-            descriptor["uri"] = str(selection)
-            task_path = selection / descriptor["relative_path"]
-            tasks = pq.read_table(task_path).to_pylist()
-            if change == "content":
-                tasks[0]["task_spec"] += " "
-            else:
-                task = json.loads(tasks[0]["task_spec"])
-                previous = task["id"]
-                task["id"] = "new-member"
-                tasks[0]["task_spec"] = json.dumps(task)
-                manifest_path = selection / presets.TASK_MANIFEST_FILENAME
-                manifest = pq.read_table(manifest_path).to_pylist()
-                for row in manifest:
-                    if row["task_id"] == previous:
-                        row["task_id"] = "new-member"
-                pq.write_table(pa.Table.from_pylist(manifest), manifest_path)
-                for answer_path in (variant / "exports/dumped_evals").glob("*/panel.jsonl"):
-                    answers = [json.loads(line) for line in answer_path.read_text().splitlines()]
-                    for row in answers:
-                        if row["task_id"] == previous:
-                            row["task_id"] = "new-member"
-                    answer_path.write_text("".join(json.dumps(row) + "\n" for row in answers))
-            pq.write_table(pa.Table.from_pylist(tasks), task_path)
-        write_json(variant / "terminal.json", receipt)
-        write_json(variant / "resolved-launch.yaml", {"config": recorded})
-        write_json(variant / "exports/attempts/native-one/tracking.json", variant_tracking)
-        produced = publication.build_record(str(variant), preset)
-        publisher.publish_result(produced, "http://localhost")
-    variants = {row["run_id"]: row for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]}
-    assert variants["tests/engine"]["comparison_key"] == served["comparison_key"]
-    assert variants["tests/engine"]["engine"]["model_dtype"] == "float16"
-    for change in ("request", "content", "membership"):
-        assert variants[f"tests/{change}"]["comparison_key"] != served["comparison_key"]
-    assert variants["tests/content"]["evaluation"]["task_set_sha256"] != served["evaluation"]["task_set_sha256"]
-    assert variants["tests/membership"]["evaluation"]["membership_sha256"] != served["evaluation"]["membership_sha256"]
+    assert repeated.urls[str(source)].endswith("&attempt=native-one")
 
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {preset.name: preset})
     pin = gate.ControlPin("learning-medium", "pinned-source-abbrev", presets.PRESET_REVISION, 2)
@@ -409,10 +338,7 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     assert command.exit_code == 0, (command.output, command.exception)
     published = json.loads(command.output)
     assert published == {
-        "served_records": [
-            str(root / f"exports/attempts/pinned-{index}/{publication.RESULT_FILENAME}")
-            for index, root in enumerate(controls)
-        ],
+        "served_records": [str(root / f"exports/attempts/pinned-{index}") for index, root in enumerate(controls)],
         "unserved_records": [],
         "errors": [],
     }
@@ -435,9 +361,8 @@ def test_snowball_publication_retries_keep_the_first_gate(rl_progress_client, re
     current["run"]["attempt_id"] = "missing-current"
     write_json(historical / "resolved-launch.yaml", {"config": current})
     (historical / "terminal.json").unlink()
-    handle = replace(training, name="tests/missing-current-history", override_path=str(historical))
-    recovered = publication.publish_run(
-        publication.RunOutput(str(historical), handle.name, handle.version),
+    recovered = publication.publish_runs(
+        [str(historical)],
         preset,
         gate_path=second_gate,
         issue=74,

@@ -17,22 +17,9 @@ Malformed records are skipped individually and named in a visible note.
 
 ## Data contract
 
-The backend reads the application-owned `rl_runs` table:
-
-```sql
-CREATE TABLE rl_runs (
-    run_id text NOT NULL,
-    attempt_id text NOT NULL,
-    record jsonb NOT NULL,
-    imported_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (run_id, attempt_id)
-);
-```
-
-Existing production data needs no migration or reload. A disposable local preview
-needs this table and synthetic records loaded through the maintained Marina data
-commands against the printed local origin. Never load a partial snapshot over the
-production table.
+The app's release migration creates its `rl_runs` table in the application schema.
+Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
+publication replaces that attempt's record; other attempts remain separate.
 
 The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` adds coverage and
 comparison fields and lists malformed rows in `skipped_records`. See the
@@ -53,6 +40,8 @@ uv run marina release infra/marina/apps/rl_progress --local --json
 Check each graph's point links, cold-loaded run hash links,
 coverage exclusions, and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
+
+Deploy a Marina runtime containing `marin.rl.rl_progress` before releasing the app package.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
 current private revision, then release with its exact `--base-version`. Merging

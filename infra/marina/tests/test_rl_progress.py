@@ -4,14 +4,13 @@
 import copy
 import hashlib
 import json
-from dataclasses import asdict
 
 import pytest
 
 from experiments.post_training import publish_rl_progress as publication
 
 
-def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_progress_client):
+def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client, monkeypatch):
     client, request = rl_progress_client
     query_path = f"/a/{publication.APPLET_ID}/query"
     membership = [f"task-{index}" for index in range(100)]
@@ -51,19 +50,12 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "artifact_uri": "s3://example/test",
         "evidence": [],
     }
-    first = publication.publish_result(record, "http://localhost")
-    assert asdict(first) == {
-        "run_id": record["run_id"],
-        "attempt_id": record["attempt_id"],
-        "inserted": True,
-        "verified": True,
-        "url": f"/a/{publication.APPLET_ID}/",
-    }
-    assert publication.publish_result(copy.deepcopy(record), "http://localhost").inserted is False
+    url = publication.publish_result(record, "http://localhost")
+    assert url.endswith("#run=test%2Fcontrol&attempt=native-first")
+    publication.publish_result(copy.deepcopy(record), "http://localhost")
     changed = copy.deepcopy(record)
+    changed.update(issue=456, label="corrected label", verdict="fail")
     changed["final"]["reward"] = 0.9
-    with pytest.raises(ValueError, match="different record"):
-        publication.publish_result(changed, "http://localhost")
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00Z",
@@ -71,7 +63,8 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
         "status": "failed",
         "optimizer_steps": 0,
     }
-    assert publication.publish_result(failed, "http://localhost").verified
+    publication.publish_result(failed, "http://localhost")
+    publication.publish_result(changed, "http://localhost")
     below = copy.deepcopy(record)
     below.update(run_id="test/under-coverage", attempt_id="native-third")
     below["final"]["scored"] = 98
@@ -163,9 +156,11 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     assert rows["fail"]["pareto_eligible"]
     assert not rows["invalid"]["pareto_eligible"] and rows["invalid"]["provisional"]
     good = rows["native-first"]
-    assert good["final"]["reward"] == 0.4
+    assert good["final"]["reward"] == 0.9
+    assert good["label"] == "corrected label" and good["issue"] == 456 and good["verdict"] == "fail"
+    assert sum(row["run_id"] == "test/control" and row["attempt_id"] == "native-first" for row in payload["runs"]) == 1
     assert good["partial_coverage"] and good["pareto_eligible"] and good["trusted_gain_eligible"]
-    assert not good["provisional"] and good["gain_per_hour"] == pytest.approx(0.2)
+    assert not good["provisional"] and good["gain_per_hour"] == pytest.approx(0.7)
     assert rows["native-second"]["status"] == "failed"
     assert rows["native-second"]["final"]["reward"] == 0.4
     assert not rows["native-second"]["pareto_eligible"]
@@ -182,3 +177,17 @@ def test_progress_publication_retains_attempts_and_serves_valid_comparisons(rl_p
     assert not rows["unknown"]["trusted_gain_eligible"]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert set(skipped) == {"test/bad-shape", "test/overflow", "test/huge-extra", "test/wrong-sql-key"}
+
+    def rejected_record(origin, method, path, **kwargs):
+        if path.endswith("/api/runs"):
+            return {
+                "runs": [],
+                "skipped_records": [
+                    {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"], "error": "unsupported result"}
+                ],
+            }
+        return request(origin, method, path, **kwargs)
+
+    monkeypatch.setattr("marina.client.marina_request", rejected_record)
+    with pytest.raises(RuntimeError, match=r"test/control/native-first.*unsupported result"):
+        publication.publish_result(changed, "http://localhost")

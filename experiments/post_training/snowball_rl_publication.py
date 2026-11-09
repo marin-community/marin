@@ -1,21 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Retain native Snowball attempts and publish them from the launcher."""
+"""Publish native Snowball attempts from stored outputs on the launcher."""
 
 from __future__ import annotations
 
 import json
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field, replace
-from typing import NamedTuple
+from dataclasses import dataclass, field, replace
 
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
-from marin.execution.artifact import RECORD_FILENAME, Artifact
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.artifact import RECORD_FILENAME
 from marin.rl import skyrl
 from marin.rl.rl_progress import EvaluationResult, RunSummary, membership_sha256, protocol_sha256
 from marin.rl.skyrl import read_stored_skyrl_attempts
@@ -26,37 +24,21 @@ from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 
-RESULT_FILENAME = "progress-record.json"
-PUBLICATION_FILENAME = "publication.json"
-
-
-class RunOutput(NamedTuple):
-    path: str
-    name: str
-    version: str
-
 
 @dataclass
 class PublicationOutcome:
     served_records: list[str] = field(default_factory=list)
     unserved_records: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-    login: str | None = None
+    urls: dict[str, str] = field(default_factory=dict)
     retry: str | None = None
 
-    def add(self, other: PublicationOutcome) -> None:
-        """Combine attempts, keeping the last supplied login and retry instructions."""
-        self.served_records.extend(other.served_records)
-        self.unserved_records.extend(other.unserved_records)
-        self.errors.extend(other.errors)
-        if other.login is not None:
-            self.login = other.login
-        if other.retry is not None:
-            self.retry = other.retry
-
     def to_dict(self) -> dict:
-        """Encode publication status with absent optional instructions omitted."""
-        return {key: value for key, value in asdict(self).items() if value is not None}
+        return {
+            "served_records": self.served_records,
+            "unserved_records": self.unserved_records,
+            "errors": self.errors,
+        } | ({"retry": self.retry} if self.retry is not None else {})
 
 
 def publishes(preset: presets.Preset) -> bool:
@@ -105,14 +87,6 @@ def _phase_result(
     return EvaluationResult.model_construct(reward=reward, attempted=len(counts), scored=len(scored_tasks))
 
 
-def record_path(run_output: str, attempt_id: str) -> StoragePath:
-    return StoragePath(run_output) / "exports/attempts" / attempt_id / RESULT_FILENAME
-
-
-def publication_path(run_output: str, attempt_id: str) -> StoragePath:
-    return StoragePath(run_output) / "publication" / attempt_id
-
-
 def label(preset: presets.Preset, inputs: gate.GateInputs) -> str:
     parts = [preset.name]
     for text in inputs.settings:
@@ -143,7 +117,6 @@ def build_record(
     preset = replace(preset, updates=launch["skyrl"]["trainer"]["max_steps"])
     native = launch["run"]
     attempt_id = native["attempt_id"]
-    destination = record_path(run_output, attempt_id)
     evidence = []
     provenance = result.provenance or {}
     options = gate.recorded_run_options(provenance.get("command_line", []))
@@ -259,66 +232,11 @@ def build_record(
         },
         "baseline": phases[0].model_dump(mode="python") if phases[0] is not None else None,
         "final": phases[1].model_dump(mode="python") if phases[1] is not None else None,
-        "artifact_uri": str(destination),
+        "artifact_uri": run_output,
         "evidence": evidence,
     }
     RunSummary.model_validate(record)
     return record
-
-
-def retain_record(
-    run_output: str,
-    preset: presets.Preset,
-    *,
-    attempt_id: str | None = None,
-    attempts: tuple[str | None, dict[str, skyrl.SkyRLLaunchReceipt]] | None = None,
-) -> dict:
-    """Build and retain one terminal record from its stored native outputs."""
-    record = build_record(run_output, preset, attempt_id=attempt_id, attempts=attempts)
-    destination = StoragePath(record["artifact_uri"])
-    destination.parent.mkdirs()
-    destination.write_text(json.dumps(record, allow_nan=False, indent=2))
-    return record
-
-
-def _publish_attempt(record: dict, service_url: str | None, output: str) -> Artifact:
-    root = StoragePath(output)
-    frozen = root / RESULT_FILENAME
-    if not presets.exists(frozen):
-        root.mkdirs()
-        frozen.write_text(json.dumps(record, allow_nan=False, indent=2))
-    receipt = publish_rl_progress.publish_result(json.loads(presets.read_text(frozen)), service_url)
-    (root / PUBLICATION_FILENAME).write_text(json.dumps(asdict(receipt), indent=2))
-    return Artifact(path=output)
-
-
-def publication_step(
-    output: RunOutput,
-    record: dict,
-    *,
-    gate_path: str | None = None,
-    issue: int | None = None,
-    service_url: str | None = None,
-) -> ArtifactStep[Artifact]:
-    """Return the unrun step that publishes one native pair from its first retained payload under the executor lock."""
-    record = dict(record, issue=issue)
-    gate_record = (
-        presets.artifact_record(gate_path)
-        if gate_path is not None and presets.exists(StoragePath(gate_path) / RECORD_FILENAME)
-        else None
-    )
-    if gate_record is not None:
-        record.update(gate=gate_record.name, verdict=gate_record.result["verdict"])
-    attempt_id = record["attempt_id"]
-    step = apply(
-        f"{output.name}/publication/{attempt_id}",
-        _publish_attempt,
-        version=output.version,
-        record=record,
-        service_url=service_url,
-        output=OUT,
-    )
-    return replace(step, override_path=str(publication_path(output.path, attempt_id)))
 
 
 def gate_complete(gate_path: str | None) -> bool:
@@ -328,8 +246,8 @@ def gate_complete(gate_path: str | None) -> bool:
     )
 
 
-def publish_run(
-    output: RunOutput,
+def publish_runs(
+    outputs: Sequence[str],
     preset: presets.Preset,
     *,
     gate_path: str | None = None,
@@ -337,80 +255,52 @@ def publish_run(
     issue: int | None = None,
     service_url: str | None = None,
 ) -> PublicationOutcome:
-    """Build and publish terminal attempts on the caller, isolating each publication failure."""
-    from marin.execution.lazy import run  # noqa: PLC0415
-    from rigging.auth import IapCredentialsUnavailable, IapLoginRequired  # noqa: PLC0415
-
+    """Rebuild and upsert each stored attempt, isolating publication failures."""
     result = PublicationOutcome()
-    path = output.path
-    try:
-        current_id, attempts = read_stored_skyrl_attempts(path)
-        if not attempts:
-            raise FileNotFoundError(f"No stored native receipt at {path}")
-    except Exception as error:
-        attempts = {}
-        result.unserved_records.append(path)
-        result.errors.append(str(error))
-    for attempt_id in attempts:
-        destination = record_path(path, attempt_id)
+    for path in outputs:
         try:
-            if (
-                gate_required
-                and attempt_id == current_id
-                and attempts[attempt_id].result.state == "succeeded"
-                and not gate_complete(gate_path)
-            ):
-                raise ValueError("gate report missing; repeat the original command with --wait")
-            record = (
-                json.loads(presets.read_text(destination))
-                if presets.exists(destination)
-                else retain_record(path, preset, attempt_id=attempt_id, attempts=(current_id, attempts))
-            )
-            step = publication_step(
-                output,
-                record,
-                gate_path=gate_path if attempt_id == current_id else None,
-                issue=issue if attempt_id == current_id else None,
-                service_url=service_url,
-            )
-            run(step, max_concurrent=1)
-            result.served_records.append(str(destination))
+            current_id, attempts = read_stored_skyrl_attempts(path)
+            if not attempts:
+                raise FileNotFoundError(f"No stored native receipt at {path}")
         except Exception as error:
-            causes = []
-            cause = error
-            while cause is not None:
-                causes.append(str(cause))
-                if isinstance(cause, (IapCredentialsUnavailable, IapLoginRequired)):
-                    result.login = "iris login"
-                cause = cause.__cause__
-            result.unserved_records.append(str(destination))
-            result.errors.append(": ".join(dict.fromkeys(causes)))
+            result.unserved_records.append(path)
+            result.errors.append(str(error))
+            continue
+        for attempt_id, receipt in attempts.items():
+            destination = str(StoragePath(path) / "exports/attempts" / attempt_id)
+            try:
+                if (
+                    gate_required
+                    and attempt_id == current_id
+                    and receipt.result.state == "succeeded"
+                    and not gate_complete(gate_path)
+                ):
+                    raise ValueError("gate report missing; repeat the original command with --wait")
+                record = build_record(path, preset, attempt_id=attempt_id, attempts=(current_id, attempts))
+                if attempt_id == current_id:
+                    record["issue"] = issue
+                    if gate_complete(gate_path):
+                        gate_record = presets.artifact_record(gate_path)
+                        record.update(gate=gate_record.name, verdict=gate_record.result["verdict"])
+                url = publish_rl_progress.publish_result(record, service_url)
+                result.served_records.append(destination)
+                if attempt_id == current_id:
+                    result.urls[path] = url
+            except Exception as error:
+                result.unserved_records.append(destination)
+                result.errors.append(str(error))
     if result.unserved_records:
         result.retry = "Repeat the original command with --wait."
     return result
 
 
-def publish_runs(runs: Sequence[RunOutput], preset: presets.Preset, **kwargs) -> PublicationOutcome:
-    """Publish stored runs and combine each attempt's publication outcome."""
-    result = PublicationOutcome()
-    for output in runs:
-        result.add(publish_run(output, preset, **kwargs))
-    return result
-
-
 def publish_controls(preset_name: str, *, service_url: str | None = None) -> PublicationOutcome:
-    """Publish the exact pinned control paths using the same frozen payloads as the launcher."""
+    """Publish the exact pinned controls from their stored native outputs."""
     preset = presets.PRESETS[preset_name]
     if not publishes(preset):
         raise click.UsageError("Progress publication requires a trained-panel preset")
     outputs = [
-        RunOutput(
-            gate.control_path(preset, pin, index),
-            presets.control_name(pin.preset, pin.main_commit, index),
-            pin.revision,
-        )
-        for pin in gate.control_pins(preset_name)
-        for index in range(pin.runs)
+        gate.control_path(preset, pin, index) for pin in gate.control_pins(preset_name) for index in range(pin.runs)
     ]
     result = publish_runs(outputs, preset, service_url=service_url)
     if result.unserved_records:

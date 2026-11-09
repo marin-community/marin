@@ -12,6 +12,23 @@ from fastapi import FastAPI
 from marin.rl.rl_progress import EvaluationResult, RunSummary
 from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+
+def migrate(connection: Connection) -> None:
+    connection.execute(
+        text(
+            """
+        CREATE TABLE IF NOT EXISTS rl_runs (
+            run_id text NOT NULL,
+            attempt_id text NOT NULL,
+            record jsonb NOT NULL,
+            imported_at timestamptz NOT NULL DEFAULT now(),
+            PRIMARY KEY (run_id, attempt_id)
+        )
+    """
+        )
+    )
 
 
 def comparison_fields(run: RunSummary) -> dict:
