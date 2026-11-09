@@ -12,6 +12,8 @@ from typing import Any
 
 from marinskyrl.runtime_options import WeightSyncTransport
 
+COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
+
 
 def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
     """Reject ``expert_block`` unless the config meets its requirements.
@@ -53,14 +55,14 @@ def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
         if (
             megatron is None
             or placement["policy_num_nodes"] != 1
-            or placement["policy_num_gpus_per_node"] != 4
+            or placement["policy_num_gpus_per_node"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
             or megatron["pipeline_model_parallel_size"] != 1
-            or megatron["expert_model_parallel_size"] != 4
+            or megatron["expert_model_parallel_size"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
             or generator["num_inference_engines"] != 1
             or generator["inference_engine_tensor_parallel_size"] != 1
             or generator["inference_engine_pipeline_parallel_size"] != 1
-            or generator["inference_engine_data_parallel_size"] != 4
-            or generator["inference_engine_expert_parallel_size"] != 4
+            or generator["inference_engine_data_parallel_size"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or generator["inference_engine_expert_parallel_size"] != COLOCATED_EXPERT_BLOCK_GPU_COUNT
         ):
             problems.append("colocation requires one four-GPU node, policy TP=PP=ETP=1 EP=4, and one vLLM TP=PP=1 DP=EP=4 engine")
         if trainer["policy"]["model"]["lora"]["rank"]:

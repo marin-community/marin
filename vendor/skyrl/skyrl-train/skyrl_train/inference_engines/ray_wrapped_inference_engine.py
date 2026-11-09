@@ -14,7 +14,7 @@ from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
-from marinskyrl.inference_placement import InferenceReplicaPlacement
+from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -616,8 +616,8 @@ def create_ray_wrapped_inference_engines(
         raise ValueError("Sleeping expert-block receivers require a shared placement group")
     if require_verified_placements and use_hybrid_engine and (
         num_inference_engines != 1
-        or data_parallel_size != 4
-        or expert_parallel_size != 4
+        or data_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+        or expert_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
         or pipeline_parallel_size != 1
         or not inference_engine_enable_sleep
         or sleep_level != 2

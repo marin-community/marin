@@ -605,12 +605,13 @@ def _validate_skyrl_recipe(
             and plan.num_inference_engines == 1
             and plan.inference_engine_tensor_parallel_size == 1
             and plan.inference_engine_pipeline_parallel_size == 1
-            and plan.inference_engine_data_parallel_size == 4
-            and plan.inference_engine_expert_parallel_size == 4
+            and plan.inference_engine_data_parallel_size == plan.policy_num_gpus_per_node
+            and plan.inference_engine_expert_parallel_size == plan.policy_num_gpus_per_node
             and _declared_config_value(config, "trainer.policy.megatron_config.tensor_model_parallel_size") == 1
             and _declared_config_value(config, "trainer.policy.megatron_config.pipeline_model_parallel_size") == 1
             and _declared_config_value(config, "trainer.policy.megatron_config.expert_tensor_parallel_size") in (1, None)
-            and _declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size") == 4
+            and _declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size")
+            == plan.policy_num_gpus_per_node
             and _declared_config_value(config, "trainer.policy.megatron_config.nccl_max_channels")
             in (None, 1, _MISSING_CONFIG_VALUE)
             and _declared_config_value(config, "generator.backend") == "vllm"
