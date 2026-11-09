@@ -4,9 +4,10 @@ Reads sampled documents from the data behind
 [`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05`](https://huggingface.co/open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05):
 216 SFT token stores (79.65% of training positions) and 391 long-context
 pretraining replay caches (20.35%). Each source lists its share of training
-positions and a few whole documents decoded with the run's tokenizer. "Draw by
-mix share" picks a source in proportion to that share, then one of its sampled
-documents.
+positions and a few documents sampled from it. A document can be read as
+decoded text, as its tokens (hover for the id), or as token ids (hover for the
+text). "Random document" picks a source with probability equal to its share,
+then one of its sampled documents.
 
 `mix/` pins the allocation and replay definition of training run
 `grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped`. Replay sources
@@ -14,8 +15,9 @@ are named `replay/c<cluster>/q<quality>/<length stratum>`; the `gt_64k` caches
 were scheduled eight times as often as their `lte_64k` siblings.
 
 The app serves a snapshot from its Postgres schema and never reads the caches
-itself. Documents longer than 64,000 characters keep their first 48,000 and
-last 16,000 characters.
+itself. Documents longer than 16,000 tokens keep their first 12,000 and last
+4,000 tokens. The snapshot also holds the decoded text of every token id in
+the run's tokenizer.
 
 ## Refresh the snapshot
 

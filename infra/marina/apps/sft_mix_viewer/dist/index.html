@@ -11,24 +11,33 @@
       <div class="title">
         <h1>SFT Mix Viewer</h1>
         <p id="summary">Loading…</p>
+        <p class="help">
+          The list shows every dataset in the mix and its share of training. Click one to read a few documents
+          sampled from it. <b>Random document</b> picks a dataset with probability equal to its share, then one of
+          its sampled documents, so pressing it repeatedly shows roughly what a training batch was made of.
+        </p>
       </div>
       <div class="controls">
-        <button id="draw" type="button" title="Pick a source in proportion to its share of training positions, then one of its sampled documents">
-          Draw by mix share
-        </button>
-        <select id="kind" aria-label="Source kind">
+        <button id="random" type="button">Random document</button>
+        <select id="kind" aria-label="Which datasets to list and draw from">
           <option value="all">SFT and replay</option>
           <option value="sft">SFT only</option>
           <option value="replay">Replay only</option>
         </select>
-        <input id="filter" type="search" placeholder="Filter sources" aria-label="Filter sources" />
+        <input id="filter" type="search" placeholder="Filter datasets by name" aria-label="Filter datasets by name" />
       </div>
     </header>
     <main>
-      <nav id="sources" aria-label="Sources"></nav>
+      <div class="sidebar">
+        <div class="columns"><span>Dataset</span><span>Share of training</span></div>
+        <nav id="sources" aria-label="Datasets"></nav>
+      </div>
       <section id="reader">
         <div id="source-head"></div>
-        <div id="pager"></div>
+        <div class="toolbar">
+          <div id="pager"></div>
+          <div id="views" role="group" aria-label="Show the document as"></div>
+        </div>
         <pre id="text"></pre>
       </section>
     </main>

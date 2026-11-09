@@ -14,24 +14,45 @@ from marina.table_load import insert_load_rows
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from infra.marina.apps.sft_mix_viewer.snapshot import SampledSource, read_snapshot
+from infra.marina.apps.sft_mix_viewer.snapshot import Snapshot, read_snapshot
 
 TABLE_COLUMNS = {
     "mix_sources": "name TEXT, kind TEXT, family TEXT, share DOUBLE PRECISION, cache_path TEXT, documents BIGINT",
     "mix_samples": "source TEXT, doc_index BIGINT, tokens BIGINT, chars BIGINT, text TEXT",
+    "mix_sample_tokens": "source TEXT, doc_index BIGINT, head_tokens BIGINT, token_ids INTEGER[]",
+    "mix_vocab": "token_id BIGINT, piece TEXT",
 }
 
 
-def load_snapshot(sampled: list[SampledSource], query: AppletQuery) -> dict[str, Any]:
+def load_snapshot(snapshot: Snapshot, query: AppletQuery) -> dict[str, Any]:
     """Stage the rows under a new load id, select it, then drop the loads it replaces."""
+    sampled = snapshot.sources
     empty = [entry.source.name for entry in sampled if not entry.samples]
     if empty:
         raise ValueError(f"Sources without samples: {empty[:5]}")
-    rows = {
+    samples = [(entry.source.name, sample) for entry in sampled for sample in entry.samples]
+    rows: dict[str, list[dict[str, Any]]] = {
         "mix_sources": [{**asdict(entry.source), "documents": entry.documents} for entry in sampled],
         "mix_samples": [
-            {"source": entry.source.name, **asdict(sample)} for entry in sampled for sample in entry.samples
+            {
+                "source": source,
+                "doc_index": sample.doc_index,
+                "tokens": sample.tokens,
+                "chars": sample.chars,
+                "text": sample.text,
+            }
+            for source, sample in samples
         ],
+        "mix_sample_tokens": [
+            {
+                "source": source,
+                "doc_index": sample.doc_index,
+                "head_tokens": sample.head_tokens,
+                "token_ids": sample.token_ids,
+            }
+            for source, sample in samples
+        ],
+        "mix_vocab": [{"token_id": token_id, "piece": piece} for token_id, piece in enumerate(snapshot.vocab)],
     }
     load_id = uuid.uuid4().hex
     counts = {
@@ -56,8 +77,8 @@ def load_snapshot(sampled: list[SampledSource], query: AppletQuery) -> dict[str,
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(input_root: str, applet_id: str, service_url: str) -> None:
     configure_coreweave_s3()
-    sampled = read_snapshot(StoragePath.parse(input_root))
-    click.echo(json.dumps(load_snapshot(sampled, applet_query(service_url, applet_id))))
+    snapshot = read_snapshot(StoragePath.parse(input_root))
+    click.echo(json.dumps(load_snapshot(snapshot, applet_query(service_url, applet_id))))
 
 
 if __name__ == "__main__":

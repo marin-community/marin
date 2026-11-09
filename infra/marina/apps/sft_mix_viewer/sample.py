@@ -25,7 +25,14 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
-from infra.marina.apps.sft_mix_viewer.snapshot import MixSource, Sample, SampledSource, SourceKind, write_snapshot
+from infra.marina.apps.sft_mix_viewer.snapshot import (
+    MixSource,
+    Sample,
+    SampledSource,
+    Snapshot,
+    SourceKind,
+    write_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +44,9 @@ TOKENIZER = "gs://marin-us-central2/grug_sft/tokenizer/2026.09.18"
 EXEMPLAR = {"input_ids": np.zeros((0,), dtype=np.int32)}
 REPLAY_PATH_PATTERN = re.compile(r"/cluster=(\d+)/quality=(\d+)/length=(\w+)$")
 READ_WORKERS = 32
-# A document longer than HEAD_CHARS + TAIL_CHARS keeps only its two ends.
-HEAD_CHARS = 48_000
-TAIL_CHARS = 16_000
+# A document longer than HEAD_TOKENS + TAIL_TOKENS keeps only its two ends.
+HEAD_TOKENS = 12_000
+TAIL_TOKENS = 4_000
 NUL_PLACEHOLDER = "␀"
 
 
@@ -83,13 +90,16 @@ def replay_sources(mix: dict, replay: dict[str, dict]) -> list[MixSource]:
     return sources
 
 
-def clip_text(text: str) -> str:
-    """Keep the head and tail of a long document and say how much was dropped between them."""
-    text = text.replace("\x00", NUL_PLACEHOLDER)  # Postgres text cannot hold NUL
-    if len(text) <= HEAD_CHARS + TAIL_CHARS:
-        return text
-    dropped = len(text) - HEAD_CHARS - TAIL_CHARS
-    return f"{text[:HEAD_CHARS]}\n\n[… {dropped:,} characters omitted …]\n\n{text[-TAIL_CHARS:]}"
+def clip_tokens(ids: np.ndarray) -> tuple[np.ndarray, int]:
+    """Keep the head and tail of a long document; returns the kept ids and how many of them are the head."""
+    if len(ids) <= HEAD_TOKENS + TAIL_TOKENS:
+        return ids, len(ids)
+    return np.concatenate([ids[:HEAD_TOKENS], ids[-TAIL_TOKENS:]]), HEAD_TOKENS
+
+
+def decode(tokenizer, ids) -> str:
+    text = tokenizer.decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    return text.replace("\x00", NUL_PLACEHOLDER)  # Postgres text cannot hold NUL
 
 
 def draw_samples(source: MixSource, per_source: int, rng: np.random.Generator, tokenizer) -> SampledSource:
@@ -100,8 +110,14 @@ def draw_samples(source: MixSource, per_source: int, rng: np.random.Generator, t
     samples = []
     for index, row in zip(indices, cache.get_batch_sync(indices), strict=True):
         ids = np.asarray(row["input_ids"])
-        text = tokenizer.decode(ids, skip_special_tokens=False)
-        samples.append(Sample(index, len(ids), len(text), clip_text(text)))
+        kept, head_tokens = clip_tokens(ids)
+        text = decode(tokenizer, kept[:head_tokens])
+        chars = len(text)
+        if len(kept) < len(ids):
+            chars = len(decode(tokenizer, ids))
+            tail = decode(tokenizer, kept[head_tokens:])
+            text = f"{text}\n\n[… {len(ids) - len(kept):,} tokens omitted …]\n\n{tail}"
+        samples.append(Sample(index, len(ids), chars, text, head_tokens, tuple(int(i) for i in kept)))
     logger.info("%s: %d of %d documents", source.name, len(samples), documents)
     return SampledSource(source, documents, tuple(samples))
 
@@ -124,7 +140,8 @@ def sample_mix(output: str, sft_per_source: int, replay_per_source: int, seed: i
             )
         )
 
-    parquet_bytes = write_snapshot(StoragePath.parse(output), seed, sampled)
+    vocab = [decode(tokenizer, [token_id]) for token_id in range(len(tokenizer))]
+    parquet_bytes = write_snapshot(StoragePath.parse(output), seed, Snapshot(sampled, vocab))
     logger.info(
         "Wrote %d samples from %d sources (%d parquet bytes) to %s",
         sum(len(entry.samples) for entry in sampled),
