@@ -18,13 +18,31 @@ from experiments.post_training.long_loop.endpoint_probe import endpoint_step
 from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
 from experiments.post_training.long_loop.rl import DEFAULT_SELECTION_URI, SELECTION_PREFIX, smoke_rl_step
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
-from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, sft_steps
+from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, read_json, sft_steps
 
 
-def plumbing_loop(version: str, source_revision: str) -> ArtifactStep:
+def plumbing_loop(version: str, source_revision: str, reuse_sft_version: str | None = None) -> ArtifactStep:
     """Sequence real artifact bindings, including the live SFT endpoint check."""
-    inputs = timed(micro_inputs(version))
-    trained, exported = sft_steps(version, source_revision, prerequisites=(inputs,))
+    sft_version = reuse_sft_version or version
+    inputs = timed(micro_inputs(sft_version))
+    trained, exported = sft_steps(sft_version, source_revision, prerequisites=(inputs,))
+    base = trained.deps[0]
+    if reuse_sft_version:
+        pinned = []
+        for step in (inputs, base, trained, exported):
+            record = read_json(step.path() + "/.artifact.json")
+            if record["name"] != step.name or record["version"] != reuse_sft_version:
+                raise ValueError(f"Committed artifact identity differs: {step.path()}")
+            pinned.append(
+                ArtifactStep.adopt(
+                    step.name.replace("long-loop/", "long-loop/reused-"),
+                    version,
+                    step.path(),
+                    kind=step.artifact_type,
+                    config={"original_record": record},
+                )
+            )
+        inputs, base, trained, exported = pinned
     endpoint = timed(endpoint_step(version, exported))
     selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/snowball-100k", "2026.11.04", DEFAULT_SELECTION_URI)
     rl = smoke_rl_step(
@@ -39,19 +57,22 @@ def plumbing_loop(version: str, source_revision: str) -> ArtifactStep:
     )
     rl = timed(replace(rl, deps=(*rl.deps, endpoint)))
     evaluated = timed(smoke_evaluation(version, rl, inputs))
-    return report_step(version, [inputs, trained.deps[0], trained, exported, endpoint, rl, evaluated])
+    return report_step(version, [inputs, base, trained, exported, endpoint, rl, evaluated])
 
 
 @click.command(help=__doc__)
 @click.option("--stage", type=click.Choice(["inputs", "loop"]), default="loop", show_default=True)
 @click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
+@click.option("--reuse-sft-version", help="Reuse committed input, base, SFT and export artifacts from this version.")
 @rl_build_options
-def main(source_revision: str, stage: str) -> ArtifactStep:
+def main(source_revision: str, stage: str, reuse_sft_version: str | None) -> ArtifactStep:
     if len(source_revision) != 40 or any(c not in "0123456789abcdef" for c in source_revision):
         raise click.BadParameter("Expected a full Git commit SHA", param_hint="--source-revision")
+    if stage == "inputs" and reuse_sft_version:
+        raise click.UsageError("--reuse-sft-version applies only to --stage loop")
     require_secret("HF_TOKEN")
     version = resolve_version("long-loop/micro-smoke", None)
-    loop = plumbing_loop(version, source_revision)
+    loop = plumbing_loop(version, source_revision, reuse_sft_version)
     if stage == "loop":
         return loop
     inputs = next(step for step in graph_handles([loop]) if step.name == "long-loop/micro-inputs")

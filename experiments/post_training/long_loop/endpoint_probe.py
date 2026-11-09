@@ -19,10 +19,17 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.iris import remote_inference
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
 from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION
+
+
+def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> list[int]:
+    """Match the token-ID list returned by the serving tokenize API."""
+    return tokenizer.apply_chat_template(
+        messages, tokenize=True, return_dict=False, add_generation_prompt=True, enable_thinking=True
+    )
 
 
 def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
@@ -68,8 +75,11 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
             tokenized = client.post(base.removesuffix("/v1") + "/tokenize", json=request)
             tokenized.raise_for_status()
             served_tokens = tokenized.json()["tokens"]
-            expected_tokens = tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True, enable_thinking=True
+            expected_tokens = prompt_tokens(tokenizer, messages)
+            fs, path = filesystem_for(output + "/tokenization.json")
+            fs.pipe_file(
+                path,
+                json.dumps({"served": served_tokens, "expected": expected_tokens, "request": request}).encode(),
             )
             if served_tokens != expected_tokens:
                 raise ValueError("Served prompt tokens differ from the pinned tokenizer/template")

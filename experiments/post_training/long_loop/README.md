@@ -73,3 +73,12 @@ is disabled; evaluation is the separate Eval-org graph stage. A fresh live run
 still requires verified organization identity and an explicit Daytona target.
 
 The current reduced smoke excludes `tau3-pi` under [#11083](https://github.com/marin-community/marin/issues/11083): 20 benchmark paths, including six agentic environment paths. Reports retain the exclusion; this is not complete Micro210 coverage. Standalone preflight reserves nine H100s (one coordinator plus an eight-GPU host).
+
+### Continue after a post-export failure
+
+Use a fresh `--version` and `--reuse-sft-version <completed-version>` to reuse
+committed inputs, base weights, SFT, and the verified BF16 export. The launcher
+requires each original artifact record, preserves it in the new adoption record,
+and builds only the endpoint check, RL, and evaluation under the new version.
+This does not resume the SFT optimizer or replay training. The live endpoint check
+still compares exact token IDs and tests both EOS tokens before RL starts.
