@@ -24,6 +24,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 
+from experiments.post_training.long_loop.archive_selection import trace_retention
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -58,11 +59,16 @@ def smoke_rl_step(
     selection: ArtifactStep[Artifact],
 ) -> ArtifactStep[SkyRLRun]:
     """Consume the preceding verified BF16 handoff, never a fixed released SFT model."""
+    config = smoke_recipe()
+    config["trainer"]["dump_training_order"] = True
+    config["generator"]["trajectory_retention"] = trace_retention(
+        f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/rl", version, fraction=0.1, phase="train"
+    )
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name("checkpoints/long-loop-plumbing-rl"),
             version=version,
-            config_yaml=yaml.safe_dump(smoke_recipe(), sort_keys=False),
+            config_yaml=yaml.safe_dump(config, sort_keys=False),
             model=model,
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),

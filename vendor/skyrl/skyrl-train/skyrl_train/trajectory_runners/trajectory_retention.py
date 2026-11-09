@@ -650,7 +650,8 @@ def _orphan_reasons(value: Mapping[str, Any], config: TrajectoryRetentionConfig)
     if mandatory:
         return (_SELECTION_MANDATORY,)
     score = _serialized_sample_score(value)
-    if score / (1 << 256) < config.sample_fraction:
+    fraction = config.eval_sample_fraction if value["phase"] == "eval" else None
+    if score / (1 << 256) < (config.sample_fraction if fraction is None else fraction):
         return (_SELECTION_FRACTION,)
     return ()
 
@@ -1051,7 +1052,8 @@ class TrajectorySink:
             return _Selection((_SELECTION_MANDATORY,))
 
         score = self._sample_score(record)
-        if score / (1 << 256) < self.config.sample_fraction:
+        fraction = self.config.eval_sample_fraction if record.phase == "eval" else None
+        if score / (1 << 256) < (self.config.sample_fraction if fraction is None else fraction):
             reasons.append(_SELECTION_FRACTION)
 
         displaced_id = None

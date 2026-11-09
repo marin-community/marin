@@ -361,6 +361,7 @@ trainer:
   run_name: "test_run"
   logger: "wandb"
   tracker_commit_each_step: true
+  dump_training_order: false  # Persist ordered task/trajectory IDs without full token batches
   dump_data_batch: false
   dump_eval_results: true
   log_level: "INFO"
@@ -527,6 +528,7 @@ generator:
     phases: [train]
     sample_count_per_step: 1
     sample_fraction: 0.0
+    eval_sample_fraction: null  # Optional eval-only override of the train fraction
     always_retain_failures: true
     always_retain_non_terminating: true
     always_retain_loops: true

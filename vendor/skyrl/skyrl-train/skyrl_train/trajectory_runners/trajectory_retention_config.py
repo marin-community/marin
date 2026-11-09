@@ -13,6 +13,7 @@ class TrajectoryRetentionConfig:
     phases: tuple[str, ...] = ("train",)
     sample_count_per_step: int = 1
     sample_fraction: float = 0.0
+    eval_sample_fraction: float | None = None
     always_retain_failures: bool = True
     always_retain_non_terminating: bool = True
     always_retain_loops: bool = True
@@ -56,6 +57,7 @@ def parse_trajectory_retention_config(config: Mapping[str, Any] | None) -> Traje
         phases=tuple(str(phase).lower() for phase in phases_value),
         sample_count_per_step=int(config.get("sample_count_per_step", defaults.sample_count_per_step)),
         sample_fraction=float(config.get("sample_fraction", defaults.sample_fraction)),
+        eval_sample_fraction=_optional_float(config.get("eval_sample_fraction", defaults.eval_sample_fraction)),
         always_retain_failures=bool(config.get("always_retain_failures", defaults.always_retain_failures)),
         always_retain_non_terminating=bool(
             config.get("always_retain_non_terminating", defaults.always_retain_non_terminating)
@@ -100,6 +102,8 @@ def _validate_config(config: TrajectoryRetentionConfig) -> None:
         raise ValueError("trajectory_retention.sample_count_per_step must be non-negative")
     if not 0.0 <= config.sample_fraction <= 1.0:
         raise ValueError("trajectory_retention.sample_fraction must be between 0 and 1")
+    if config.eval_sample_fraction is not None and not 0 <= config.eval_sample_fraction <= 1:
+        raise ValueError("eval_sample_fraction must be between 0 and 1")
     byte_bounds = (config.max_bytes_per_step, config.max_bytes_per_run)
     if any(bound is not None and bound < 0 for bound in byte_bounds):
         raise ValueError("trajectory retention byte bounds must be non-negative")

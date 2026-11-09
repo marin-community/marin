@@ -226,6 +226,7 @@ def test_staged_models_are_written_as_structured_config(tmp_path, monkeypatch) -
     launch = OmegaConf.create(
         {
             "run": {"id": "run", "attempt_id": "attempt"},
+            "artifacts": {"attempts_root": str(tmp_path / "attempts")},
             "inputs": {"model": {"uri": "s3://models/policy"}},
             "skyrl": {
                 "trainer": {
@@ -243,6 +244,7 @@ def test_staged_models_are_written_as_structured_config(tmp_path, monkeypatch) -
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path))
 
     path = _write_final_config(launch, policy_model=policy, policy_tokenizer=tokenizer, draft_model=draft)
+    assert (tmp_path / "attempts/attempt/consumed-config.yaml").read_bytes() == path.read_bytes()
     resolved = OmegaConf.load(path)
 
     assert resolved.skyrl.trainer.policy.model.path == "/tmp/policy-metadata"
@@ -260,6 +262,7 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
     launch = OmegaConf.create(
         {
             "run": {"id": "run", "attempt_id": "attempt"},
+            "artifacts": {"attempts_root": str(tmp_path / "attempts")},
             "inputs": {"model": {"uri": "s3://models/policy"}},
             "skyrl": {
                 "trainer": {
@@ -274,6 +277,7 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path))
 
     path = _write_final_config(launch, policy_model=policy, policy_tokenizer=None, draft_model=None)
+    assert (tmp_path / "attempts/attempt/consumed-config.yaml").read_bytes() == path.read_bytes()
     resolved = OmegaConf.load(path)
 
     for role in ("policy", "ref"):

@@ -49,3 +49,14 @@ def checked_serving_release() -> VllmGpuRelease:
     release = serving_release()
     check_serving_pin(release, root / "vendor/skyrl/pyproject.toml")
     return release
+
+
+# Pinned base config: open-athena/snowball-67b-a2b-base-262k-qk175-skew8
+# revision 058ecaf27b9e4f37219df221a51e7d490d58ec3d. SFT packing does not change RoPE.
+SNOWBALL_CONTEXT_LIMIT = 262144
+
+
+def snowball_context_override(requested_window: int) -> dict[str, int]:
+    if requested_window > SNOWBALL_CONTEXT_LIMIT:
+        raise ValueError("Requested context exceeds the pinned Snowball base configuration")
+    return {"max_position_embeddings": SNOWBALL_CONTEXT_LIMIT}

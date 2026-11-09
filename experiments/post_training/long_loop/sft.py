@@ -69,6 +69,7 @@ def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None
     if not verification["exact_parity"] or len(verification["tensors"]) != 502:
         raise ValueError("Base import did not verify all 502 tensors")
     config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
+    (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     run_grug(config)
     metadata = read_json(output + "/checkpoints/step-15/metadata.json")
     if metadata.get("step") != 15 or metadata.get("is_temporary") is not False:

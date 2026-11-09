@@ -1,6 +1,7 @@
 """Shared checkpoint and export path contracts."""
 
 import json
+import math
 
 from rigging.filesystem.storage_path import StoragePath
 from marinskyrl.resource_locator import join_resource_path
@@ -27,3 +28,19 @@ def selected_export_step(checkpoint_root: str, selection: str, latest_step: int)
     if best["model_format"] != "native":
         raise ValueError("Best checkpoint is the initial HF model; no trained export is available")
     return int(best["step"])
+
+
+def trailing_validation_ema(history: list[dict], step: int, window: int) -> float | None:
+    """Adjusted EMA over a complete consecutive optimizer-step window; alpha=2/(window+1)."""
+    if window < 1:
+        raise ValueError("Validation EMA window must be positive")
+    by_step = {int(row["step"]): float(row["reward"]) for row in history}
+    steps = list(range(step - window + 1, step + 1))
+    if steps[0] < 1 or any(s not in by_step for s in steps):
+        return None
+    rewards = [by_step[s] for s in steps]
+    if not all(math.isfinite(value) and 0 <= value <= 1 for value in rewards):
+        raise ValueError("Validation rewards must be finite and normalized")
+    decay = 1 - 2 / (window + 1)
+    weights = [decay ** age for age in reversed(range(window))]
+    return sum(reward * weight for reward, weight in zip(rewards, weights, strict=True)) / sum(weights)

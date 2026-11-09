@@ -2145,6 +2145,11 @@ def _write_final_config(
     destination = _final_config_path(config)
     destination.parent.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(root, destination, resolve=True)
+    # Preserve the exact post-staging bytes consumed below, not only the pre-staging recipe.
+    consumed_uri = str(root.artifacts.attempts_root).rstrip("/") + "/" + str(root.run.attempt_id) + "/consumed-config.yaml"
+    fs, key = fs_and_path(consumed_uri)
+    fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
+    fs.pipe_file(key, destination.read_bytes())
     return destination
 
 

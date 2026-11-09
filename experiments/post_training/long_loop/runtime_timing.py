@@ -12,6 +12,7 @@ from uuid import uuid4
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.post_training.long_loop.archive_stage import archive_step
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
 from experiments.post_training.long_loop.timing import Event, EventLog, report
@@ -43,7 +44,10 @@ def write_report(*, output: str, stages: list[str]) -> None:
         for key in sorted(fs.glob(prefix + "/*.jsonl")):
             events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
             sources.append(fs.unstrip_protocol(key))
-    text = report(events, synthetic=False)
+    # Reused stage artifacts have different original run IDs; preserve those in the sources.
+    original_runs = sorted({event.run for event in events})
+    text = report([replace(event, run=output) for event in events], synthetic=False)
+    text += "\nOriginal stage run IDs: " + ", ".join(original_runs) + ". Raw events retain these IDs.\n"
     text += "\nPlumbing SFT geometry (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.\n"
     text += (
         "\nStage spans include scheduling and startup; they are not active compute measurements.\n"
@@ -60,5 +64,6 @@ def write_report(*, output: str, stages: list[str]) -> None:
         raise ValueError(f"Micro210 reduced smoke did not verify all {SMOKE_PATH_COUNT} selected paths")
 
 
-def report_step(version: str, stages: list[ArtifactStep]) -> ArtifactStep:
-    return apply("long-loop/report", write_report, version=version, output=OUT, stages=stages)
+def report_step(version: str, stages: list[ArtifactStep], archive_plan: dict | None = None) -> ArtifactStep:
+    completed = apply("long-loop/report", write_report, version=version, output=OUT, stages=stages)
+    return archive_step(version, archive_plan, completed) if archive_plan is not None else completed

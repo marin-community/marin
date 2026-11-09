@@ -150,15 +150,46 @@ def report(events: list[Event], *, synthetic: bool) -> str:
         f"Paired allocation GPU-hours: {gpu_hours:.3f}; observed peak: {peak} GPUs.",
         "Allocation totals exclude incomplete spans; a missing allocation boundary prevents cap certification.",
         "",
-        "| Stage | Kind | Spans | Work seconds | p50 | p90 | max |",
-        "|---|---|---:|---:|---:|---:|---:|",
     ]
-    for (stage, kind), durations in sorted(groups.items()):
-        p90 = quantiles(durations, n=10, method="inclusive")[8] if len(durations) > 1 else durations[0]
-        lines.append(
-            f"| {stage} | {kind} | {len(durations)} | {sum(durations):.3f} | "
-            f"{median(durations):.3f} | {p90:.3f} | {max(durations):.3f} |"
-        )
+    components = {
+        "Queue and allocation": ("queue", "allocation"),
+        "Model loading, server startup and compilation": ("startup", "spin", "load", "compil"),
+        "File transfers and exports": ("transfer", "export", "convert"),
+        "SFT and RL computation": ("train", "learner", "rollout", "optimizer", "weight_sync"),
+        "Checkpoint saves and drain": ("checkpoint", "drain"),
+        "Validation and evaluation": ("eval", "judge", "benchmark"),
+        "Archive and cleanup": ("archive", "cleanup"),
+    }
+    remaining = dict(groups)
+    for title, keywords in components.items():
+        selected = {
+            key: values
+            for key, values in remaining.items()
+            if "including_queue" not in key[1] and any(word in key[1] for word in keywords)
+        }
+        lines.extend(["", f"## {title}", ""])
+        if not selected:
+            lines.append("No distinct phase measurements captured; unavailable, not zero.")
+            continue
+        lines.extend(["| Stage | Kind | Spans | Work seconds | p50 | p90 | max |", "|---|---|---:|---:|---:|---:|---:|"])
+        for (stage, kind), durations in sorted(selected.items()):
+            p90 = quantiles(durations, n=10, method="inclusive")[8] if len(durations) > 1 else durations[0]
+            lines.append(
+                f"| {stage} | {kind} | {len(durations)} | {sum(durations):.3f} | "
+                f"{median(durations):.3f} | {p90:.3f} | {max(durations):.3f} |"
+            )
+            del remaining[(stage, kind)]
+    lines.extend(
+        [
+            "",
+            "## Inclusive stage spans and other measurements",
+            "",
+            "These spans can include the components above; do not add them to component totals.",
+            "",
+        ]
+    )
+    for (stage, kind), durations in sorted(remaining.items()):
+        lines.append(f"- {stage} / {kind}: {sum(durations):.3f} seconds across {len(durations)} spans.")
     lines.extend(["", "UTC interval unions (overlapping work is counted once):", ""])
     lines.extend(f"- {kind}: {interval_union(spans):.3f} seconds" for kind, spans in sorted(intervals.items()))
     lines.extend(

@@ -44,6 +44,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     scalar_reward_token_credit,
     verifier_score_summary,
 )
+from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.dataset.preprocess import (
     collate_response_token_channel,
@@ -1692,6 +1693,18 @@ class RayPPOTrainer:
         # Batch replay runs this prefix outside an optimizer step, without a step wall clock.
         if step_wall is not None:
             step_wall.start("advantages")
+        if self.cfg.trainer.dump_training_order:
+            order = {
+                "global_step": self.global_step,
+                "uids": to_jsonable(training_input.metadata["uids"]),
+                "trajectory_ids": to_jsonable(training_input.metadata["trajectory_ids"]),
+                "pad_size": training_input.metadata.get("pad_size", 0),
+                "order_semantics": "assembled learner batch before optimizer update; confirm completion against step metrics",
+            }
+            order_path = join_resource_path(self.cfg.trainer.export_path, "training_order", f"step-{self.global_step}.json")
+            io.makedirs(join_resource_path(self.cfg.trainer.export_path, "training_order"), exist_ok=True)
+            io.write_bytes_atomic(order_path, json.dumps(order).encode())
+
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages_and_returns(training_input)
             training_input = self.finalize_advantages_for_training(training_input)

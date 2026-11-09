@@ -31,10 +31,12 @@ from marin.rl.skyrl import (
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.post_training.long_loop.archive_selection import trace_retention
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION, SKIPPED_BENCHMARKS
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
+from experiments.post_training.long_loop.serving import snowball_context_override
 from experiments.post_training.long_loop.sft import read_json
 from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_reference
 
@@ -134,9 +136,15 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
     _materialize_role_plan_config(config, plan)
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"].update(tensor_model_parallel_size=1, expert_model_parallel_size=8)
-    config["generator"]["engine_init_kwargs"].update(tool_call_parser="hermes")
+    config["generator"]["engine_init_kwargs"].update(
+        tool_call_parser="hermes",
+        hf_overrides=snowball_context_override(config["context_budget"]["request_window_tokens"]),
+    )
     config["generator"]["sampling_params"].update(skip_special_tokens=False, stop_token_ids=[128001, 128009])
     config["generator"]["eval_sampling_params"].update(skip_special_tokens=False, stop_token_ids=[128001, 128009])
+    config["generator"]["trajectory_retention"] = trace_retention(
+        f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/eval", version, fraction=1.0, phase="eval"
+    )
     step = skyrl_step(
         SkyRLSpec(
             name="long-loop/micro-smoke",

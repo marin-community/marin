@@ -35,7 +35,7 @@ from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
 from skyrl_train.inline_harbor_client import collect_harbor
-from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY, trailing_validation_ema
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
 from skyrl_train.inference_observability import (
@@ -195,7 +195,10 @@ class BestCheckpointCallback(TrainerCallback):
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, initial_model_uri: str, expected_tasks: int, minimum_scored_tasks: int):
+    def __init__(self, *, initial_model_uri: str, expected_tasks: int, minimum_scored_tasks: int, ema_window: int = 1):
+        if ema_window < 1:
+            raise ValueError("Validation EMA window must be positive")
+        self.ema_window = ema_window
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
@@ -206,7 +209,10 @@ class BestCheckpointCallback(TrainerCallback):
         best_path = join_resource_path(root, BEST_CHECKPOINT_FILENAME)
         if self.best_score is None and io.exists(best_path):
             with io.open_file(best_path, "r") as stream:
-                self.best_score = json.load(stream)["accuracy"]
+                previous = json.load(stream)
+            if previous.get("ema_window", 1) != self.ema_window:
+                raise ValueError("Checkpoint selection window changed on resume")
+            self.best_score = previous["accuracy"]
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         if (
@@ -218,6 +224,24 @@ class BestCheckpointCallback(TrainerCallback):
         score = metrics["eval/all/avg_verifier_score"]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
+        raw_score = score
+        if self.ema_window > 1:
+            history_path = join_resource_path(root, "validation_selection_history.json")
+            history = []
+            if io.exists(history_path):
+                with io.open_file(history_path, "r") as stream:
+                    history = json.load(stream)
+            recorded = [row for row in history if row["step"] == state.global_step]
+            if recorded and recorded[0]["reward"] != raw_score:
+                raise ValueError("Validation reward changed for an already recorded optimizer step")
+            history = [row for row in history if row["step"] != state.global_step]
+            history.append({"step": state.global_step, "reward": raw_score,
+                "attempted": attempted, "scored": scored})
+            io.makedirs(root, exist_ok=True)
+            io.write_bytes_atomic(history_path, json.dumps(history).encode())
+            score = trailing_validation_ema(history, state.global_step, self.ema_window)
+            if score is None:
+                return control
         if self.best_score is not None and score <= self.best_score:
             return control
         model_uri = self.initial_model_uri
@@ -235,7 +259,10 @@ class BestCheckpointCallback(TrainerCallback):
             "scored": scored,
             "model_uri": model_uri,
             "model_format": model_format,
-            "selection": "Highest valid normalized verifier score; keep the earliest checkpoint on ties",
+            "raw_reward": raw_score,
+            "ema_window": self.ema_window,
+            "ema_alpha": 2 / (self.ema_window + 1),
+            "selection": "Highest valid score; adjusted trailing-step EMA when window>1; earliest on ties",
         }
         io.makedirs(root, exist_ok=True)
         io.write_bytes_atomic(best_path, json.dumps(payload).encode())
