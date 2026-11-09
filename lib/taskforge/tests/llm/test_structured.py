@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
-from lib.taskforge.tests.llm.conftest import FakeGlm
+from lib.taskforge.tests.llm.fake_glm import FakeGlm
 from pydantic import BaseModel, Field, field_validator
 
 from taskforge.llm.client import StructuredResult

@@ -28,8 +28,6 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, Prompt
 
-pytest_plugins = ("lib.taskforge.tests.test_proposal",)
-
 
 @pytest.fixture
 def workpiece(proposal: TaskProposal) -> Workpiece:
