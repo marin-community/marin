@@ -37,6 +37,7 @@ from verifyit.spec import ExactSpec, JudgeSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic import example_build
 from taskforge.agentic.drafts import (
+    BLIND_SOLVE_PASSED,
     DRAFT_MAX_ANSWER_SHARE,
     DraftConfig,
     DraftProposal,
@@ -222,6 +223,18 @@ async def test_a_draft_needs_a_program_whose_ids_give_varied_tasks():
     instances = await task_instances(result.draft, ["ledger--1", "ledger--2"], ShellSimMachineFactory(), timeout=10)
     answers = [instance.grader.parameters["expected"] for instance in instances]  # type: ignore[union-attr]
     assert answers == [f"{EXPECTED}1", f"{EXPECTED}2"]
+
+
+async def test_a_session_that_gives_up_after_a_passing_blind_solve_keeps_the_checked_task(monkeypatch):
+    async def blind_solve_passes(self, task, right_answer):
+        return [BLIND_SOLVE_PASSED]
+
+    monkeypatch.setattr(DraftTools, "blind_solve_problems", blind_solve_passes)
+    agent = ScriptedAgent([write_task(SHELL_TASK.model_dump_json(), BUILD), submit(), ("finish", {"report": "stuck"})])
+    result = await draft_task(proposal(), config(agent))
+
+    assert "likely too easy" in replies(result)["call-2"]["problems"][0]
+    assert result.draft is not None and result.draft.task == SHELL_TASK
 
 
 async def test_a_draft_may_grade_with_a_judge_that_gives_the_right_answer_full_credit(judge_replies):

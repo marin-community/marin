@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "17"
+DRAFT_REVISION = "18"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -318,6 +318,9 @@ class DraftTools:
         self.report: str | None = None
         self.submits = 0
         self.blind_solves = 0
+        self.fallback: Draft | None = None
+        """The task that passed every check before a passing blind solve asked for a harder one: the session's draft
+        when no harder version is accepted."""
 
     def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
         return TOOL_DEFINITIONS
@@ -917,6 +920,8 @@ class DraftSession:
             )
         if not problems:
             problems = await self.tools.blind_solve_problems(task, right_answer)
+            if problems == [BLIND_SOLVE_PASSED]:
+                self.tools.fallback = Draft(task, program, await workspace_snapshot(self.machine))
         if problems:
             return _reply({"accepted": False, "problems": problems})
         self.tools.draft = Draft(task, program, await workspace_snapshot(self.machine))
@@ -949,7 +954,8 @@ async def draft_task(proposal: DraftProposal, config: DraftConfig) -> DraftResul
     except RolloutInterrupted as error:
         rollout = error.rollout
         failure = f"{error.operation}: {error.rollout.failure}"
-    return DraftResult(proposal, tools.draft, tools.report, rollout, rollout_tokens(rollout), tools.submits, failure)
+    draft = tools.draft or tools.fallback
+    return DraftResult(proposal, draft, tools.report, rollout, rollout_tokens(rollout), tools.submits, failure)
 
 
 def draft_agent_task(proposal: DraftProposal, workspace_backend: Backend, agent_limits: RolloutLimits) -> TaskSpec:
