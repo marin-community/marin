@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from lib.taskforge.tests.llm.conftest import FakeGlm
+from lib.taskforge.tests.llm.fake_glm import FakeGlm
 
 from taskforge.llm.client import (
     AttemptOutcome,
