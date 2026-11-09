@@ -269,7 +269,7 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
     finally:
         client.shutdown()
     comparison = build_comparison(records[:2], panel_request(), ("east", "west"))
-    assert comparison["shared"] == ["colors"]
+    assert comparison["shared"] == ["colors [evalchemy; chat]"]
     assert build_comparison([records[0], records[2]], panel_request(), ("east", "revised"))["shared"] == []
 
 

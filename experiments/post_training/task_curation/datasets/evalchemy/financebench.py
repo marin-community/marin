@@ -16,7 +16,7 @@ from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -62,7 +62,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                         stop=(),
                         chat_template_kwargs={"enable_thinking": False},
                     ),
-                    trials=TrialPolicy(count=1, seed=None),
+                    trials=TrialPolicy(count=1, seed=42),
                     metrics=Metrics.CLASSIFICATION,
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
@@ -73,3 +73,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             pipeline=curate,
         )
     ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks(sources())

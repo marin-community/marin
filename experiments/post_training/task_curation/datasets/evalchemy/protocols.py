@@ -107,7 +107,6 @@ def choice_source(
     metric_kind: MetricKind = MetricKind.BINARY,
     scoring: Literal["most_likely", "probability_mass"] = "most_likely",
     version: str = "2026.11.02",
-    fewshot_group: str | None = None,
 ) -> RlDataSource[EvalDataset]:
     """Bind pinned rows and few-shots, with the first normalization as the headline."""
     names = {
@@ -176,7 +175,7 @@ def choice_source(
                 ),
             ),
             item_builder=partial(choice_item, subject=template.subject),
-            fewshot_group=fewshot_group,
+            protocol_name="harness",
         ),
         pipeline=curate,
     )

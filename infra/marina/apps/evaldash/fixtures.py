@@ -52,6 +52,7 @@ from marin.evaluation.records import (
     MetricKind,
     ModelRef,
     Provenance,
+    ResolvedEvaluationSelection,
     RunStatus,
     RunTiming,
     ServingParams,
@@ -995,13 +996,18 @@ def build_fixtures(dest: str) -> list[str]:
 def build_native_fixtures(dest: str) -> list[str]:
     """Write native raw runs for browser checks of historical comparisons and retry-safe samples."""
     written = []
-    for name, shots, metric in (("mmlu", 5, "acc,none"), ("humaneval", 0, "accuracy")):
+    for name, shots, metric in (
+        ("mmlu", 5, "acc,none"),
+        ("humaneval", 0, "accuracy"),
+        ("gsm8k-0shot", 0, "exact_match,strict-match"),
+        ("gsm8k-5shot", 5, "exact_match,strict-match"),
+    ):
         run_id = f"native-fixture-{name}"
         root = f"{dest}/{run_id}/results"
         dataset = f"fixture-{name}"
         likelihood = name == "mmlu"
         protocol = EvaluationProtocol(
-            benchmark=name,
+            benchmark="gsm8k" if name.startswith("gsm8k-") else name,
             version="fixture-v1",
             operation="choice_likelihood" if likelihood else "text_generation",
             sampling=(
@@ -1117,7 +1123,17 @@ def build_native_fixtures(dest: str) -> list[str]:
             evaluation=EvalRef(
                 name=name,
                 mechanism="curated",
-                curated=CuratedRef(datasets=(dataset,), settings=CuratedSettings()),
+                curated=CuratedRef(
+                    datasets=(dataset,),
+                    settings=CuratedSettings(),
+                    selection=(
+                        ResolvedEvaluationSelection(
+                            benchmark="gsm8k", protocol="harness", num_fewshot=shots, prompt_format="completion"
+                        )
+                        if name.startswith("gsm8k-")
+                        else None
+                    ),
+                ),
             ),
             status=RunStatus.SUCCEEDED,
             results_path=root,

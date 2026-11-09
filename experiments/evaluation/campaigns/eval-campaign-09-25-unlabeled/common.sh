@@ -9,7 +9,7 @@ CANONICAL_CONFIG_ROOT="$SCRIPT_DIR"
 CAMPAIGN_CONFIG="$CANONICAL_CONFIG_ROOT/campaign.yaml"
 MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/model-configs"
 CHAT_TEMPLATE_DIR="$CANONICAL_CONFIG_ROOT/chat-templates"
-CURATED_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/evalchemy-configs"
+EVALUATION_CONFIG="$CANONICAL_CONFIG_ROOT/evalchemy.yaml"
 HARBOR_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/harbor-configs"
 JUDGE_MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/judge-model-configs"
 JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG_DIR/MiniMaxAI-MiniMax-M3-MXFP8.yaml"
@@ -223,7 +223,7 @@ validate_campaign_configs() {
   (cd "$MARIN_DIR" && \
   MODEL_CONFIG_DIR="$MODEL_CONFIG_DIR" \
   CHAT_TEMPLATE_DIR="$CHAT_TEMPLATE_DIR" \
-  CURATED_CONFIG_DIR="$CURATED_CONFIG_DIR" \
+  EVALUATION_CONFIG="$EVALUATION_CONFIG" \
   HARBOR_CONFIG_DIR="$HARBOR_CONFIG_DIR" \
   CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" \
   JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG" \
@@ -235,13 +235,13 @@ from pathlib import Path
 
 import yaml
 
-from experiments.evaluation.curated import CuratedDefinition, corpus_steps
+from experiments.evaluation.curated import load_evaluations, corpus_steps, resolve_selection
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from marin.evaluation.model_config import load_model_config
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])
-evalchemy = Path(os.environ["CURATED_CONFIG_DIR"])
+evalchemy = Path(os.environ["EVALUATION_CONFIG"])
 
 harbor = Path(os.environ["HARBOR_CONFIG_DIR"])
 campaign_config = Path(os.environ["CAMPAIGN_CONFIG"])
@@ -298,9 +298,8 @@ for path in models.glob("*.yaml"):
         actual_thinking_format,
         expected_thinking_format,
     )
-for path in evalchemy.glob("*.yaml"):
-    definition = CuratedDefinition.from_file(path)
-    corpus_steps(definition.sources, CampaignRuntime())
+for selection in load_evaluations(evalchemy):
+    corpus_steps(resolve_selection(selection, None), CampaignRuntime())
 
 fallbacks = {
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
@@ -324,9 +323,9 @@ assert "--enforce-eager" not in judge.serve.vllm_extra_args
 assert "--model-loader-extra-config" not in judge.serve.vllm_extra_args
 
 
-nupa = yaml.safe_load((evalchemy / "nupa.yaml").read_text())
-assert nupa["sources"] == ["evalchemy-nupa5k-loose"]
-assert "max_tokens" not in nupa
+nupa = yaml.safe_load(evalchemy.read_text())["evaluations"]["nupa"]
+assert nupa["benchmark"] == "nupa5k-loose"
+assert "max_tokens" not in nupa.get("run", {})
 
 terminal_bench = yaml.safe_load((harbor / "tb2-recovery.yaml").read_text())
 assert terminal_bench["n_attempts"] == 3
@@ -405,7 +404,7 @@ from pathlib import Path
 
 import yaml
 
-config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--curated-config", "--policy-finalization-config"}
+config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--evaluation-config", "--policy-finalization-config"}
 arguments = sys.argv[1:]
 files = []
 for index, argument in enumerate(arguments[:-1]):

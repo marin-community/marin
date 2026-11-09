@@ -52,6 +52,7 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
+from marin.evaluation.historical_protocols import comparison_column, compatible_selection, historical_selection
 from marin.evaluation.metric_selection import PUBLICATION_METRIC_POLICY
 from marin.evaluation.records import EvalRunRecord, RunStatus
 from marin.execution.step_status import STATUS_SUCCESS
@@ -79,6 +80,7 @@ EVAL_SUITES: dict[str, tuple[str, ...]] = {
         "nq-open",
         "drop",
         "gsm8k-0shot",
+        "gsm8k",
     ),
     "Chat / Math": ("math500", "aime24", "olympiadbench"),
     "Long context": ("mrcr", "graphwalks"),
@@ -96,17 +98,19 @@ RUN_FACETS: dict[str, str] = {
 }
 
 
-def eval_suites(evals: set[str]) -> list[dict]:
+def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[dict]:
     """Group the eval names present into ordered presentation suites for the column tree.
 
     Each suite lists only the evals actually seen; any eval outside :data:`EVAL_SUITES` lands in a
     trailing ``Other`` bucket so an unmapped column is still selectable.
     """
-    assigned = {name for names in EVAL_SUITES.values() for name in names}
+    assigned = set()
+    for names in EVAL_SUITES.values():
+        assigned.update(name for name in evals if name in names or families.get(name) in names)
     result = [
         {"suite": suite, "evals": present}
         for suite, names in EVAL_SUITES.items()
-        if (present := sorted(name for name in names if name in evals))
+        if (present := sorted(name for name in evals if name in names or families.get(name) in names))
     ]
     other = sorted(name for name in evals if name not in assigned)
     if other:
@@ -119,6 +123,9 @@ def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
     explicit: dict[str, tuple[str, str]] = {}
     inferred: dict[str, tuple[str, str]] = {}
     for record in records:
+        curated = record.evaluation.curated
+        if curated is not None and curated.selection is not None:
+            explicit[comparison_column(curated.selection)] = (curated.selection.benchmark, record.created_at or "")
         family = record.evaluation.family
         if family is not None:
             current = explicit.get(record.evaluation.name)
@@ -260,7 +267,34 @@ def score_eligible(record: EvalRunRecord) -> bool:
 
 def dashboard_measurements(records: Iterable[EvalRunRecord]) -> list[Measurement]:
     """Extract scores from records whose observed steps are complete."""
-    return measurements_from_records(record for record in records if score_eligible(record))
+    records = [record for record in records if score_eligible(record)]
+    selections = {
+        comparison_column(record.evaluation.curated.selection): record.evaluation.curated.selection
+        for record in records
+        if record.evaluation.curated is not None and record.evaluation.curated.selection is not None
+    }
+    result = []
+    for record in records:
+        measurement = measurement_from_record(record)
+        if measurement is None:
+            continue
+        curated = record.evaluation.curated
+        if curated is not None and curated.selection is not None:
+            result.append(replace(measurement, benchmark=comparison_column(curated.selection)))
+            continue
+        historical = historical_selection(record)
+        columns = [
+            column
+            for column, selection in selections.items()
+            if historical is not None and compatible_selection(historical, selection)
+        ]
+        if columns:
+            result.extend(
+                replace(measurement, benchmark=column, num_fewshot=historical.num_fewshot) for column in columns
+            )
+        else:
+            result.append(measurement)
+    return result
 
 
 def cell_payload(measurement: Measurement) -> dict:
@@ -328,20 +362,30 @@ def _missing_cells(
     newest offending run, so an empty cell links the run behind it instead of rendering blank.
     """
     reasons = {rejection.run_id: rejection.reason for rejection in rejections}
+    columns: dict[str, list[str]] = {}
+    for measurement in dashboard_measurements(records):
+        columns.setdefault(measurement.run_id, []).append(measurement.benchmark)
     missing: dict[str, dict[str, dict]] = {}
     for record in records:
-        model, benchmark = record.model.name, record.evaluation.name
-        if benchmark in chosen.get(model, {}):
-            continue
-        reason = reasons.get(record.run_id) or _gap_reason(record)
-        current = missing.setdefault(model, {}).get(benchmark)
-        if current is None or (record.created_at or "") > current["created_at"]:
-            missing[model][benchmark] = {
-                "reason": reason,
-                "run_id": record.run_id,
-                "status": display_status(record),
-                "created_at": record.created_at,
-            }
+        curated = record.evaluation.curated
+        name = (
+            comparison_column(curated.selection)
+            if curated is not None and curated.selection is not None
+            else record.evaluation.name
+        )
+        for benchmark in columns.get(record.run_id, [name]):
+            model = record.model.name
+            if benchmark in chosen.get(model, {}):
+                continue
+            reason = reasons.get(record.run_id) or _gap_reason(record)
+            current = missing.setdefault(model, {}).get(benchmark)
+            if current is None or (record.created_at or "") > current["created_at"]:
+                missing[model][benchmark] = {
+                    "reason": reason,
+                    "run_id": record.run_id,
+                    "status": display_status(record),
+                    "created_at": record.created_at,
+                }
     return missing
 
 
@@ -508,7 +552,16 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "accelerator": sorted({r.hardware.accelerator for r in records if r.hardware.accelerator}),
     }
     records = _panel_records(records)
-    eval_names = {r.evaluation.name for r in records}
+    eval_names = {measurement.benchmark for measurement in dashboard_measurements(records)}
+    eval_names.update(
+        (
+            comparison_column(r.evaluation.curated.selection)
+            if r.evaluation.curated is not None and r.evaluation.curated.selection is not None
+            else r.evaluation.name
+        )
+        for r in records
+        if measurement_from_record(r) is None
+    )
     by_family = group_by_family(sorted(eval_names), declared_families(records))
     metadata = run_metadata(records)
     facets = {
@@ -521,7 +574,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "default_cohort": ALL_COHORTS,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
-        "suites": eval_suites(eval_names),
+        "suites": eval_suites(eval_names, declared_families(records)),
         "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({display_status(r) for r in records}),
@@ -578,11 +631,13 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
 def _model_history(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
     """Per-eval score-over-time: every scored run for the model on each eval, oldest first."""
     history: dict[str, list[dict]] = {}
-    for record in records:
-        headline = record_headline(record, protocols.get(record.evaluation.name))
-        if headline is None:
+    for measurement in dashboard_measurements(records):
+        protocol = protocols.get(measurement.benchmark)
+        if protocol is not None and not matches_protocol(measurement, protocol):
             continue
-        history.setdefault(record.evaluation.name, []).append({**headline, "status": record.status.value})
+        history.setdefault(measurement.benchmark, []).append(
+            {**cell_payload(measurement), "status": measurement.status.value}
+        )
     for points in history.values():
         points.sort(key=lambda point: point["created_at"] or "")
     return history

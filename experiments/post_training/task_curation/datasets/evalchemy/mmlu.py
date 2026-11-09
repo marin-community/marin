@@ -9,7 +9,7 @@ from taskcompendium.evaluation.spec import LikelihoodNormalization
 from taskcompendium.importers.evaluation_harness import HarnessTemplate
 
 from experiments.post_training.task_curation.datasets.evalchemy.protocols import choice_source
-from experiments.post_training.task_curation.evaluation import EvalDataset
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, ProtocolVariant
 from experiments.post_training.task_curation.source import RlDataSource
 
 MMLU_REVISION = "c30699e8356da336a370243923dbaf21066bb9fe"
@@ -75,45 +75,42 @@ MMLU_POPULATIONS = {
 }
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources(shots: int = 5) -> list[RlDataSource[EvalDataset]]:
     raw = (LikelihoodNormalization.RAW,)
     result = []
-    for shots in (0, 5):
-        for subject, population in MMLU_POPULATIONS.items():
-            source = choice_source(
-                "mmlu-" + subject if shots == 5 else "mmlu-0shot-" + subject,
-                "cais/mmlu",
-                MMLU_REVISION,
-                subject + "/test-00000-of-00001.parquet",
-                population,
-                HarnessTemplate("mmlu", shots, subject, subject + "/dev-00000-of-00001.parquet"),
-                raw,
-                fewshot_group="mmlu-" + subject,
-            )
-            dataset = source.config
-            assert dataset is not None
-            result.append(
-                replace(
-                    source,
-                    config=replace(
-                        dataset,
-                        protocol=dataset.protocol.model_copy(
-                            update={
-                                "benchmark": "mmlu" if shots == 5 else "mmlu-0shot",
-                            }
-                        ),
-                    ),
-                )
-            )
-    result.append(
-        choice_source(
-            "mmlu-smoke",
+    for subject, population in MMLU_POPULATIONS.items():
+        source = choice_source(
+            "mmlu-" + subject,
             "cais/mmlu",
             MMLU_REVISION,
-            "abstract_algebra/test-00000-of-00001.parquet",
-            100,
-            HarnessTemplate("mmlu", 0, "abstract_algebra"),
+            subject + "/test-00000-of-00001.parquet",
+            population,
+            HarnessTemplate("mmlu", shots, subject, subject + "/dev-00000-of-00001.parquet"),
             raw,
         )
-    )
+        dataset = source.config
+        assert dataset is not None
+        result.append(
+            replace(
+                source,
+                config=replace(
+                    dataset,
+                    partition=subject,
+                    protocol=dataset.protocol.model_copy(
+                        update={
+                            "benchmark": "mmlu",
+                        }
+                    ),
+                ),
+            )
+        )
     return result
+
+
+def build(variant: ProtocolVariant) -> tuple[RlDataSource[EvalDataset], ...]:
+    assert variant.num_fewshot is not None
+    return tuple(sources(variant.num_fewshot))
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return [EvaluationBenchmark("mmlu", tuple(ProtocolVariant("harness", shots, None) for shots in (5, 0)), build)]

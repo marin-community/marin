@@ -53,6 +53,7 @@ from marin.rl.skyrl import (
 )
 from rigging.provenance import username_segment
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.launch import (
     ARMS,
@@ -529,7 +530,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     evaluation = skyrl_eval_step(
         rl,
         evaluation_model,
-        preset.evals,
+        resolve_evaluations(preset.evals),
         version=evaluation_version,
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,

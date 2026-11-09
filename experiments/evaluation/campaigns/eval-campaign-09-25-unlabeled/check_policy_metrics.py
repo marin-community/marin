@@ -8,10 +8,11 @@ import runpy
 from pathlib import Path
 
 import yaml
+from marin.evaluation.historical_protocols import HISTORICAL_PROTOCOLS
 from taskcompendium.importers.evalchemy.code import CRUX_DIRECTIONS
 
-from experiments.evaluation.curated import CuratedDefinition
-from experiments.post_training.task_curation.sources import evaluation_sources
+from experiments.evaluation.curated import load_evaluations
+from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
 
 CAMPAIGN = Path(__file__).resolve().parent
 ROOT = CAMPAIGN.parents[3]
@@ -21,26 +22,26 @@ def main() -> None:
     contract = runpy.run_path(str(CAMPAIGN / "policy_metric_map.py"))
     expected = contract["POLICY_METRICS_2026_10_16"]
     mechanism = contract["PolicyMechanism"]
-    curated = {path.stem: path for path in (CAMPAIGN / "evalchemy-configs").glob("*.yaml")}
+    curated = {selection.name: selection for selection in load_evaluations(CAMPAIGN / "evalchemy.yaml")}
     harbor = {path.stem: path for path in (CAMPAIGN / "harbor-configs").glob("*.yaml")}
     if set(expected) != curated.keys() | harbor.keys():
         raise ValueError("Campaign configurations differ from the publication metric contract")
-    catalog = evaluation_sources()
+    catalog = evaluation_benchmarks()
     harbor_types = runpy.run_path(str(ROOT / "vendor/harbor/src/harbor/models/benchmark.py"))
     reward = harbor_types["reward_benchmark_metadata"]("policy", n_benchmark=1, n_attempted=1)
     for name, metric in expected.items():
         if metric.mechanism is mechanism.CURATED:
-            definition = CuratedDefinition.from_file(curated[name])
-            for source in (*definition.sources, *definition.chat_sources):
-                dataset = catalog[source].config
+            definition = curated[name]
+            for source in catalog[definition.benchmark].resolve(definition.protocol, definition.num_fewshot):
+                dataset = source.config
                 assert dataset is not None
                 protocol = dataset.protocol
                 if (protocol.benchmark, protocol.primary_metric, protocol.primary_metric) != (
-                    metric.task,
+                    HISTORICAL_PROTOCOLS[name].benchmark,
                     metric.evaluator_metric,
                     metric.record_metric,
                 ):
-                    raise ValueError(f"{name}: curated protocol differs from the publication contract")
+                    raise ValueError(f"{name}: curated metric differs from the publication contract")
                 available = {item.name for item in protocol.metrics}
                 if name == "cruxeval":
                     available.update(
@@ -50,7 +51,7 @@ def main() -> None:
                     )
                 if metric.published_metric not in available:
                     raise ValueError(f"{name}: undeclared publication metric {metric.published_metric}")
-                if protocol.requires_judge and definition.judge is None:
+                if protocol.requires_judge and definition.run.judge is None:
                     raise ValueError(f"{name}: missing judge deployment identity")
             continue
         config = yaml.safe_load(harbor[name].read_text())

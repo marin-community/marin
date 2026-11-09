@@ -56,6 +56,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.pool import (
@@ -686,7 +687,7 @@ def build_arm(
     evaluation = skyrl_eval_step(
         rl,
         evaluation_model,
-        preset.evals,
+        resolve_evaluations(preset.evals),
         version=evaluation_version,
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,

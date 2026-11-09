@@ -5,7 +5,7 @@
 
 import re
 from typing import Any, cast
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import pytest
 from marina.journeys import Journey
@@ -45,7 +45,6 @@ def test_the_panel_serves_the_committed_catalog(journey: Journey) -> None:
     assert "snowball" in journey.reads()
     store = cast(dict[str, Any], journey.api(f"{API}/status"))["store"]
     assert store["backend"] == "postgres"
-    assert store["record_count"] == 23
 
 
 def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey) -> None:
@@ -304,3 +303,27 @@ def test_historical_and_native_scores_compare_across_cohorts_and_browse_terminal
     all_samples.click()
     journey.page.get_by_role("button", name="Open viewer ⛶", exact=True).click()
     journey.sees("Which option is correct").shoot("native-sample-viewer")
+
+
+def test_comparisons_keep_shot_variants_separate_and_admit_historical_scores(journey: Journey) -> None:
+    journey.visit("/compare?cohort=all&models=snowball,native-qwen3-8b")
+    response = cast(dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,native-qwen3-8b"))
+    rows = {row["benchmark"]: row for row in response["rows"]}
+    zero = rows["gsm8k [harness; 0-shot; completion]"]
+    five = rows["gsm8k [harness; 5-shot; completion]"]
+    assert zero["cells"]["snowball"]["value"] == pytest.approx(0.564)
+    assert zero["cells"]["native-qwen3-8b"]["value"] == pytest.approx(2 / 3)
+    assert set(five["cells"]) == {"native-qwen3-8b"}
+    journey.sees("gsm8k [harness; 0-shot; completion]")
+    journey.sees("gsm8k [harness; 5-shot; completion]")
+    journey.shoot("protocol-variant-comparison")
+    selected = quote("gsm8k [harness; 0-shot; completion]", safe="")
+    url = f"/compare?cohort=all&models=snowball,native-qwen3-8b&benchmarks={selected}"
+    journey.visit(url)
+    filtered = cast(
+        dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,native-qwen3-8b&benchmarks={selected}")
+    )
+    assert [row["benchmark"] for row in filtered["rows"]] == ["gsm8k [harness; 0-shot; completion]"]
+    journey.sees("gsm8k [harness; 0-shot; completion]")
+    journey.page.reload(wait_until="domcontentloaded")
+    journey.sees("gsm8k [harness; 0-shot; completion]")

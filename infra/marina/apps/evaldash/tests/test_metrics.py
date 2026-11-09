@@ -17,6 +17,8 @@ from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
+    CuratedRef,
+    CuratedSettings,
     EvalchemyRef,
     EvalRef,
     EvalRunRecord,
@@ -27,6 +29,7 @@ from marin.evaluation.records import (
     ModelConfigRef,
     ModelRef,
     Provenance,
+    ResolvedEvaluationSelection,
     RunStatus,
     TaskCoverage,
 )
@@ -661,7 +664,7 @@ def test_meta_reports_suites_facets_and_archived_models():
 
 
 def test_eval_suites_groups_known_evals_and_buckets_the_rest():
-    grouped = {group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "mystery"})}
+    grouped = {group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "mystery"}, {})}
 
     assert grouped["NLP"] == ["drop", "mmlu"]
     assert grouped["Chat / Math"] == ["math500"]
@@ -894,3 +897,54 @@ def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
 
     assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
     assert panel["policy_rejections"] == []
+
+
+def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
+    historical = [
+        _record("old", name, None, "2026-01-01", 0.6, num_fewshot=shots, metric="exact_match,flexible-extract")
+        for name, shots in (("gsm8k-0shot", 0), ("gsm8k", 5))
+    ]
+    native = []
+    for shots, created in ((0, "2026-02-01"), (5, "2026-03-01")):
+        record = _record(
+            "new",
+            f"configured-{shots}",
+            None,
+            created,
+            0.7,
+            num_fewshot=shots,
+            metric="exact_match,strict-match",
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            coverage={
+                f"configured-{shots}": TaskCoverage(
+                    n_benchmark=ITEMS, n_attempted=ITEMS, n_scored=ITEMS, n_correct=700, errors={}
+                )
+            },
+        )
+        reference = record.evaluation.model_copy(
+            update={
+                "mechanism": "curated",
+                "evalchemy": None,
+                "curated": CuratedRef(
+                    datasets=("fixture",),
+                    settings=CuratedSettings(),
+                    selection=ResolvedEvaluationSelection(
+                        benchmark="gsm8k", protocol="harness", num_fewshot=shots, prompt_format="completion"
+                    ),
+                ),
+            }
+        )
+        native.append(record.model_copy(update={"evaluation": reference}))
+    records = historical + native
+    comparison = build_comparison(records, panel_request(), ("old", "new"))
+    rows = {row["benchmark"]: row for row in comparison["rows"]}
+    for shots in (0, 5):
+        row = rows[f"gsm8k [harness; {shots}-shot; completion]"]
+        assert row["cells"]["old"]["value"] == 0.6
+        assert row["cells"]["new"]["value"] == 0.7
+        assert row["cells"]["new"]["num_fewshot"] == shots
+    assert len(rows) == 2
+    metadata = build_meta(records)
+    family = next(entry for entry in metadata["families"] if entry["family"] == "gsm8k")
+    assert set(family["variants"]) == set(rows)

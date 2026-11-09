@@ -43,7 +43,7 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -120,7 +120,7 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
                     stop=(),
                     chat_template_kwargs={"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=None),
+                trials=TrialPolicy(count=1, seed=42),
                 metrics=(
                     Metric(name="accuracy", kind=MetricKind.CONTINUOUS, higher_is_better=True),
                     Metric(name="prefix_hit_rate", kind=MetricKind.BINARY, higher_is_better=True),
@@ -192,4 +192,20 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             ),
             pipeline=curate,
         ),
+    ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    populations = sources()
+    return [
+        *fixed_benchmarks(
+            [
+                source
+                for source in populations
+                if source.config is not None and source.config.protocol.benchmark == "GraphWalks"
+            ]
+        ),
+        *fixed_benchmarks([mrcr_source("MRCR", 73728)], "evalchemy", {"MRCR": "mrcr"}),
+        *fixed_benchmarks([mrcr_source("MRCR-32k", 32704)], "32k", {"MRCR-32k": "mrcr"}),
+        *fixed_benchmarks([mrcr_source("MRCR-65k", 65472)], "65k", {"MRCR-65k": "mrcr"}),
     ]

@@ -3,6 +3,7 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
+from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     structure_closure,
@@ -10,18 +11,6 @@ from experiments.post_training.task_curation.datasets import (
     unconverted,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
-from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
-from experiments.post_training.task_curation.datasets.evalchemy import commonsense as eval_commonsense
-from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
-from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
-from experiments.post_training.task_curation.datasets.evalchemy import instructions as eval_instructions
-from experiments.post_training.task_curation.datasets.evalchemy import jee as eval_jee
-from experiments.post_training.task_curation.datasets.evalchemy import long_context as eval_long_context
-from experiments.post_training.task_curation.datasets.evalchemy import math as eval_math
-from experiments.post_training.task_curation.datasets.evalchemy import mmlu as eval_mmlu
-from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
-from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
-from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
@@ -41,41 +30,12 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
-from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.source import RlDataSource
-
-
-def evaluation_sources() -> dict[str, RlDataSource[EvalDataset]]:
-    """Canonical evaluation declarations, keyed by curation invocation name."""
-    sources = [
-        *eval_code.sources(),
-        *eval_code.fewshot_sources(),
-        *eval_commonsense.sources(),
-        *eval_harness.sources(),
-        *eval_harness.short_answer_sources(),
-        *eval_instructions.sources(),
-        *eval_harness.chat_sources(
-            [source for source in eval_instructions.sources() if source.name == "evalchemy-ifeval"]
-        ),
-        *eval_jee.sources(),
-        *eval_math.sources(),
-        *eval_math.fewshot_sources(),
-        *eval_reasoning.sources(),
-        *eval_reasoning.likelihood_sources(),
-        *eval_mmlu.sources(),
-        *eval_financebench.sources(),
-        *eval_simpleqa.sources(),
-        *eval_long_context.sources(),
-        *eval_nupa.sources(),
-    ]
-    if len({source.name for source in sources}) != len(sources):
-        raise ValueError("Duplicate evaluation source names")
-    return {source.name: source for source in sources}
 
 
 def all_sources() -> dict[str, RlDataSource]:
     sources = [
-        *evaluation_sources().values(),
+        *(source for benchmark in evaluation_benchmarks().values() for source in benchmark.resolve()),
         *skyrl_math.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),

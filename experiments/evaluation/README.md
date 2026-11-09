@@ -30,12 +30,9 @@ Choose exactly one model source:
 
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 `smoke`, `core`, `nlp`, `chat`, `math`, `code`, and `agentic`.
-[evals.py](evals.py) lists their members and the available evaluation keys.
+[configs/evalchemy.yaml](configs/evalchemy.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
-To use evaluation files, repeat `--curated-config` or `--harbor-config`.
-These add to `--evals`; each file produces one evaluation record. With no
-evaluation selection, the launcher uses `smoke`. File-only launches do not add
-that default.
+Use `--evaluation-config` for a suite or campaign document. Its `evaluations` mapping contains named benchmark selections; `--evals` selects entries from that document, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. With no selection, the launcher uses `smoke`.
 
 For example, run a curated task and a Harbor benchmark on shared GPU serving:
 
@@ -93,10 +90,25 @@ The artifact graph binds their completed roots into execution; an evaluation lau
 does not publish a catalog snapshot. Catalog publication uses the curation workflow.
 The standalone `task_driver` also accepts already published corpus roots.
 
-`--curated-config` files name catalog sources, optional chat variants, source limits,
-budgets, seeds and explicit judge metadata. They accept no evaluator plugins or
-runtime extras. `standard-local` selects standard protocols that require no external
-judge. GraphWalks needs at least 8,192 output tokens, even in a bounded smoke.
+A benchmark owns its pinned population, partitions and supported protocol builders. Shot count is a protocol parameter. Chat and completion formats compile into separate immutable artifacts before inference; callers do not name those artifacts.
+
+```yaml
+evaluations:
+  cruxeval:
+    benchmark: cruxeval
+    run:
+      seed: 42
+  gsm8k-zero:
+    benchmark: gsm8k
+    protocol: harness
+    num_fewshot: 0
+  gsm8k-five:
+    benchmark: gsm8k
+    protocol: harness
+    num_fewshot: 5
+```
+
+`prompt_format: chat` or `completion` selects an explicit supported format. Otherwise planning selects the benchmark's supported format for the model and records it. `partitions` selects named dataset-owned partitions, such as MMLU subjects. Each `run` can override `limit`, `max_tokens`, `seed` and judge deployment bindings. Protocol sampling, stopping, grading, metrics and population remain in curation. Output caps also respect the model budget and actual server context. `standard-local` excludes external-judge protocols. GraphWalks needs at least 8,192 output tokens even in a bounded smoke.
 
 The driver writes raw attempts, samples, selection decisions and evidence. Evaldash
 computes metadata-driven summaries and selects the latest terminal retry for both
@@ -222,8 +234,7 @@ To extend the catalog:
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
 - Add pinned evaluation source recipes under `experiments/post_training/task_curation/datasets/`
-  and menu declarations under [configs/evalchemy](configs/evalchemy/). Add standard
-  selections to `STANDARD_EVALS` in [evals.py](evals.py).
+  and expose their supported protocols through `benchmarks()`. Add suite choices or run overrides in [configs/evalchemy.yaml](configs/evalchemy.yaml); ordinary default selections need no menu entry.
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.
 

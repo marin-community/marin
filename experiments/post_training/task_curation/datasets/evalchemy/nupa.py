@@ -20,7 +20,7 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -31,7 +31,10 @@ PANEL_SOURCE_COMMIT = "623134de90723e7f189036da005067f36817b6e7"
 
 def sources() -> list[RlDataSource[EvalDataset]]:
     result = []
-    for name, rows, reader in (("NUPA-Loose", 238926, read_nupa_sample), ("NUPA5K-Loose", 5000, read_nupa_panel)):
+    for name, rows, reader, seed in (
+        ("NUPA-Loose", 238926, read_nupa_sample, None),
+        ("NUPA5K-Loose", 5000, read_nupa_panel, 20222943),
+    ):
         inputs = (
             {
                 "panel": UrlSource(
@@ -79,7 +82,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                             stop=(),
                             chat_template_kwargs={},
                         ),
-                        trials=TrialPolicy(count=1, seed=None),
+                        trials=TrialPolicy(count=1, seed=seed),
                         metrics=tuple(
                             Metric(
                                 name=metric,
@@ -109,3 +112,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             )
         )
     return result
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks(sources())

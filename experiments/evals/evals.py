@@ -5,23 +5,24 @@
 
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ServeConfig
+from marin.evaluation.records import EvaluationSelection
 
 from experiments.evals.evaluation import DEFAULT_ACCELERATOR, EvalGroup
 
 CORE = (
-    "agieval-lsat-ar-3shot",
-    "arc-easy-10shot",
-    "arc-challenge-10shot",
-    "boolq-10shot",
-    "commonsense-qa-10shot",
-    "copa",
-    "hellaswag-0shot",
-    "hellaswag",
-    "lambada",
-    "openbookqa",
-    "piqa-10shot",
-    "wsc273",
-    "winogrande-0shot",
+    EvaluationSelection(benchmark="agieval-lsat-ar", protocol="likelihood", num_fewshot=3),
+    EvaluationSelection(benchmark="arc-easy", protocol="harness", num_fewshot=10),
+    EvaluationSelection(benchmark="arc-challenge", protocol="harness", num_fewshot=10),
+    EvaluationSelection(benchmark="boolq", protocol="harness", num_fewshot=10),
+    EvaluationSelection(benchmark="commonsense-qa", protocol="likelihood", num_fewshot=10),
+    EvaluationSelection(benchmark="copa", protocol="likelihood", num_fewshot=0),
+    EvaluationSelection(benchmark="hellaswag", protocol="harness", num_fewshot=0),
+    EvaluationSelection(benchmark="hellaswag", protocol="harness", num_fewshot=10),
+    EvaluationSelection(benchmark="lambada", protocol="harness"),
+    EvaluationSelection(benchmark="openbookqa", protocol="harness", num_fewshot=0),
+    EvaluationSelection(benchmark="piqa", protocol="harness", num_fewshot=10),
+    EvaluationSelection(benchmark="wsc273", protocol="likelihood", num_fewshot=0),
+    EvaluationSelection(benchmark="winogrande", protocol="harness", num_fewshot=0),
 )
 
 
@@ -44,7 +45,14 @@ def key_evals(
     return [
         EvalGroup(
             name="key_generation",
-            evals=("ifeval", "gsm8k-cot-8shot", "drop-0shot", "humaneval-10shot", "bbh-cot-3shot", "minerva-math-4shot"),
+            evals=(
+                EvaluationSelection(benchmark="ifeval", protocol="evalchemy"),
+                EvaluationSelection(benchmark="gsm8k", protocol="cot", num_fewshot=8),
+                EvaluationSelection(benchmark="drop", protocol="harness", num_fewshot=0),
+                EvaluationSelection(benchmark="humaneval", protocol="evalchemy", num_fewshot=10),
+                EvaluationSelection(benchmark="bbh", protocol="cot", num_fewshot=3),
+                EvaluationSelection(benchmark="hendrycks-math", protocol="cot", num_fewshot=4),
+            ),
             serve=serving,
             accelerator=hardware,
             max_tokens=4096,
@@ -52,7 +60,11 @@ def key_evals(
         ),
         EvalGroup(
             name="key_multiple_choice",
-            evals=("mmlu-0shot", "mmlu", "truthfulqa-6shot"),
+            evals=(
+                EvaluationSelection(benchmark="mmlu", protocol="harness", num_fewshot=0),
+                EvaluationSelection(benchmark="mmlu", protocol="harness", num_fewshot=5),
+                EvaluationSelection(benchmark="truthfulqa", protocol="harness", num_fewshot=6),
+            ),
             serve=serving,
             accelerator=hardware,
             limit=max_eval_instances,
@@ -69,13 +81,30 @@ def base_model_evals(
     serving = serve or ServeConfig()
     hardware = accelerator or DEFAULT_ACCELERATOR
     selections = [
-        ("core_leaderboard", ("bbh-3shot", "gpqa-0shot", *CORE)),
-        ("mmlu_0shot", ("mmlu-0shot",)),
-        ("mmlu_5shot", ("mmlu",)),
-        ("mmlu_pro_5shot", ("mmlu-pro-5shot",)),
+        (
+            "core_leaderboard",
+            (
+                EvaluationSelection(benchmark="bbh", protocol="likelihood", num_fewshot=3),
+                EvaluationSelection(benchmark="gpqa", protocol="likelihood", num_fewshot=0),
+                *CORE,
+            ),
+        ),
+        ("mmlu_0shot", (EvaluationSelection(benchmark="mmlu", protocol="harness", num_fewshot=0),)),
+        ("mmlu_5shot", (EvaluationSelection(benchmark="mmlu", protocol="harness", num_fewshot=5),)),
+        ("mmlu_pro_5shot", (EvaluationSelection(benchmark="mmlu-pro", protocol="likelihood", num_fewshot=5),)),
     ]
     if run_generation_evals:
-        selections.append(("base_generation", ("bbh-cot-3shot", "gsm8k-cot-8shot", "nq-open-0shot", "triviaqa-0shot")))
+        selections.append(
+            (
+                "base_generation",
+                (
+                    EvaluationSelection(benchmark="bbh", protocol="cot", num_fewshot=3),
+                    EvaluationSelection(benchmark="gsm8k", protocol="cot", num_fewshot=8),
+                    EvaluationSelection(benchmark="nq-open", protocol="harness", num_fewshot=0),
+                    EvaluationSelection(benchmark="triviaqa", protocol="harness", num_fewshot=0),
+                ),
+            )
+        )
     return [
         EvalGroup(
             name=name,

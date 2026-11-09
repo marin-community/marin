@@ -1,5 +1,0 @@
-name: truthfulqa
-num_fewshot: 0
-sources:
-- evalchemy-truthfulqa_mc2
-max_tokens: 256

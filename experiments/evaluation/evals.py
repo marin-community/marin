@@ -11,17 +11,18 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+import yaml
 from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
+from marin.evaluation.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
 
-from experiments.evaluation.curated import CuratedDefinition
-from experiments.post_training.task_curation.sources import evaluation_sources
+from experiments.evaluation.curated import requires_judge
+from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,6 @@ _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API
 _DAYTONA_EGRESS: tuple[str, ...] = ("app.daytona.io", "*.app.daytona.io")
 # Harbor's dataset registry, a Supabase project (Harbor's HARBOR_SUPABASE_URL).
 _HARBOR_REGISTRY_EGRESS: tuple[str, ...] = ("hlqxxzsirfrgeqasvaps.supabase.co",)
-# Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
-_EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
 
 
 @dataclass(frozen=True)
@@ -135,102 +134,16 @@ def harbor_definition(
         name=name,
         config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
-        family=_EVAL_FAMILIES.get(name),
     )
 
 
-EvaluationDefinition = CuratedDefinition | HarborDefinition
+EvaluationDefinition = EvaluationSelection | HarborDefinition
 
 
-STANDARD_EVALS: tuple[str, ...] = (
-    "mmlu",
-    "arc-challenge",
-    "hellaswag",
-    "winogrande",
-    "truthfulqa",
-    "boolq",
-    "piqa",
-    "openbookqa",
-    "gsm8k",
-    "math500",
-    "humaneval",
-    "arc-easy",
-    "lambada",
-    "triviaqa",
-    "nq-open",
-    "drop",
-    "gsm8k-0shot",
-    "aime24",
-    "olympiadbench",
-    "olympiadbench-deterministic",
-    "humanevalplus",
-    "mbppplus",
-    "mmlu-smoke",
-    "gsm8k-smoke",
-    "aime24-smoke",
-    "mmlu-pro",
-    "gpqa-diamond",
-    "cruxeval",
-    "financebench",
-    "ifeval",
-    "ifbench",
-    "mrcr",
-    "graphwalks",
-)
-
-_CURATED_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
+_CONFIG = yaml.safe_load((Path(__file__).with_name("configs") / "evalchemy.yaml").read_text())
 EVALS: dict[str, EvaluationDefinition] = {
-    path.stem: CuratedDefinition.from_file(path) for path in sorted(_CURATED_CONFIG_DIR.glob("*.yaml"))
+    name: EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in _CONFIG["evaluations"].items()
 }
-# Alternate checkpoint menus reuse their base selection and generation budget.
-for base, shots in (
-    ("arc-challenge", 10),
-    ("arc-easy", 10),
-    ("boolq", 10),
-    ("piqa", 10),
-    ("winogrande", 0),
-    ("hellaswag", 0),
-    ("truthfulqa", 6),
-    ("mmlu", 0),
-):
-    name = f"{base}-{shots}shot"
-    definition = EVALS[base]
-    assert isinstance(definition, CuratedDefinition)
-    EVALS[name] = definition.model_copy(update={"name": name, "num_fewshot": shots})
-
-_ADDITIONAL_BENCHMARKS = {
-    "commonsense_qa": "commonsense-qa-10shot",
-    "copa": "copa",
-    "wsc273": "wsc273",
-    "agieval_lsat_ar": "agieval-lsat-ar-3shot",
-    "leaderboard_mmlu_pro": "mmlu-pro-5shot",
-    "leaderboard_bbh": "bbh-3shot",
-    "leaderboard_gpqa": "gpqa-0shot",
-    "gsm8k_cot": "gsm8k-cot-8shot",
-    "bbh_cot_fewshot": "bbh-cot-3shot",
-    "minerva_math": "minerva-math-4shot",
-    "nq_open-0shot": "nq-open-0shot",
-    "triviaqa-0shot": "triviaqa-0shot",
-    "drop-0shot": "drop-0shot",
-    "humaneval-10shot": "humaneval-10shot",
-}
-_EVALUATION_SOURCES = evaluation_sources()
-for benchmark, name in _ADDITIONAL_BENCHMARKS.items():
-    EVALS[name] = CuratedDefinition(
-        name=name,
-        sources=tuple(
-            source.name
-            for source in _EVALUATION_SOURCES.values()
-            if source.config is not None and source.config.protocol.benchmark == benchmark
-        ),
-    )
-EVALS.update(
-    {
-        "nupa": CuratedDefinition(name="nupa", sources=("evalchemy-nupa5k-loose",), seed=20222943, max_tokens=256),
-        "mrcr-32k": CuratedDefinition(name="mrcr-32k", sources=("evalchemy-mrcr-32k",), seed=42, max_tokens=4096),
-        "mrcr-65k": CuratedDefinition(name="mrcr-65k", sources=("evalchemy-mrcr-65k",), seed=42, max_tokens=4096),
-    }
-)
 EVALS.update(
     {
         # --- Harbor (agentic registry benchmarks) ---
@@ -252,87 +165,26 @@ EVALS.update(
     }
 )
 
-# A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.
-SMOKE_EVALS: tuple[str, ...] = ("mmlu-smoke", "gsm8k-smoke")
 
-# The comprehensive per-model benchmark set: every model x task pair runs (and is recorded) as its
-# own run, so the dashboard shows the full N-models x M-tasks grid of runs.
-CORE_EVALS: tuple[str, ...] = (
-    "mmlu",
-    "gsm8k",
-    "arc-challenge",
-    "hellaswag",
-    "winogrande",
-    "truthfulqa",
-    "boolq",
-    "piqa",
-    "openbookqa",
-    "humaneval",
-    "math500",
+def evaluation_for(name: str) -> EvaluationDefinition:
+    if name in EVALS:
+        return EVALS[name]
+    if name in evaluation_benchmarks():
+        return EvaluationSelection(benchmark=name)
+    raise ValueError(f"unknown evaluation: {name}")
+
+
+SUITES: dict[str, tuple[str, ...]] = {name: tuple(entries) for name, entries in _CONFIG["suites"].items()}
+SUITES["standard-local"] = tuple(
+    name
+    for name in SUITES["standard"]
+    if isinstance(definition := evaluation_for(name), EvaluationSelection) and not requires_judge(definition)
 )
 
-# The baseline lm-eval-harness NLP suite: 14 deterministic loglikelihood/greedy tasks, runnable on
-# every served model (base or instruct).
-NLP_EVALS: tuple[str, ...] = (
-    "mmlu",
-    "arc-challenge",
-    "arc-easy",
-    "hellaswag",
-    "winogrande",
-    "truthfulqa",
-    "boolq",
-    "piqa",
-    "openbookqa",
-    "lambada",
-    "triviaqa",
-    "nq-open",
-    "drop",
-    "gsm8k-0shot",
-)
 
-# The short general-purpose chat suite. Longer publication-policy benchmarks are file-backed under
-# the curated catalog and validated on H100; GPQADiamond's seeded requests remain incompatible with TPU vLLM.
-CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
-
-MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
-CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
-
-AGENTIC_EVALS: tuple[str, ...] = (
-    "tb2",
-    "swebench",
-    "gaia",
-    "bfcl",
-    "aider",
-    "medagentbench",
-    "financeagent",
-)
-
-# Named suite groups selectable by name on the CLI (``--evals smoke``). Launch NLP and CHAT as
-# separate groups (two serves) rather than one ~19-eval serial serve: the serve backstop grows
-# 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
-SUITES: dict[str, tuple[str, ...]] = {
-    "smoke": SMOKE_EVALS,
-    "standard": (*STANDARD_EVALS, "nupa"),
-    "standard-local": tuple(
-        name
-        for name in (*STANDARD_EVALS, "nupa")
-        if isinstance(EVALS[name], CuratedDefinition) and not EVALS[name].requires_judge
-    ),
-    "core": CORE_EVALS,
-    "nlp": NLP_EVALS,
-    "chat": CHAT_EVALS,
-    "math": MATH_EVALS,
-    "code": CODE_EVALS,
-    "agentic": AGENTIC_EVALS,
-}
-
-
-def resolve_eval_keys(selection: str) -> tuple[str, ...]:
-    """Resolve a named suite or comma-separated evaluation keys."""
+def resolve_evaluations(selection: str) -> tuple[EvaluationDefinition, ...]:
+    """Resolve suite and CLI labels once, at the textual input boundary."""
     keys = SUITES.get(selection) or tuple(part.strip() for part in selection.split(",") if part.strip())
     if not keys:
         raise ValueError("no evals selected")
-    unknown = [key for key in keys if key not in EVALS]
-    if unknown:
-        raise ValueError(f"unknown eval(s) {unknown}; known: {sorted(EVALS)} or suites {sorted(SUITES)}")
-    return keys
+    return tuple(evaluation_for(key) for key in keys)

@@ -395,3 +395,6 @@ metric/kind/shot compatibility rules; they cannot erase known corpus differences
 PostgreSQL reconciliation checks the raw store HEAD as well as record.json,
 so resumed work can refresh an unchanged producer record. Derived summaries remain in
 Evaldash's catalog.
+
+
+Benchmark selections recorded by the native launcher identify the canonical benchmark, protocol preset, shot count and prompt format. Panels and comparisons expose these as separate variants, so a newer five-shot result cannot displace the same model's zero-shot result. Historical Evalchemy launch labels are interpreted at ingestion using their recorded shot counts and model format where available. Compatible historical scores can join a native variant without rerunning inference; differing known corpus identities remain separate. Raw archives and original launch labels are retained.
