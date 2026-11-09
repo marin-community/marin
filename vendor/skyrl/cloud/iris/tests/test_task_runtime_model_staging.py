@@ -1,9 +1,12 @@
 from argparse import Namespace
+from dataclasses import asdict
 import hashlib
 from pathlib import Path
 import shutil
 
 import fsspec
+import huggingface_hub
+import huggingface_hub.constants
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
@@ -23,6 +26,7 @@ from cloud.iris.task_runtime import (
     prepare_policy_tokenizer,
 )
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
+from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import RolloutModelLoading
 
 
@@ -281,3 +285,74 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
         assert model.path == "/tmp/policy-metadata"
         assert model.tokenizer_path == "/tmp/policy-metadata"
         assert model.tokenizer_revision is None
+
+
+@pytest.mark.parametrize("requested_revision", ["a" * 40, "main", "refs/pr/7"])
+def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeypatch, requested_revision):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        _memory_model_snapshot(f"staging-source/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+
+    def reject_hub_download(*_args, **_kwargs):
+        raise AssertionError("GPU node must not download from the Hub")
+
+    monkeypatch.setattr(hf_model_cache, "snapshot_download", reject_hub_download)
+    monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", reject_hub_download)
+    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity)
+    node_path = task_runtime.stage_model(locator)
+    snapshot = huggingface_hub.snapshot_download(
+        "org/policy",
+        revision=requested_revision,
+        cache_dir=cache,
+        local_files_only=True,
+    )
+    assert Path(snapshot) == node_path
+    assert (node_path / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
+    assert (node_path / "tokenizer.json").read_bytes() == (mirror / "tokenizer.json").read_bytes()
+    assert task_runtime.stage_model(locator) == node_path
+
+
+def test_node_rejects_unprepared_hub_models_before_staging():
+    config = OmegaConf.create(
+        {
+            "run": {"mode": "train"},
+            "inputs": {"model": {"uri": "org/policy"}, "hugging_face_models": []},
+            "skyrl": {"trainer": {"policy": {"model": {"revision": "a" * 40}}}},
+        }
+    )
+    with pytest.raises(ValueError, match="pre-cached by the CPU launcher"):
+        task_runtime.stage_hugging_face_models(config)
+
+
+def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        _memory_model_snapshot(f"export-source/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    policy = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity)
+    # The derived export config can retain locators for training-only teachers whose TTL expired.
+    teacher = HuggingFaceModelCache("org/teacher", "b" * 40, "memory://expired-teacher-mirror", "sha256:" + "c" * 64)
+    config = OmegaConf.create(
+        {
+            "run": {"mode": "checkpoint_export"},
+            "inputs": {"model": {"uri": "org/policy"}, "hugging_face_models": [asdict(policy), asdict(teacher)]},
+            "skyrl": {"trainer": {"policy": {"model": {"revision": "a" * 40}}}},
+        }
+    )
+    task_runtime.stage_hugging_face_models(config)
+    path = Path(
+        huggingface_hub.snapshot_download("org/policy", revision="a" * 40, cache_dir=cache, local_files_only=True)
+    )
+    assert (path / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
+    assert not (cache / "models--org--teacher").exists()

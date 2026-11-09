@@ -85,6 +85,7 @@ MarinSkyRL launch host
   compose skyrl recipe against ppo_base_config once
   inject canonical model/data/output values
   validate topology, strategy, entrypoint, TP, and batches
+  mirror Hub policy and local teachers to the regional bucket on CPU
                          |
                          v
   resolved launch.yaml ---------> Iris allocation and submission
@@ -95,6 +96,20 @@ MarinSkyRL launch host
 Iris task
   stage immutable inputs -> patch task-local paths -> run(cfg.skyrl)
 ```
+
+Before submitting the GPU job, the CPU launch process ensures a regional mirror
+for each Hub policy and `local_inference` teacher. The locked cache reuses a
+completed mirror for the same model revision until its retention period expires. The resolved
+config records the mirror URI and manifest identity in `inputs.hugging_face_models`.
+Every GPU node copies these mirrors into its local Hugging Face cache before Ray
+starts; model staging has no direct-Hub fallback. External teacher endpoints and
+local or object-store model inputs keep their existing loading paths.
+
+`artifacts.hugging_face_cache_ttl_days` controls the mirror retention period
+(default 14 days), including draft-model mirrors. `prepare` only validates the
+config. Submitting Hub models requires Iris job context; run the
+[experiment entry point](#experiment-entry-point) with `--run` to start its CPU
+coordinator.
 
 The top-level sections name what they configure: `iris` owns allocation and routing, `ray` owns
 cluster bootstrap, `inputs` owns immutable model and data locators, `artifacts` owns durable and

@@ -45,9 +45,17 @@ import time
 import uuid
 from typing import Any, Protocol
 
+import huggingface_hub.constants
 from omegaconf import DictConfig, OmegaConf
 
-from cloud.iris.artifacts import ArtifactSource, atomic_directory_update, file_inventory, fs_and_path, materialize
+from cloud.iris.artifacts import (
+    ArtifactSource,
+    atomic_directory_update,
+    file_inventory,
+    fs_and_path,
+    materialize,
+    materialize_inventory,
+)
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
     ensure_hugging_face_model_cache,
@@ -70,12 +78,11 @@ from marinskyrl.environment_contract import (
     ensure_debug_artifact_directories,
     ray_cluster_owner_environment,
 )
-from marinskyrl.hf_model import immutable_model_cache_key, validate_hf_model_weights
+from marinskyrl.hf_model import HuggingFaceModelCache, immutable_model_cache_key, validate_hf_model_weights
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
-from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
-from marinskyrl.distillation import TeacherModelSpec, TeacherSource, compile_distillation_plan_from_config
+from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind, is_hugging_face_commit
 from marinskyrl.process_diagnostics import (
     ProcessOutcomeKind,
     initialize_process_diagnostics,
@@ -89,7 +96,7 @@ from cloud.iris.ray_storage import (
     resolve_ray_spill_target,
     validate_ray_spill_dir,
 )
-from cloud.iris.launch_config import RunMode, load_launch_config
+from cloud.iris.launch_config import RunMode, hugging_face_models, load_launch_config
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -111,6 +118,7 @@ except ImportError as error:
         return contextlib.nullcontext()
 
 
+MODEL_CACHE_SUFFIXES = (".safetensors", ".json", ".txt", ".model", ".py", ".jinja")
 RENDEZVOUS_FILENAME = "ray_head.json"
 DONE_FILENAME = "ray_head.done"
 HEAD_RESULT_SUCCEEDED = "succeeded"
@@ -248,33 +256,41 @@ def stage_task_data(data_json: str, *, role: str) -> None:
     _log(f"{role.capitalize()} data staged to node-local paths: {resolved}")
 
 
-def stage_model(model_path: str, revision: str | None = None) -> None:
-    """Pre-download one model revision into this NODE's local HF cache on EVERY node.
+def stage_model(model: HuggingFaceModelCache) -> Path:
+    """Restore a CPU-made bucket mirror into this node's offline HF cache."""
+    manifest = load_model_manifest(model.uri)
+    if manifest.identity != model.identity or manifest.model_id != model.model_id:
+        raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
+    if not manifest.revision or not is_hugging_face_commit(manifest.revision):
+        raise ValueError(f"Hugging Face mirror requires an immutable revision: {model.uri}")
+    cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model.model_id.replace('/', '--')}"
+    local_path = cache_root / "snapshots" / manifest.revision
+    _log(f"Staging bucket mirror on node {_rank()}/{_num_tasks()}: {model.uri} -> {local_path}")
+    filesystem, root = fs_and_path(model.uri)
+    inventory = tuple(item for item in file_inventory(filesystem, root) if item[1].path.endswith(MODEL_CACHE_SUFFIXES))
+    validate_hf_model_weights({entry.path for _, entry in inventory}, model.uri)
+    materialize_inventory(ArtifactSource(model.uri, model.identity, str(local_path)), filesystem, inventory)
+    if model.revision != manifest.revision:
+        refs = (cache_root / "refs").resolve()
+        ref = (refs / model.revision).resolve()
+        ref.relative_to(refs)
+        ref.parent.mkdir(parents=True, exist_ok=True)
+        ref.write_text(manifest.revision)
+    return local_path
 
-    The controller runs on every node before Ray bootstrap, so pre-download the
-    weights ONCE PER NODE here (N pulls, not N*8) into the node-local HF cache.
-    The download runs in the controller's pre-Ray phase where no collective
-    barrier is active. With ``HF_HUB_OFFLINE=1`` set for the training ranks
-    (config extra_env), all ranks on a node read the pre-populated cache.
-    Idempotent: ``snapshot_download`` skips already-complete cached files.
-    """
-    if is_cloud_uri(model_path):
-        raise ValueError(f"stage_model accepts a Hugging Face repo ID, not object-store model URI {model_path!r}")
-    if not model_path or os.path.isdir(model_path):
-        _log(f"stage_model: skip (model_path={model_path!r} is empty or a local directory)")
-        return
 
-    # Weights + config + tokenizer + repository-provided chat templates and any
-    # trust_remote_code modeling files needed by from_pretrained in offline ranks.
-    allow_patterns = ["*.safetensors", "*.json", "*.txt", "*.model", "*.py", "*.jinja"]
-
-    _log(f"Pre-staging model on this node (rank {_rank()}/{_num_tasks()}): {model_path}")
-    local_dir = download_hugging_face_snapshot(
-        model_path,
-        revision=revision,
-        allow_patterns=tuple(allow_patterns),
-    )
-    _log(f"model pre-staged to node-local HF cache: {local_dir}")
+def stage_hugging_face_models(config: DictConfig) -> None:
+    """Require a completed CPU mirror for every Hub model before starting Ray."""
+    models = {
+        (value.model_id, value.revision): HuggingFaceModelCache(**_container(value))
+        for value in config.inputs.hugging_face_models
+    }
+    required = hugging_face_models(config)
+    if any((model.path, model.revision) not in models for model in required):
+        raise ValueError("Hub models must be pre-cached by the CPU launcher before GPU submission")
+    # Checkpoint exports retain the training config but no longer need its teacher mirrors.
+    for model in required:
+        stage_model(models[model.path, model.revision])
 
 
 def _metadata_path(source_uri: str, identity: str) -> str:
@@ -2022,13 +2038,6 @@ def _json_list(value: Any) -> str:
     return json.dumps(values, sort_keys=True)
 
 
-def _local_teacher_models(skyrl: DictConfig) -> tuple[TeacherModelSpec, ...]:
-    plan = compile_distillation_plan_from_config(skyrl)
-    if plan is None:
-        return ()
-    return tuple(teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE)
-
-
 def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     """Project the typed launch document into the controller's private runtime state."""
     model = config.inputs.model
@@ -2064,8 +2073,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         terminal_bench_data=_json_list(skyrl.get("data", {}).get("terminal_bench_data", [])),
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
-        model_revision=str(skyrl.get("trainer", {}).get("policy", {}).get("model", {}).get("revision") or ""),
-        prestage_teacher_models=() if checkpoint_export else _local_teacher_models(skyrl),
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
         model_local_path=str(model.local_path),
         model_source_identity=model_identity if is_cloud_uri(model_uri) else "",
@@ -2075,7 +2082,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         policy_tokenizer_revision=str(model.tokenizer_revision),
         policy_chat_template=str(model.chat_template or ""),
         draft_model=draft_model,
-        draft_model_cache_ttl_days=int(config.artifacts.draft_model_cache_ttl_days),
+        draft_model_cache_ttl_days=int(config.artifacts.hugging_face_cache_ttl_days),
         draft_model_cache_source_prefix=str(config.artifacts.checkpoint_root),
     )
 
@@ -2204,16 +2211,10 @@ def main() -> None:
         materialize_data_sources(args.data_sources_json)
     if args.terminal_bench_data:
         stage_task_data(args.terminal_bench_data, role="terminal-bench sidechannel")
+    stage_hugging_face_models(launch_config)
     policy_model = prepare_policy_model(args)
     policy_local_path = policy_model.local_path if policy_model is not None else None
     policy_tokenizer = prepare_policy_tokenizer(args)
-    if args.prestage_model:
-        stage_model(
-            args.prestage_model,
-            revision=(args.model_revision or None),
-        )
-    for teacher_model in args.prestage_teacher_models:
-        stage_model(teacher_model.path, revision=teacher_model.revision)
     draft_model = args.draft_model
     if draft_model is not None:
         draft_model = prepare_draft_model(

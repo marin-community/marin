@@ -1,6 +1,7 @@
 """Shared Hugging Face model lifecycle utilities."""
 
 import contextlib
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -13,6 +14,16 @@ from marinskyrl.environment_contract import HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFF
 TOKENIZER_CONFIG_NAME = "tokenizer_config.json"
 TOKENIZER_JSON_NAME = "tokenizer.json"
 _OFFLINE_ENVIRONMENT_VARIABLES = (HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV)
+
+
+@dataclass(frozen=True)
+class HuggingFaceModelCache:
+    """Completed CPU mirror for a Hub model and its requested revision."""
+
+    model_id: str
+    revision: str
+    uri: str
+    identity: str
 
 
 def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_json: bool, source: str) -> bytes:

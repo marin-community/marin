@@ -14,13 +14,15 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from iris.client.client import JobFailedError
+from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
-from cloud.iris.launch_config import SubmissionMode, load_launch_config
+from cloud.iris.launch_config import SubmissionMode, hugging_face_models, load_launch_config
+from cloud.iris.hf_model_cache import ensure_hugging_face_model_cache
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
-from marinskyrl.hf_model import validate_portable_hf_model_files
+from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
@@ -104,6 +106,26 @@ def _prepare_config(config: DictConfig) -> DictConfig:
     return prepared
 
 
+def _prepare_model_caches(config: DictConfig) -> None:
+    models = hugging_face_models(config)
+    if not models:
+        return
+    if get_job_info() is None:
+        raise RuntimeError(
+            "Hugging Face model pre-caching requires an Iris CPU coordinator; run your rl_build_options experiment with --run"
+        )
+    caches = []
+    for model in models:
+        uri, manifest = ensure_hugging_face_model_cache(
+            model.path,
+            model.revision,
+            ttl_days=int(config.artifacts.hugging_face_cache_ttl_days),
+            source_prefix=str(config.artifacts.checkpoint_root),
+        )
+        caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity))
+    config.inputs.hugging_face_models = caches
+
+
 def _exported_policy(config: DictConfig) -> ExportedPolicy:
     checkpoint_root = str(config.artifacts.checkpoint_root)
     global_step = selected_export_step(
@@ -183,6 +205,8 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         if config.run.submission == SubmissionMode.PREPARE:
             active_backend.validate(resolved_path)
             return _result(config, LaunchState.PREPARED)
+        _prepare_model_caches(config)
+        OmegaConf.save(config, resolved_file.name, resolve=False)
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
