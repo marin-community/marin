@@ -274,8 +274,11 @@ def _parse_record(text: str) -> ArtifactRecord:
     :class:`ArtifactRecord` with every native field defaulted and the real payload dropped as
     ignored extras — leaving ``read_artifact`` with no ``result``. Detect that shape (no record
     identity, but keys foreign to the record schema) and take the whole document as ``result`` so
-    those caches load. A genuine record never carries foreign keys, so it is untouched.
+    those caches load. A genuine record never carries foreign keys, so it is untouched. A legacy
+    step that returned ``None`` saved the bare payload ``null``; it reads as an empty record.
     """
+    if json.loads(text) is None:
+        return ArtifactRecord()
     record = ArtifactRecord.model_validate_json(text)
     if any(getattr(record, field) for field in _RECORD_IDENTITY_FIELDS):
         return record

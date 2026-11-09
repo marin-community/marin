@@ -15,6 +15,7 @@ import logging
 import pytest
 from marin.execution.artifact import (
     Artifact,
+    ArtifactRecord,
     FingerprintMismatchError,
     StepRecordIdentity,
     read_artifact,
@@ -235,6 +236,13 @@ def test_read_artifact_adopts_pre_6649_bare_payload(tmp_path):
     assert loaded == _EmbedPayload(
         version="v1", output_dir="gs://bucket/datakit/embed/cp/peps_52c03790", counters={"rows": 128}
     )
+
+
+def test_read_record_adopts_pre_6649_null_payload(tmp_path):
+    """A pre-#6649 step that returned None left ``null``; it reads as an empty record, not an error."""
+    (tmp_path / ".artifact.json").write_text("null")
+
+    assert read_record(tmp_path.as_posix()) == ArtifactRecord()
 
 
 def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):
