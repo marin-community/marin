@@ -658,8 +658,12 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
 
     class SandboxRpc(LocalRpc):
         def exec_in_container(self, request, timeout_ms):
+            # Hide paths already under tmp_path (itself under /tmp on Linux) from the rewrite.
+            root, marker = str(tmp_path), "\0tmp_path\0"
             command = [
-                re.sub(r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda m: str(tmp_path / m[1]), part)
+                re.sub(
+                    r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda m: str(tmp_path / m[1]), part.replace(root, marker)
+                ).replace(marker, root)
                 for part in request.command
             ]
             result = subprocess.run(command, capture_output=True, text=True, timeout=30)
