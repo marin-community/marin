@@ -9,7 +9,7 @@ effects, never whole stages.
 - Annotate every function. Use PEP 695 generics, `TypeIs` from
   `typing_extensions`, and `@override` on protocol implementations. Keep `Any`
   inside JSON boundary adapters only.
-- The effect decisions are `Transient`, `Restart`, `Hold`, and `LogFailure`.
+- The effect decisions are `Transient`, `Restart`, `Hold`, `LogFailure`, and `DriverCancelled`.
   A new exception needs a written decision rationale in `effects/issues.py`.
   No bare catches or catch-all outside the process-boundary driver. Executors
   own retries; observers report issues at scope checks.

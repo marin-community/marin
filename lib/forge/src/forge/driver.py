@@ -164,24 +164,30 @@ async def one(args: argparse.Namespace) -> int:
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
     except* DriverCancelled as error:
         cancelled = True
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
-        logging.warning("Forge driver cancelled while holding %s: %s", proposal.header.id, reasons(error))
+        logging.warning("Forge driver cancelled while processing %s: %s", proposal.header.id, reasons(error))
     except* (Hold, Restart, Transient, LogFailure) as error:
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
-        logging.warning("Forge workpiece %s held: %s", proposal.header.id, reasons(error))
+        if cancelled:
+            wp = wp.with_(decisions=(*wp.decisions, Incomplete(reasons(error))))
+            logging.warning(
+                "Forge workpiece %s interrupted during driver cancellation: %s", proposal.header.id, reasons(error)
+            )
+        else:
+            wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
+            if log is not None:
+                await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+            logging.warning("Forge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
         detail = traceback.format_exc()
-        wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
-        if log is not None:
-            await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Forge workpiece %s failed", proposal.header.id)
-        if len(error.exceptions) == 1:
-            raise error.exceptions[0] from None
-        raise
+        if cancelled:
+            wp = wp.with_(decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
+        else:
+            wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
+            if log is not None:
+                await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
+            if len(error.exceptions) == 1:
+                raise error.exceptions[0] from None
+            raise
     finally:
         if not skipped:
             (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))

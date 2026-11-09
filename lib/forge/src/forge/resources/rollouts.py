@@ -37,16 +37,13 @@ def interruption(error: RolloutInterrupted) -> DriverCancelled | Transient | Res
     causes: list[str] = []
     seen = {id(error)}
     cause = error.__cause__
-    parent_job_terminated = False
     while cause is not None and id(cause) not in seen:
         seen.add(id(cause))
-        if isinstance(cause, ParentJobTerminated):
-            parent_job_terminated = True
         causes.append(describe_exception(cause))
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
-    if parent_job_terminated:
+    if has_cause(error, ParentJobTerminated):
         return DriverCancelled(message)
     if error.operation is RolloutOperation.ADVANCE and has_cause(error, MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")

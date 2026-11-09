@@ -139,8 +139,10 @@ workpieces are resumed only when the launch passes `--resume-held`; use it under
 after an infrastructure outage (sandbox admission, a provider gap longer than
 `provider.unavailable_wait`). Model calls replay from the event log; shell commands are
 re-executed on fresh machines, so a resumed author session takes minutes before new events appear.
-**Cancelling a driver publishes its in-flight workpieces as `held` with the reason "parent job …
-has terminated"**; those resume the same way.
+If Iris terminates a driver's parent job, the driver stops claiming after the first refused sandbox
+launch. A newly claimed workpiece publishes with `terminal: null` and resumes on a plain restart. Other active
+children receive SIGTERM and retain their last published snapshots; those with `terminal: null` also
+resume on a plain restart.
 
 While a driver is working on a workpiece, its `status.json` reads `terminal: null` with
 `upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
@@ -208,5 +210,4 @@ test (`test_verifier_live.py`, excluded by the default marker expression and run
 - `container` proposals are skipped until image support exists beyond the pinned image.
 - Bubblewrap cannot run unprivileged in an Iris Kubernetes task (#10692); the verifier machine
   is a long-lived shellbox Iris sandbox.
-- A cancelled driver leaves `held` records that need `--resume-held` (see Outputs).
 - `lib/taskforge` is frozen and untouched; `forge` does not import it.
