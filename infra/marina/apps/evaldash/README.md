@@ -180,7 +180,8 @@ written before this metadata existed use their prior metric-selection rules and 
 their columns remain populated while benchmarks are rerun.
 
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
-benchmark across cohorts.
+benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
+a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
