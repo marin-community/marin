@@ -232,3 +232,15 @@ def test_models_from_different_cohorts_compare_behind_the_mixed_settings_warning
     journey.page.wait_for_url(re.compile(r"/compare\?.*cohort=all"))
     journey.sees("All cohorts may mix evaluation settings")
     expect(journey.page.get_by_role("button", name="Remove qwen3-8b", exact=True)).to_be_visible()
+
+
+def test_a_cross_cohort_comparison_names_each_cell_cohort_and_links_its_run(journey: Journey) -> None:
+    comparison = cast(dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,qwen3-8b"))
+    row = next(row for row in comparison["rows"] if len(row["cells"]) == 2)
+    cell = row["cells"]["qwen3-8b"]
+
+    journey.visit("/compare?cohort=all&models=snowball,qwen3-8b")
+    link = journey.page.get_by_role("link", name=cell["version"], exact=True).first
+    expect(link).to_be_visible()
+    link.click()
+    journey.page.wait_for_url(re.compile(r"/runs/"))

@@ -313,7 +313,7 @@ const chartSeries = computed(() =>
                       backgroundColor: scoreTint(cell(row, m)!.value),
                       ...(row.leader === m ? { '--tw-ring-color': 'var(--c-best)' } : {}),
                     }"
-                    :title="`${cell(row, m)!.metric} · ${cell(row, m)!.n_scored} items graded`"
+                    :title="`${cell(row, m)!.metric} · ${cell(row, m)!.n_scored} items graded · cohort ${cell(row, m)!.version ?? 'unversioned'}`"
                   >
                     <span class="font-mono font-medium tabular-nums">{{ formatScore(cell(row, m)!.value) }}</span>
                     <span class="block font-mono text-[10px] text-text-muted tabular-nums leading-none">
@@ -329,6 +329,12 @@ const chartSeries = computed(() =>
                       class="block font-mono text-[9px] leading-none text-text-muted"
                       :title="`95% interval for this model's gap to ${row.leader}`"
                       >{{ gapLabel(row, m) }}</span
+                    >
+                    <RouterLink
+                      :to="`/runs/${encodeURIComponent(cell(row, m)!.run_id)}`"
+                      class="block font-mono text-[9px] leading-none text-text-muted hover:text-accent mt-0.5"
+                      :title="`Open the run behind this score (${cell(row, m)!.run_id})`"
+                      >{{ cell(row, m)!.version ?? 'unversioned' }}</RouterLink
                     >
                   </div>
                   <span v-else class="text-text-muted">—</span>
