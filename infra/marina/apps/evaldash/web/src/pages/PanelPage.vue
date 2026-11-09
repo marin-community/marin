@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, cohortWarning, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { UNVERSIONED_COHORT, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
@@ -429,7 +429,7 @@ function cellTitle(cell: PanelCell): string {
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
-    `cohort ${cell.version ?? 'unversioned'}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
+    `cohort ${cell.version ?? UNVERSIONED_COHORT}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
     'click for history',
   ].join('\n')
 }
