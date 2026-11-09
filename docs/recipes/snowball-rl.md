@@ -53,18 +53,17 @@ candidates require qualified controls before submission.
 
 ## Dashboard publication
 
-After `--run --wait` observes the coordinator finish, the launcher builds and publishes trained-panel
-records using the caller's Marina login. Each published terminal native `(run_id, attempt_id)`, including failures,
-has a stored `exports/attempts/<attempt_id>/progress-record.json`. Status includes `rl_progress_url` after
-verification. Controls and train-long have a null gate verdict; standalone gate commands publish nothing.
+After `--run --wait` observes the coordinator finish, the launcher rebuilds and publishes
+trained-panel records using the caller's Marina login. Each terminal native `(run_id, attempt_id)`,
+including failures, identifies one updatable record. Repeat publication replaces that record and
+preserves other attempts. Finishing status includes `rl_progress_url` after serving verification.
+Controls and train-long have a null gate verdict; standalone gate commands publish nothing.
 
-Repeat the original command with `--wait` from the same source and inputs. Missing or failed native
-receipts resubmit through the executor, which reuses successful steps. When all native receipts succeeded
-and the required gate exists, incomplete publication can run directly. Successful publication steps and
-the first payload at `publication/<attempt_id>/progress-record.json` are reused. `publication.json` records
-exact database readback and serving verification. Errors report concrete paths and causes; missing
-credentials also suggest `iris login`. Publication errors preserve the experiment verdict and exit code.
-A current successful gated attempt stays unserved until its matching gate report exists.
+Repeat the original command with `--wait` from the same source and inputs. The executor reuses
+successful steps and runs failed work, then the launcher retries publication from stored outputs.
+Errors identify the affected native attempt; missing credentials suggest `iris login`.
+Publication errors preserve the experiment verdict and exit code. A current successful gated
+attempt stays unserved until its matching gate report exists.
 
 Publish a preset's pinned controls from their recorded paths with one command:
 
@@ -72,14 +71,11 @@ Publish a preset's pinned controls from their recorded paths with one command:
 python -m experiments.post_training.snowball_rl_publication --preset learning-medium
 ```
 
-Speed presets and data-short publish nothing. Learning-long and data-long use `test_panel_100` for their
-progress measurements. Native failures and failed training invariants set `status: failed` and name the
-`failed_facts`. INVALID records remain visible and unranked; valid FAIL measurements can rank.
-
-Records contain stored native identity, lineage timing, measurements, source and engine facts, and the launcher's issue.
-A `--resume-from` record names the source, carries no measurement and stays unranked.
-The app ranks records only with matching task-content, membership, evaluation request protocol and timing identities.
-`--run --wait` publishes when the coordinator ends; publish a run started without `--wait` within 14 days, while its earlier attempts' receipts are kept.
+Speed presets and data-short publish nothing. Native failures and failed training invariants set
+`status: failed` and name the `failed_facts`. Records contain stored native identity, lineage timing,
+measurements, source and engine facts, and the launcher's issue. The app serves the stored records.
+`--run --wait` publishes when the coordinator ends; publish a run started without `--wait` within
+14 days, while its earlier attempts' receipts are kept.
 
 ## Change one input
 
