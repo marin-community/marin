@@ -22,8 +22,9 @@ Each grade runs in a fresh sandbox, in four steps:
    scores 1 only if it proves the reference's statement, keeps the reference's other declarations, and
    uses no axioms beyond ``propext``, ``Classical.choice`` and ``Quot.sound``.
 
-Before step 1, the machine's world-writable directories are closed to the candidate's uid. The sandbox
-itself stops every process and frees the disk when the grade ends.
+Before step 1, ``/tests``, which can hold a reference proof the reply must not see, is made root-only, and
+the machine's world-writable directories are closed to the candidate's uid. The sandbox itself stops every
+process and frees the disk when the grade ends.
 
 The reward on stdout is 0 for anything the proof causes: a failed or crashed compile or export, running
 out of time or space, missing proof data, or a rejection by ``lean-verify``. Any other failure (a broken
@@ -188,14 +189,16 @@ def proof_block(reply: str) -> str:
     return (blocks[-1][1] if blocks else reply).strip()
 
 
-def without_comments(source: str) -> str:
-    """``source`` with Lean comments, nested block comments included, replaced by spaces; strings are kept."""
+def without_comments(source: str, keep_strings: bool = True) -> str:
+    """``source`` with Lean comments, nested block comments included, replaced by spaces; strings are kept,
+    or emptied to ``""`` unless ``keep_strings``."""
     pieces, position = [], 0
     while (match := COMMENT_OR_STRING.search(source, position)) is not None:
         pieces.append(source[position : match.start()])
         token = match.group()
         if token != "/-":
-            pieces.append(token if token.startswith('"') else " ")
+            string = token if keep_strings else '""'
+            pieces.append(string if token.startswith('"') else " ")
             position = match.end()
             continue
         depth, index = 1, match.end()
@@ -213,9 +216,10 @@ def without_comments(source: str) -> str:
 
 
 def declares_target(block: str, target: str) -> bool:
-    """Whether the reply restates the target theorem, outside comments, rather than giving only its proof."""
+    """Whether the reply restates the target theorem, outside comments and strings, rather than giving only its
+    proof."""
     declaration = rf"(?<![\w'.!?])(?:theorem|lemma)\s+{re.escape(target)}(?![\w'.!?])"
-    return re.search(declaration, without_comments(block)) is not None
+    return re.search(declaration, without_comments(block, keep_strings=False)) is not None
 
 
 def reference_source(contract: Contract) -> str:
@@ -241,6 +245,14 @@ def make_step_dir(name: str, uid: int = 0) -> Path:
     os.chown(path, uid, uid)
     path.chmod(0o700)
     return path
+
+
+def close_grader_files() -> None:
+    """Make ``/tests`` root-only: the candidate's compile runs in this sandbox, next to the task's evidence."""
+    os.chown(TESTS, 0, 0)
+    TESTS.chmod(0o700)
+    if TESTS.stat().st_mode & 0o077:
+        raise GraderFailure(f"{TESTS} is still open to other users")
 
 
 def close_shared_directories() -> None:
@@ -509,6 +521,7 @@ def main() -> None:
         if not os.access(tool, os.X_OK):
             raise GraderFailure(f"missing grader tool {tool}")
     WORK.mkdir(mode=0o755)
+    close_grader_files()
     close_shared_directories()
     steps = GraderSteps(start, lean, lean_path, CANDIDATE_UIDS[secrets.randbelow(len(CANDIDATE_UIDS))])
     check_candidate_uid(steps)
