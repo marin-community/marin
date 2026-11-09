@@ -210,6 +210,16 @@ the hub every 30 seconds. It does not travel through the row-forwarding path. Th
 fires when a regional heartbeat is two minutes old, the required node-agent namespace
 is absent, or a nonzero publication/forwarding lag has made no progress for ten minutes.
 
+`NodeRuntimeFilesystemAlmostFull` pages critical ops when a node's `/` or
+separately mounted `/tmp` stays below 5% free space for five minutes. It reads
+the node-agent `node_filesystem_available_bytes` and `node_filesystem_total_bytes`
+gauges, preserving cluster, node UID, and mountpoint identity. Only the latest
+samples from the last five minutes participate. Missing data stays normal while
+node agents are upgraded; Finelog fleet and relay alerts cover query outages.
+Deploy the updated Iris node agents along with Grafana. The existing NVMe
+`node_disk_*` metrics do not measure the root RAM disk; see the
+[root-filesystem runbook](../../lib/iris/OPS.md#coreweave-root-filesystem-full).
+
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
 terminal) and `query` use the controller's `ExecuteRawQuery`; `workers` aggregates

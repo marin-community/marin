@@ -649,11 +649,20 @@ def main(
             pool=pool,
             stage=embed,
         )
-    inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
+    declarations = {source.declaration.id: source.declaration for source in {**all_sources(), **selected}.values()}
+    inventory = list(declarations.values())
     if corpus is not None:
         restored = _corpus_sources(corpus)
         assert embedding is not None
-        embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
+        # Refresh recorded inventory entries by ID while retaining entries no longer in the catalog.
+        corpus_inventory = {row.id: row for row in restored.inventory}
+        corpus_inventory.update({row.id: row for row in inventory})
+        embedding(
+            restored.roots,
+            inventory=list(corpus_inventory.values()),
+            population=restored.population,
+            do_run=do_run,
+        )
         if selection_recipe is not None:
             inputs = _corpus_inputs(restored, "admitted", selection_recipe.name, selection_recipe.version)
             _selection_pass(task_selection_step(inputs, selection_recipe), cache_dir=cache_dir, do_run=do_run)
