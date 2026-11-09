@@ -324,9 +324,7 @@ def test_verified_copy_retry_uses_verified_objects_without_source_reads(tmp_path
     verified_copy_prefix(str(source), str(destination), workers=1)
     (destination / COMPLETION_MANIFEST).unlink()
 
-    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
-    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
-    status_filesystem, status_path = verified_copy_module.filesystem_for(f"{destination}.verified-copy-status")
+    source_filesystem, _ = verified_copy_module.filesystem_for(str(source))
 
     class UnreadableSource:
         def __getattr__(self, name):
@@ -335,15 +333,7 @@ def test_verified_copy_retry_uses_verified_objects_without_source_reads(tmp_path
         def open(self, _path, _mode):
             raise AssertionError("a verified resumed object must not reread its source")
 
-    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
-        del s3_upload_policy
-        if url == str(source):
-            return UnreadableSource(), source_path
-        if url == str(destination):
-            return destination_filesystem, destination_path
-        return status_filesystem, status_path
-
-    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+    _route_filesystems(monkeypatch, {str(source): UnreadableSource()})
 
     result = verified_copy_prefix(str(source), str(destination), workers=1)
 
