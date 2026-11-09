@@ -127,6 +127,7 @@ nav:
       - HBM Optimization: references/hbm-optimization.md
       - Hero Pipeline on H100: references/hero-pipeline-h100.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
+      - Response-position diagnostics: references/response-position-diagnostics.md
       - Browsing Buckets with fsutil: references/fsutil.md
       - Analyzing Large Logs: references/logscan.md
 

@@ -2981,6 +2981,7 @@ class RayPPOTrainer:
                     training_input["rollout_logprobs"],
                     training_input["loss_mask"],
                     rollout_staleness,
+                    training_input["response_mask"],
                     eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
                     eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
                 )
