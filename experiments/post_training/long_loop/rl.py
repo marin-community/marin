@@ -193,7 +193,7 @@ def full_recipe(*, initial_model: str, validation_tasks: int) -> dict:
 def full_rl_step(
     *, version: str, model: ArtifactHfModel, selection: ArtifactStep[Artifact], validation_tasks: int
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind the full target allocation to its preceding SFT export and fixed data."""
+    """Refuse full RL admission until target-geometry qualification is implemented."""
     raise NotImplementedError(
         "Full RL launch is blocked until the CP4 natural-long save/restore gate and "
         "exact 32 agentic / 32 non-agentic consumed-group admission are implemented"

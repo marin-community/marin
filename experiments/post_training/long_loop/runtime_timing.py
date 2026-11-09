@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive_stage import archive_step
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
@@ -40,8 +41,8 @@ def write_report(*, output: str, stages: list[str]) -> None:
     events = []
     sources = []
     for stage in stages:
-        fs, prefix = filesystem_for(stage + "/timing")
-        for key in sorted(fs.glob(prefix + "/*.jsonl")):
+        fs, prefix = filesystem_for(prefix_join(stage, "timing"))
+        for key in sorted(fs.glob(prefix_join(prefix, "*.jsonl"))):
             events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
             sources.append(fs.unstrip_protocol(key))
     # Reused stage artifacts have different original run IDs; preserve those in the sources.
@@ -55,11 +56,11 @@ def write_report(*, output: str, stages: list[str]) -> None:
         "Iris/SkyRL/SFT telemetry for this run. Missing measurements are not counted as zero.\n"
     )
     fs, root = filesystem_for(output)
-    fs.pipe_file(root + "/timing.md", text.encode())
-    fs.pipe_file(root + "/timing-sources.json", json.dumps(sources, indent=2).encode())
+    fs.pipe_file(prefix_join(root, "timing.md"), text.encode())
+    fs.pipe_file(prefix_join(root, "timing-sources.json"), json.dumps(sources, indent=2).encode())
     evaluation = audit(stages[-1], expected_rollouts=SMOKE_PATH_COUNT)
     evaluation["excluded_benchmarks"] = SKIPPED_BENCHMARKS
-    fs.pipe_file(root + "/evaluation.json", json.dumps(evaluation, indent=2).encode())
+    fs.pipe_file(prefix_join(root, "evaluation.json"), json.dumps(evaluation, indent=2).encode())
     if not evaluation["all_verified"]:
         raise ValueError(f"Micro210 reduced smoke did not verify all {SMOKE_PATH_COUNT} selected paths")
 

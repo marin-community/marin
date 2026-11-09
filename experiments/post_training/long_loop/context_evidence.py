@@ -7,10 +7,12 @@ import hashlib
 import json
 from pathlib import Path
 
+from experiments.post_training.long_loop.serving import serving_release
+
 
 def validate_context_evidence(config: dict, overrides: dict, window: int, evidence: dict) -> None:
     digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
-    if evidence["vllm_commit"] != "39e62869693c46402b1a95fde4fc55ca1aab9ae1":
+    if evidence["vllm_commit"] != serving_release().source_commit:
         raise ValueError("Context proof uses a different vLLM pin")
     for case in evidence["cases"]:
         if (case["config_digest"], case["overrides"], case["requested_window"]) == (digest, overrides, window):

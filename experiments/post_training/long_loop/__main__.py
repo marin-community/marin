@@ -60,7 +60,7 @@ def plumbing_loop(
             validate_handoff(exported.path())
         pinned = []
         for step in ((inputs, base, trained, exported) if handoff == "reuse" else (inputs, base, trained)):
-            record = read_json(step.path() + "/.artifact.json")
+            record = read_json(prefix_join(step.path(), ".artifact.json"))
             if record["name"] != step.name or record["version"] != step.version:
                 raise ValueError(f"Committed artifact identity differs: {step.path()}")
             pinned.append(
@@ -76,7 +76,7 @@ def plumbing_loop(
         if handoff == "reuse":
             exported = pinned[3]
         else:
-            model = read_json(trained.path() + "/.artifact.json")["config"]["recipe"]["model"]
+            model = read_json(prefix_join(trained.path(), ".artifact.json"))["config"]["recipe"]["model"]
             exported = sft_export_step(version, source_revision, trained, model)
     endpoint = timed(endpoint_step(version, exported))
     selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/snowball-100k", "2026.11.04", DEFAULT_SELECTION_URI)
@@ -98,7 +98,7 @@ def plumbing_loop(
 def full_sft_stage(version: str, source_revision: str) -> ArtifactStep:
     """Begin the authorized full round; downstream RL is admitted separately after its gates validate."""
     base_uri = "s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8"
-    base_record = read_json(base_uri + "/.artifact.json")
+    base_record = read_json(prefix_join(base_uri, ".artifact.json"))
     initializer = ArtifactStep.adopt("long-loop/reused-base", version, base_uri, config={"original_record": base_record})
     trained, _ = sft_steps(version, source_revision, recipe=full_sft_recipe(), run_kind="full", initializer=initializer)
     fresh_sft_config(
@@ -131,12 +131,12 @@ def eval_continuation(version: str, rl_version: str, inputs_version: str) -> Art
     )
     adopted = []
     for name, original_version, kind in sources:
-        source = prefix + name + "/" + original_version
-        record = read_json(source + "/.artifact.json")
+        source = prefix_join(prefix_join(prefix, name), original_version)
+        record = read_json(prefix_join(source, ".artifact.json"))
         if record["name"] != name or record["version"] != original_version:
             raise ValueError(f"Committed artifact identity differs: {source}")
         if kind is SkyRLRun:
-            terminal = read_json(source + "/terminal.json")["result"]
+            terminal = read_json(prefix_join(source, "terminal.json"))["result"]
             if terminal["state"] != "succeeded" or terminal["model"]["global_step"] != 3:
                 raise ValueError("Eval-only continuation requires committed successful RL step 3")
         options = {"kind": kind} if kind else {}
@@ -160,7 +160,7 @@ def bixbench_continuation(version: str, rl_version: str, inputs_version: str) ->
     trained = next(step for step in graph if step.artifact_type is SkyRLRun)
     prefix = os.environ["MARIN_PREFIX"]
     subset_uri = prefix_join(prefix, f"long-loop/bix-inputs/{version}")
-    record = read_json(subset_uri + "/.artifact.json")
+    record = read_json(prefix_join(subset_uri, ".artifact.json"))
     subset = ArtifactStep.adopt("long-loop/reused-bix-inputs", version, subset_uri, config={"original_record": record})
     evaluated = timed(evaluation_step(version, trained, subset))
     original_uri = prefix_join(prefix, "long-loop/micro-smoke/2026.11.09.9")
@@ -168,7 +168,7 @@ def bixbench_continuation(version: str, rl_version: str, inputs_version: str) ->
         "long-loop/reused-completed-eval",
         version,
         original_uri,
-        config={"original_record": read_json(original_uri + "/.artifact.json")},
+        config={"original_record": read_json(prefix_join(original_uri, ".artifact.json"))},
     )
     return merged_report(version, original, evaluated)
 

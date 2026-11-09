@@ -30,14 +30,14 @@ def publish_evaluation(*, source: str, record: EvalRunRecord, records_prefix: st
             sort_keys=True,
         ).encode()
     ).hexdigest()
-    archive_fs, marker_key = filesystem_for(record.results_path + "/publication.json")
+    archive_fs, marker_key = filesystem_for(prefix_join(record.results_path, "publication.json"))
     if archive_fs.exists(marker_key):
         marker = json.loads(archive_fs.cat_file(marker_key))
         if marker["signature"] != signature:
             raise ValueError("Evaluation archive inputs changed")
         if digest(marker["record_path"])[1] != marker["record_sha256"]:
             raise ValueError("Published evaluation record changed")
-        if digest(record.results_path + "/HEAD")[1] != marker["head_sha256"]:
+        if digest(prefix_join(record.results_path, "HEAD"))[1] != marker["head_sha256"]:
             raise ValueError("Published evaluation archive HEAD changed")
         return marker["record_path"]
     counts = defaultdict(lambda: {"attempted": 0, "scored": 0, "correct": 0})
@@ -107,13 +107,13 @@ def publish_evaluation(*, source: str, record: EvalRunRecord, records_prefix: st
     )
     path = write_record(updated, records_prefix)
     write_once(
-        record.results_path + "/publication.json",
+        prefix_join(record.results_path, "publication.json"),
         json.dumps(
             {
                 "signature": signature,
                 "record_path": path,
                 "record_sha256": digest(path)[1],
-                "head_sha256": digest(record.results_path + "/HEAD")[1],
+                "head_sha256": digest(prefix_join(record.results_path, "HEAD"))[1],
             },
             sort_keys=True,
         ).encode(),

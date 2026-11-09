@@ -50,9 +50,5 @@ def build_loop(preflight: ArtifactStep, bindings: StageBindings) -> ArtifactStep
 
 
 def execute_local_graph(output: ArtifactStep) -> list[Artifact]:
-    """Run a bound graph without automatic retries of failed submissions.
-
-    Remote bindings are deliberately not installed yet. Their submission-intent
-    reconciliation and allocation-release receipts must be qualified first.
-    """
+    """Run a bound graph without automatic retries of failed submissions."""
     return run(output, max_concurrent=1, force_run_failed=False)

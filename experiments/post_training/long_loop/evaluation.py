@@ -64,7 +64,7 @@ def prepare_micro(
         raise ValueError("Micro smoke must cover all 21 benchmark paths")
     chosen = [i for i in chosen if table["benchmark"][i].as_py() not in SKIPPED_BENCHMARKS]
     smoke = repaired_table(table.take(pa.array(chosen)), wheels_revision)
-    fs, key = filesystem_for(output + "/rollouts.parquet")
+    fs, key = filesystem_for(prefix_join(output, "rollouts.parquet"))
     with fs.open(key, "wb") as target:
         pq.write_table(smoke, target)
     subprocess.run(
@@ -93,7 +93,7 @@ def prepare_micro(
         ],
         check=True,
     )
-    validate_environment_preflight(read_json(output + "/environment.json"), output)
+    validate_environment_preflight(read_json(prefix_join(output, "environment.json")), output)
 
 
 def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:
@@ -111,13 +111,13 @@ class TerminalPolicy:
     def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
         if ctx.is_fingerprint:
             locator = ResolvedModelLocator(
-                uri=artifact_identity(self.step) + "/terminal-export",
+                uri=prefix_join(artifact_identity(self.step), "terminal-export"),
                 identity=artifact_identity(self.step),
                 local_path="/tmp/marinskyrl/models/long-loop-terminal",
                 tokenizer_uri="<terminal-tokenizer>",
                 tokenizer_revision="<terminal-tokenizer-revision>",
             )
-            validate_eval_policy(locator, self.step.path() + "/exports/global_step_3/policy")
+            validate_eval_policy(locator, prefix_join(self.step.path(), "exports/global_step_3/policy"))
             return locator
         result = ctx.resolved(self.step)
         if result.hf_model_uri is None or result.global_step is None:
@@ -229,7 +229,7 @@ def evaluation_step(
         if not ctx.is_fingerprint:
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
         if not ctx.is_fingerprint:
-            manifest = read_json(ctx.artifact_path(data) + "/environment.json")
+            manifest = read_json(prefix_join(ctx.artifact_path(data), "environment.json"))
             validate_environment_preflight(manifest, ctx.artifact_path(data))
         return JudgedEvaluation(run, judge, cluster["dashboard_url"])
 

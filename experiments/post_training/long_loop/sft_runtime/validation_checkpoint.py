@@ -57,7 +57,7 @@ class BestValidationCheckpoint:
     def _write_selection(self) -> None:
         assert self.best is not None
         if jax.process_index() == 0:
-            StoragePath(self.path + "/best.json").write_text(json.dumps(asdict(self.best), indent=2) + "\n")
+            StoragePath(prefix_join(self.path, "best.json")).write_text(json.dumps(asdict(self.best), indent=2) + "\n")
 
     def consider(self, model: PyTree, step: int, score: float) -> ValidationSelection | None:
         if not math.isfinite(score):

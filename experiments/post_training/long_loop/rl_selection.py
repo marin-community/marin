@@ -6,8 +6,9 @@
 import json
 import math
 
-import fsspec
 from marin.rl.skyrl import SkyRLRun
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 
 def validate_selection_receipts(best: dict, history: list[dict], selected_step: int) -> dict:
@@ -44,15 +45,15 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
 
 def validate_full_selection(run: SkyRLRun) -> dict:
     """Read the durable native selection before admitting its HF export to eval."""
-    root = run.checkpoint_root.rstrip("/")
-    with fsspec.open(root + "/best_checkpoint.json") as stream:
-        best = json.load(stream)
-    with fsspec.open(root + "/validation_selection_history.json") as stream:
-        history = json.load(stream)
+    root = run.checkpoint_root
+    fs, key = filesystem_for(prefix_join(root, "best_checkpoint.json"))
+    best = json.loads(fs.cat_file(key))
+    fs, key = filesystem_for(prefix_join(root, "validation_selection_history.json"))
+    history = json.loads(fs.cat_file(key))
     if run.global_step is None or not run.hf_model_uri:
         raise ValueError("Full RL result has no selected HF export")
-    if best["model_uri"] != f"{root}/global_step_{run.global_step}/policy":
+    if best["model_uri"] != prefix_join(root, f"global_step_{run.global_step}/policy"):
         raise ValueError("Selected native checkpoint lineage differs from this run")
-    if not run.hf_model_uri.rstrip("/").endswith(f"/global_step_{run.global_step}/policy"):
+    if not str(StoragePath(run.hf_model_uri)).endswith(f"/global_step_{run.global_step}/policy"):
         raise ValueError("HF export step differs from selected native checkpoint")
     return validate_selection_receipts(best, history, run.global_step)

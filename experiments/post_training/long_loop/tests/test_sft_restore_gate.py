@@ -19,7 +19,7 @@ class State(NamedTuple):
 
 
 def test_first_step_restores_full_state_and_releases_old_buffers(tmp_path):
-    mesh = Mesh(np.asarray(jax.devices('cpu')[:1]), ('data',))
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("data",))
     with jax.set_mesh(mesh):
         state = State(jnp.array(1), jnp.arange(32, dtype=jnp.float32), jnp.full(32, 0.125))
         expected = [np.asarray(x).copy() for x in state]
@@ -28,4 +28,4 @@ def test_first_step_restores_full_state_and_releases_old_buffers(tmp_path):
         for original, actual, wanted in zip(state, restored, expected, strict=True):
             assert original.is_deleted()
             np.testing.assert_array_equal(actual, wanted)
-        assert (tmp_path / 'step-1' / 'metadata.json').is_file()
+        assert (tmp_path / "step-1" / "metadata.json").is_file()

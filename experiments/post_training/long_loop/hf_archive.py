@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
 from experiments.grug.moe_hero_ep.ops.upload_hf import validate_model_card
@@ -129,10 +129,10 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     validate_model_card(card, license_text)
     root = Path(config.local_directory)
     root.mkdir(parents=True, exist_ok=True)
-    events = prefix_join(timing_destination.rsplit("/", 1)[0], "files")
+    events = prefix_join(str(StoragePath(timing_destination).parent), "files")
     fs, prefix = filesystem_for(config.source)
     source_files = sorted(fs.find(prefix))
-    names = [key.removeprefix(prefix.rstrip("/") + "/") for key in source_files]
+    names = [StoragePath(key).relative_to(StoragePath(prefix)) for key in source_files]
     if any(PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts for name in names):
         raise ValueError("Export contains a nonrelative path")
     # Source checkpoints can contain an old card; only the reviewed card is published.

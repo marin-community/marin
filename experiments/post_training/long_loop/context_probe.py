@@ -10,10 +10,12 @@ from pathlib import Path
 import vllm
 from vllm.config import ModelConfig
 
+from experiments.post_training.long_loop.serving import serving_release
+
 
 def main():
     root = Path(__file__).with_name("context-fixtures")
-    if "39e62869693c" not in vllm.__version__:
+    if serving_release().source_commit[:12] not in vllm.__version__:
         raise ValueError(f"Wrong vLLM runtime: {vllm.__version__}")
     cases = [
         ("old", {"max_position_embeddings": 262144}, False),
@@ -42,7 +44,7 @@ def main():
         )
         results.append(result)
     evidence = {
-        "vllm_commit": "39e62869693c46402b1a95fde4fc55ca1aab9ae1",
+        "vllm_commit": serving_release().source_commit,
         "vllm": vllm.__version__,
         "config_sha256": hashlib.sha256((root / "config.json").read_bytes()).hexdigest(),
         "cases": results,

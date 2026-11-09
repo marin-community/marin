@@ -49,7 +49,7 @@ def write_once(uri: str, content: bytes) -> None:
         if fs.cat_file(key) != content:
             raise ValueError(f"Immutable archive collision: {uri}")
         return
-    parent = key.rsplit("/", 1)[0]
+    parent = str(StoragePath(key).parent)
     fs.makedirs(parent, exist_ok=True)
     fs.pipe_file(key, content)
 
@@ -58,7 +58,7 @@ def archive_object(item: ArchiveInput, root: str) -> ArchivedObject:
     name = PurePosixPath(item.name)
     if name.is_absolute() or ".." in name.parts or not name.parts:
         raise ValueError("Archive names must be relative and cannot traverse parents")
-    destination = prefix_join(root, "objects/" + item.name)
+    destination = prefix_join(prefix_join(root, "objects"), item.name)
     size, checksum = digest(item.source)
     fs, key = filesystem_for(destination)
     if fs.exists(key):
@@ -81,16 +81,16 @@ def seal_archive(root: str, inputs: list[ArchiveInput], provenance: dict) -> dic
     objects = [archive_object(item, root) for item in inputs]
     manifest = {"schema": 1, "provenance": provenance, "objects": [asdict(obj) for obj in objects]}
     raw = json.dumps(manifest, sort_keys=True, indent=2).encode()
-    write_once(root + "/manifest.json", raw)
+    write_once(prefix_join(root, "manifest.json"), raw)
     token = hashlib.sha256(raw).hexdigest()
-    write_once(root + "/VERIFIED.json", json.dumps({"manifest_sha256": token}, sort_keys=True).encode())
+    write_once(prefix_join(root, "VERIFIED.json"), json.dumps({"manifest_sha256": token}, sort_keys=True).encode())
     return manifest
 
 
 def verify_archive(root: str) -> dict:
     fs, key = filesystem_for(root)
-    raw = fs.cat_file(key + "/manifest.json")
-    marker = json.loads(fs.cat_file(key + "/VERIFIED.json"))
+    raw = fs.cat_file(prefix_join(key, "manifest.json"))
+    marker = json.loads(fs.cat_file(prefix_join(key, "VERIFIED.json")))
     if hashlib.sha256(raw).hexdigest() != marker["manifest_sha256"]:
         raise ValueError("Archive manifest does not match completion marker")
     manifest = json.loads(raw)
@@ -132,12 +132,13 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
             raise ValueError(f"Checkpoint changed since archive: {uri}")
         planned.append((uri, fs, key))
     write_once(
-        root + "/cleanup-plan.json", json.dumps({"selected": selected, "objects": candidates}, sort_keys=True).encode()
+        prefix_join(root, "cleanup-plan.json"),
+        json.dumps({"selected": selected, "objects": candidates}, sort_keys=True).encode(),
     )
     for _, fs, key in planned:
         if fs.exists(key):
             fs.rm(key)
-    fs, key = filesystem_for(root + "/cleanup-completed.json")
+    fs, key = filesystem_for(prefix_join(root, "cleanup-completed.json"))
     fs.pipe_file(
         key,
         json.dumps(

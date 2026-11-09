@@ -62,6 +62,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
@@ -206,7 +207,7 @@ def restore_first_checkpoint(state, checkpointer, mesh):
     checkpointer.wait_until_finished()
     template = restore_template_from(state)
     restored = load_grug_checkpoint(
-        state=template, candidate=f"{checkpointer.base_path}/step-{step}", mesh=mesh, allow_partial=False
+        state=template, candidate=prefix_join(checkpointer.base_path, f"step-{step}"), mesh=mesh, allow_partial=False
     )
     jax.block_until_ready(restored)
     if int(restored.step) != step or checkpoint_samples(restored) != expected:
@@ -719,18 +720,7 @@ def _compute_flops(
 
 
 def log_device_memory(step_info) -> None:
-    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB.
-
-    The EP hero had no peak-HBM telemetry, which makes a whole class of result unreadable: XLA's
-    ``HloRematerialization`` engages only when peak crosses the allocator limit, so a config change
-    that moves peak across that boundary produces an MFU step change that has nothing to do with the
-    change itself. Issue #8054 traced its own +9.08% headline to exactly this -- 3.69 GiB of peak
-    took it under the limit and switched remat off -- and the win fell to +3.31% once one process
-    per GPU put 8.79 GiB back. Any ablation that moves activation memory needs this logged, or its
-    rungs cannot be told apart from allocator-limit crossings.
-
-    Ported from ``experiments/grug/moe_hero_fsdp/train.py``.
-    """
+    """Log local-device HBM peak, live bytes, and allocator limit in GiB."""
     stats = jax.local_devices()[0].memory_stats()
     levanter.tracker.log(
         {

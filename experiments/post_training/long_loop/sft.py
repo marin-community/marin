@@ -18,7 +18,7 @@ from marin.execution.remote import remote
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.checkpointing import load_grug_checkpoint
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- register optimizer
@@ -45,7 +45,7 @@ def read_json(uri: str) -> dict:
 
 def import_base(*, output: str, model: dict, revision: str) -> None:
     configure_coreweave_s3()
-    convert(ImportConfig(BASE_MODEL, revision, draccus.decode(GrugModelConfig, model), output + "/native"))
+    convert(ImportConfig(BASE_MODEL, revision, draccus.decode(GrugModelConfig, model), prefix_join(output, "native")))
 
 
 def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str) -> GrugRunConfig:
@@ -55,19 +55,19 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
     trainer["id"] = run_id
-    trainer["log_dir"] = output + "/logs"
-    trainer["initialize_from"] = initializer + "/native/step-0"
+    trainer["log_dir"] = prefix_join(output, "logs")
+    trainer["initialize_from"] = prefix_join(initializer, "native/step-0")
     trainer["load_checkpoint"] = False
     trainer["load_checkpoint_path"] = []
-    trainer["checkpointer"]["base_path"] = output + "/checkpoints"
-    trainer["checkpointer"]["temporary_base_path"] = output + "/temporary-checkpoints"
+    trainer["checkpointer"]["base_path"] = prefix_join(output, "checkpoints")
+    trainer["checkpointer"]["temporary_base_path"] = prefix_join(output, "temporary-checkpoints")
     trainer["tracker"].update(id=run_id, name=run_id)
     return draccus.decode(GrugRunConfig, config)
 
 
 def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None:
     configure_coreweave_s3()
-    verification = read_json(initializer + "/native/verification.json")
+    verification = read_json(prefix_join(initializer, "native/verification.json"))
     if not verification["exact_parity"] or len(verification["tensors"]) != 502:
         raise ValueError("Base import did not verify all 502 tensors")
     config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
@@ -91,7 +91,7 @@ def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None
 def restore_frozen(
     checkpoint: str, metadata_digest: str, config: GrugModelConfig, mesh: jax.sharding.Mesh
 ) -> Transformer:
-    metadata = read_json(checkpoint + "/metadata.json")
+    metadata = read_json(prefix_join(checkpoint, "metadata.json"))
     if (
         digest(metadata) != metadata_digest
         or metadata.get("step") != int(checkpoint.rsplit("step-", 1)[1])
@@ -105,8 +105,8 @@ def restore_frozen(
 
 def validate_handoff(root: str) -> None:
     """Reject schema declarations that would cause Bridge to omit expert weights."""
-    config = read_json(root + "/hf/config.json")
-    weight_map = read_json(root + "/hf/model.safetensors.index.json")["weight_map"]
+    config = read_json(prefix_join(root, "hf/config.json"))
+    weight_map = read_json(prefix_join(root, "hf/model.safetensors.index.json"))["weight_map"]
     if config["grugmoe_artifact_schema_version"] != 2:
         raise ValueError("Long-loop handoff requires split-expert schema 2")
     for layer in range(config["num_hidden_layers"]):
@@ -119,23 +119,23 @@ def validate_handoff(root: str) -> None:
 
 def export_sft(*, output: str, trained: str, model: dict, source_revision: str) -> None:
     configure_coreweave_s3()
-    selected = read_json(trained + "/selected.json")
+    selected = read_json(prefix_join(trained, "selected.json"))
     config = ExportConfig(
         selected["checkpoint"],
         selected["metadata_digest"],
         draccus.decode(GrugModelConfig, model),
-        output + "/hf",
+        prefix_join(output, "hf"),
         source_revision,
         max_position_embeddings=SNOWBALL_CONTEXT_LIMIT,
     )
     export_weights(config, restore_frozen, weights_kind="snowball_sft_frozen_router")
     fs, prefix = filesystem_for(TOKENIZER_URI)
-    destination_fs, destination = filesystem_for(output + "/hf")
+    destination_fs, destination = filesystem_for(prefix_join(output, "hf"))
     for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
-        content = fs.cat_file(prefix + "/" + name)
-        destination_fs.pipe_file(destination + "/" + name, content)
+        content = fs.cat_file(prefix_join(prefix, name))
+        destination_fs.pipe_file(prefix_join(destination, name), content)
     destination_fs.pipe_file(
-        destination + "/generation_config.json",
+        prefix_join(destination, "generation_config.json"),
         json.dumps(
             {
                 "bos_token_id": 128000,
@@ -144,9 +144,9 @@ def export_sft(*, output: str, trained: str, model: dict, source_revision: str) 
             }
         ).encode(),
     )
-    manifest = read_json(output + "/hf/export-manifest.json")
+    manifest = read_json(prefix_join(output, "hf/export-manifest.json"))
     for shard in manifest["shards"]:
-        with destination_fs.open(destination + "/" + shard["filename"], "rb") as stream:
+        with destination_fs.open(prefix_join(destination, shard["filename"]), "rb") as stream:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()
         if actual != shard["sha256"]:
             raise ValueError(f"Export hash mismatch: {shard['filename']}")

@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive import write_once
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
@@ -19,21 +20,21 @@ from experiments.post_training.long_loop.sft import read_json
 
 
 def prepare_subset(*, output: str, source: str) -> None:
-    fs, path = filesystem_for(source + "/rollouts.parquet")
+    fs, path = filesystem_for(prefix_join(source, "rollouts.parquet"))
     with fs.open(path, "rb") as stream:
         table = pq.read_table(stream)
     selected = table.filter(pc.equal(table["benchmark"], "bixbench-pi"))
     if selected.num_rows != 1:
         raise ValueError("Expected exactly one original BixBench smoke task")
-    manifest = read_json(source + "/environment.json")
+    manifest = read_json(prefix_join(source, "environment.json"))
     manifest.update(data_uri=output, subset_of=source, subset_benchmark="bixbench-pi")
     target_fs, target = filesystem_for(output)
     target_fs.makedirs(target, exist_ok=True)
-    with target_fs.open(target + "/rollouts.parquet", "wb") as stream:
+    with target_fs.open(prefix_join(target, "rollouts.parquet"), "wb") as stream:
         pq.write_table(selected, stream)
-    target_fs.pipe_file(target + "/environment.json", json.dumps(manifest, indent=2).encode())
+    target_fs.pipe_file(prefix_join(target, "environment.json"), json.dumps(manifest, indent=2).encode())
     target_fs.pipe_file(
-        target + "/selection.json",
+        prefix_join(target, "selection.json"),
         json.dumps(
             {
                 "source": source,
@@ -49,13 +50,13 @@ def prepare_subset(*, output: str, source: str) -> None:
 
 def merge_identity(original: str, repair: str) -> dict:
     """Verify task content and consumed configs, allowing only run-local locators."""
-    configs = [read_json(root + "/terminal.json")["config"] for root in (original, repair)]
+    configs = [read_json(prefix_join(root, "terminal.json"))["config"] for root in (original, repair)]
     row_hashes = []
     for config in configs:
         data = config["inputs"]["validation_data"]
         if len(data) != 1:
             raise ValueError("Expected one pinned validation input")
-        fs, key = filesystem_for(data[0]["uri"] + "/" + data[0]["relative_path"])
+        fs, key = filesystem_for(prefix_join(data[0]["uri"], data[0]["relative_path"]))
         with fs.open(key, "rb") as stream:
             rows = [row for row in pq.read_table(stream).to_pylist() if row["benchmark"] == "bixbench-pi"]
         if len(rows) != 1:
@@ -101,7 +102,7 @@ def merge_identity(original: str, repair: str) -> dict:
         "task_row_sha256": row_hashes[0],
         "compared_config_sha256": hashlib.sha256(json.dumps(normalized[0], sort_keys=True).encode()).hexdigest(),
         "excluded_run_local_fields": run_local,
-        "terminal_uris": [root + "/terminal.json" for root in (original, repair)],
+        "terminal_uris": [prefix_join(root, "terminal.json") for root in (original, repair)],
     }
 
 
@@ -114,10 +115,12 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     suffix = "/exports/dumped_evals/eval_only/"
     original_fs, original_root = filesystem_for(original + suffix)
     repair_fs, repair_root = filesystem_for(repair + suffix)
-    replacements = [p for p in repair_fs.glob(repair_root + "/*.jsonl") if not p.endswith("aggregated_results.jsonl")]
+    replacements = [
+        p for p in repair_fs.glob(prefix_join(repair_root, "*.jsonl")) if not p.endswith("aggregated_results.jsonl")
+    ]
     if len(replacements) != 1 or not replacements[0].endswith("/bixbench-pi.jsonl"):
         raise ValueError("Repair must contain BixBench only")
-    original_bix = json.loads(original_fs.cat_file(original_root + "/bixbench-pi.jsonl"))
+    original_bix = json.loads(original_fs.cat_file(prefix_join(original_root, "bixbench-pi.jsonl")))
     repaired_bix = json.loads(repair_fs.cat_file(replacements[0]))
     identity["original_prompt_is_prefix"] = (
         repaired_bix["prompt_token_ids"][: len(original_bix["prompt_token_ids"])] == original_bix["prompt_token_ids"]
@@ -132,7 +135,7 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
         source_fs, source_root = (
             (repair_fs, repair_root) if name == "bixbench-pi.jsonl" else (original_fs, original_root)
         )
-        payload = source_fs.cat_file(source_root + "/" + name)
+        payload = source_fs.cat_file(prefix_join(source_root, name))
         write_once(output + suffix + name, payload)
         provenance.append(
             {
@@ -144,9 +147,9 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     merged = audit(output, 20)
     if not merged["all_verified"]:
         raise ValueError("Merged result does not verify all 20 paths")
-    write_once(output + "/evaluation.json", json.dumps(merged, indent=2).encode())
+    write_once(prefix_join(output, "evaluation.json"), json.dumps(merged, indent=2).encode())
     write_once(
-        output + "/merge-provenance.json",
+        prefix_join(output, "merge-provenance.json"),
         json.dumps(
             {
                 "identity": identity,

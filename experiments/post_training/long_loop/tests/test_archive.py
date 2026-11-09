@@ -30,9 +30,9 @@ def test_archive_survives_source_loss_and_detects_corruption(tmp_path):
     root = str(tmp_path / "archive")
     inputs = [ArchiveInput(str(source), "configs/consumed.yaml", "config")]
     first = seal_archive(root, inputs, {"marin_commit": "a" * 40})
-    assert seal_archive(root, inputs, {"marin_commit": "a" * 40}) == first
+    assert seal_archive(root + "/", inputs, {"marin_commit": "a" * 40}) == first
     source.unlink()
-    assert verify_archive(root) == first
+    assert verify_archive(root + "/") == first
     Path(first["objects"][0]["destination"]).write_bytes(b"corrupted")
     with pytest.raises(ValueError, match="failed verification"):
         verify_archive(root)

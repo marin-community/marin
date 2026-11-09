@@ -15,7 +15,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive import ArchiveInput, checkpoint_cleanup, seal_archive, write_once
 from experiments.post_training.long_loop.eval_archive import publish_evaluation
@@ -31,7 +31,7 @@ REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "w
 
 def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     """Seal an explicit reviewed inventory, then clean only its superseded checkpoints."""
-    fs, key = filesystem_for(completed_report + "/evaluation.json")
+    fs, key = filesystem_for(prefix_join(completed_report, "evaluation.json"))
     evaluation = json.loads(fs.cat_file(key))
     if not evaluation["all_verified"]:
         raise ValueError("Completed report has unverified evaluation paths")
@@ -45,7 +45,7 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         raise ValueError("Archive requires an exact Marin commit")
     if not provenance["evaluation_complete"]:
         raise ValueError("Archival post-script requires completed evaluation")
-    receipt_fs, receipt_key = filesystem_for(output + "/hf-checkpoint.json")
+    receipt_fs, receipt_key = filesystem_for(prefix_join(output, "hf-checkpoint.json"))
     if receipt_fs.exists(receipt_key):
         receipt = json.loads(receipt_fs.cat_file(receipt_key))
         upload = plan["hf_upload"]
@@ -53,12 +53,14 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
             raise ValueError("Existing HF receipt belongs to a different archive plan")
         verify_hf_checkpoint(receipt)
     else:
-        receipt = upload_checkpoint(HfUpload(**plan["hf_upload"]), timing_destination=output + "/timing/hf-upload.jsonl")
-        write_once(output + "/hf-checkpoint.json", json.dumps(receipt, sort_keys=True, indent=2).encode())
+        receipt = upload_checkpoint(
+            HfUpload(**plan["hf_upload"]), timing_destination=prefix_join(output, "timing/hf-upload.jsonl")
+        )
+        write_once(prefix_join(output, "hf-checkpoint.json"), json.dumps(receipt, sort_keys=True, indent=2).encode())
     provenance["hf_checkpoint"] = receipt
     publication = plan["evaldash"]
     record = EvalRunRecord.model_validate(publication["record"]).model_copy(
-        update={"results_path": output + "/evaluation"}
+        update={"results_path": prefix_join(output, "evaluation")}
     )
     record_uri = publish_evaluation(
         source=publication["source"], record=record, records_prefix=publication["records_prefix"]
@@ -68,7 +70,9 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     for key in sorted(eval_fs.find(eval_root)):
         inputs.append(
             ArchiveInput(
-                eval_fs.unstrip_protocol(key), "evaldash/store/" + key.removeprefix(eval_root + "/"), "eval_trace"
+                eval_fs.unstrip_protocol(key),
+                prefix_join("evaldash/store", StoragePath(key).relative_to(StoragePath(eval_root))),
+                "eval_trace",
             )
         )
     seal_archive(output, inputs, provenance)
@@ -105,7 +109,7 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     request_sha = hashlib.sha256(
         json.dumps({"plan": plan, "trained": trained, "report": completed_report}, sort_keys=True).encode()
     ).hexdigest()
-    archive_fs, archive_key = filesystem_for(output + "/resolved-plan.json")
+    archive_fs, archive_key = filesystem_for(prefix_join(output, "resolved-plan.json"))
     if archive_fs.exists(archive_key):
         resolved = json.loads(archive_fs.cat_file(archive_key))
         if (
@@ -121,7 +125,7 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     resolved["hf_upload"].update(source=run.hf_model_uri, native_checkpoint=selected)
     disposable = []
     for key, info in sorted(fs.find(root, detail=True).items()):
-        relative = key.removeprefix(root.rstrip("/") + "/")
+        relative = StoragePath(key).relative_to(StoragePath(root))
         component = relative.split("/", 1)[0]
         if info.get("type") != "file" or re.fullmatch(r"global_step_[0-9]+", component) is None:
             continue
@@ -138,10 +142,14 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     }
     for filename in ("best_checkpoint.json", "validation_selection_history.json"):
         resolved["inputs"].append(
-            {"source": prefix_join(run.checkpoint_root, filename), "name": "selection/" + filename, "category": "config"}
+            {
+                "source": prefix_join(run.checkpoint_root, filename),
+                "name": prefix_join("selection", filename),
+                "category": "config",
+            }
         )
     resolved["provenance"]["checkpoint_selection"] = {"receipt": best_uri, "result": best}
-    write_once(output + "/resolved-plan.json", json.dumps(resolved, sort_keys=True, indent=2).encode())
+    write_once(prefix_join(output, "resolved-plan.json"), json.dumps(resolved, sort_keys=True, indent=2).encode())
     archive_run(output=output, plan=resolved, completed_report=completed_report)
 
 

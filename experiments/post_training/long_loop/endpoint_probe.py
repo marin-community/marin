@@ -19,6 +19,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.iris import remote_inference
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
@@ -35,7 +36,9 @@ def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> l
 
 def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
     validate_handoff(model_root)
-    check_context_limit("SFT endpoint", read_json(model_root + "/hf/config.json")["max_position_embeddings"], 24576)
+    check_context_limit(
+        "SFT endpoint", read_json(prefix_join(model_root, "hf/config.json"))["max_position_embeddings"], 24576
+    )
     root = find_project_root()
     assert root is not None, "Run from the Marin worktree"
     model = load_model_config(
@@ -45,7 +48,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
     model = replace(
         model,
         name="long-loop-sft-probe",
-        location=model_root + "/hf",
+        location=prefix_join(model_root, "hf"),
         revision=None,
         tokenizer=TOKENIZER_REPO,
         tokenizer_revision=tokenizer_revision,
@@ -80,7 +83,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
             tokenized.raise_for_status()
             served_tokens = tokenized.json()["tokens"]
             expected_tokens = prompt_tokens(tokenizer, messages)
-            fs, path = filesystem_for(output + "/tokenization.json")
+            fs, path = filesystem_for(prefix_join(output, "tokenization.json"))
             fs.pipe_file(
                 path,
                 json.dumps({"served": served_tokens, "expected": expected_tokens, "request": request}).encode(),
@@ -107,7 +110,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
                 response.raise_for_status()
                 receipts[str(token)] = response.json()
                 stops[token] = response.json()["choices"][0]["finish_reason"]
-            fs, path = filesystem_for(model_root + "/hf/tokenizer.json")
+            fs, path = filesystem_for(prefix_join(model_root, "hf/tokenizer.json"))
             tokenizer_hash = hashlib.sha256(fs.cat_file(path)).hexdigest()
             check_endpoint(
                 EndpointEvidence(
@@ -132,7 +135,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
                 "forced_eos": receipts,
                 "weight_identity_basis": "verified export plus pinned server launch, not models endpoint alone",
             }
-    fs, path = filesystem_for(output + "/endpoint.json")
+    fs, path = filesystem_for(prefix_join(output, "endpoint.json"))
     fs.pipe_file(path, json.dumps(record, indent=2).encode())
 
 

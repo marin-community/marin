@@ -57,4 +57,3 @@ def hub(tmp_path, monkeypatch):
     monkeypatch.setattr(hf_archive, "HfApi", lambda **kwargs: result)
     monkeypatch.setattr(hf_archive, "hf_hub_download", result.download)
     return result
-

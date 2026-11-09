@@ -6,13 +6,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from rolloutengine.models import TaskRolloutSpec
 
 from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_row
-from experiments.post_training.long_loop.evaluation import TerminalPolicy, smoke_evaluation, validate_eval_policy
+from experiments.post_training.long_loop.evaluation import TerminalPolicy, validate_eval_policy
 from experiments.post_training.long_loop.serving import check_context_limit
 from vendor.skyrl.marinskyrl.resource_locator import ModelLocatorError
 
@@ -40,19 +39,6 @@ def test_eval_policy_locator_rejects_hf_shaped_local_path():
     validate_eval_policy(locator, source)
     with pytest.raises(ModelLocatorError, match="local metadata path"):
         validate_eval_policy(replace(locator, local_path="models/long-loop-terminal"), source)
-
-
-def test_eval_launch_preserves_base_context_and_all_trace_retention():
-    trained = ArtifactStep.adopt("test/rl", "2026.11.09", "s3://marin-us-east-02a/test/rl")
-    data = ArtifactStep.adopt("test/data", "2026.11.09", "s3://marin-us-east-02a/test/data")
-    step = smoke_evaluation("2026.11.09.100", trained, data)
-    binding = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    launch = yaml.safe_load(binding.skyrl.launch_config_yaml)
-    generator = launch["skyrl"]["generator"]
-    assert generator["engine_init_kwargs"]["hf_overrides"] == {"max_position_embeddings": 262144, "max_seq_len": 262144}
-    assert generator["trajectory_retention"]["sample_fraction"] == 1.0
-    assert generator["trajectory_retention"]["required"]
-    assert launch["inputs"]["model"]["local_path"].startswith("/")
 
 
 def test_context_preflight_rejects_packing_length_as_serving_limit():
