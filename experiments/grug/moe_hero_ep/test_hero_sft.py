@@ -10,6 +10,7 @@ import numpy as np
 import optax
 import pytest
 from jax.sharding import AxisType, Mesh
+from levanter.data.text.datasets import LmDataConfig, _component_cache_path
 from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe_hero_ep import model
@@ -106,6 +107,22 @@ def test_stores_smaller_than_the_block_count_share_one_component():
 
     assert set(components) == {SFT_COMPONENT_PREFIX + "big", SFT_POOLED_COMPONENT}
     assert counts[SFT_POOLED_COMPONENT] == 24
+
+
+def test_sft_stores_offer_no_validation_split():
+    # Evaluation asks every component for a validation split; the SFT stores hold only train.
+    stores = {"a": _store(600_000), "tiny": _store(14)}
+    plan = plan_sft_mixture(stores, batch_size=16, replay_fraction=0.2)
+    components, _ = sft_components(stores, plan)
+    config = LmDataConfig(tokenizer="gpt2", cache_dir=None, components=components)
+
+    assert config._cache_items("validation")
+    assert all(
+        item.flat_cache and item.cache_dir == "s3://bucket/store/train" for _, item in config._cache_items("train")
+    )
+    assert all(
+        _component_cache_path(name, item, None, "validation") is None for name, item in config._cache_items("validation")
+    )
 
 
 @pytest.mark.parametrize(

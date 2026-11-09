@@ -183,7 +183,14 @@ def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_
 
 
 def _store_component(store: SftStore) -> DatasetComponent:
-    return DatasetComponent(source=None, cache_dir=store.cache_path, format=TextLmDatasetFormat(), pack=store.max_length)
+    # The stores hold only a train split; a flat cache gives evaluation no validation split to look for.
+    return DatasetComponent(
+        source=None,
+        cache_dir=prefix_join(store.cache_path, "train"),
+        format=TextLmDatasetFormat(),
+        pack=store.max_length,
+        flat_cache=True,
+    )
 
 
 def sft_components(
