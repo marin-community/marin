@@ -120,10 +120,11 @@ def test_a_restated_theorem_replaces_everything_after_the_imports():
         ("open Nat in\n@[simp] theorem t (n : Nat) : n + 0 = n := by\n  simp", True),
         ("by\n  /- theorem t : True := trivial -/\n  simp", False),
         ("by\n  simp -- theorem t", False),
+        ('by\n  let _msg := "theorem t"\n  simp', False),
         ("by\n  exact other_t", False),
     ],
 )
-def test_a_reply_restates_the_target_only_with_a_declaration_outside_comments(block, restated):
+def test_a_reply_restates_the_target_only_with_a_declaration_outside_comments_and_strings(block, restated):
     assert declares_target(block, "t") is restated
 
 
