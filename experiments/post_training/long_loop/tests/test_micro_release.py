@@ -12,6 +12,7 @@ from rolloutengine.models import TaskRolloutSpec
 
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_row
 from experiments.post_training.long_loop.evaluation import TerminalPolicy, smoke_evaluation, validate_eval_policy
+from experiments.post_training.long_loop.serving import check_context_limit
 from vendor.skyrl.marinskyrl.resource_locator import ModelLocatorError
 
 
@@ -51,3 +52,9 @@ def test_eval_launch_preserves_base_context_and_all_trace_retention():
     assert generator["trajectory_retention"]["sample_fraction"] == 1.0
     assert generator["trajectory_retention"]["required"]
     assert launch["inputs"]["model"]["local_path"].startswith("/")
+
+
+def test_context_preflight_rejects_packing_length_as_serving_limit():
+    with pytest.raises(ValueError, match="max_model_len=65536"):
+        check_context_limit("packed-SFT", 32768, 65536)
+    check_context_limit("base-context override", 262144, 65536)

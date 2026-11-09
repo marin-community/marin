@@ -36,7 +36,7 @@ from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluat
 from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION, SKIPPED_BENCHMARKS
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
-from experiments.post_training.long_loop.serving import snowball_context_override
+from experiments.post_training.long_loop.serving import check_context_limit, snowball_context_override
 from experiments.post_training.long_loop.sft import read_json
 from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_reference
 
@@ -181,6 +181,10 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
         root / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/"
         "olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-131k.yaml"
     )
+    # Context bound from the exact judge revision's text_config, not its serving window.
+    if (judge.location, judge.revision) != ("MiniMaxAI/MiniMax-M3-MXFP8", "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba"):
+        raise ValueError("Revalidate the judge context bound when changing its pinned revision")
+    check_context_limit(judge.location, 1048576, judge.serve.max_model_len)
     cluster = yaml.safe_load((root / IRIS_HUB_CLUSTER_CONFIG).read_text())
 
     def build_config(ctx: StepContext) -> JudgedEvaluation:

@@ -24,6 +24,7 @@ from experiments.grug.checkpointing import load_grug_checkpoint
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- register optimizer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.runtime_timing import timed
+from experiments.post_training.long_loop.serving import SNOWBALL_CONTEXT_LIMIT
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
 from experiments.post_training.long_loop.sft_runtime.import_hf import ImportConfig, convert
 from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig, Transformer
@@ -119,6 +120,7 @@ def export_sft(*, output: str, trained: str, model: dict, source_revision: str) 
         draccus.decode(GrugModelConfig, model),
         output + "/hf",
         source_revision,
+        max_position_embeddings=SNOWBALL_CONTEXT_LIMIT,
     )
     export_weights(config, restore_frozen, weights_kind="snowball_sft_frozen_router")
     fs, prefix = filesystem_for(TOKENIZER_URI)

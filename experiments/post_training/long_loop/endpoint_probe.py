@@ -22,8 +22,8 @@ from rigging.filesystem.buckets import filesystem_for
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
-from experiments.post_training.long_loop.serving import checked_serving_release
-from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, validate_handoff
+from experiments.post_training.long_loop.serving import check_context_limit, checked_serving_release
+from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, read_json, validate_handoff
 
 
 def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> list[int]:
@@ -35,6 +35,7 @@ def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> l
 
 def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
     validate_handoff(model_root)
+    check_context_limit("SFT endpoint", read_json(model_root + "/hf/config.json")["max_position_embeddings"], 24576)
     root = find_project_root()
     assert root is not None, "Run from the Marin worktree"
     model = load_model_config(
@@ -136,6 +137,8 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
 
 
 def endpoint_step(version: str, model: ArtifactStep) -> ArtifactStep:
+    # Both plumbing packing and the base bound cover this probe; runtime checks the actual export.
+    check_context_limit("SFT plumbing endpoint", 32768, 24576)
     return apply(
         "long-loop/endpoint-probe",
         probe,

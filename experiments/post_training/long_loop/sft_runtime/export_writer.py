@@ -29,7 +29,7 @@ from experiments.post_training.long_loop.sft_runtime.model import (
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 5
+EXPORT_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,7 @@ class ExportConfig:
     model: GrugModelConfig
     destination: str
     source_revision: str
+    max_position_embeddings: int
     expert_axis_size: int = 1
     replica_axis_size: int = 1
 
@@ -58,6 +59,9 @@ def export_weights(
         raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
     root = StoragePath(config.destination)
     hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
+    if config.max_position_embeddings < config.model.max_seq_len:
+        raise ValueError("Export context bound is smaller than the training sequence length")
+    hf_config["max_position_embeddings"] = config.max_position_embeddings
     request = {
         "export_version": EXPORT_VERSION,
         "weights_kind": weights_kind,

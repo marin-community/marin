@@ -89,11 +89,14 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
         # the second pipeline stage; otherwise Bridge silently skips the experts.
         destination = tmp_path / "hf"
         export_weights(
-            ExportConfig("in-memory-initialized-base", "test", model, str(destination), "a" * 40),
+            ExportConfig(
+                "in-memory-initialized-base", "test", model, str(destination), "a" * 40, max_position_embeddings=262144
+            ),
             lambda checkpoint, metadata_digest, model_config, export_mesh: actual.params,
             weights_kind="test_frozen_router",
         )
         assert json.loads((destination / "config.json").read_text())["grugmoe_artifact_schema_version"] == 2
+        assert json.loads((destination / "config.json").read_text())["max_position_embeddings"] == 262144
         index = json.loads((destination / "model.safetensors.index.json").read_text())["weight_map"]
         tensors = {}
         for shard in set(index.values()):

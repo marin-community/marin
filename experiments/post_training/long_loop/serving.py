@@ -57,6 +57,13 @@ SNOWBALL_CONTEXT_LIMIT = 262144
 
 
 def snowball_context_override(requested_window: int) -> dict[str, int]:
-    if requested_window > SNOWBALL_CONTEXT_LIMIT:
-        raise ValueError("Requested context exceeds the pinned Snowball base configuration")
+    check_context_limit("Snowball", SNOWBALL_CONTEXT_LIMIT, requested_window)
     return {"max_position_embeddings": SNOWBALL_CONTEXT_LIMIT}
+
+
+def check_context_limit(model: str, max_position_embeddings: int, max_model_len: int) -> None:
+    if max_model_len > max_position_embeddings:
+        raise ValueError(
+            f"{model}: requested max_model_len={max_model_len} exceeds "
+            f"max_position_embeddings={max_position_embeddings}"
+        )

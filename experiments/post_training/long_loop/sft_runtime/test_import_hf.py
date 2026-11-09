@@ -76,7 +76,14 @@ def test_hf_import_preserves_experts_through_native_restore(tmp_path):
     assert {row["name"] for row in verification["tensors"]} == set(source)
     exported = tmp_path / "exported"
     export_weights(
-        ExportConfig(str(destination / "step-0"), "test-digest", config, str(exported), "a" * 40),
+        ExportConfig(
+            str(destination / "step-0"),
+            "test-digest",
+            config,
+            str(exported),
+            "a" * 40,
+            max_position_embeddings=config.max_seq_len,
+        ),
         lambda checkpoint, digest, config, mesh: loaded,
         weights_kind="snowball_sft_frozen_router",
     )
