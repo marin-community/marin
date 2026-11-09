@@ -91,6 +91,19 @@ def test_top_level_import_reaches_transitive_dependents(tmp_path: Path) -> None:
     assert "zephyr" not in scopes_in(matrix), "a lazy import must not propagate"
 
 
+def test_forge_source_change_selects_external_importers_and_its_dedicated_suite(tmp_path: Path) -> None:
+    write(tmp_path, "lib/forge/src/forge/__init__.py")
+    write(tmp_path, "lib/forge/src/forge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/driver.py", "from forge.events import Event\n")
+    write(tmp_path, "lib/iris/tests/test_driver.py", "from iris import driver\n")
+
+    selection = select_changed_tests(["lib/forge/src/forge/events.py"], tmp_path)
+
+    assert leg_paths(selection.matrix, "iris") == ["lib/iris/tests/test_driver.py"]
+    assert "forge-unit" in selection.suites
+
+
 def test_selection_is_empty_when_nothing_depends_on_the_change(tmp_path: Path) -> None:
     _workspace(tmp_path)
     write(tmp_path, "lib/rigging/src/rigging/unused.py", "X = 1\n")
@@ -394,12 +407,16 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     [
         (
             "lib/taskcompendium/src/taskcompendium/lowering.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["forge-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
+        (
+            "lib/rolloutengine/src/rolloutengine/engine.py",
+            ["forge-unit", "rolloutengine-unit", "skyrl-wheel", "taskforge-unit"],
+        ),
         (
             "lib/shellbox/src/shellbox/machine.py",
             [
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "shellbox-unit",
@@ -411,6 +428,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         (
             "lib/shellbox/tests/test_docker_machine.py",
             [
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "shellbox-unit",
@@ -422,6 +440,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         (
             "lib/shellbox/pyproject.toml",
             [
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "shellbox-unit",
@@ -432,12 +451,13 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            ["forge-unit", "rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         (
             "lib/rigging/src/rigging/message.py",
             [
                 "evalchemy-unit",
+                "forge-unit",
                 "harbor-unit",
                 "rolloutengine-unit",
                 "skyrl-wheel",
@@ -447,11 +467,12 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
-        ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
-        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "forge-unit", "harbor-unit", "skyrl-wheel"]),
+        ("lib/iris/src/iris/client/client.py", ["forge-unit", "iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
+        ("lib/taskforge/src/taskforge/llm/glm_client.py", ["forge-unit", "taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("lib/forge/src/forge/unimported.py", ["forge-unit"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
