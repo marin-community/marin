@@ -39,7 +39,7 @@ import numpy as np
 from haliax import Axis
 from levanter import callbacks
 from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
-from levanter.callbacks.profiler import ProfilerConfig, XprofUploadConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import NamedLmDataset
@@ -50,7 +50,7 @@ from levanter.models.snowball import SnowballConfig, num_long_attention_layers
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import StepInfo, Trainer, TrainerConfig
-from levanter.utils.flop_utils import lm_flops_per_token
+from levanter.utils.flop_utils import AttentionFlops, lm_attention_flops_per_token, lm_flops_per_token
 from levanter.utils.mesh import MeshConfig
 
 logger = logging.getLogger("snowball_synthetic")
@@ -104,6 +104,18 @@ def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int)
         num_experts_per_tok=cfg.num_experts_per_token,
         num_shared_experts=1,
         shared_intermediate_dim=cfg.shared_expert_intermediate_dim,
+        sliding_window=cfg.sliding_window,
+        num_full_attention_layers=num_long_attention_layers(cfg.num_layers),
+    )
+
+
+def snowball_attention_flops_per_token(cfg: SnowballConfig, seq_len: int) -> AttentionFlops:
+    """The attention-map part of ``snowball_flops_per_token``, non-causal as charged there and causal."""
+    return lm_attention_flops_per_token(
+        hidden_dim=cfg.hidden_dim,
+        num_heads=cfg.num_heads,
+        num_layers=cfg.num_layers,
+        seq_len=seq_len,
         sliding_window=cfg.sliding_window,
         num_full_attention_layers=num_long_attention_layers(cfg.num_layers),
     )
@@ -185,10 +197,24 @@ def build_trainer_config(args: argparse.Namespace, preset: Preset, run_id: str, 
             start_step=args.profile_start,
             num_steps=args.profile_steps,
             upload=XprofUploadConfig(enabled=False),
+            # The HLO modules let trace tools attribute kernels to HLO ops (spurix's xplane buckets).
+            profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
         ),
         jax_compilation_cache_dir=args.compilation_cache_dir,
         log_jaxprs=False,
         log_xla_hlo=False,
+    )
+
+
+def log_model_flops(flops_per_example: float, attention_per_token: AttentionFlops, seq_len: int) -> None:
+    """Log the FLOPs per example that MFU charges (3x forward) and their attention-map part, non-causal and causal."""
+    if jax.process_index() != 0:
+        return
+    logger.info(
+        "model flops per example: total=%r attention_noncausal=%r attention_causal=%r",
+        flops_per_example,
+        3 * attention_per_token.noncausal * seq_len,
+        3 * attention_per_token.causal * seq_len,
     )
 
 
@@ -257,6 +283,7 @@ def main() -> None:
         Vocab = Axis("vocab", model_cfg.vocab_size)
         model_key, training_key = jrandom.split(jrandom.PRNGKey(trainer_cfg.seed))
         flops_per_example = 3 * snowball_flops_per_token(model_cfg, Vocab.size, Pos.size) * Pos.size
+        log_model_flops(flops_per_example, snowball_attention_flops_per_token(model_cfg, Pos.size), Pos.size)
 
         trainer.add_hook(callbacks.pbar_logger(total=args.steps), every=1)
         trainer.add_hook(callbacks.log_step_info(args.steps, trainer_cfg.batch_schedule), every=1)

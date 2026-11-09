@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Snowball synthetic harness and the June Snowball trainer must charge the same FLOPs per example."""
+"""The Snowball synthetic harness and the June Snowball trainer must charge the same FLOPs per example, attention
+included."""
 
 from levanter.models.snowball import SnowballConfig, num_long_attention_layers
 
-from experiments.grug.snowball_synthetic.train import snowball_flops_per_token
+from experiments.grug.snowball_synthetic.train import snowball_attention_flops_per_token, snowball_flops_per_token
 from experiments.june_tpu_67b_a2b.moe import train as june_train
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 
@@ -32,3 +33,6 @@ def test_harness_flops_match_the_june_trainer():
     )
     assert harness_flops_per_example == june_flops_per_example
     assert num_long_attention_layers(snowball.num_layers) == summary["throughput/num_full_attention_layers"] == 7
+    attention = snowball_attention_flops_per_token(snowball, june.max_seq_len)
+    assert 3 * attention.noncausal * june.max_seq_len == summary[june_train.ATTENTION_FLOPS_PER_EXAMPLE_KEY]
+    assert 3 * attention.causal * june.max_seq_len == summary[june_train.CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY]
