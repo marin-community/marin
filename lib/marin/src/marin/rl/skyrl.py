@@ -42,6 +42,8 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 SKYRL_PROJECT = Path("vendor/skyrl")
+# The SkyRL runtime is packaged separately, so its matching limit is checked there too.
+_COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -601,7 +603,7 @@ def _validate_skyrl_recipe(
         plan = topology.role_plan
         supported = (
             plan.policy_num_nodes == 1
-            and plan.policy_num_gpus_per_node == 4
+            and plan.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
             and plan.num_inference_engines == 1
             and plan.inference_engine_tensor_parallel_size == 1
             and plan.inference_engine_pipeline_parallel_size == 1
