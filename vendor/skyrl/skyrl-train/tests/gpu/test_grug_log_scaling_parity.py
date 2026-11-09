@@ -1,7 +1,7 @@
 """Megatron Grug log scaling against the committed JAX Hero oracle.
 
 The oracle is a tiny Hero-shaped model whose floor is 16 keys, so most positions of its two documents
-are scaled, and whose log-probabilities move by about 0.6 nats when log scaling is turned off. Megatron
+are scaled, and whose log-probabilities move by 0.35 to 0.6 nats when log scaling is turned off. Megatron
 must match the scaled oracle unpacked, packed, and packed under CP2, where each document's positions
 come from the zigzag chunks. With the config fields null, it must match the unscaled oracle instead.
 """
