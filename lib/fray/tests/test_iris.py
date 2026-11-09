@@ -137,26 +137,32 @@ class TestConvertConstraintsDeviceAlternatives:
 
 def test_unpickled_actor_handle_reresolves_endpoint_in_receiver_context(monkeypatch):
     """A pickled handle carries only its endpoint name; the receiver resolves it through its own Iris context."""
-    actor_clients = []
+    resolved_names = []
 
     def actor_client(actor_resolver, endpoint_name):
-        actor_clients.append((actor_resolver, endpoint_name))
+        resolved_names.append(actor_resolver.resolve(endpoint_name).name)
         return SimpleNamespace(ping=lambda: "pong")
 
     monkeypatch.setattr(iris_backend, "ActorClient", actor_client)
 
-    sender_resolver = MagicMock()
+    sender_lookups = []
+    sender_resolver = SimpleNamespace(resolve=lambda name: sender_lookups.append(name) or SimpleNamespace(name=name))
     handle = IrisActorHandle("my-actor", resolver=sender_resolver)
     assert handle.ping() == "pong"
 
     restored = pickle.loads(pickle.dumps(handle))
-    receiver_client = cast(IrisClient, SimpleNamespace(_cluster_client=object()))
-    with iris_ctx_scope(IrisContext(job_id=JobName.from_string("/user/receiver"), client=receiver_client)):
+    receiver_lookups = []
+    receiver_cluster = SimpleNamespace(list_endpoint_instances=lambda name: receiver_lookups.append(name) or [])
+    receiver_ctx = IrisContext(
+        job_id=JobName.from_string("/user/receiver"),
+        client=cast(IrisClient, SimpleNamespace(_cluster_client=receiver_cluster)),
+    )
+    with iris_ctx_scope(receiver_ctx):
         assert restored.ping() == "pong"
 
-    assert [name for _, name in actor_clients] == ["my-actor", "my-actor"]
-    assert actor_clients[0][0] is sender_resolver
-    assert actor_clients[1][0] is not sender_resolver
+    assert resolved_names == ["my-actor", "my-actor"]
+    assert sender_lookups == ["my-actor"]
+    assert receiver_lookups == [f"{receiver_ctx.namespace}/my-actor"]
 
 
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
