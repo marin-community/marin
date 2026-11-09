@@ -286,6 +286,7 @@ def test_child_queue_deadline_resets_for_next_child_but_not_a_running_one(monkey
     class ProgressingCluster(FakeClusterClient):
         def list_jobs(self, **kwargs):
             finished = not sequential and clock["now"] >= 5
+            first_finished = finished or (sequential and clock["now"] >= 2)
             self.jobs = [
                 job_pb2.JobStatus(
                     job_id=parent_id,
@@ -294,11 +295,8 @@ def test_child_queue_deadline_resets_for_next_child_but_not_a_running_one(monkey
                 ),
                 job_pb2.JobStatus(
                     job_id=f"{parent_id}/first",
-                    state=(
-                        job_pb2.JOB_STATE_SUCCEEDED
-                        if finished or (sequential and clock["now"] >= 2)
-                        else job_pb2.JOB_STATE_RUNNING
-                    ),
+                    state=job_pb2.JOB_STATE_SUCCEEDED if first_finished else job_pb2.JOB_STATE_RUNNING,
+                    task_state_counts={"succeeded": 1} if first_finished else {"running": 1},
                 ),
             ]
             if sequential and clock["now"] >= 2:
