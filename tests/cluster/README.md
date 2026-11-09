@@ -54,3 +54,30 @@ then selects these tests; `--import-mode=importlib` is re-added because `-o addo
 drops it and the `tests.cluster.*` imports need it. `--timeout=0` disables the 60s
 per-test cap (a separate `timeout` ini that `-o addopts=` does not clear) for the
 TPU smokes, which carry no per-test timeout marker; the vLLM e2es set their own.
+
+## Snowball training-forward parity
+
+What: `vllm/test_snowball_training_parity.py` builds Snowball through `train_lm`'s HF load and trainer state with
+the identity recipe's precision settings, then scores the trainer's compute view, through the training loss, at
+every position of the 64 representative prompts against a stored vLLM reference. One H100x8 job, forward only.
+
+Run:
+
+```bash
+uv run pytest tests/cluster/vllm/test_snowball_training_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
+```
+
+Pass: per prompt category and past the 2,048-token window, p99 <= 0.70 and max <= 3.5 nats of absolute log-prob
+difference, over vLLM's top-20 tokens above p = 1e-3 and over the actual next tokens; zero dropped MoE assignments.
+
+Notes:
+
+- The test skips until `VLLM_POSITION_REFERENCE_SHA256` in `lib/marin/src/marin/testing/inference/snowball.py`
+  names a staged reference. `vllm/generate_snowball_position_reference.py --output <uri> --run` writes one and
+  logs its sha256 and URL.
+- The gate scores every prompt cropped to its first 8,192 tokens, the SFT training length, under `torch_order`,
+  the recipe's attention. Prompts longer than that are also scored whole under FA4 and reported as `_fa4_full`
+  groups, not gated.
+- `TrainingForwardSettings` switches each precision fix for threshold ablations (arms such as `bias+dot off`);
+  only the defaults are gated.
