@@ -6,24 +6,24 @@
 from collections import defaultdict
 from functools import cache, partial
 
+from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
     code,
     commonsense,
     financebench,
     gsm8k,
     instruction_following,
-    lambada,
-    multiple_choice,
-    question_answering,
     jee,
+    lambada,
     long_context,
     math,
     mmlu,
+    multiple_choice,
     nupa,
+    question_answering,
     reasoning,
     simpleqa,
 )
-from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
 

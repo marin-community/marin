@@ -3,14 +3,14 @@
 
 """Classic MMLU subject populations and pinned development pools."""
 
-from dataclasses import replace
-
 from taskcompendium.evaluation.spec import LikelihoodNormalization
 from taskcompendium.importers.evaluation_harness import HarnessTemplate
+from taskcompendium.pipeline.inputs import SourceFormat
 
-from experiments.evaluation.prompt_compilation import lm_eval_multiple_choice
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
+from experiments.evaluation.prompt_compilation import lm_eval_multiple_choice
+from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource
 
 MMLU_REVISION = "c30699e8356da336a370243923dbaf21066bb9fe"
@@ -80,21 +80,23 @@ def sources(shots: int = 5) -> list[RlDataSource[EvaluationCorpusRecipe]]:
     raw = (LikelihoodNormalization.RAW,)
     result = []
     for subject, population in MMLU_POPULATIONS.items():
-        source = lm_eval_multiple_choice(name='mmlu-' + subject, repo='cais/mmlu', revision=MMLU_REVISION, file=subject + '/test-00000-of-00001.parquet', population=population, template=HarnessTemplate('mmlu', shots, subject, subject + '/dev-00000-of-00001.parquet'), normalizations=raw)
-        dataset = source.config
-        assert dataset is not None
         result.append(
-            replace(
-                source,
-                config=replace(
-                    dataset,
-                    partition=subject,
-                    protocol=dataset.protocol.model_copy(
-                        update={
-                            "benchmark": "mmlu",
-                        }
-                    ),
+            lm_eval_multiple_choice(
+                name="mmlu-" + subject,
+                benchmark="mmlu",
+                source=HfSource(
+                    "cais/mmlu", MMLU_REVISION, (subject + "/test-00000-of-00001.parquet",), SourceFormat.PARQUET
                 ),
+                population=population,
+                template=HarnessTemplate(
+                    name="mmlu",
+                    num_fewshot=shots,
+                    subject=subject,
+                    fewshot_file=subject + "/dev-00000-of-00001.parquet",
+                ),
+                normalizations=raw,
+                version="2026.11.02",
+                partition=subject,
             )
         )
     return result

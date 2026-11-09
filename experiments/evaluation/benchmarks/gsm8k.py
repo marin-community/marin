@@ -10,8 +10,11 @@ from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.environments import MATH_GRADER
-from experiments.evaluation.benchmarks.question_answering import QuestionAnsweringDataset, question_answering_benchmark
-from experiments.evaluation.prompt_compilation import text_generation_evaluation
+from experiments.evaluation.prompt_compilation import (
+    QuestionAnsweringDataset,
+    lm_eval_text_generation,
+    text_generation_evaluation,
+)
 from experiments.post_training.task_curation.pipeline import HfSource
 
 GSM8K_SOURCE = HfSource(
@@ -24,7 +27,7 @@ GSM8K_SOURCE = HfSource(
 
 def benchmarks() -> list[EvaluationBenchmark]:
     return [
-        question_answering_benchmark(
+        lm_eval_text_generation(
             dataset=QuestionAnsweringDataset(
                 name="gsm8k", source=GSM8K_SOURCE, population=1319, pool_file="main/train-00000-of-00001.parquet"
             ),

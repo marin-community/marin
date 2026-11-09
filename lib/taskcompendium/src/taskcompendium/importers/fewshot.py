@@ -138,7 +138,10 @@ def compile_choice_documents(
     pool: Sequence[Document],
     template: ChoiceTemplate,
 ) -> Iterator[dict[str, Any]]:
-    """Compile complete source order with one sampler and explicit request layout."""
+    """Compile complete source order with one sampler and explicit request layout.
+
+    Request assembly changes require bumping both explicit-template and lm-eval corpus versions.
+    """
     policy = template.fewshot
     sampler, preparation = Random(FEWSHOT_SEED), Random(0)
     for original in documents:

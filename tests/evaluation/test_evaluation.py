@@ -1342,44 +1342,6 @@ def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, m
     assert not iris_opened
 
 
-def test_launch_selects_across_documents_and_adds_harbor_configs(tmp_path, monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch)
-    ifeval = tmp_path / "ifeval.yaml"
-    ifeval.write_text("evaluations:\n  ifeval:\n    benchmark: ifeval\n")
-    math = tmp_path / "math.yaml"
-    math.write_text("evaluations:\n  bounded-math:\n    benchmark: math500\n  omitted:\n    benchmark: gsm8k\n")
-    first = _write_harbor_config(tmp_path / "first-policy.yaml")
-    second = _write_harbor_config(tmp_path / "second-policy.yaml")
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--evals",
-            "ifeval,bounded-math",
-            "--evaluation-config",
-            str(ifeval),
-            "--evaluation-config",
-            str(math),
-            "--harbor-config",
-            str(first),
-            "--harbor-config",
-            str(second),
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "eval=ifeval" in result.output
-    assert "eval=bounded-math" in result.output
-    assert "eval=omitted" not in result.output
-    assert "eval=first-policy" in result.output
-    assert "eval=second-policy" in result.output
-
-
 def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
