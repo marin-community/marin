@@ -30,7 +30,7 @@ def test_completed_export_rejects_index_header_disagreement(tmp_path):
     document["weight_map"] = {"different": "model-00001-of-00001.safetensors"}
     index.write_text(json.dumps(document))
 
-    with pytest.raises(RuntimeError, match="index differs from shard headers"):
+    with pytest.raises(ValueError, match="does not match its shards"):
         verify_completed_hf_model_export(str(tmp_path))
 
 

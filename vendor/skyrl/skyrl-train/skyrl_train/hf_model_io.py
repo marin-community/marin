@@ -13,6 +13,7 @@ from marinskyrl.model_manifest import (
     HF_WEIGHT_INDEX_FILENAME,
     MODEL_MANIFEST_FILENAME,
     ModelManifest,
+    build_safetensors_weight_index,
     read_safetensors_header,
     write_local_model_manifest,
 )
@@ -77,8 +78,9 @@ def verify_completed_hf_model_export(export_path: str) -> None:
     verify_hf_model_export(export_path)
     with io.open_file(manifest_path, "r") as source:
         manifest = ModelManifest.from_mapping(json.load(source), manifest_path)
-    with io.open_file(index_path, "r") as source:
-        weight_map = json.load(source)["weight_map"]
+    with io.open_file(index_path, "rb") as source:
+        index_bytes = source.read()
+    weight_map = json.loads(index_bytes)["weight_map"]
     manifest_files = {entry.path: entry.size for entry in manifest.files}
     export_files = {Path(path).name for path in io.list_dir(export_path)}
     if missing := set(manifest_files) - export_files:
@@ -88,7 +90,7 @@ def verify_completed_hf_model_export(export_path: str) -> None:
         raise RuntimeError(f"HF export manifest omits indexed shards at {export_path}")
     if HF_WEIGHT_INDEX_FILENAME not in manifest_files:
         raise RuntimeError(f"HF export manifest omits its index at {export_path}")
-    header_map = {}
+    shard_headers = {}
     for shard in sorted(shards):
         with io.open_file(join_resource_path(export_path, shard), "rb") as source:
             _header, keys = read_safetensors_header(source, shard)
@@ -96,12 +98,8 @@ def verify_completed_hf_model_export(export_path: str) -> None:
             size = source.tell()
         if size != manifest_files[shard]:
             raise RuntimeError(f"HF export shard size differs from manifest at {export_path}: {shard}")
-        for key in keys:
-            if key in header_map:
-                raise RuntimeError(f"HF export has duplicate tensor {key} at {export_path}")
-            header_map[key] = shard
-    if header_map != weight_map:
-        raise RuntimeError(f"HF export index differs from shard headers at {export_path}")
+        shard_headers[shard] = (size, keys)
+    build_safetensors_weight_index(shard_headers, export_path, existing=index_bytes)
 
 
 def has_completed_hf_model_export(export_path: str) -> bool:
