@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the coordinator with a two-step toy workpiece and controlled stage failures.
+"""Exercise the coordinator with a three-step toy workpiece and controlled stage failures.
 
-``numbers`` writes a resource used by the ``task`` sink. ``SOURCE`` holds the same program as
-module text, as an author writing Python would return it.
+``numbers`` writes a resource and ``grader`` the grader, and the ``task`` sink uses both. ``SOURCE``
+holds the same program as module text, as an author writing Python would return it, and passes the
+restricted loader.
 """
 
 import base64
@@ -17,27 +18,23 @@ from typing import Any, NoReturn
 import pytest
 from pydantic import BaseModel
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
+from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.spec.draft import assemble, requirements
 from taskforge.stage20_triage.verdict import accept
-from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
-from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage30_author.author import (
+    PROGRAM_FILE,
+    AuthorContext,
+    AuthoredProgram,
+    Revision,
+    RevisionKind,
+    static_author,
+)
+from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
     rl_env_build_program,
@@ -45,6 +42,7 @@ from taskforge.stage30_author.program import (
     rl_env_build_step,
 )
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.outputs import Grader
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, TASK_FILE, TaskDraft, run_build
 from taskforge.stage40_build_with_program.step_store import StoreCorruption, model_digest
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
@@ -92,22 +90,30 @@ async def numbers(context: RLEnvBuildContext) -> TaskResource:
     )
 
 
+@rl_env_build_step
+async def grader(context: RLEnvBuildContext) -> Grader:
+    return Grader(
+        package=verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0)),
+        answer_contract="Reply with the product alone.",
+        reference_reply="42",
+        reference_files=(),
+        secret_values=("42",),
+        rejection_ceiling=0.0,
+        prototyped=(),
+    )
+
+
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, proposal: dict[str, str]) -> TaskSpec:
-    grader = verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
-    return TaskSpec(
-        id=context.workpiece_id,
-        context=ConversationInput(events=(TextMessage(role="user", content=proposal["task"]),)),
-        environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"),
-            command_semantics=CommandSemantics.SHELL_SIMULATOR,
-            working_directory="/workspace",
-        ),
-        answer_type=AnswerType.TEXT,
-        answer_format=PlainText(),
-        grader=grader.grader,
-        source=Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
-        resources=ResourceGroups(worker=(numbers,), verifier=grader.resources),
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: Grader, proposal: dict[str, str]) -> TaskSpec:
+    return assemble(
+        context.workpiece_id,
+        proposal["task"],
+        AnswerType.TEXT,
+        PlainText(),
+        grader.package,
+        Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
+        environment=requirements(image=None),
+        files=(numbers,),
     )
 
 
@@ -116,36 +122,27 @@ async def broken(context: RLEnvBuildContext, proposal: dict[str, str]) -> TaskSp
     raise BuildFailure("the numbers do not multiply to the answer")
 
 
-PROGRAM = rl_env_build_program(numbers, sink=task)
+PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 FAILING = rl_env_build_program(sink=broken)
 SOURCE_IMPORTS = """\
 import base64
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
+from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
+from taskforge.spec.draft import assemble, requirements
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.outputs import Grader
 """
 SOURCE = "\n\n".join(
     [
         SOURCE_IMPORTS,
         inspect.getsource(numbers.fn),
+        inspect.getsource(grader.fn),
         inspect.getsource(task.fn),
-        "PROGRAM = rl_env_build_program(numbers, sink=task)\n",
+        "PROGRAM = rl_env_build_program(numbers, grader, sink=task)\n",
     ]
 )
 """``PROGRAM`` as module text. The steps keep their text, so the loaded program has ``PROGRAM``'s digest."""
@@ -159,6 +156,14 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
+NO_SDK_NAMES = SdkExports(defining_modules={})
+"""The walkthrough's programs read no name they leave unbound, so the loader has no SDK name to suggest."""
+
+
+def load_toy_program(source: str) -> RLEnvBuildProgram:
+    return load_program_source(source, NO_SDK_NAMES)
+
+
 def no_call(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("this stage does not run")
 
@@ -166,7 +171,7 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
 STAGES = StageFunctions(
     triage=accept,
     author=static_author(PROGRAM),
-    load_program=load_program_source,
+    load_program=load_toy_program,
     build=run_build,
     validate=validate,
     review=review,
@@ -175,13 +180,15 @@ UNUSED_MODEL_DIGEST = model_digest(UnusedModel(), SAMPLING)
 
 
 class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each revision asked for."""
+    """Returns ``programs`` in turn, the last one from then on, and records each context and revision asked for."""
 
     def __init__(self, *programs: RLEnvBuildProgram):
         self.programs = list(programs)
+        self.contexts: list[AuthorContext] = []
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
+        self.contexts.append(context)
         self.revisions.append(revision)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
@@ -193,9 +200,9 @@ class SourceAuthor:
         self.source = source
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
-        return AuthoredProgram(load_program_source(self.source), self.source)
+        return AuthoredProgram(load_toy_program(self.source), self.source)
 
 
 HOST_FAILURE = BuildInfrastructureFailure("image_pull", "the sandbox image did not pull")
@@ -293,7 +300,7 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
     def load_program(source: str) -> RLEnvBuildProgram:
         loaded.append(source)
-        return load_program_source(source)
+        return load_toy_program(source)
 
     log = InMemoryEventLog()
     stages = replace(STAGES, author=author, load_program=load_program)
@@ -409,8 +416,11 @@ async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
 
 
 async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
-    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)")
-    assert source != SOURCE
+    """The loader refuses a name that nothing binds, so the step declares it global and never assigns it."""
+    declared = "async def numbers(context: RLEnvBuildContext) -> TaskResource:\n"
+    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)").replace(
+        declared, declared + "    global encoded_numbers\n", 1
+    )
     expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
         source, "content_base64=encoded_numbers"
     )
@@ -418,9 +428,9 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
-    """A step opening a missing file is a program bug, not the storage fault the OSError pass-through covers."""
-    source = SOURCE.replace(NUMBERS_FILE, 'InlineFile(content_base64=open("/workspace/does-not-exist.txt").read())')
-    assert source != SOURCE
+    """The restricted loader excludes ``open``, so the step raises FileNotFoundError directly."""
+    missing = '    raise FileNotFoundError(2, "No such file or directory", "/workspace/does-not-exist.txt")\n'
+    source = SOURCE.replace("    return TaskResource(\n", missing + "    return TaskResource(\n", 1)
     expected = (
         "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "
         + program_line(source, "does-not-exist")
@@ -461,11 +471,11 @@ class CutAuthor:
         self.cuts = cuts
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
-        return AuthoredProgram(load_program_source(SOURCE), SOURCE)
+        return AuthoredProgram(load_toy_program(SOURCE), SOURCE)
 
 
 async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):
@@ -506,7 +516,7 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
     ]
 
 
-async def unavailable_author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+async def unavailable_author(context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
 
@@ -611,7 +621,7 @@ async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_rela
     assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
 
 
-async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):
+async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings_and_context(tmp_path):
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
@@ -624,4 +634,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
+    # The author stage and the build stage's call again, as the author returns no source, in each round.
+    directory = tmp_path / "workpieces" / WORKPIECE
+    assert author.contexts == [AuthorContext(WORKPIECE, 0, directory)] * 2 + [AuthorContext(WORKPIECE, 1, directory)] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
