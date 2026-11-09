@@ -42,8 +42,8 @@ from taskcompendium.importers.evalchemy.scorers.long_context import (
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -89,7 +89,7 @@ GRAPHWALKS_CONTEXT_POLICY = ContextPolicy(
 )
 
 
-def mrcr_source(name: str, max_context: int) -> RlDataSource[EvaluationCorpusRecipe]:
+def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name.lower(),
@@ -140,9 +140,9 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvaluationCorpusRec
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
-        mrcr_source("MRCR", 73728),
-        mrcr_source("MRCR-32k", 32704),
-        mrcr_source("MRCR-65k", 65472),
+        mrcr_source(name="MRCR", max_context=73728),
+        mrcr_source(name="MRCR-32k", max_context=32704),
+        mrcr_source(name="MRCR-65k", max_context=65472),
         RlDataSource(
             info=SourceInfo(
                 id="Evalchemy:graphwalks",
@@ -206,7 +206,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
                 if source.config is not None and source.config.protocol.benchmark == "GraphWalks"
             ]
         ),
-        *fixed_benchmarks([mrcr_source("MRCR", 73728)], "evalchemy", {"MRCR": "mrcr"}),
-        *fixed_benchmarks([mrcr_source("MRCR-32k", 32704)], "32k", {"MRCR-32k": "mrcr"}),
-        *fixed_benchmarks([mrcr_source("MRCR-65k", 65472)], "65k", {"MRCR-65k": "mrcr"}),
+        *fixed_benchmarks([mrcr_source(name="MRCR", max_context=73728)], "evalchemy", {"MRCR": "mrcr"}),
+        *fixed_benchmarks([mrcr_source(name="MRCR-32k", max_context=32704)], "32k", {"MRCR-32k": "mrcr"}),
+        *fixed_benchmarks([mrcr_source(name="MRCR-65k", max_context=65472)], "65k", {"MRCR-65k": "mrcr"}),
     ]

@@ -20,13 +20,12 @@ from taskcompendium.importers.evalchemy.scorers.instruction_spec import Instruct
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.benchmarks.environments import (
     IFBENCH_GRADER,
     IFEVAL_GRADER,
 )
-from experiments.evaluation.preparation import chat_source
-from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
-from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_source, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -112,8 +111,26 @@ def instruction_following_evaluation(
 
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
-        instruction_following_evaluation(name='ifeval', benchmark='ifeval', source=HfSource('google/IFEval', IFEVAL_REVISION, ('ifeval_input_data.jsonl',), SourceFormat.JSONL), population=541, profile=InstructionProfile.HARNESS, max_tokens=1280, seed=1234),
-        instruction_following_evaluation(name='ifbench', benchmark='IFBench', source=HfSource('allenai/IFBench_test', IFBENCH_REVISION, ('data/train-00000-of-00001.parquet',), SourceFormat.PARQUET), population=300, profile=InstructionProfile.IFBENCH, max_tokens=1024, seed=42),
+        instruction_following_evaluation(
+            name="ifeval",
+            benchmark="ifeval",
+            source=HfSource("google/IFEval", IFEVAL_REVISION, ("ifeval_input_data.jsonl",), SourceFormat.JSONL),
+            population=541,
+            profile=InstructionProfile.HARNESS,
+            max_tokens=1280,
+            seed=1234,
+        ),
+        instruction_following_evaluation(
+            name="ifbench",
+            benchmark="IFBench",
+            source=HfSource(
+                "allenai/IFBench_test", IFBENCH_REVISION, ("data/train-00000-of-00001.parquet",), SourceFormat.PARQUET
+            ),
+            population=300,
+            profile=InstructionProfile.IFBENCH,
+            max_tokens=1024,
+            seed=42,
+        ),
     ]
 
 

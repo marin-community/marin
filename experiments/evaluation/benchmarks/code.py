@@ -28,18 +28,19 @@ from taskcompendium.importers.evalchemy.code import (
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.evaluation.benchmarks.environments import PYTHON_GRADER
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.benchmarks.environments import PYTHON_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 
 def python_source(
+    *,
     name: str,
     suite: str,
     source: HfSource,
-    rows: int,
+    population: int,
     max_tokens: int,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     completion = suite == "humaneval"
@@ -51,7 +52,7 @@ def python_source(
             origin="Evalchemy",
             family="python-code",
             tags=("eval", "source:evalchemy", "benchmark", "code", "single-turn"),
-            count=rows,
+            count=population,
         ),
         config=EvaluationCorpusRecipe(
             recipe=CurationRecipe(
@@ -79,7 +80,7 @@ def python_source(
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=rows,
+                expected_population=population,
             ),
             item_builder=partial(python_item, generation=TextGeneration() if completion else ChatGeneration()),
         ),
@@ -90,54 +91,54 @@ def python_source(
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         python_source(
-            "humaneval",
-            "humaneval",
-            HfSource(
+            name="humaneval",
+            suite="humaneval",
+            source=HfSource(
                 "openai/openai_humaneval",
                 "7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544",
                 ("openai_humaneval/test-00000-of-00001.parquet",),
                 SourceFormat.PARQUET,
             ),
-            164,
-            1024,
+            population=164,
+            max_tokens=1024,
         ),
         python_source(
-            "HumanEvalPlus",
-            "humanevalplus",
-            HfSource(
+            name="HumanEvalPlus",
+            suite="humanevalplus",
+            source=HfSource(
                 "evalplus/humanevalplus",
                 "d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
                 ("test.jsonl",),
                 SourceFormat.JSONL,
             ),
-            164,
-            1024,
+            population=164,
+            max_tokens=1024,
         ),
         python_source(
-            "MBPPPlus",
-            "mbppplus",
-            HfSource(
+            name="MBPPPlus",
+            suite="mbppplus",
+            source=HfSource(
                 "evalplus/mbppplus",
                 "b2d74c91837c3f2a20c1299ae98133cbe7cfa077",
                 ("data/test-00000-of-00001-d5781c9c51e02795.parquet",),
                 SourceFormat.PARQUET,
                 read=read_mbpp,
             ),
-            378,
-            1024,
+            population=378,
+            max_tokens=1024,
         ),
         python_source(
-            "CruxEval",
-            "cruxeval",
-            HfSource(
+            name="CruxEval",
+            suite="cruxeval",
+            source=HfSource(
                 "cruxeval-org/cruxeval",
                 "b96af0450242eb4da433032b90998f25588a5d0f",
                 ("test.jsonl",),
                 SourceFormat.JSONL,
                 read=read_crux,
             ),
-            1600,
-            2048,
+            population=1600,
+            max_tokens=2048,
         ),
     ]
 

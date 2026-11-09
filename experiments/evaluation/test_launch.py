@@ -147,6 +147,53 @@ def test_launch_preflights_prepared_task_with_hosted_judge(
     assert batch.judge.api_model == "qwen3-0.6b"
 
 
+def test_launch_selects_across_documents_and_adds_harbor_configs(
+    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
+):
+    ifeval = tmp_path / "ifeval.yaml"
+    ifeval.write_text("evaluations:\n  ifeval:\n    benchmark: ifeval\n")
+    math = tmp_path / "math.yaml"
+    math.write_text("evaluations:\n  bounded-math:\n    benchmark: math500\n  omitted:\n    benchmark: gsm8k\n")
+    policies = []
+    for name in ("first-policy", "second-policy"):
+        policy = harbor_task_workspace / f"{name}.json"
+        policy.write_text(
+            json.dumps(
+                {
+                    "environment": {"type": "local"},
+                    "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                    "datasets": [{"path": "dataset"}],
+                }
+            )
+        )
+        policies.append(policy)
+    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
+
+    command = _command(tmp_path)
+    command[command.index("--evals") + 1] = "ifeval,bounded-math"
+    command.extend(
+        [
+            "--evaluation-config",
+            str(ifeval),
+            "--evaluation-config",
+            str(math),
+            "--harbor-config",
+            str(policies[0]),
+            "--harbor-config",
+            str(policies[1]),
+        ]
+    )
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code == 0, result.output
+    assert {evaluation.identity.eval_ref.name for evaluation in submitted_batches[0].evaluations} == {
+        "ifeval",
+        "bounded-math",
+        "first-policy",
+        "second-policy",
+    }
+
+
 @pytest.mark.parametrize("explicit_run_id", [True, False])
 def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
     tmp_path, submitted_batches, explicit_run_id, monkeypatch

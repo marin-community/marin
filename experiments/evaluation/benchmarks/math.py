@@ -19,10 +19,10 @@ from taskcompendium.importers.evalchemy.scorers.math import CHAT_REQUEST_STOPS
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.evaluation.benchmarks.environments import MATH_GRADER, MATH_JUDGE_GRADER
-from experiments.evaluation.prompt_compilation import text_generation_evaluation
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.benchmarks.environments import MATH_GRADER, MATH_JUDGE_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
+from experiments.evaluation.prompt_compilation import text_generation_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -47,7 +47,24 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         ("precalculus", 546),
     ):
         result.append(
-            text_generation_evaluation(name='minerva_math-' + subject, benchmark='minerva_math', source=HfSource('EleutherAI/hendrycks_math', MATH_REVISION, (subject + '/test-00000-of-00001.parquet',), SourceFormat.PARQUET), population=population, template=minerva_template(subject), metrics=('exact_match,none', 'math_verify,none'), sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=None, stop=('Problem:',), chat_template_kwargs={}), scorer='minerva_math', grader=MATH_GRADER)
+            text_generation_evaluation(
+                name="minerva_math-" + subject,
+                benchmark="minerva_math",
+                source=HfSource(
+                    "EleutherAI/hendrycks_math",
+                    MATH_REVISION,
+                    (subject + "/test-00000-of-00001.parquet",),
+                    SourceFormat.PARQUET,
+                ),
+                population=population,
+                template=minerva_template(subject),
+                metrics=("exact_match,none", "math_verify,none"),
+                sampling=Sampling(
+                    temperature=0, top_p=None, top_k=None, max_tokens=None, stop=("Problem:",), chat_template_kwargs={}
+                ),
+                scorer="minerva_math",
+                grader=MATH_GRADER,
+            )
         )
     return result
 
@@ -63,11 +80,12 @@ def bundled_source(directory: str, filename: str, sha256: str) -> UrlSource:
 
 
 def math_dataset(
+    *,
     name: str,
     benchmark: str,
     source: HfSource | UrlSource,
     answer_field: str,
-    rows: int,
+    population: int,
     trials: int,
     temperature: float,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
@@ -86,7 +104,7 @@ def math_dataset(
             origin="Evalchemy",
             family="math-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math"),
-            count=rows,
+            count=population,
         ),
         config=EvaluationCorpusRecipe(
             recipe,
@@ -106,7 +124,7 @@ def math_dataset(
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
-                expected_population=rows,
+                expected_population=population,
             ),
             partial(chat_item, response_selection="final_or_complete_boxed_reasoning"),
         ),
@@ -163,28 +181,28 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
 def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         math_dataset(
-            "math500",
-            "MATH500",
-            HfSource("HuggingFaceH4/MATH-500", MATH500_REVISION, ("test.jsonl",), SourceFormat.JSONL),
-            "answer",
-            500,
-            1,
-            0,
+            name="math500",
+            benchmark="MATH500",
+            source=HfSource("HuggingFaceH4/MATH-500", MATH500_REVISION, ("test.jsonl",), SourceFormat.JSONL),
+            answer_field="answer",
+            population=500,
+            trials=1,
+            temperature=0,
         ),
         math_dataset(
-            "aime24",
-            "AIME24",
-            UrlSource(
+            name="aime24",
+            benchmark="AIME24",
+            source=UrlSource(
                 f"https://raw.githubusercontent.com/marin-community/marin/{MARIN_SOURCE_REVISION}/"
                 "vendor/evalchemy/eval/chat_benchmarks/AIME24/data/aime24.json",
                 AIME24_SHA256,
                 "aime24.jsonl",
                 SourceFormat.JSONL,
             ),
-            "expected_answer",
-            30,
-            10,
-            0.7,
+            answer_field="expected_answer",
+            population=30,
+            trials=10,
+            temperature=0.7,
         ),
     ]
 
@@ -192,22 +210,22 @@ def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     # AIME25 and AMC23 source generation sets do_sample=False despite temperature=.7.
     aime = math_dataset(
-        "aime25",
-        "AIME25",
-        bundled_source("AIME25", "aime25.json", AIME25_SHA256),
-        "answer",
-        30,
-        10,
-        0,
+        name="aime25",
+        benchmark="AIME25",
+        source=bundled_source("AIME25", "aime25.json", AIME25_SHA256),
+        answer_field="answer",
+        population=30,
+        trials=10,
+        temperature=0,
     )
     amc = math_dataset(
-        "amc23",
-        "AMC23",
-        bundled_source("AMC23", "amc23.json", AMC23_SHA256),
-        "answer",
-        40,
-        10,
-        0,
+        name="amc23",
+        benchmark="AMC23",
+        source=bundled_source("AMC23", "amc23.json", AMC23_SHA256),
+        answer_field="answer",
+        population=40,
+        trials=10,
+        temperature=0,
     )
     assert aime.config is not None and amc.config is not None
     assert aime.config.protocol.sampling is not None and amc.config.protocol.sampling is not None

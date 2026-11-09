@@ -3,7 +3,7 @@
 
 """Multiple-choice source data and supported lm-eval configurations."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
@@ -34,16 +34,15 @@ def _compile(
     normalizations: tuple[LikelihoodNormalization, ...],
     metric_kind: MetricKind,
     scoring: Literal["most_likely", "probability_mass"],
-    version: str,
+    fewshot_version: str,
 ) -> tuple[RlDataSource[EvaluationCorpusRecipe], ...]:
     source = dataset.source
     shots = variant.num_fewshot
     assert shots is not None
     compiled = lm_eval_multiple_choice(
         name=dataset.name,
-        repo=source.repo,
-        revision=source.revision,
-        file=source.files[0],
+        benchmark=dataset.benchmark,
+        source=source,
         population=dataset.population,
         template=HarnessTemplate(
             name=dataset.name, num_fewshot=shots, fewshot_file=dataset.pool_file or source.files[0]
@@ -51,16 +50,9 @@ def _compile(
         normalizations=normalizations,
         metric_kind=metric_kind,
         scoring=scoring,
-        version=version if shots else "2026.11.02",
+        version=fewshot_version if shots else "2026.11.02",
     )
-    recipe = compiled.config
-    assert recipe is not None
-    return (
-        replace(
-            compiled,
-            config=replace(recipe, protocol=recipe.protocol.model_copy(update={"benchmark": dataset.benchmark})),
-        ),
-    )
+    return (compiled,)
 
 
 def _benchmark(
@@ -70,13 +62,18 @@ def _benchmark(
     normalizations: tuple[LikelihoodNormalization, ...],
     metric_kind: MetricKind = MetricKind.BINARY,
     scoring: Literal["most_likely", "probability_mass"] = "most_likely",
-    version: str = "2026.11.02",
+    fewshot_version: str = "2026.11.02",
 ) -> EvaluationBenchmark:
     return EvaluationBenchmark(
         name=dataset.benchmark,
         variants=tuple(ProtocolVariant("harness", count, None) for count in shots),
         build=partial(
-            _compile, dataset, normalizations=normalizations, metric_kind=metric_kind, scoring=scoring, version=version
+            _compile,
+            dataset,
+            normalizations=normalizations,
+            metric_kind=metric_kind,
+            scoring=scoring,
+            fewshot_version=fewshot_version,
         ),
     )
 
@@ -148,7 +145,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             ),
             shots=(0, 10),
             normalizations=raw,
-            version="2026.11.05.2",
+            fewshot_version="2026.11.05.2",
         ),
         _benchmark(
             dataset=MultipleChoiceDataset(
@@ -165,7 +162,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             ),
             shots=(0, 10),
             normalizations=(LikelihoodNormalization.CHARACTERS, LikelihoodNormalization.RAW),
-            version="2026.11.05.2",
+            fewshot_version="2026.11.05.2",
         ),
         _benchmark(
             dataset=MultipleChoiceDataset(
@@ -216,6 +213,6 @@ def benchmarks() -> list[EvaluationBenchmark]:
             normalizations=raw,
             metric_kind=MetricKind.CONTINUOUS,
             scoring="probability_mass",
-            version="2026.11.05.2",
+            fewshot_version="2026.11.05.2",
         ),
     ]

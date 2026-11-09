@@ -219,7 +219,13 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
         "\n".join(json.dumps({"problem": f"{index} + 1?", "answer": str(index + 1)}) for index in range(2)) + "\n"
     )
     source = math_dataset(
-        "colors", "colors", HfSource("fixture/colors", "a" * 40, ("test.jsonl",), SourceFormat.JSONL), "answer", 2, 1, 0
+        name="colors",
+        benchmark="colors",
+        source=HfSource("fixture/colors", "a" * 40, ("test.jsonl",), SourceFormat.JSONL),
+        answer_field="answer",
+        population=2,
+        trials=1,
+        temperature=0,
     )
     dataset = source.config
     assert dataset is not None and dataset.recipe.grader is not None
