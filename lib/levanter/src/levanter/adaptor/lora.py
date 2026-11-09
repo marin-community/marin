@@ -54,6 +54,7 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Unio
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -582,7 +583,7 @@ def save_merged_hf_checkpoint_callback(
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
     model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
-    field_dtype_overrides: Mapping[str, str] | None = None,
+    field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -599,7 +600,7 @@ def save_merged_hf_checkpoint_callback(
         converter: the converter to use to convert the base model to HF
         base_model: the base model to save
         upload_to_hf: the repo to upload to. If a string, will be interpreted as a repo name + branch
-        field_dtype_overrides: model attribute name to the dtype name it is exported in
+        field_dtype_overrides: model attribute name to the dtype it is exported in
         **hf_upload_kwargs:
     Returns:
         callback
@@ -642,7 +643,7 @@ def save_merged_hf_model(
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
-    field_dtype_overrides: Mapping[str, str] | None = None,
+    field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **upload_kwargs,
 ):
     """

@@ -64,7 +64,7 @@ def initial_state(model):
         adaptor.apply(model, key=jax.random.PRNGKey(0)),
         key=jax.random.PRNGKey(0),
         is_trainable=adaptor.trainable_filter(model),
-        mp=with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16"), {"router_bias": "float32"}),
+        mp=with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16"), {"router_bias": jnp.dtype("float32")}),
     )
 
 
@@ -144,13 +144,13 @@ def fp32_snowball(tmp_path, local_gpt2_tokenizer_path):
             save_tokenizer=False,
             save_reference_code=False,
             dtype=jnp.bfloat16,
-            field_dtype_overrides={"router_bias": "float32"},
+            field_dtype_overrides={"router_bias": jnp.dtype("float32")},
         )
         source_converter = converter.replaced(reference_checkpoint=RepoRef(source_path))
         trainer_config = TrainerConfig(
             id="fp32-router-bias",
             mp=jmp.get_policy("p=f32,c=bf16"),
-            field_dtype_overrides={"router_bias": "float32"},
+            field_dtype_overrides={"router_bias": jnp.dtype("float32")},
             tracker=(),
             require_accelerator=False,
             load_checkpoint=False,
@@ -333,7 +333,7 @@ def test_frozen_adaptor_export_hook_carries_field_dtype_overrides(tmp_path):
     hooks = []
     trainer = types.SimpleNamespace(
         run_id="run",
-        config=types.SimpleNamespace(checkpointer=None, field_dtype_overrides={"router_bias": "float32"}),
+        config=types.SimpleNamespace(checkpointer=None, field_dtype_overrides={"router_bias": jnp.dtype("float32")}),
         add_hook=lambda hook, *, every: hooks.append((hook, every)),
     )
     adaptor.install_export_hooks(
@@ -349,4 +349,4 @@ def test_frozen_adaptor_export_hook_carries_field_dtype_overrides(tmp_path):
     [(saved, kwargs)] = saves
     assert saved is model
     assert kwargs["dtype"] == jnp.bfloat16
-    assert kwargs["field_dtype_overrides"] == {"router_bias": "float32"}
+    assert kwargs["field_dtype_overrides"] == {"router_bias": jnp.dtype("float32")}

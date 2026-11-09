@@ -876,12 +876,12 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
-    field_dtype_overrides: dict[str, str] = field(default_factory=dict)
-    """Model attribute name, matched at any depth (e.g. ``router_bias``), to the floating dtype name it keeps.
+    field_dtype_overrides: dict[str, jnp.dtype] = field(default_factory=dict)
+    """Model attribute name, matched at any depth (e.g. ``router_bias``), to the floating dtype it keeps.
 
     ``mp`` casts an overridden field only to its own dtype: in the trainer state and the compute view, on HF load in
     train_lm, train_dpo and lora_lm, and in HF exports. The eval and sampling entry points still load HF checkpoints in
-    the compute dtype. Example: ``{"router_bias": "float32"}``.
+    the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
     """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None

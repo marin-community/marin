@@ -4,8 +4,9 @@
 """Give named model fields their own floating dtype under a mixed-precision policy.
 
 Some small arrays, such as MoE router biases, lose meaning when rounded to bfloat16. An override maps an attribute
-name, matched exactly at any depth, to a floating dtype name such as ``"float32"``. The policy casts that field to
-its own dtype wherever it casts: on load, in the trainer state, in the compute view and in HF exports.
+name, matched exactly at any depth, to a floating ``jnp.dtype``; in YAML it is written ``{router_bias: float32}``.
+The policy casts that field to its own dtype wherever it casts: in the trainer state, in the compute view, on HF
+load and in HF exports.
 """
 
 import dataclasses
@@ -20,22 +21,13 @@ import numpy as np
 
 T = TypeVar("T")
 
-FieldDtypes = tuple[tuple[str, np.dtype], ...]
-"""Parsed overrides: ``(field name, dtype)`` pairs sorted by name, hashable so a policy can be a static jit argument."""
+FieldDtypes = tuple[tuple[str, jnp.dtype], ...]
+"""Overrides as ``(field name, dtype)`` pairs sorted by name, hashable so a policy can be a static jit argument."""
 
 
-def parse_field_dtype_overrides(overrides: Mapping[str, str]) -> FieldDtypes:
-    """Parse dtype names once with ``jnp.dtype``; raise on unknown names and non-floating dtypes."""
-    parsed = []
-    for name, dtype_name in sorted(overrides.items()):
-        try:
-            dtype = jnp.dtype(dtype_name)
-        except TypeError as error:
-            raise ValueError(f"field dtype override {name}: unknown dtype {dtype_name!r}") from error
-        if not jnp.issubdtype(dtype, jnp.floating):
-            raise ValueError(f"field dtype override {name}: {dtype_name!r} is not a floating dtype")
-        parsed.append((name, dtype))
-    return tuple(parsed)
+def sorted_field_dtypes(overrides: Mapping[str, jnp.dtype] | None) -> FieldDtypes:
+    """``overrides`` as sorted, hashable ``(field name, dtype)`` pairs."""
+    return tuple(sorted((overrides or {}).items()))
 
 
 def _is_floating_array(leaf) -> bool:
@@ -63,12 +55,15 @@ def cast_with_field_dtypes(tree: T, dtype: jnp.dtype | None, field_dtypes: Field
     return jax.tree_util.tree_map_with_path(cast_leaf, tree, is_leaf=lambda leaf: isinstance(leaf, hax.NamedArray))
 
 
-def check_field_dtype_overrides(model, overrides: Mapping[str, str]) -> None:
+def check_field_dtype_overrides(model, overrides: Mapping[str, jnp.dtype]) -> None:
     """Raise if an override is not a floating dtype or names no floating array in ``model``.
 
-    A typo in a field or dtype name cannot silently do nothing.
+    A typo in a field name cannot silently do nothing. Unknown dtype names already fail when the config is decoded.
     """
-    fields = frozenset(name for name, _ in parse_field_dtype_overrides(overrides))
+    for name, dtype in overrides.items():
+        if not jnp.issubdtype(dtype, jnp.floating):
+            raise ValueError(f"field dtype override {name}: {dtype} is not a floating dtype")
+    fields = frozenset(overrides)
     if not fields:
         return
     matched = set()
@@ -99,12 +94,11 @@ class FieldDtypePolicy(jmp.Policy):
         return cast_with_field_dtypes(x, self.compute_dtype, self.field_dtypes)
 
 
-def with_field_dtype_overrides(mp: jmp.Policy, overrides: Mapping[str, str]) -> jmp.Policy:
+def with_field_dtype_overrides(mp: jmp.Policy, overrides: Mapping[str, jnp.dtype]) -> jmp.Policy:
     """``mp`` itself without overrides; otherwise ``mp`` with each overridden field cast to its own dtype."""
-    field_dtypes = parse_field_dtype_overrides(overrides)
-    if not field_dtypes:
+    if not overrides:
         return mp
-    return FieldDtypePolicy(mp.param_dtype, mp.compute_dtype, mp.output_dtype, field_dtypes)
+    return FieldDtypePolicy(mp.param_dtype, mp.compute_dtype, mp.output_dtype, sorted_field_dtypes(overrides))
 
 
 def hf_load_dtype(mp: jmp.Policy) -> jnp.dtype | None:

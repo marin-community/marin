@@ -242,7 +242,7 @@ def test_export_lm_to_hf_keeps_field_dtype_overrides(tmp_path):
             trainer=SimpleNamespace(
                 device_mesh=contextlib.nullcontext(),
                 parameter_axis_mapping={},
-                field_dtype_overrides={"router_bias": "float32"},
+                field_dtype_overrides={"router_bias": jnp.dtype("float32")},
             ),
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,

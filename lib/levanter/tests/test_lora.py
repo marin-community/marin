@@ -466,7 +466,7 @@ def test_lora_lm_load_and_merged_export_honour_field_dtype_overrides(local_gpt2_
     """A float32 bias override survives lora_lm's base load from a bfloat16 source and the merged export."""
     converter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=16, hidden_dim=16, num_layers=1, num_heads=2)
-    overrides = {"bias": "float32"}
+    overrides = {"bias": jnp.dtype("float32")}
     mp = with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16"), overrides)
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, config=config, key=jax.random.PRNGKey(0))

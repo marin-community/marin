@@ -1,7 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import io
 
+import draccus
 import equinox as eqx
 import haliax as hax
 import jax
@@ -31,7 +33,7 @@ def router(named=False):
 @pytest.mark.parametrize("named", [False, True])
 def test_compute_view_preserves_float32_override_bits(named):
     model = tuple(router(named) for _ in range(26))
-    policy = with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16,o=f32"), {"router_bias": "float32"})
+    policy = with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16,o=f32"), {"router_bias": jnp.dtype("float32")})
     compute = eqx.filter_jit(policy.cast_to_compute)(model)
     for master, view in zip(model, compute, strict=True):
         original = master.router_bias.array if named else master.router_bias
@@ -54,7 +56,7 @@ def test_trainer_loss_preserves_router_bias_and_gradient():
     config = TrainerConfig(
         id="compute-view-test",
         mp=policy,
-        field_dtype_overrides={"router_bias": "float32"},
+        field_dtype_overrides={"router_bias": jnp.dtype("float32")},
         tracker=(),
         require_accelerator=False,
         mesh=MeshConfig(),
@@ -70,7 +72,7 @@ def test_trainer_loss_preserves_router_bias_and_gradient():
 
 def test_bfloat16_override_on_float32_field_is_honoured():
     model = router()
-    policy = with_field_dtype_overrides(jmp.get_policy("p=f32,c=f32"), {"router_bias": "bfloat16"})
+    policy = with_field_dtype_overrides(jmp.get_policy("p=f32,c=f32"), {"router_bias": jnp.dtype("bfloat16")})
     for cast in (policy.cast_to_param, policy.cast_to_compute):
         view = eqx.filter_jit(cast)(model)
         assert view.router_bias.dtype == jnp.bfloat16
@@ -81,12 +83,21 @@ def test_bfloat16_override_on_float32_field_is_honoured():
 
 def test_check_field_dtype_overrides_rejects_bad_fields_and_dtypes():
     model = Router(jnp.zeros(2, dtype=jnp.float32), jnp.zeros((), dtype=jnp.int32))
-    check_field_dtype_overrides(model, {"router_bias": "float32"})
+    check_field_dtype_overrides(model, {"router_bias": jnp.dtype("float32")})
     with pytest.raises(ValueError, match="not found"):
-        check_field_dtype_overrides(model, {"router_bais": "float32"})
+        check_field_dtype_overrides(model, {"router_bais": jnp.dtype("float32")})
     with pytest.raises(ValueError, match="not a floating-point array"):
-        check_field_dtype_overrides(model, {"weight": "float32"})
-    with pytest.raises(ValueError, match="unknown dtype"):
-        check_field_dtype_overrides(model, {"router_bias": "flaot32"})
+        check_field_dtype_overrides(model, {"weight": jnp.dtype("float32")})
     with pytest.raises(ValueError, match="not a floating dtype"):
-        check_field_dtype_overrides(model, {"router_bias": "int32"})
+        check_field_dtype_overrides(model, {"router_bias": jnp.dtype("int32")})
+
+
+def test_yaml_field_dtype_overrides_decode_to_dtypes_and_round_trip():
+    config = draccus.load(TrainerConfig, io.StringIO("field_dtype_overrides: {router_bias: float32, w: bfloat16}\n"))
+    assert config.field_dtype_overrides == {"router_bias": jnp.dtype("float32"), "w": jnp.dtype("bfloat16")}
+    assert all(isinstance(dtype, jnp.dtype) for dtype in config.field_dtype_overrides.values())
+    dumped = draccus.dump(config)
+    assert "router_bias: float32" in dumped and "w: bfloat16" in dumped
+    assert draccus.load(TrainerConfig, io.StringIO(dumped)).field_dtype_overrides == config.field_dtype_overrides
+    with pytest.raises(draccus.utils.DecodingError, match="flaot32"):
+        draccus.load(TrainerConfig, io.StringIO("field_dtype_overrides: {router_bias: flaot32}\n"))

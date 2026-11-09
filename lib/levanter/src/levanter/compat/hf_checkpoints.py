@@ -55,7 +55,7 @@ from tqdm_loggable.auto import tqdm
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
-from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, parse_field_dtype_overrides
+from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -1101,7 +1101,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
         chat_template: Optional[str] = None,
-        field_dtype_overrides: Mapping[str, str] | None = None,
+        field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1123,7 +1123,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
-        :param field_dtype_overrides: model attribute name (matched at any depth) to the dtype name it is exported in,
+        :param field_dtype_overrides: model attribute name (matched at any depth) to the dtype it is exported in,
             regardless of dtype
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
@@ -1157,8 +1157,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        field_dtypes = parse_field_dtype_overrides(field_dtype_overrides or {})
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, field_dtypes)
+        overridden = sorted_field_dtypes(field_dtype_overrides)
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, overridden)
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1229,7 +1229,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, field_dtypes),
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, overridden),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
@@ -1403,7 +1403,7 @@ def save_hf_checkpoint_callback(
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
-    field_dtype_overrides: Mapping[str, str] | None = None,
+    field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1415,7 +1415,7 @@ def save_hf_checkpoint_callback(
     :param upload_to_hf:
     :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
     (written to both tokenizer_config.json and chat_template.jinja)
-    :param field_dtype_overrides: model attribute name to the dtype name it is exported in, regardless of save_dtype
+    :param field_dtype_overrides: model attribute name to the dtype it is exported in, regardless of save_dtype
     :param hf_upload_kwargs:
     :return:
     """
