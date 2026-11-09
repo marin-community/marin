@@ -6,6 +6,8 @@ Unlike the neighbouring variants, this directory carries no model copy. [`train.
 
 Presets: `tiny` (CPU check), `medium` (4 layers at full width), and `full` (26 layers, 67B parameters). The default batch is one sequence per device; a global batch of 1 fails in the next-token loss under explicit mesh axes, so single-device runs need `--batch-size 2`. Every step sees fresh random tokens, so the loss cannot fall below ln(vocab_size) and a lower value means something leaks targets. No checkpoint is written.
 
+Before training it logs `model flops per example: total=... attention_noncausal=... attention_causal=...`: the FLOPs per example its MFU charges, and their attention-map part counted as Levanter counts it (non-causal, window-aware) and with causal masking counted exactly, for a causal MFU.
+
 ```bash
 RAGGED_DOT_IMPL=xla python experiments/grug/snowball_synthetic/train.py \
     --size full --steps 20 --profile-steps 3 --compilation-cache-dir "$WORK/jax-cache"
