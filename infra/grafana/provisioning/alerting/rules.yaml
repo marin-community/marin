@@ -343,8 +343,7 @@ groups:
 
   # Fewer than 10% of Ready GB200 GPUs are active (>10% device utilization)
   # for 30 minutes. The bridge requires telemetry for at least 80% of Ready
-  # GPUs. Activity changes stay in the numeric value so they do not restart
-  # the pending timer.
+  # GPUs.
   - orgId: 1
     name: b200-capacity
     folder: Alerts
