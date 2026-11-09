@@ -9,7 +9,6 @@ import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -49,6 +48,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
     HERO_RACK_GPUS,
+    HERO_SCHEDULE_STEPS,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
@@ -61,12 +61,13 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     validation_datasets,
     with_transport_remat_mode,
 )
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
     HERO_PROCESS_STALL_TIMEOUT,
     HERO_RESUME_CHECKPOINT_PREFIX,
     HERO_STARTUP_TIMEOUT,
     HERO_STEP_TIMEOUT,
+    LADDER_RACKS,
     RESUME_CHECKPOINT_TTL_DAYS,
     RESUME_SAVE_INTERVAL,
 )
@@ -106,9 +107,6 @@ SPECIAL_TOKEN_ANCHORS = (
     (128009, "<|end_of_text|>"),
 )
 EXPECTED_ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
-# The pretraining schedule the hero's optimizer state was built for; it fixes beta2 and epsilon.
-HERO_PRETRAIN_STEPS = 390251
-HERO_PRETRAIN_BATCH = 176
 
 
 @dataclass(frozen=True)
@@ -323,7 +321,6 @@ def build_sft_run(
     stop_after_steps: int | None = None,
     eval_every: int = 0,
     checkpoint_root: str | None = None,
-    checkpoint_interval: timedelta = RESUME_SAVE_INTERVAL,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
@@ -351,11 +348,10 @@ def build_sft_run(
     if stop_step > num_train_steps:
         raise ValueError(f"stop_after_steps={stop_after_steps} is past the {plan.steps}-step epoch")
 
-    pretrain_optimizer = MoeHeuristic().build_optimizer_config(
-        num_train_steps=HERO_PRETRAIN_STEPS,
-        batch_size=HERO_PRETRAIN_BATCH,
-        hidden_dim=model.hidden_dim,
-        seq_len=model.max_seq_len,
+    # The restored optimizer state comes from the hero's pretraining recipe, which fixes beta2 and epsilon.
+    _, pretrain_optimizer = build_hero_configs(
+        num_train_steps=HERO_SCHEDULE_STEPS,
+        batch_size=hero_rack_batch_size(model.max_seq_len) * LADDER_RACKS["d6144"],
     )
     optimizer = dataclasses.replace(
         pretrain_optimizer,
@@ -467,7 +463,7 @@ def build_sft_run(
             checkpointer=CheckpointerConfig(
                 base_path=permanent_path,
                 temporary_base_path=temporary_path,
-                save_interval=checkpoint_interval,
+                save_interval=RESUME_SAVE_INTERVAL,
                 keep=None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
@@ -572,7 +568,6 @@ def _grad_norm(value: str) -> float | None:
     default=None,
     help="Put all checkpoints below this prefix, e.g. a tmp/ttl=3d path for a smoke test.",
 )
-@click.option("--checkpoint-minutes", type=click.FloatRange(min=0, min_open=True), default=60.0, show_default=True)
 @build_options
 def main(
     run_id: str,
@@ -587,7 +582,6 @@ def main(
     capacity_factor: float,
     eval_every: int,
     checkpoint_root: str | None,
-    checkpoint_minutes: float,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_sft_run(
         run_id=run_id,
@@ -603,7 +597,6 @@ def main(
         stop_after_steps=stop_after_steps,
         eval_every=eval_every,
         checkpoint_root=checkpoint_root,
-        checkpoint_interval=timedelta(minutes=checkpoint_minutes),
     )
 
 

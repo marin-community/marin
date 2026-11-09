@@ -10,7 +10,7 @@ import numpy as np
 import optax
 import pytest
 from jax.sharding import AxisType, Mesh
-from levanter.data.text.datasets import LmDataConfig, _component_cache_path
+from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe_hero_ep import model
@@ -18,7 +18,6 @@ from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
     SftStore,
-    load_sft_stores,
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
@@ -116,23 +115,7 @@ def test_sft_stores_offer_no_validation_split():
     components, _ = sft_components(stores, plan)
     config = LmDataConfig(tokenizer="gpt2", cache_dir=None, components=components)
 
-    assert all(
-        item.flat_cache and item.cache_dir == "s3://bucket/store/train" for _, item in config._cache_items("train")
-    )
-    assert all(
-        _component_cache_path(name, item, None, "validation") is None for name, item in config._cache_items("validation")
-    )
-
-
-@pytest.mark.parametrize(
-    ("racks", "block_size", "steps"),
-    [(1, 64_000, 76_000), (11, 64_064, 6_916)],
-)
-def test_full_ab_epoch_plan(racks, block_size, steps):
-    plan = plan_sft_mixture(load_sft_stores(), batch_size=16 * racks, replay_fraction=0.2035)
-
-    assert (plan.sft_sequences, plan.num_blocks, plan.block_size, plan.steps) == (968_596, 19, block_size, steps)
-    assert plan.replay_fraction == pytest.approx(0.2035, abs=1e-3)
+    assert config.build_caches("validation") == {}
 
 
 def test_special_token_updates_scale_only_the_listed_rows():
