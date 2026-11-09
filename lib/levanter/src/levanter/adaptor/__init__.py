@@ -138,7 +138,7 @@ def _install_full_model_export_hook(
             save_dtype=save_dtype,
             generation_config=export.generation_config,
             chat_template=export.chat_template,
-            fp32_fields=trainer.config.fp32_fields,
+            field_dtype_overrides=trainer.config.field_dtype_overrides,
         ),
         every=export.hf_save_steps,
     )

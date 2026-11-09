@@ -19,7 +19,7 @@ from levanter.adaptor import AdaptorExportConfig, FrozenParameterAdaptorConfig
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, save_hf_checkpoint_callback
-from levanter.fp32_fields import with_fp32_fields
+from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.main.train_lm import (
@@ -61,7 +61,7 @@ def initial_state(model):
         adaptor.apply(model, key=jax.random.PRNGKey(0)),
         key=jax.random.PRNGKey(0),
         is_trainable=adaptor.trainable_filter(model),
-        mp=with_fp32_fields(jmp.get_policy("p=f32,c=bf16"), ("router_bias",)),
+        mp=with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16"), {"router_bias": "float32"}),
     )
 
 
@@ -141,13 +141,13 @@ def fp32_snowball(tmp_path, local_gpt2_tokenizer_path):
             save_tokenizer=False,
             save_reference_code=False,
             dtype=jnp.bfloat16,
-            fp32_fields=("router_bias",),
+            field_dtype_overrides={"router_bias": "float32"},
         )
         source_converter = converter.replaced(reference_checkpoint=RepoRef(source_path))
         trainer_config = TrainerConfig(
             id="fp32-router-bias",
             mp=jmp.get_policy("p=f32,c=bf16"),
-            fp32_fields=("router_bias",),
+            field_dtype_overrides={"router_bias": "float32"},
             tracker=(),
             require_accelerator=False,
             load_checkpoint=False,
@@ -208,9 +208,9 @@ def resumed(env, state, grads):
     return restored.take_step(grads, key=jax.random.PRNGKey(3))[0]
 
 
-def test_without_fp32_fields_frozen_biases_round_to_compute_dtype(fp32_snowball):
+def test_without_field_dtype_overrides_frozen_biases_round_to_compute_dtype(fp32_snowball):
     env = fp32_snowball
-    compute_config = dataclasses.replace(env.trainer_config, fp32_fields=())
+    compute_config = dataclasses.replace(env.trainer_config, field_dtype_overrides={})
     compute_trainer = Trainer(compute_config, optax.adamw(0.1), loss, add_default_hooks=False)
     rounded = _load_lm_model_from_configured_source(
         **{
@@ -243,7 +243,7 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(fp32_snowball):
         str(env.tmp_path),
         env.converter,
         save_dtype=jnp.bfloat16,
-        fp32_fields=env.trainer_config.fp32_fields,
+        field_dtype_overrides=env.trainer_config.field_dtype_overrides,
         save_tokenizer=False,
         save_reference_code=False,
     )
@@ -264,14 +264,14 @@ def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(fp32_snowball):
     assert not np.array_equal(updated["model.embed_tokens.weight"], env.original["model.embed_tokens.weight"])
 
 
-def test_frozen_adaptor_export_hook_carries_fp32_fields(tmp_path):
+def test_frozen_adaptor_export_hook_carries_field_dtype_overrides(tmp_path):
     adaptor = FrozenParameterAdaptorConfig(("router_bias",))
     saves = []
     converter = types.SimpleNamespace(save_pretrained=lambda model, path, **kwargs: saves.append((model, kwargs)))
     hooks = []
     trainer = types.SimpleNamespace(
         run_id="run",
-        config=types.SimpleNamespace(checkpointer=None, fp32_fields=("router_bias",)),
+        config=types.SimpleNamespace(checkpointer=None, field_dtype_overrides={"router_bias": "float32"}),
         add_hook=lambda hook, *, every: hooks.append((hook, every)),
     )
     adaptor.install_export_hooks(
@@ -287,4 +287,4 @@ def test_frozen_adaptor_export_hook_carries_fp32_fields(tmp_path):
     [(saved, kwargs)] = saves
     assert saved is model
     assert kwargs["dtype"] == jnp.bfloat16
-    assert kwargs["fp32_fields"] == ("router_bias",)
+    assert kwargs["field_dtype_overrides"] == {"router_bias": "float32"}

@@ -11,7 +11,7 @@ import numpy as np
 import optax
 import pytest
 
-from levanter.fp32_fields import check_fp32_fields, with_fp32_fields
+from levanter.field_dtype_overrides import check_field_dtype_overrides, with_field_dtype_overrides
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
@@ -29,9 +29,9 @@ def router(named=False):
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_compute_view_preserves_fp32_field_bits(named):
+def test_compute_view_preserves_float32_override_bits(named):
     model = tuple(router(named) for _ in range(26))
-    policy = with_fp32_fields(jmp.get_policy("p=f32,c=bf16,o=f32"), ("router_bias",))
+    policy = with_field_dtype_overrides(jmp.get_policy("p=f32,c=bf16,o=f32"), {"router_bias": "float32"})
     compute = eqx.filter_jit(policy.cast_to_compute)(model)
     for master, view in zip(model, compute, strict=True):
         original = master.router_bias.array if named else master.router_bias
@@ -54,7 +54,7 @@ def test_trainer_loss_preserves_router_bias_and_gradient():
     config = TrainerConfig(
         id="compute-view-test",
         mp=policy,
-        fp32_fields=("router_bias",),
+        field_dtype_overrides={"router_bias": "float32"},
         tracker=(),
         require_accelerator=False,
         mesh=MeshConfig(),
@@ -68,10 +68,25 @@ def test_trainer_loss_preserves_router_bias_and_gradient():
     np.testing.assert_array_equal(model.router_bias, router().router_bias)
 
 
-def test_check_fp32_fields_rejects_unknown_and_non_floating_fields():
+def test_bfloat16_override_on_float32_field_is_honoured():
+    model = router()
+    policy = with_field_dtype_overrides(jmp.get_policy("p=f32,c=f32"), {"router_bias": "bfloat16"})
+    for cast in (policy.cast_to_param, policy.cast_to_compute):
+        view = eqx.filter_jit(cast)(model)
+        assert view.router_bias.dtype == jnp.bfloat16
+        np.testing.assert_array_equal(view.router_bias, model.router_bias.astype(jnp.bfloat16))
+        assert view.weight.dtype == jnp.float32
+        np.testing.assert_array_equal(view.weight, model.weight)
+
+
+def test_check_field_dtype_overrides_rejects_bad_fields_and_dtypes():
     model = Router(jnp.zeros(2, dtype=jnp.float32), jnp.zeros((), dtype=jnp.int32))
-    check_fp32_fields(model, ("router_bias",))
+    check_field_dtype_overrides(model, {"router_bias": "float32"})
     with pytest.raises(ValueError, match="not found"):
-        check_fp32_fields(model, ("router_bais",))
+        check_field_dtype_overrides(model, {"router_bais": "float32"})
     with pytest.raises(ValueError, match="not a floating-point array"):
-        check_fp32_fields(model, ("weight",))
+        check_field_dtype_overrides(model, {"weight": "float32"})
+    with pytest.raises(ValueError, match="unknown dtype"):
+        check_field_dtype_overrides(model, {"router_bias": "flaot32"})
+    with pytest.raises(ValueError, match="not a floating dtype"):
+        check_field_dtype_overrides(model, {"router_bias": "int32"})
