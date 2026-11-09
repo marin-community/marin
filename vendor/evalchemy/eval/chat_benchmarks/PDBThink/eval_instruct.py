@@ -1,7 +1,7 @@
 """Original PDBThink prompts, repeated completions, and exact context budgeting."""
 
 from dataclasses import replace
-from typing import Any
+from typing import TypedDict
 
 from eval.chat_benchmarks.PDBThink.data import PDBTHINK_REVISION, load_bundle, manifest
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
@@ -9,6 +9,12 @@ from eval.execution.generation import canonical_generation_kwargs
 from eval.limits import ContextWindowExceededError, require_context_length, safe_generation_cap
 from eval.sources.common import SourceOptions, text_specs
 from eval.task import BaseBenchmark
+
+
+class RenderBudget(TypedDict):
+    render_id: str
+    input_tokens: int
+    output_tokens: int
 
 
 class PDBThinkBenchmark(BaseBenchmark):
@@ -23,7 +29,7 @@ class PDBThinkBenchmark(BaseBenchmark):
             raise ValueError("PDBThink preserves its versioned system prompt")
         self.n_repeat = 3
         self._bundle: dict | None = None
-        self._budgets: list[dict[str, Any]] = []
+        self._budgets: list[RenderBudget] = []
 
     def benchmark_size(self) -> int:
         return manifest()["n_renders"]
@@ -65,7 +71,7 @@ class PDBThinkBenchmark(BaseBenchmark):
         # Check the complete selected cohort before the first model request. A prompt
         # that cannot fit must not silently change coordinates or benchmark coverage.
         prepared = []
-        budgets = {}
+        budgets: dict[str, RenderBudget] = {}
         for spec in specs:
             render_id = spec.source_id
             if render_id not in budgets:
