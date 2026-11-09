@@ -36,6 +36,9 @@ STAGING_SUFFIX = ".verified-copy-staging"
 MANIFEST_SCHEMA_VERSION = 1
 SHA256_IDENTITY_PREFIX = "sha256="
 ETAG_IDENTITY_PREFIX = "etag="
+# S3 assigns this version ID to every object written while bucket versioning is
+# off or suspended, and listings omit it, so it never identifies an object.
+S3_NULL_VERSION_ID = "null"
 
 logger = logging.getLogger(__name__)
 
@@ -650,7 +653,7 @@ def _source_identity(info: dict[str, Any]) -> str | None:
         "mtime",
         "LastModified",
     ):
-        value = info.get(key)
+        value = _identity_value(info, key)
         if value is not None:
             return f"{key}={value!s}"
     return None
@@ -661,10 +664,17 @@ def _destination_identity(info: dict[str, Any]) -> str | None:
     if etag is not None:
         return f"{ETAG_IDENTITY_PREFIX}{etag}"
     for key in ("ChecksumSHA256", "checksum", "md5Hash", "crc32c", "version_id", "VersionId"):
-        value = info.get(key)
+        value = _identity_value(info, key)
         if value is not None:
             return f"{key}={value!s}"
     return None
+
+
+def _identity_value(info: dict[str, Any], key: str) -> Any:
+    value = info.get(key)
+    if key in ("version_id", "VersionId") and value == S3_NULL_VERSION_ID:
+        return None
+    return value
 
 
 def _etag(info: dict[str, Any]) -> str | None:
