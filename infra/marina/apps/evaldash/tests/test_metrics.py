@@ -901,7 +901,7 @@ def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
 
 def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     historical = [
-        _record("old", name, None, "2026-01-01", 0.6, num_fewshot=shots, metric="exact_match,flexible-extract")
+        _record("old", name, "historical", "2026-01-01", 0.6, num_fewshot=shots, metric="exact_match,flexible-extract")
         for name, shots in (("gsm8k-0shot", 0), ("gsm8k", 5))
     ]
     native = []
@@ -948,3 +948,14 @@ def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     metadata = build_meta(records)
     family = next(entry for entry in metadata["families"] if entry["family"] == "gsm8k")
     assert set(family["variants"]) == set(rows)
+    selected = "gsm8k [harness; 0-shot; completion]"
+    request = panel_request(benchmarks=(selected,), cohort_version="historical")
+    panel = build_panel(records, request)
+    assert panel["rows"][0]["cells"][selected]["value"] == 0.6
+    assert panel["rows"][0]["missing"] == {}
+    assert panel["families"] == [{"family": "gsm8k", "variants": [selected], "default": selected}]
+    comparison = build_comparison(records, request, ("old",))
+    assert comparison["rows"][0]["benchmark"] == selected
+    detail = build_model_detail(records, "old")
+    assert detail is not None
+    assert set(detail["history"]) == set(rows)
