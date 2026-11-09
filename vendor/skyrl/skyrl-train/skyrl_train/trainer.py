@@ -27,6 +27,7 @@ import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
+from skyrl_train.long_context_qualification import qualify_learner_batch, qualify_optimizer_status
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
@@ -1655,6 +1656,15 @@ class RayPPOTrainer:
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
     async def _run_training(self, training_input: TrainingInputBatch, *, step_wall: StepWallTime | None = None):
+        qualification = self.cfg.trainer.long_context_qualification if self.global_step == 1 and self.cfg.trainer.long_context_qualification.enabled else None
+        qualification_evidence = None
+        if qualification is not None:
+            if self.cfg.trainer.policy.megatron_config.context_parallel_size != 4:
+                raise ValueError("Natural-long qualification requires CP4")
+            if self.cfg.trainer.step_wise_training or not self.cfg.trainer.dump_data_batch:
+                raise ValueError("Natural-long qualification requires full-turn projection and collation audit")
+            qualification_evidence = qualify_learner_batch(training_input,
+                minimum_tokens=qualification.minimum_tokens, maximum_tokens=qualification.maximum_tokens)
         if (
             "ftpo_chosen_mask" in training_input
             and not training_input["loss_mask"].any()
@@ -1720,6 +1730,9 @@ class RayPPOTrainer:
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
             status = await asyncio.to_thread(self.train_critic_and_policy, training_input)
         self._policy_version_step = self.global_step
+        if qualification_evidence is not None:
+            qualify_optimizer_status(status)
+            await self._qualify_checkpoint_restore(training_input, qualification_evidence)
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None and ftpo.early_stopping_chosen_win is not None:
@@ -1728,6 +1741,38 @@ class RayPPOTrainer:
                 self._ftpo_stopped = True
                 self._control.should_training_stop = True
         return status
+
+    async def _qualify_checkpoint_restore(self, training_input: TrainingInputBatch, evidence: dict) -> None:
+        """Reload the committed first-step model/optimizer and compare the same learner forward."""
+        with Timer("qualification_save_restore", self.all_timings):
+            await self.context.pause_and_drain()
+            qualified = False
+            try:
+                await self.save_checkpoints()
+                before = await asyncio.to_thread(self.fwd_logprobs_values_reward, training_input)
+                expected = before["action_log_probs"].clone()
+                checkpoint = join_resource_path(self.cfg.trainer.ckpt_path, f"global_step_{self.global_step}", "policy")
+                # Free optimizer buffers before native restore, as in normal startup restore.
+                await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
+                refs = self.policy_model.async_run_ray_method("pass_through", "load_checkpoint",
+                    ckpt_dir=checkpoint, load_training_state=True)
+                await asyncio.gather(*refs)
+                await asyncio.to_thread(self.policy_model.backload_to_gpu, backload_optimizer=True, backload_model=True)
+                after = await asyncio.to_thread(self.fwd_logprobs_values_reward, training_input)
+                mask = training_input["loss_mask"].bool()
+                actual = after["action_log_probs"]
+                if not torch.allclose(actual[mask], expected[mask], rtol=1e-5, atol=1e-5):
+                    raise ValueError("Native restore changed first-step action logprobs")
+                evidence.update(step=self.global_step, context_parallel_size=4, optimizer_update_completed=True,
+                    native_model_optimizer_scheduler_load_completed=True, checkpoint=checkpoint,
+                    restore_action_logprob_max_difference=float((actual[mask] - expected[mask]).abs().max()),
+                    restore_logprob_rtol=1e-5, restore_logprob_atol=1e-5)
+                io.write_bytes_atomic(join_resource_path(self.cfg.trainer.export_path, "long-context-qualification.json"),
+                    json.dumps(evidence).encode())
+                qualified = True
+            finally:
+                if qualified:
+                    self.context.resume()
 
     def _group_for_teacher_scoring(self, group: RolloutGroup) -> TrajectoryBatch:
         """Apply the learner's row selector without duplicating its metric side effects."""

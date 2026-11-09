@@ -144,12 +144,12 @@ FULL_PLAN = SkyRLRolePlan(
 )
 
 
-def full_recipe(*, initial_model: str, validation_tasks: int) -> dict:
+def full_recipe(*, initial_model: str, validation_tasks: int, source_routes: dict[str, str]) -> dict:
     """Construct the target geometry; live qualification remains mandatory."""
     config = yaml.safe_load(Path(__file__).with_name("rl-smoke.yaml").read_text())
     _materialize_role_plan_config(config, FULL_PLAN)
     config["context_budget"] = {
-        "request_window_tokens": 94_208,
+        "request_window_tokens": 102_400,
         "max_new_tokens_per_turn": 8_192,
         "max_turns": 128,
     }
@@ -160,6 +160,12 @@ def full_recipe(*, initial_model: str, validation_tasks: int) -> dict:
         dump_training_order=True,
         ckpt_interval=1,
         max_ckpts_to_keep=-1,
+        long_context_qualification={"enabled": True, "minimum_tokens": 65537, "maximum_tokens": 102400},
+    )
+    if set(source_routes.values()) != {"agentic", "nonagentic"}:
+        raise ValueError("Full RL requires admitted agentic and nonagentic source provenance")
+    trainer["rollout_buffer"].update(
+        consumed_route_quotas={"agentic": 32, "nonagentic": 32}, source_routes=source_routes
     )
     selection = validation_selection(initial_model=initial_model, task_count=validation_tasks)
     trainer.update(selection)
@@ -195,6 +201,6 @@ def full_rl_step(
 ) -> ArtifactStep[SkyRLRun]:
     """Refuse full RL admission until target-geometry qualification is implemented."""
     raise NotImplementedError(
-        "Full RL launch is blocked until the CP4 natural-long save/restore gate and "
-        "exact 32 agentic / 32 non-agentic consumed-group admission are implemented"
+        "Full RL launch is blocked pending admitted mixed-source dataset provenance and "
+        "local integration review of the first-step CP4 qualification path"
     )

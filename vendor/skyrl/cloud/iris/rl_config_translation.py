@@ -626,6 +626,8 @@ def parse_checkpoint_export_config(
 _OPTIONAL_HYDRA_PATTERNS = {
     ".distillation",
     ".domain_weights",
+    ".consumed_route_quotas",
+    ".source_routes",
     ".engine_init_kwargs",
     ".chat_template_kwargs",
     ".speculative_decoding",

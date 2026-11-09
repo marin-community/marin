@@ -7,9 +7,11 @@ import hashlib
 import json
 import logging
 import re
+import struct
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
@@ -21,6 +23,104 @@ from experiments.post_training.long_loop.timing import durable_event_log
 
 logger = logging.getLogger(__name__)
 UPLOAD_REQUEST = "long-loop-upload-request.json"
+PUBLIC_SIDECARS = {
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "chat_template.jinja",
+    "tokenizer.model",
+    "vocab.json",
+    "merges.txt",
+    "model.safetensors.index.json",
+    ".marinskyrl-model-manifest.json",
+}
+PRIVATE_CONTENT = re.compile(
+    rb"(?:s3|gs)://|/(?:Users|home|tmp|app)/|"
+    rb"https?://(?:[^/\s]+\.)?(?:oa\.dev|internal)(?:[/:]|$)|"
+    rb"https?://(?:[0-9]{1,3}\.){3}[0-9]{1,3}|"
+    rb"hf_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|"
+    rb"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+)
+
+
+def public_weight_name(name: str) -> bool:
+    return re.fullmatch(r"model(?:-[0-9]{5}-of-[0-9]{5})?\.safetensors", name) is not None
+
+
+def audit_public_bytes(name: str, content: bytes) -> None:
+    """Reject private locations and credential signatures without printing their values."""
+    if PRIVATE_CONTENT.search(name.encode()) or PRIVATE_CONTENT.search(content):
+        raise ValueError(f"Private location or credential-like content in public file: {name}")
+    for url in re.findall(rb"https?://[^\s\"<>]+", content):
+        host = urlsplit(url.decode()).hostname
+        if host not in {"github.com", "huggingface.co", "openmdw.org", "www.openmdw.org"}:
+            raise ValueError(f"Unreviewed public URL in file: {name}")
+    if name.endswith(".json") and name != "tokenizer.json":
+        audit_public_fields(name, json.loads(content))
+
+
+def audit_public_fields(name: str, value: object) -> None:
+    """Inspect configuration fields, never tokenizer vocabulary entries."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if item and re.search(
+                r"(?:^|_)(?:api_key|access_token|auth_token|password|secret|authorization|endpoint|base_url|server_url|hostname)(?:$|_)",
+                key.lower(),
+            ):
+                raise ValueError(f"Credential or endpoint field in public file: {name}")
+            audit_public_fields(name, item)
+    elif isinstance(value, list):
+        for item in value:
+            audit_public_fields(name, item)
+
+
+def audit_public_file(path: Path, name: str) -> None:
+    if public_weight_name(name):
+        with path.open("rb") as stream:
+            header_size = struct.unpack("<Q", stream.read(8))[0]
+            if header_size > 64 * 1024 * 1024:
+                raise ValueError(f"Oversized safetensors header: {name}")
+            header = stream.read(header_size)
+            if len(header) != header_size:
+                raise ValueError(f"Incomplete safetensors header: {name}")
+            parsed = json.loads(header)
+            audit_public_fields(name, parsed.get("__metadata__", {}))
+            audit_public_bytes(name, header)
+        return
+    audit_public_bytes(name, path.read_bytes())
+
+
+def location_commitment(source: str, native_checkpoint: str) -> str:
+    return hashlib.sha256(
+        json.dumps({"source": source, "native_checkpoint": native_checkpoint}, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def audit_public_history(api: HfApi, repo_id: str) -> None:
+    """Inspect every historical sidecar, so a clean tip cannot conceal private provenance."""
+    seen = set()
+    for commit in api.list_repo_commits(repo_id, repo_type="model"):
+        info = api.model_info(repo_id, revision=commit.commit_id, files_metadata=True)
+        for item in info.siblings:
+            name = item.rfilename
+            identity = (name, item.lfs.sha256 if item.lfs is not None else item.blob_id)
+            if identity in seen:
+                continue
+            if public_weight_name(name):
+                header = api.parse_safetensors_file_metadata(repo_id, name, revision=commit.commit_id)
+                audit_public_fields(name, header.metadata)
+                audit_public_bytes(
+                    name, json.dumps({"metadata": header.metadata, "tensors": list(header.tensors)}).encode()
+                )
+            else:
+                if name not in PUBLIC_SIDECARS | {"README.md", "LICENSE", UPLOAD_REQUEST, ".gitattributes"}:
+                    raise ValueError(f"Unreviewed historical public filename: {name}")
+                path = hf_hub_download(repo_id, name, revision=commit.commit_id, token=api.token)
+                audit_public_file(Path(path), name)
+            seen.add(identity)
 
 
 @dataclass(frozen=True)
@@ -79,8 +179,8 @@ def verify_hf_checkpoint(receipt: dict) -> dict:
         raise ValueError("HF archive requires an immutable commit SHA")
     api = HfApi(token=require_secret("HF_TOKEN"))
     info = api.model_info(receipt["repo_id"], revision=revision, files_metadata=True)
-    if info.sha != revision or not info.private:
-        raise ValueError("Selected HF checkpoint must have the pinned revision and remain private")
+    if info.sha != revision or info.private:
+        raise ValueError("Selected HF checkpoint must have the pinned revision and be public")
     expected = {item["path"]: item for item in receipt["files"]}
     actual = {item.rfilename: item for item in info.siblings if item.rfilename != ".gitattributes"}
     if expected.keys() != actual.keys() or len(expected) != len(receipt["files"]):
@@ -113,8 +213,9 @@ def verify_hf_checkpoint(receipt: dict) -> dict:
     expected_request_files = [item for item in receipt["files"] if item["path"] != UPLOAD_REQUEST]
     if request["files"] != expected_request_files:
         raise ValueError("HF upload request and receipt inventories disagree")
-    if request["source"] != receipt["source"] or request["native_checkpoint"] != receipt["native_checkpoint"]:
+    if request["location_commitment_sha256"] != location_commitment(receipt["source"], receipt["native_checkpoint"]):
         raise ValueError("HF upload receipt does not bind the selected checkpoint")
+    audit_public_history(api, receipt["repo_id"])
     return receipt
 
 
@@ -127,6 +228,8 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     card = card_fs.cat_file(card_key)
     license_text = license_fs.cat_file(license_key)
     validate_model_card(card, license_text)
+    audit_public_bytes("README.md", card)
+    audit_public_bytes("LICENSE", license_text)
     root = Path(config.local_directory)
     root.mkdir(parents=True, exist_ok=True)
     events = prefix_join(str(StoragePath(timing_destination).parent), "files")
@@ -139,7 +242,7 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     sources = [
         (key, name)
         for key, name in zip(source_files, names, strict=True)
-        if name not in {"README.md", "LICENSE", UPLOAD_REQUEST}
+        if name in PUBLIC_SIDECARS or public_weight_name(name)
     ]
     if any(name.startswith(".cache/") or name.endswith(".distcp") for _, name in sources):
         raise ValueError("HF export source contains cache or native optimizer payloads")
@@ -155,17 +258,20 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
         (root / "README.md").write_bytes(card)
         (root / "LICENSE").write_bytes(license_text)
         records.extend([_local_record(root / name, name) for name in ("README.md", "LICENSE")])
+        for item in records:
+            audit_public_file(root / item["path"], item["path"])
         request = {
-            "source": config.source,
-            "native_checkpoint": config.native_checkpoint,
+            "schema": 2,
+            "location_commitment_sha256": location_commitment(config.source, config.native_checkpoint),
             "files": sorted(records, key=lambda item: item["path"]),
         }
         request_raw = json.dumps(request, sort_keys=True, indent=2).encode()
         (root / UPLOAD_REQUEST).write_bytes(request_raw)
         api = HfApi(token=require_secret("HF_TOKEN"))
-        api.create_repo(config.repo_id, repo_type="model", private=True, exist_ok=True)
-        if not api.model_info(config.repo_id).private:
-            raise ValueError("Refuse to upload into a public repository")
+        api.create_repo(config.repo_id, repo_type="model", private=False, exist_ok=True)
+        if api.model_info(config.repo_id).private:
+            raise ValueError("Refuse to publish a previously private repository; use a fresh public repo")
+        audit_public_history(api, config.repo_id)
         existing = set(api.list_repo_files(config.repo_id, repo_type="model"))
         if UPLOAD_REQUEST in existing:
             prior = Path(hf_hub_download(config.repo_id, UPLOAD_REQUEST, token=api.token)).read_bytes()
@@ -183,7 +289,7 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
                 repo_id=config.repo_id,
                 repo_type="model",
                 folder_path=root,
-                private=True,
+                private=False,
                 allow_patterns=[item["path"] for item in records],
                 num_workers=config.workers,
             )
@@ -192,7 +298,7 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
             "schema": 1,
             "repo_id": config.repo_id,
             "revision": revision,
-            "private": True,
+            "private": False,
             "source": config.source,
             "native_checkpoint": config.native_checkpoint,
             "files": sorted(records, key=lambda item: item["path"]),

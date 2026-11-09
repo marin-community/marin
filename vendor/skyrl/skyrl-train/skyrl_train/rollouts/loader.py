@@ -109,7 +109,7 @@ class PromptLoader:
     The sequence never ends; the trainer decides when to stop.
     """
 
-    def __init__(self, dataset: PromptGroupDataset, order: PromptOrder, *, batch_size: int, max_stale_retries: int):
+    def __init__(self, dataset: PromptGroupDataset, order: PromptOrder, *, batch_size: int, max_stale_retries: int, routes: Mapping[str, str] | None = None):
         if max_stale_retries < 0:
             raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
         self._uid_count = len({dataset.uid(index) for index in range(len(dataset))})
@@ -119,6 +119,7 @@ class PromptLoader:
                 f"{batch_size}; a batch trains each uid at most once"
             )
         self._dataset = dataset
+        self._routes = dict(routes or {})
         self._order = order
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
@@ -127,7 +128,7 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str]) -> dict | None:
+    def next_prompt(self, live: Collection[str], route: str | None = None) -> dict | None:
         """The next prompt whose uid is not in ``live``, or None when every uid is live.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
@@ -135,7 +136,7 @@ class PromptLoader:
         order that keeps drawing live rows cannot stall dispatch; the row may be one the order weights at zero.
         """
         for position, prompt in enumerate(self._retries):
-            if prompt["uid"] not in live:
+            if prompt["uid"] not in live and (route is None or self._routes[prompt["uid"]] == route):
                 del self._retries[position]
                 return prompt
         # Every dataset uid is live, so drawing would only advance the order.
@@ -143,12 +144,12 @@ class PromptLoader:
             return None
         for _ in range(self._draw_limit):
             index = self._order.next_index()
-            if self._dataset.uid(index) not in live:
+            if self._dataset.uid(index) not in live and (route is None or self._routes[self._dataset.uid(index)] == route):
                 return self._offer(index)
         num_rows = len(self._dataset)
         for offset in range(num_rows):
             index = (self._scan_start + offset) % num_rows
-            if self._dataset.uid(index) not in live:
+            if self._dataset.uid(index) not in live and (route is None or self._routes[self._dataset.uid(index)] == route):
                 self._scan_start = index + 1
                 return self._offer(index)
         return None
@@ -181,4 +182,6 @@ class PromptLoader:
     def _offer(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])
         self._stale_retries.pop(prompt["uid"], None)
+        if self._routes:
+            prompt["group_route"] = self._routes[prompt["uid"]]
         return prompt

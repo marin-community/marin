@@ -110,3 +110,15 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
                 for expert in range(model.num_experts):
                     name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
                     np.testing.assert_array_equal(tensors[name], native[bank][expert].astype("bfloat16"))
+
+
+def test_remote_sft_timing_destination_survives_config_decode():
+    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
+    config = fresh_sft_config(
+        output="s3://marin-us-east-02a/run/",
+        initializer="s3://marin-us-east-02a/base",
+        recipe=recipe,
+        run_id="timing-regression",
+    )
+    # TrainerConfig.log_dir is a local Path: the old implementation collapsed s3:// to s3:/.
+    assert config.native_timing_root == "s3://marin-us-east-02a/run/timing/native-sft"

@@ -54,8 +54,14 @@ class RolloutBufferConfig:
     batch_policy: BatchPolicy
     dynamic_sampling: DynamicSamplingType | None
     max_candidate_groups: int | None
+    consumed_route_quotas: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.consumed_route_quotas:
+            if self.batch_policy is not BatchPolicy.FULL_BATCH:
+                raise ValueError("Consumed route quotas require full_batch admission")
+            if sum(self.consumed_route_quotas.values()) != self.batch_size or any(value < 1 for value in self.consumed_route_quotas.values()):
+                raise ValueError("Consumed route quotas must be positive and sum to batch_size")
         if self.batch_size < 1:
             raise ValueError(f"rollout batch size must be positive, got {self.batch_size}")
         if self.max_in_flight is not None and self.max_in_flight < 1:
@@ -86,6 +92,7 @@ class RolloutLease:
     lease_id: str
     policy_step: int
     batch_id: int
+    route: str | None = None
 
 
 @dataclass(frozen=True)
@@ -449,14 +456,26 @@ class RolloutBuffer:
         """Wait for generation capacity and lease it at the current policy step."""
         async with self._changed:
             await self._changed.wait_for(lambda: self._lease_batch() is not None)
-            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, self._lease_batch())
+            batch_id = self._lease_batch()
+            route = None
+            if self.config.consumed_route_quotas:
+                occupied = collections.Counter(lease.route for lease in self._leases.values() if lease.batch_id == batch_id)
+                occupied.update(rollout.prompt["group_route"] for rollout in self._ready if rollout.batch_id == batch_id)
+                occupied.update(rollout.prompt["group_route"] for rollout in self._admitted[batch_id])
+                route = next((name for name, count in self.config.consumed_route_quotas.items() if occupied[name] < count), None)
+                if route is None:
+                    raise RuntimeError("No route slot remains in an unfilled batch")
+            lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route)
             self._leases[lease.lease_id] = lease
             return lease
 
     async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
-            lease = self._leases.pop(lease_id)
+            lease = self._leases[lease_id]
+            if lease.route is not None and prompt.get("group_route") != lease.route:
+                raise ValueError("Committed prompt does not match its consumed-route lease")
+            del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
             self._ready.append(
                 ReadyRollout(
@@ -529,10 +548,16 @@ class RolloutBuffer:
                 ) from error
             selection = None
             if self._batch_complete():
+                route_counts = collections.Counter(rollout.prompt.get("group_route") for rollout in self._admitted[self._policy_step])
+                if self.config.consumed_route_quotas and route_counts != self.config.consumed_route_quotas:
+                    raise RuntimeError("Consumed batch does not meet exact route quotas")
                 for rollout in self._admitted[self._policy_step]:
                     self._dispose(rollout, "consumed")
                 stats = self._stats.pop(self._policy_step)
-                selection = BatchSelection(stats.metrics(self.config.dynamic_sampling), stats.judged)
+                metrics = stats.metrics(self.config.dynamic_sampling)
+                if self.config.consumed_route_quotas:
+                    metrics.update({f"async/consumed_route/{name}": float(count) for name, count in route_counts.items()})
+                selection = BatchSelection(metrics, stats.judged)
                 self._batch_taken = True
             elif (batch_id := self._over_budget_batch()) is not None:
                 raise RuntimeError(

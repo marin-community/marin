@@ -464,6 +464,7 @@ class GrugRunConfig:
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
+    native_timing_root: str | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
@@ -1234,7 +1235,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
     timing_attempt = f"rank-{jax.process_index()}-{uuid4().hex}"
-    timing_uri = str(trainer.log_dir / run_id / "native-timing" / f"{timing_attempt}.jsonl")
+    timing_root = config.native_timing_root or str(trainer.log_dir / run_id / "native-timing")
+    timing_uri = prefix_join(timing_root, f"{timing_attempt}.jsonl")
     with (
         set_mesh(mesh),
         dashboard,

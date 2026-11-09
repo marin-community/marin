@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import json
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,12 +23,23 @@ class Hub:
         self.revision = "a" * 40
 
     def create_repo(self, *args, **kwargs):
-        return None
+        if not self.files:
+            self.private = kwargs["private"]
+
+    def list_repo_commits(self, *args, **kwargs):
+        return [SimpleNamespace(commit_id=self.revision)]
+
+    def parse_safetensors_file_metadata(self, repo, name, **kwargs):
+        raw = self.files[name]
+        length = struct.unpack("<Q", raw[:8])[0]
+        header = json.loads(raw[8 : 8 + length])
+        return SimpleNamespace(metadata=header.pop("__metadata__", {}), tensors=header)
 
     def model_info(self, repo, revision=None, files_metadata=False):
         siblings = [
             SimpleNamespace(
                 rfilename=name,
+                blob_id=hashlib.sha256(data).hexdigest(),
                 size=len(data),
                 lfs=SimpleNamespace(sha256=hashlib.sha256(data).hexdigest()) if name.endswith(".safetensors") else None,
             )

@@ -55,7 +55,7 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
     trainer["id"] = run_id
-    trainer["log_dir"] = prefix_join(output, "logs")
+    config["native_timing_root"] = prefix_join(output, "timing/native-sft")
     trainer["initialize_from"] = prefix_join(initializer, "native/step-0")
     trainer["load_checkpoint"] = False
     trainer["load_checkpoint_path"] = []

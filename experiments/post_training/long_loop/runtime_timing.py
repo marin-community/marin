@@ -24,7 +24,7 @@ def timed(step: ArtifactStep) -> ArtifactStep:
 
     def execute(config):
         attempt = uuid4().hex
-        fs, key = filesystem_for(step.path() + f"/timing/{attempt}.jsonl")
+        fs, key = filesystem_for(prefix_join(step.path(), f"timing/{attempt}.jsonl"))
         with tempfile.TemporaryDirectory() as directory:
             log = EventLog(Path(directory) / "events.jsonl", step.version, step.name, attempt)
             try:
@@ -37,19 +37,19 @@ def timed(step: ArtifactStep) -> ArtifactStep:
     return replace(step, run=execute)
 
 
-def write_report(*, output: str, stages: list[str]) -> None:
+def write_report(*, output: str, stages: list[str], expected_rollouts: int, sft_geometry: str) -> None:
     events = []
     sources = []
     for stage in stages:
         fs, prefix = filesystem_for(prefix_join(stage, "timing"))
-        for key in sorted(fs.glob(prefix_join(prefix, "*.jsonl"))):
+        for key in sorted(fs.glob(prefix_join(prefix, "**/*.jsonl"))):
             events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
             sources.append(fs.unstrip_protocol(key))
     # Reused stage artifacts have different original run IDs; preserve those in the sources.
     original_runs = sorted({event.run for event in events})
     text = report([replace(event, run=output) for event in events], synthetic=False)
     text += "\nOriginal stage run IDs: " + ", ".join(original_runs) + ". Raw events retain these IDs.\n"
-    text += "\nPlumbing SFT geometry (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.\n"
+    text += "\n" + sft_geometry + "\n"
     text += (
         "\nStage spans include scheduling and startup; they are not active compute measurements.\n"
         "Queue wait, allocation release, native learner phases, and per-benchmark timing require the\n"
@@ -58,13 +58,28 @@ def write_report(*, output: str, stages: list[str]) -> None:
     fs, root = filesystem_for(output)
     fs.pipe_file(prefix_join(root, "timing.md"), text.encode())
     fs.pipe_file(prefix_join(root, "timing-sources.json"), json.dumps(sources, indent=2).encode())
-    evaluation = audit(stages[-1], expected_rollouts=SMOKE_PATH_COUNT)
+    evaluation = audit(stages[-1], expected_rollouts=expected_rollouts)
     evaluation["excluded_benchmarks"] = SKIPPED_BENCHMARKS
     fs.pipe_file(prefix_join(root, "evaluation.json"), json.dumps(evaluation, indent=2).encode())
     if not evaluation["all_verified"]:
-        raise ValueError(f"Micro210 reduced smoke did not verify all {SMOKE_PATH_COUNT} selected paths")
+        raise ValueError(f"Micro210 did not verify all {expected_rollouts} selected paths")
 
 
-def report_step(version: str, stages: list[ArtifactStep], archive_plan: dict | None = None) -> ArtifactStep:
-    completed = apply("long-loop/report", write_report, version=version, output=OUT, stages=stages)
+def report_step(
+    version: str,
+    stages: list[ArtifactStep],
+    archive_plan: dict | None = None,
+    *,
+    expected_rollouts: int = SMOKE_PATH_COUNT,
+    sft_geometry: str = "Plumbing SFT (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.",
+) -> ArtifactStep:
+    completed = apply(
+        "long-loop/report",
+        write_report,
+        version=version,
+        output=OUT,
+        stages=stages,
+        expected_rollouts=expected_rollouts,
+        sft_geometry=sft_geometry,
+    )
     return archive_step(version, archive_plan, completed) if archive_plan is not None else completed
