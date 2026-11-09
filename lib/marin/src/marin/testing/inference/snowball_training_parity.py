@@ -8,8 +8,8 @@ the model ``train_lm`` builds, at every position of the same 64 representative p
 
 - ``training_lm_config`` is a ``TrainLmConfig`` with the identity recipe's model settings: ``initialize_from_hf``
   the Snowball export, ``use_hf_model_config``, ``FrozenParameterAdaptorConfig(("router_bias",))``,
-  ``p=f32,c=bf16`` and ``fp32_fields=("router_bias",)``, on the recipe's expert-parallel mesh shrunk to one
-  H100x8 host (data 2 x expert 4);
+  ``p=f32,c=bf16`` and ``field_dtype_overrides={router_bias: float32}``, on the recipe's expert-parallel mesh
+  shrunk to one H100x8 host (data 2 x expert 4);
 - ``build_training_state`` calls ``train_lm``'s own ``hf_initialization``, ``_load_lm_model_from_configured_source``
   and ``Trainer.initial_state``;
 - the forward runs on the view the trainer's loss sees, ``trainer.mp.cast_to_compute(state.model)`` under the
@@ -84,7 +84,7 @@ logger = logging.getLogger(__name__)
 # lib/ cannot import experiments/.
 DATA_AXIS = 2
 EXPERT_AXIS = 4
-FP32_FIELDS = ("router_bias",)
+FIELD_DTYPE_OVERRIDES = {"router_bias": jnp.dtype("float32")}
 FROZEN_FIELDS = ("router_bias",)
 TRAINING_PRECISION = "p=f32,c=bfloat16,o=f32"
 RECIPE_ATTENTION = "torch_order"
@@ -174,7 +174,7 @@ def training_lm_config(settings: TrainingForwardSettings) -> TrainLmConfig:
             seed=SEED,
             tracker=NoopConfig(),
             mp=jmp.get_policy(TRAINING_PRECISION),
-            fp32_fields=FP32_FIELDS if settings.fp32_router_bias else (),
+            field_dtype_overrides=dict(FIELD_DTYPE_OVERRIDES) if settings.fp32_router_bias else {},
             mesh=training_mesh(),
             use_explicit_mesh_axes=True,
             train_batch_size=BATCH_SIZE,
@@ -218,7 +218,7 @@ def training_compute_view(trainer: Trainer, state: TrainerState) -> SnowballLMHe
     with hax.axis_mapping(trainer.compute_axis_mapping):
         view = trainer.mp.cast_to_compute(model)
     assert isinstance(view, SnowballLMHeadModel)
-    if trainer.config.fp32_fields:
+    if trainer.config.field_dtype_overrides:
         for stored, viewed in zip(_router_biases(model), _router_biases(view), strict=True):
             assert stored.dtype == jnp.float32, f"stored router_bias is {stored.dtype}"
             assert viewed.dtype == jnp.float32, f"compute-view router_bias is {viewed.dtype}"
