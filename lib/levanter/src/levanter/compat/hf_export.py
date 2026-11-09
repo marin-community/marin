@@ -5,10 +5,11 @@
 
 import hashlib
 import json
+import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,12 +21,38 @@ from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from jax.experimental import multihost_utils
 from jax.sharding import PartitionSpec as P
+from rigging import telemetry
+from rigging.telemetry.serialization import EventBody
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save_file
 
 from levanter.utils.byte_budget import HostByteBudget
+
+
+@contextmanager
+def _export_phase(phase: str, filename: str):
+    started = time.time_ns() // 1_000_000
+    clock = time.monotonic()
+    succeeded = False
+    try:
+        yield
+        succeeded = True
+    finally:
+        telemetry.event(
+            "hf_export_phase",
+            EventBody(
+                {
+                    "phase": phase,
+                    "filename": filename,
+                    "started_unix_ms": started,
+                    "finished_unix_ms": time.time_ns() // 1_000_000,
+                    "duration_seconds": time.monotonic() - clock,
+                    "succeeded": succeeded,
+                }
+            ),
+        )
 
 
 def run_on_export_writer[T](action: Callable[[], T]) -> T | None:
@@ -183,20 +210,24 @@ class _HFShardWriter:
         with staging as directory:
             local = Path(directory) / filename
             local.parent.mkdir(parents=True, exist_ok=True)
-            save_file(tensors, local, metadata={"format": "pt"})
+            with _export_phase("serialization", filename):
+                save_file(tensors, local, metadata={"format": "pt"})
             record = None
             if self._resume is not None:
-                record = HFShardRecord(
-                    self._resume.export_id,
-                    filename,
-                    local.stat().st_size,
-                    _sha256(StoragePath(str(local))),
-                    sorted(tensors),
-                )
+                with _export_phase("hash", filename):
+                    record = HFShardRecord(
+                        self._resume.export_id,
+                        filename,
+                        local.stat().st_size,
+                        _sha256(StoragePath(str(local))),
+                        sorted(tensors),
+                    )
             if self._root.is_remote:
-                (self._root / filename).upload_from(str(local))
+                with _export_phase("object_store_upload", filename):
+                    (self._root / filename).upload_from(str(local))
             if self._upload_to_hf is not None:
-                self._upload_to_hf(directory, filename)
+                with _export_phase("hf_upload", filename):
+                    self._upload_to_hf(directory, filename)
             if self._resume is not None and record is not None:
                 self._resume.commit(record)
             return record

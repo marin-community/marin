@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from uuid import uuid4
 
 import equinox as eqx
 import jax
@@ -81,6 +82,7 @@ from experiments.post_training.long_loop.sft_runtime.validation_checkpoint impor
     BestValidationCheckpoint,
     best_validation_callback,
 )
+from experiments.post_training.long_loop.timing import durable_event_log
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -1210,7 +1212,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
-    with set_mesh(mesh), dashboard, ExitStack() as gc_resources:
+    timing_attempt = f"rank-{jax.process_index()}-{uuid4().hex}"
+    timing_uri = str(trainer.log_dir / run_id / "native-timing" / f"{timing_attempt}.jsonl")
+    with (
+        set_mesh(mesh),
+        dashboard,
+        ExitStack() as gc_resources,
+        durable_event_log(timing_uri, run_id, "sft", timing_attempt) as timing,
+    ):
         batch_schedule = trainer.batch_schedule
 
         @jax.jit
@@ -1225,29 +1234,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 master_param_mode=config.trainer.master_param_mode,
             )
 
-        state = _init_state(model_key)
-        released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
-        if released_initial_state:
-            state = restore_template_from(state)
-
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-            template_for_candidate=lambda candidate: template_for_candidate_layout(
-                state, candidate, config.trainer.master_param_mode
-            ),
-        )
-        if config.trainer.master_param_mode == MasterParamMode.DEVICE:
-            state = take_master_as_params(state)
-        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+        with timing.span("model_initialization_and_restore"):
             state = _init_state(model_key)
-        if int(state.step) == 0:
-            if trainer.initialize_from is None:
-                raise ValueError("Snowball SFT requires an explicit base checkpoint")
-            state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
+            released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+            if released_initial_state:
+                state = restore_template_from(state)
+
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+                template_for_candidate=lambda candidate: template_for_candidate_layout(
+                    state, candidate, config.trainer.master_param_mode
+                ),
+            )
+            if config.trainer.master_param_mode == MasterParamMode.DEVICE:
+                state = take_master_as_params(state)
+            if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+                state = _init_state(model_key)
+            if int(state.step) == 0:
+                if trainer.initialize_from is None:
+                    raise ValueError("Snowball SFT requires an explicit base checkpoint")
+                state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1470,7 +1480,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     gc_hook = gc_resources.enter_context(coordinated_gc())
                     state_callbacks.add_hook(gc_hook, every=config.trainer.gc_interval)
                     levanter.tracker.log({GC_TIME_METRIC: time.perf_counter() - gc_start}, step=current_step)
-                with jax.profiler.TraceAnnotation("load_batch"):
+                with timing.span("data_loading", step=current_step), jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
@@ -1482,13 +1492,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                state, metrics, inline_watch_stats = train_step(state, batch)
-                if inline_watch_stats is not None and watch_due:
-                    watch_stats = inline_watch_stats
-                current_step = int(state.step)
-                step = current_step - 1
+                with timing.span("train_step", step=current_step):
+                    state, metrics, inline_watch_stats = train_step(state, batch)
+                    if inline_watch_stats is not None and watch_due:
+                        watch_stats = inline_watch_stats
+                    current_step = int(state.step)
+                    step = current_step - 1
 
-                jax.block_until_ready(metrics["train/loss"])
+                    jax.block_until_ready(metrics["train/loss"])
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
@@ -1533,10 +1544,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 checkpoint_start = time.perf_counter()
                 if checkpointer is not None:
-                    with callbacks.progress_event_scope(
-                        state_callbacks.emit_event,
-                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    with (
+                        timing.span("checkpoint_enqueue", step=current_step),
+                        callbacks.progress_event_scope(
+                            state_callbacks.emit_event,
+                            callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                            callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                        ),
                     ):
                         checkpointer.on_step(tree=state, step=current_step)
 
@@ -1558,10 +1572,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                with callbacks.progress_event_scope(
-                    state_callbacks.emit_event,
-                    callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                    callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                with (
+                    timing.span("final_checkpoint_drain", step=current_step),
+                    callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ),
                 ):
                     checkpointer.on_step(tree=state, step=int(state.step), force=True)
                     checkpointer.wait_until_finished()

@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import draccus
 import equinox as eqx
@@ -25,6 +26,7 @@ from experiments.post_training.long_loop.sft_runtime.model import (
     Transformer,
     grugmoe_inference_state_dict,
 )
+from experiments.post_training.long_loop.timing import durable_event_log
 
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
@@ -80,23 +82,34 @@ def export_weights(
 
     run_on_export_writer(prepare)
     mesh = compact_grug_mesh(expert_axis_size=config.expert_axis_size, replica_axis_size=config.replica_axis_size)
-    with jax.set_mesh(mesh):
-        model = restore(config.checkpoint, config.metadata_digest, config.model, mesh)
-        model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
-        jax.block_until_ready(model)
-        gc.collect()
-        state_dict = grugmoe_inference_state_dict(model)
-        shards, _ = _shard_hf_checkpoint(state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
-        records = save_hf_shards(
-            shards,
-            lambda keys: {name: state_dict[name] for name in keys},
-            config.destination,
-            # One writer stages one planned shard plus serialization buffers.
-            export_host_budget_bytes=1,
-            max_concurrent_shards=1,
-            resume=HFShardResume(root, export_id),
-            tensor_names={name: split_expert_names(name, config.model.num_experts) for name in state_dict},
-        )
+    with (
+        jax.set_mesh(mesh),
+        durable_event_log(
+            str(root / "timing" / f"export-rank-{jax.process_index()}-{uuid4().hex}.jsonl"),
+            config.source_revision,
+            "sft_export",
+            export_id,
+        ) as timing,
+    ):
+        with timing.span("checkpoint_restore"):
+            model = restore(config.checkpoint, config.metadata_digest, config.model, mesh)
+        with timing.span("bf16_conversion_and_shard_plan"):
+            model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
+            jax.block_until_ready(model)
+            gc.collect()
+            state_dict = grugmoe_inference_state_dict(model)
+            shards, _ = _shard_hf_checkpoint(state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
+        with timing.span("serialization_hash_and_upload"):
+            records = save_hf_shards(
+                shards,
+                lambda keys: {name: state_dict[name] for name in keys},
+                config.destination,
+                # One writer stages one planned shard plus serialization buffers.
+                export_host_budget_bytes=1,
+                max_concurrent_shards=1,
+                resume=HFShardResume(root, export_id),
+                tensor_names={name: split_expert_names(name, config.model.num_experts) for name in state_dict},
+            )
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
         weight_map = {name: record.filename for record in records for name in record.tensor_names}
 

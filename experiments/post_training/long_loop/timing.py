@@ -5,6 +5,7 @@
 
 import json
 import os
+import tempfile
 import time
 from collections import defaultdict
 from collections.abc import Iterator
@@ -14,6 +15,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median, quantiles
 from uuid import uuid4
+
+from rigging.filesystem.buckets import filesystem_for
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,20 @@ class EventLog:
             emit("end", "completed")
 
 
+@contextmanager
+def durable_event_log(destination: str, run: str, stage: str, attempt: str) -> Iterator[EventLog]:
+    """Keep a worker journal in task outputs and upload it on normal or exceptional exit."""
+    directory = Path(tempfile.mkdtemp(prefix="native-timing-", dir=os.environ.get("IRIS_OUTPUT_DIR")))
+    log = EventLog(directory / "events.jsonl", run, stage, attempt)
+    try:
+        yield log
+    finally:
+        if log.path.exists():
+            fs, key = filesystem_for(destination)
+            fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
+            fs.pipe_file(key, log.path.read_bytes())
+
+
 def read_events(paths: list[Path]) -> list[Event]:
     return [Event(**json.loads(line)) for path in paths for line in path.read_text().splitlines() if line.strip()]
 
@@ -147,7 +164,11 @@ def report(events: list[Event], *, synthetic: bool) -> str:
         "",
         f"Observed event envelope: {elapsed:.3f} seconds (not proof of run completion).",
         f"Incomplete spans: {incomplete}; failed spans: {failed}.",
-        f"Paired allocation GPU-hours: {gpu_hours:.3f}; observed peak: {peak} GPUs.",
+        (
+            f"Paired allocation GPU-hours: {gpu_hours:.3f}; observed peak: {peak} GPUs."
+            if allocations
+            else "Allocation GPU-hours and peak: unavailable (no allocation boundaries captured)."
+        ),
         "Allocation totals exclude incomplete spans; a missing allocation boundary prevents cap certification.",
         "",
     ]

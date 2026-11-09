@@ -4,6 +4,7 @@
 """Offline eval-only flow; only model and installed-process execution are scripted."""
 
 import gzip
+import importlib
 import json
 import sys
 import zipfile
@@ -242,7 +243,23 @@ class LocalBackend:
         OmegaConf.save(self.cfg, self.root / "consumed-eval.yaml")
         ray.init(num_cpus=3, include_dashboard=False, log_to_driver=True)
         try:
-            metrics = CPUEntry(self.cfg).run()
+            timing_events = []
+            evaluation = importlib.import_module("skyrl_train.evaluate")
+            original_record = evaluation.record_event
+            evaluation.record_event = lambda name, fields: timing_events.append({"name": name, **fields})
+            try:
+                metrics = CPUEntry(self.cfg).run()
+            finally:
+                evaluation.record_event = original_record
+            tasks = [event for event in timing_events if event["name"] == "evaluation_task"]
+            assert len(tasks) == 2
+            assert all(
+                event["succeeded"]
+                and event["submitted_unix_ms"] <= event["started_unix_ms"] <= event["finished_unix_ms"]
+                for event in tasks
+            )
+            assert {event["benchmark"] for event in tasks} == {"installed", "native"}
+            (self.root / "timing-events.json").write_text(json.dumps(timing_events, indent=2))
         finally:
             ray.shutdown()
         (self.root / "metrics.json").write_text(json.dumps(metrics, indent=2))
