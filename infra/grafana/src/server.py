@@ -34,7 +34,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/alerts/training_optimizer watched hero runs + optimizer-fault value(0|1)
     GET /finelog/marin/alerts/training_health    watched hero runs + degraded-signal value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
-    GET /finelog/marin/alerts/b200_utilization   Ready B200 capacity + GPU activity value(0|1)
+    GET /finelog/marin/alerts/b200_utilization   Ready B200 capacity + active GPU percentage
     GET /iris/{cluster}/job_counts               root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/jobs?cluster=             recent jobs visible through one federation peer
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region

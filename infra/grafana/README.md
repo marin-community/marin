@@ -46,7 +46,7 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
-GET /finelog/marin/alerts/b200_utilization       per-cluster Ready GB200 activity value(0|1)
+GET /finelog/marin/alerts/b200_utilization       per-cluster active GB200 GPU percentage
 GET /iris/{cluster}/job_counts | jobs | workers | health
                                                     live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
