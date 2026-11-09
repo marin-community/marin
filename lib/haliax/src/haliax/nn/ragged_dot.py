@@ -147,7 +147,7 @@ def _triton_ragged_dot_kernel(
                 a = plgpu.load(a_ref.at[span_m, span_k])
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
-            return acc + pl.dot(a.astype(dtype), b.astype(dtype))
+            return acc + plgpu.dot(a.astype(dtype), b.astype(dtype))
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
@@ -239,7 +239,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
         a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
         b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
         dtype = jnp.result_type(a, b)
-        return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
+        return acc + plgpu.dot(a.astype(dtype).T, b.astype(dtype))
 
     num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
@@ -585,12 +585,12 @@ def _tile_map_row_kernel(
                     None if col_mask is None else col_mask[:, None], None if k_mask is None else k_mask[None, :]
                 )
                 b = _masked_load(b_ref.at[group, col_span, k_span], b_mask)
-                return acc + pl.dot(a, b, trans_b=True)
+                return acc + plgpu.dot(a, b, trans_b=True)
             b_mask = _and_masks(
                 None if k_mask is None else k_mask[:, None], None if col_mask is None else col_mask[None, :]
             )
             b = _masked_load(b_ref.at[group, k_span, col_span], b_mask)
-            return acc + pl.dot(a, b)
+            return acc + plgpu.dot(a, b)
 
         acc = jax.lax.fori_loop(0, pl.cdiv(k, block_k), body, jnp.zeros((block_m, block_n), jnp.float32))
         plgpu.store(out_ref.at[row_span, col_span], acc.astype(out_ref.dtype), mask=store_mask)
@@ -671,7 +671,7 @@ def _tile_map_contracting_kernel(
         r_mask = (start_r + jnp.arange(block_k) < hi)[:, None] if mask_rows else None
         a = _masked_load(a_ref.at[r_span, m_span], _and_masks(r_mask, None if m_mask is None else m_mask[None, :]))
         b = _masked_load(b_ref.at[r_span, n_span], _and_masks(r_mask, None if n_mask is None else n_mask[None, :]))
-        return acc + pl.dot(a, b, trans_a=True)
+        return acc + plgpu.dot(a, b, trans_a=True)
 
     # Every row block but the last is full. An empty group runs one fully masked block and stores zeros.
     num_r_blocks = jnp.maximum(pl.cdiv(hi - lo, block_k), 1)

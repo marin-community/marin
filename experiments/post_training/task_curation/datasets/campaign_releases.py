@@ -10,22 +10,22 @@ admission, split assignment and qualification evidence already live in the
 release itself, so re-converting them here would invent a second provenance.
 
 Container-backed cohorts additionally carry host-local Docker image locators.
-Their archives record image IDs but not image bytes, so no machine can execute
-these tasks until the images are rebuilt or separately distributed. Treat every
-entry as a data pointer, not a runnable pipeline.
+Their screened public releases record instruction text and identity but no image
+bytes or verifier material, so no machine can execute these tasks from the public
+release alone. Treat every entry as a data pointer, not a runnable pipeline.
 """
+
+from finestore.rl.curation import IndependentQC, Verdict
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 TASK_TROVE_PUBLIC = "open-athena/task-trove"
-TASK_TROVE_PRIVATE = "open-athena/task-trove-smartie-continuation-private"
-CAMPAIGN_ARCHIVE = "campaign-archive/2026.10.20"
-PRIVATE_ARCHIVE_REVISION = "ab5173cc03cd4392d5b8cdf38a3392e1ff44a0bc"
+PUBLIC_STAGED_REVISION = "5d6a5c9cbbf1541ae7325cbdba290a102ab05ca0"
 CAMPAIGN_ISSUE = "https://github.com/marin-community/marin/issues/10305"
 
 STAGE3_IMAGE_CAVEAT = (
-    "Docker image locators are local IDs, not pullable registry references; the archive "
-    "excludes container image bytes, so this release is not self-contained executable data."
+    "Container image material is host-local and excluded from the screened release, so this "
+    "release is data, not a runnable task environment."
 )
 QUALIFICATION_IS_NOT_ADMISSION = (
     "Campaign qualification is not curation admission: use the release's own admission "
@@ -41,15 +41,18 @@ def _public_release(release: str, revision: str) -> SourceReference:
     )
 
 
-def _private_archive(archive: str) -> SourceReference:
-    return SourceReference(
-        TASK_TROVE_PRIVATE,
-        PRIVATE_ARCHIVE_REVISION,
-        f"https://huggingface.co/datasets/{TASK_TROVE_PRIVATE}/tree/{PRIVATE_ARCHIVE_REVISION}/{CAMPAIGN_ARCHIVE}/{archive}",
-    )
+def _pinned_blob(reference: SourceReference, member: str = "") -> str:
+    """Blob URL for a pinned tree reference itself or one of its members."""
+    url = reference.url.replace("/tree/", "/blob/", 1)
+    return f"{url}/{member}" if member else url
 
 
 def sources() -> list[RlDataSource]:
+    calibforge = _public_release("smartie-continuation-20261016/calibforge", "6a6429ccba098e11ea9f6297a70cb43a34670c0f")
+    shared_v2 = _public_release("calibforge-shared-20261017-v2", "3b6c5b5533f1b702163f365b7ce869b834cb2994")
+    swesmith = _public_release("smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c")
+    staged_v1 = _public_release("smartie-swesmith-staged-v1", PUBLIC_STAGED_REVISION)
+    staged_v2 = _public_release("smartie-swesmith-staged-v2", PUBLIC_STAGED_REVISION)
     return [
         RlDataSource(
             info=SourceInfo(
@@ -67,8 +70,14 @@ def sources() -> list[RlDataSource]:
                     "smartie-calibforge-shared-v2, repaired from these candidates, is the usable "
                     "release. See the campaign report: " + CAMPAIGN_ISSUE
                 ),
-                dataset=_public_release(
-                    "smartie-continuation-20261016/calibforge", "6a6429ccba098e11ea9f6297a70cb43a34670c0f"
+                dataset=calibforge,
+                independent_qc=IndependentQC(
+                    verdict=Verdict.SOME_ISSUES,
+                    method="release quality review accepted the task text; oracle execution skipped and "
+                    "privacy, split and overlap checks remain before publication",
+                    reviewed=2205,
+                    admitted=2205,
+                    evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
             )
         ),
@@ -86,7 +95,15 @@ def sources() -> list[RlDataSource]:
                     "Admission checks cover fixture equivalence and setup and verifier execution; "
                     "oracle solution execution was waived."
                 ),
-                dataset=_public_release("calibforge-shared-20261017-v2", "3b6c5b5533f1b702163f365b7ce869b834cb2994"),
+                dataset=shared_v2,
+                independent_qc=IndependentQC(
+                    verdict=Verdict.GOOD,
+                    method="fixture equivalence plus setup and verifier execution admission checks; "
+                    "oracle solution execution waived",
+                    reviewed=2205,
+                    admitted=324,
+                    evidence_url=_pinned_blob(shared_v2, "manifest.json"),
+                ),
             )
         ),
         RlDataSource(
@@ -103,8 +120,13 @@ def sources() -> list[RlDataSource]:
                     "model-solving accuracy claim, and campaign-specific train and validation splits "
                     "remain in the private archive."
                 ),
-                dataset=_public_release(
-                    "smartie-continuation-20261016/swesmith", "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c"
+                dataset=swesmith,
+                independent_qc=IndependentQC(
+                    verdict=Verdict.GOOD,
+                    method="every retained task passed Daytona oracle execution and a Good quality verdict",
+                    reviewed=8045,
+                    admitted=8045,
+                    evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
             )
         ),
@@ -114,18 +136,25 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie staged SWE-Smith Stage 1 cohort",
                 origin="Snowball Smartie RL",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "campaign-release", "private"),
+                tags=("agentic", "multi-turn", "campaign-release"),
                 count=1699,
                 notes=(
                     "1,683 setup-branch parents from qualified repositories, retained as 1,699 staged "
                     "variants. Stage 1 tests repository and workspace readiness, not issue repair. The "
                     "verifier inspects actual checkout state and rejects upstream defaults and wrong "
-                    "branches. Private: Open-Athena access required. "
+                    "branches. The public release is screened to agent-visible instructions; execution "
+                    "and verifier materials remain host-local. "
                     + QUALIFICATION_IS_NOT_ADMISSION
                     + " "
                     + STAGE3_IMAGE_CAVEAT
                 ),
-                dataset=_private_archive("swesmith-staged-v1-20261017.tar.gz"),
+                dataset=staged_v1,
+                independent_qc=IndependentQC(
+                    verdict=Verdict.UNKNOWN,
+                    method="Stage 1 workspace-readiness verification; the release makes no task-quality claim",
+                    reviewed=1699,
+                    evidence_url=_pinned_blob(staged_v1, "manifest.json"),
+                ),
             )
         ),
         RlDataSource(
@@ -134,19 +163,27 @@ def sources() -> list[RlDataSource]:
                 title="Snowball Smartie staged SWE-Smith Stage 3 handoffs",
                 origin="Snowball Smartie RL",
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "campaign-release", "private"),
+                tags=("agentic", "multi-turn", "campaign-release"),
                 count=778,
                 notes=(
                     "778 repair handoffs from 600 parents: 600 complete and 178 partial, retained as "
                     "762 train / 16 validation. Complete handoffs start from repaired code that passed "
                     "the original required tests; partials start from partially repaired code with a "
                     "witnessed remaining failure that the known repair clears. Stage 3 was not used in "
-                    "run 2026.10.19.57. Private: Open-Athena access required. "
+                    "run 2026.10.19.57. The public release is screened to agent-visible instructions; "
+                    "execution and verifier materials remain host-local. "
                     + QUALIFICATION_IS_NOT_ADMISSION
                     + " "
                     + STAGE3_IMAGE_CAVEAT
                 ),
-                dataset=_private_archive("swesmith-staged-v2-20261017.tar.gz"),
+                dataset=staged_v2,
+                independent_qc=IndependentQC(
+                    verdict=Verdict.SOME_ISSUES,
+                    method="Stage 3 handoff verification against required tests; 178 of 778 handoffs are partial "
+                    "and none were used in run 2026.10.19.57",
+                    reviewed=778,
+                    evidence_url=_pinned_blob(staged_v2, "manifest.json"),
+                ),
             )
         ),
     ]
