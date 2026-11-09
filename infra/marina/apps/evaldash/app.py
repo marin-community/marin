@@ -82,7 +82,6 @@ from .metrics import (
     build_panel,
     dashboard_measurements,
     display_status,
-    in_cohort,
     panel_request,
     record_headline,
     run_metric_rows,
@@ -495,7 +494,6 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
-        records = [record for record in records if in_cohort(record, request)]
         archived = self.archived_models()
         if archived and not include_archived:
             records = [record for record in records if record.model.name not in archived]
