@@ -144,8 +144,9 @@ class GradingMachine:
             for path in command.argv[2:]:
                 self.files.pop(path, None)
             return EXITED
-        if program == "tar":
-            with tarfile.open(fileobj=io.BytesIO(self.files[command.argv[2]])) as archive:
+        if program == "sh" and command.argv[2].startswith("tar -xf"):
+            # Grading stages inputs as one `tar -xf "$1" -C "$2" && rm -f "$1"` script.
+            with tarfile.open(fileobj=io.BytesIO(self.files.pop(command.argv[4]))) as archive:
                 for member in archive.getmembers():
                     stream = archive.extractfile(member)
                     assert stream is not None
