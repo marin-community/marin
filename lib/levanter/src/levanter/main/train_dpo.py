@@ -93,8 +93,7 @@ def _initialize_policy_model_from_source(
             Vocab=Vocab,
             model_key=policy_key,
             parameter_axis_mapping=parameter_axis_mapping,
-            compute_dtype=trainer.mp.compute_dtype,
-            cast_to_param=trainer.mp.cast_to_param,
+            mp=trainer.mp,
             hf_ref=config.initialize_from_hf,
         )
     elif config.initialize_from_checkpoint_path is not None:
@@ -103,8 +102,7 @@ def _initialize_policy_model_from_source(
             Vocab=Vocab,
             model_key=policy_key,
             parameter_axis_mapping=parameter_axis_mapping,
-            compute_dtype=trainer.mp.compute_dtype,
-            cast_to_param=trainer.mp.cast_to_param,
+            mp=trainer.mp,
             checkpoint_path=config.initialize_from_checkpoint_path,
         )
     else:
@@ -423,8 +421,7 @@ def _load_separate_reference_model(
         Vocab=Vocab,
         model_key=reference_model_key,
         parameter_axis_mapping=parameter_axis_mapping,
-        compute_dtype=trainer.mp.compute_dtype,
-        cast_to_param=trainer.mp.cast_to_param,
+        mp=trainer.mp,
         hf_ref=config.reference.model_path if config.reference.is_hf else False,
         checkpoint_path=None if config.reference.is_hf else config.reference.model_path,
     )
@@ -563,6 +560,7 @@ def _install_separate_reference_export_hooks(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=export.generation_config,
+            field_dtype_overrides=trainer.config.field_dtype_overrides,
             **hf_upload_kwargs,
         )
         last_saved_update = step.next_step
