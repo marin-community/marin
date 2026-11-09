@@ -20,7 +20,7 @@ from safetensors.numpy import load_file
 
 import experiments.grug.moe_hero_ep.ops.export_cpu as cpu_export
 import experiments.grug.moe_hero_ep.ops.export_vllm as hero_export
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
@@ -30,7 +30,7 @@ def test_log_scaled_config_round_trips_through_the_hf_config_at_schema_3():
 
     hf_config = model.to_hf_config(model.vocab_size).to_dict()
 
-    assert hf_config["grugmoe_artifact_schema_version"] == 3
+    assert hf_config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
     assert (hf_config["log_scaling_n_floor"], hf_config["log_scaling_alpha"], hf_config["log_scaling_power"]) == (
         16,
         0.1,
@@ -43,7 +43,7 @@ def test_log_scaled_config_round_trips_through_the_hf_config_at_schema_3():
 def test_config_without_log_scaling_keeps_schema_2_and_omits_the_fields():
     hf_config = GrugModelConfig(vocab_size=32).to_hf_config(32).to_dict()
 
-    assert hf_config["grugmoe_artifact_schema_version"] == 2
+    assert hf_config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 2
     assert not any(key.startswith("log_scaling") for key in hf_config)
 
 
