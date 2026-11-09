@@ -32,6 +32,7 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_conf
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.snowball import SnowballConfig
@@ -149,8 +150,7 @@ def _load_lm_model_from_configured_source(
             # Passing None here would reload a second time and discard those settings.
             config=config.model,
             axis_mapping=parameter_axis_mapping,
-            # Load fp32 fields at their stored dtype; casting the whole model to compute dtype here would round them.
-            dtype=None if config.trainer.fp32_fields else trainer.mp.compute_dtype,
+            dtype=hf_load_dtype(trainer.mp),
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
