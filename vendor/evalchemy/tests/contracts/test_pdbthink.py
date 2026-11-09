@@ -43,6 +43,10 @@ def test_family_macro_excludes_controls_and_survives_resume(pdbthink_bundle):
 
 @pytest.mark.parametrize("schema,gold,text,termination,message_extra,expected", [
     ("residue_set", {"value": ["A:A1", "A:G2"]}, "FINAL: A:A1", "stop", {}, 2 / 3),
+    ("residue_pair", {"value": "A:A1--B:G2", "alternatives": ["A:A1--B:S3"]},
+     "FINAL: B:S3--A:A1", "stop", {}, 1.0),
+    ("residue_pair", {"value": "A:A1--B:G2", "alternatives": ["A:A1--B:S3"]},
+     "FINAL: A:A1--B:V4", "stop", {}, 0.0),
     ("distance", {"value": 2.0}, "FINAL: 2.02", "stop", {}, 1.0),
     ("distance", {"value": 2.0}, "FINAL: 2.021", "stop", {}, 0.0),
     ("integer", {"value": 2}, "2", "stop", {}, 0.0),
@@ -58,6 +62,16 @@ def test_upstream_parser_and_provider_signals_determine_score(pdbthink_bundle, s
     metrics, samples = evaluate_source(source, options, FixedEndpoint(response))
     assert metrics["macro_score"] == pytest.approx(expected)
     assert samples[0]["completion_responses"][0][0]["finish_reason"] == termination
+
+
+def test_mechanistic_contact_alternatives_reach_the_upstream_scorer(pdbthink_bundle):
+    row = record(schema="multi_field", gold={"fields": {
+        "contact": {"schema": "residue_pair", "value": "A:A1--B:G2", "alternatives": ["A:A1--B:S3"]},
+    }})
+    row["parameters"] = {"field_schemas": {"contact": "residue_pair"}}
+    source, options = source_and_options(pdbthink_bundle([row]))
+    metrics, _ = evaluate_source(source, options, FixedEndpoint("FINAL\ncontact: B:S3--A:A1"))
+    assert metrics["macro_score"] == 1.0
 
 
 def test_context_failure_prevents_partial_cohort_execution(pdbthink_bundle):

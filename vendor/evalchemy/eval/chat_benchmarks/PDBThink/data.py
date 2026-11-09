@@ -9,7 +9,7 @@ from pathlib import Path
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 
-PDBTHINK_REVISION = "94b65a918140e44ca6b6e94032a0ee0a7441b1dd"
+PDBTHINK_REVISION = "c00271fe049d60dc0d671b999d8c2fb595086166"
 BUNDLE_PATH = f"Open-Athena/pdbthink/{PDBTHINK_REVISION}/evaluation.json.gz"
 MANIFEST_PATH = Path(__file__).with_name("manifest.json")
 

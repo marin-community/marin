@@ -4,8 +4,9 @@ Marin's `pdbthink` evaluation runs the original protein structural-reasoning
 benchmark through vendored Evalchemy. It is an in-distribution development eval
 under the [Marin evaluation policy](https://github.com/marin-community/marin/issues/10197).
 Exclude its questions and teacher completions from SFT data, and do not use its
-questions directly as RL training tasks. The separate 100k coordinate-task
-training dataset is outside this integration.
+questions directly as RL training tasks. The separate
+[100k coordinate-task dataset](https://github.com/Open-Athena/pdbthink/blob/c00271fe049d60dc0d671b999d8c2fb595086166/docs/coordinate-task-generation.md)
+is outside this integration.
 
 Questions ask models to reason from supplied protein coordinates, for example
 to count residues, measure an atom-to-atom distance, or identify contacting
@@ -15,7 +16,7 @@ problem expressed using a particular coordinate format or control condition.
 ## Frozen benchmark
 
 The source and scorer are pinned to
-[`94b65a9`](https://github.com/Open-Athena/pdbthink/tree/94b65a918140e44ca6b6e94032a0ee0a7441b1dd).
+[`c00271f`](https://github.com/Open-Athena/pdbthink/tree/c00271fe049d60dc0d671b999d8c2fb595086166).
 Building that revision's `configs/dataset_v1.yaml` produces 121 semantic
 questions and 253 renders: 158 minimal-PDB, 47 normalized-coordinate, and 48
 context-only prompts. All questions have upstream curation status `proposed`.
@@ -26,10 +27,17 @@ renders express the coordinates in tables; context-only controls omit them.
 The 158 minimal-PDB renders include 31 rotated controls, which change the
 coordinate frame while preserving the answer.
 
-The frozen build uses prompt version `v5` and scorer version `1.1.0`. The older
-candidate manifests committed upstream identify prompt version `v2`; scores
-against those prompts are not directly comparable. Marin records the source,
-config, definitions, structure and bundle hashes in its
+The frozen build uses dataset revision `1.1.0`, prompt version `v6`, and scorer
+version `1.2.0`. It includes the upstream corrections to contact answer sets,
+residue identifiers, geometric question criteria, and reversed-state wording.
+See the [upstream revision notes](https://github.com/Open-Athena/pdbthink/blob/c00271fe049d60dc0d671b999d8c2fb595086166/docs/original-benchmark-v1.1.md).
+Changed questions require fresh model responses; scores from older prompt
+versions are not directly comparable. Mechanism multiple-choice answers remain
+curated interpretations that coordinate calculations do not independently
+establish. The clash family contains four of five requested
+questions because structures with unknown protein bond topology are rejected.
+
+Marin records the source, config, definitions, structure and bundle hashes in its
 [manifest](https://github.com/marin-community/marin/blob/main/vendor/evalchemy/eval/chat_benchmarks/PDBThink/manifest.json).
 Prompts and gold answers live in the evaluation data cache and are not committed
 to Marin.
@@ -61,11 +69,13 @@ inside that checkout; acquisition needs network access to the upstream structure
 sources, and subsequent build and validation use the cache:
 
 ```bash
-git checkout --detach 94b65a918140e44ca6b6e94032a0ee0a7441b1dd
-uv run --python 3.12 --extra tokenizer structural-reasoning acquire --config configs/dataset_v1.yaml
-uv run --python 3.12 --extra tokenizer structural-reasoning build \
+git checkout --detach c00271fe049d60dc0d671b999d8c2fb595086166
+uv venv --python 3.12
+uv pip install --python .venv/bin/python '.[tokenizer]'
+uv run --no-sync structural-reasoning acquire --config configs/dataset_v1.yaml
+uv run --no-sync structural-reasoning build \
   --config configs/dataset_v1.yaml --output datasets/marin-v1
-uv run --python 3.12 --extra tokenizer structural-reasoning validate --dataset datasets/marin-v1
+uv run --no-sync structural-reasoning validate --dataset datasets/marin-v1
 ```
 
 From the Marin repository, validate and stage the bundle:
@@ -79,10 +89,12 @@ uv run --project vendor/evalchemy --frozen --extra pdbthink \
 
 The command rejects any build that differs from the frozen manifest and verifies
 the written bundle. It creates
-`Open-Athena/pdbthink/94b65a918140e44ca6b6e94032a0ee0a7441b1dd/evaluation.json.gz`
+`Open-Athena/pdbthink/c00271fe049d60dc0d671b999d8c2fb595086166/evaluation.json.gz`
 under the cache prefix. For a distributed evaluation,
 use a private object-store prefix accessible to the evaluation worker in its
 region. Use `uv run fsutil cp` to copy an already prepared bundle to that prefix.
+Preserve the full `Open-Athena/pdbthink/<revision>/evaluation.json.gz` path
+beneath the destination prefix.
 
 Set `dataset_cache` in a copy of
 `experiments/evaluation/configs/evalchemy/pdbthink.yaml` to this cache prefix, then

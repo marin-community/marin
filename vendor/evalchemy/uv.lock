@@ -727,7 +727,7 @@ requires-dist = [
     { name = "nltk", marker = "extra == 'livebench'" },
     { name = "numpy" },
     { name = "patsy", marker = "extra == 'alpaca-eval'" },
-    { name = "pdbthink", marker = "extra == 'pdbthink'", git = "https://github.com/Open-Athena/pdbthink?rev=94b65a918140e44ca6b6e94032a0ee0a7441b1dd" },
+    { name = "pdbthink", marker = "extra == 'pdbthink'", git = "https://github.com/Open-Athena/pdbthink?rev=c00271fe049d60dc0d671b999d8c2fb595086166" },
     { name = "protobuf" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyext", marker = "extra == 'livebench'", git = "https://github.com/penfever/PyExt" },
@@ -2040,7 +2040,7 @@ wheels = [
 [[package]]
 name = "pdbthink"
 version = "0.1.0"
-source = { git = "https://github.com/Open-Athena/pdbthink?rev=94b65a918140e44ca6b6e94032a0ee0a7441b1dd#94b65a918140e44ca6b6e94032a0ee0a7441b1dd" }
+source = { git = "https://github.com/Open-Athena/pdbthink?rev=c00271fe049d60dc0d671b999d8c2fb595086166#c00271fe049d60dc0d671b999d8c2fb595086166" }
 dependencies = [
     { name = "gemmi" },
     { name = "jinja2" },
