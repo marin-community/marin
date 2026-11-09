@@ -13,10 +13,11 @@ task 0 owns pipeline stage 0 and task 1 owns pipeline stage 1.
 
 import dataclasses
 import logging
+import math
 import re
 from collections import Counter
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import haliax as hax
 import jax
@@ -26,10 +27,12 @@ import requests
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.timing import Duration, ExponentialBackoff
 
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig, VllmEngineConfig, VllmLauncherType, VllmSource
+from marin.inference.iris_tpu_vllm import tpu_ray_gang
 from marin.inference.iris_vllm import (
     iris_vllm_followers,
     iris_vllm_launch,
@@ -38,7 +41,8 @@ from marin.inference.iris_vllm import (
 )
 from marin.inference.levanter_backend import LevanterBackend
 from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
-from marin.inference.vllm_backend import VllmBackend
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_server import IsolatedTpuVllm, VllmLauncherWithEnvironment
 from marin.testing.inference.backend_parity import (
     NextTokenObservation,
     NextTokenParity,
@@ -50,15 +54,19 @@ from marin.testing.inference.snowball import (
     BATCH_SIZE,
     MAX_PROBABILITY_ERROR,
     SNOWBALL,
+    TPU_CHIPS_PER_HOST,
+    TPU_TENSOR_PARALLEL_SIZE,
     RepresentativeCase,
     RepresentativeGolden,
+    RepresentativePromptFixture,
     pad_prompt_batch,
     read_prompt_fixture,
+    read_tpu_export_manifest,
 )
 
 logger = logging.getLogger(__name__)
 
-RUNTIME_TIMEOUT = 30 * 60.0
+RUNTIME_TIMEOUT = 30 * 60
 HTTP_CONNECT_TIMEOUT = 30.0
 HTTP_READ_TIMEOUT = 5 * 60.0
 GPU_COUNT = 8
@@ -288,6 +296,7 @@ def _request_vllm_case(
         actual_logprobs = {
             int(token.removeprefix("token_id:")): float(logprob) for token, logprob in returned_top_logprobs.items()
         }
+        assert all(math.isfinite(value) for value in actual_logprobs.values()), context
         return NextTokenObservation.from_logprob_map(
             case.id,
             int(greedy_token_id),
@@ -299,34 +308,13 @@ def _request_vllm_case(
         raise
 
 
-def _request_vllm_wave(
-    executor: ThreadPoolExecutor,
-    completions_url: str,
-    model_id: str,
-    cases: tuple[RepresentativeCase, ...],
-    request_prefix: str,
-) -> list[NextTokenObservation]:
-    assert len(cases) == GPU_COUNT
-    futures = [
-        executor.submit(
-            _request_vllm_case,
-            completions_url,
-            model_id,
-            case,
-            rank,
-            f"{request_prefix}-{case.id}-rank-{rank}",
-        )
-        for rank, case in enumerate(cases)
-    ]
-    return [future.result() for future in as_completed(futures)]
-
-
 def score_vllm_against_goldens(
     goldens: tuple[RepresentativeGolden, ...],
     attention_backend: str,
     pipeline_parallel_size: int,
-) -> None:
+) -> list[NextTokenParity] | None:
     """Run one task in the vLLM gang; the leader scores rank-pinned prompts."""
+    configure_coreweave_s3()
     prompt_fixture = read_prompt_fixture(goldens)
 
     spec = ModelSpec(
@@ -393,76 +381,132 @@ def score_vllm_against_goldens(
                 environment.publish_compilation_cache()
             else:
                 with iris_vllm_followers(launch):
-                    completions_url = f"{environment.server_url}/completions"
-
-                    with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
-                        for wave, batch in enumerate(prompt_fixture.batches):
-                            logger.info(
-                                "vLLM wave %d/%d: max_tokens=%d cases=%s",
-                                wave + 1,
-                                len(prompt_fixture.batches),
-                                batch.max_tokens,
-                                [case.id for case in batch.cases],
-                            )
-                            parities.extend(
-                                observation.parity_against(
-                                    next(case.top_logprobs for case in batch.cases if case.id == observation.case_id)
-                                )
-                                for observation in _request_vllm_wave(
-                                    executor,
-                                    completions_url,
-                                    spec.api_model,
-                                    batch.cases,
-                                    f"wave-{wave}",
-                                )
-                            )
-
-                        sentinel = next(case for case in prompt_fixture.cases if case.id == "knowledge-longbench-02")
-                        assert len(sentinel.prompt_token_ids) > 2048
-                        logger.info(
-                            "vLLM repeatability sentinel: case=%s tokens=%d",
-                            sentinel.id,
-                            len(sentinel.prompt_token_ids),
-                        )
-                        first_wave = _request_vllm_wave(
-                            executor,
-                            completions_url,
-                            spec.api_model,
-                            (sentinel,) * GPU_COUNT,
-                            "same-rank-repeat-0",
-                        )
-                        second_wave = _request_vllm_wave(
-                            executor,
-                            completions_url,
-                            spec.api_model,
-                            (sentinel,) * GPU_COUNT,
-                            "same-rank-repeat-1",
-                        )
-                        assert_same_rank_repeatability(first_wave, second_wave)
-                        sentinel_parities = [
-                            observation.parity_against(sentinel.top_logprobs)
-                            for observation in (*first_wave, *second_wave)
-                        ]
-                        # https://github.com/marin-community/marin/issues/7554:
-                        # the rank-to-golden distance is diagnostic; only exact
-                        # same-rank recomputation is stable enough to gate.
-                        _log_parities(
-                            f"vllm-gpu-pp{pipeline_parallel_size}-repeatability",
-                            sentinel_parities,
-                        )
-                        diagnostic = cross_rank_diagnostic(first_wave)
-                        logger.info(
-                            "vLLM cross-rank diagnostic only: case=%s emitted_tokens=%s "
-                            "shared_top_tokens=%d max_probability_spread=%.6f",
-                            diagnostic.case_id,
-                            dict(diagnostic.emitted_token_ids_by_rank),
-                            diagnostic.shared_top_token_count,
-                            diagnostic.max_probability_spread,
-                        )
-                    assert len(parities) == len(prompt_fixture.cases)
-                    _log_parities(f"vllm-gpu-pp{pipeline_parallel_size}", parities)
-                    for parity in parities:
-                        parity.assert_matches(max_probability_error=VLLM_MAX_PROBABILITY_ERROR)
+                    parities = score_vllm_endpoint(
+                        prompt_fixture,
+                        f"{environment.server_url}/completions",
+                        spec.api_model,
+                        data_parallel_size=GPU_COUNT,
+                    )
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
-            return
+            return None
+    return parities
+
+
+def score_vllm_endpoint(
+    fixture: RepresentativePromptFixture,
+    completions_url: str,
+    model_id: str,
+    *,
+    data_parallel_size: int,
+) -> list[NextTokenParity]:
+    """Score exact fixture IDs and require fresh same-rank recomputation.
+
+    GPU waves pin one request to each data-parallel rank. TPU waves use rank 0
+    for every request; repeatability is checked serially on that single rank.
+    """
+    parities = []
+    with ThreadPoolExecutor(max_workers=BATCH_SIZE) as executor:
+        for wave, batch in enumerate(fixture.batches):
+            futures = [
+                executor.submit(
+                    _request_vllm_case,
+                    completions_url,
+                    model_id,
+                    case,
+                    index % data_parallel_size,
+                    f"wave-{wave}-{case.id}",
+                )
+                for index, case in enumerate(batch.cases)
+            ]
+            for case, future in zip(batch.cases, futures, strict=True):
+                observation = future.result()
+                parities.append(observation.parity_against(case.top_logprobs))
+
+        sentinel = next(case for case in fixture.cases if case.id == "knowledge-longbench-02")
+        assert len(sentinel.prompt_token_ids) > 2048
+        repeats = []
+        for repeat in range(2):
+            futures = [
+                executor.submit(
+                    _request_vllm_case,
+                    completions_url,
+                    model_id,
+                    sentinel,
+                    rank,
+                    f"same-rank-repeat-{repeat}-{sentinel.id}-rank-{rank}",
+                )
+                for rank in range(data_parallel_size)
+            ]
+            repeats.append([future.result() for future in futures])
+        assert_same_rank_repeatability(*repeats)
+        logger.info("vLLM cross-rank diagnostic only: %s", cross_rank_diagnostic(repeats[0]))
+    assert len(parities) == len(fixture.cases)
+    _log_parities("vllm", parities)
+    for parity in parities:
+        parity.assert_matches(max_probability_error=VLLM_MAX_PROBABILITY_ERROR)
+    return parities
+
+
+def tpu_vllm_engine_config() -> VllmEngineConfig:
+    """Return the TPU arm configuration, including its integer vLLM timeout."""
+    return VllmEngineConfig(
+        launcher=VllmLauncherType.TPU,
+        max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
+        max_num_seqs=BATCH_SIZE,
+        startup_timeout_seconds=RUNTIME_TIMEOUT,
+        extra_args=("--max-logprobs", str(RETURNED_LOGPROBS), "--no-enable-prefix-caching"),
+    )
+
+
+def score_tpu_vllm_against_goldens(
+    goldens: tuple[RepresentativeGolden, ...],
+    weights: str,
+    cpus_per_host: float,
+) -> list[NextTokenParity] | None:
+    """Run the same vLLM contract on one four-host v4 slice at TP16."""
+    assert weights == SNOWBALL.tpu_export_uri
+    read_tpu_export_manifest()
+    fixture = read_prompt_fixture(goldens)
+    engine = tpu_vllm_engine_config()
+    launcher = vllm_launcher(engine)
+    assert isinstance(launcher, IsolatedTpuVllm)
+    spec = ModelSpec(
+        weights=weights,
+        api_model=SNOWBALL.model_name,
+        num_chips=TPU_TENSOR_PARALLEL_SIZE,
+        tensor_parallel_size=TPU_TENSOR_PARALLEL_SIZE,
+        dtype="bfloat16",
+        max_model_len=MAX_MODEL_LEN,
+        chat_template_content=None,
+    )
+    # Only isolated Ray/serving children use TPU JAX; the coordinator stays CPU.
+    # Torchax also needs the CPU backend during checkpoint loading.
+    with tpu_ray_gang(
+        VllmLauncherWithEnvironment(launcher, {"JAX_PLATFORMS": "tpu,cpu"}),
+        cpus_per_host=max(1, math.floor(cpus_per_host)),
+        chips_per_host=TPU_CHIPS_PER_HOST,
+        timeout_seconds=RUNTIME_TIMEOUT,
+    ) as gang:
+        if gang.leader:
+            with iris_vllm_followers(gang.identity):
+                with VllmBackend(engine).start(
+                    spec,
+                    extra_args=("--distributed-executor-backend", "ray"),
+                    subprocess_env={**gang.subprocess_env, "JAX_PLATFORMS": "tpu,cpu"},
+                ) as environment:
+                    environment.wait_until_ready()
+                    parities = score_vllm_endpoint(
+                        fixture,
+                        environment.server_url + "/completions",
+                        spec.api_model,
+                        data_parallel_size=1,
+                    )
+                    gang.check_alive()
+                    environment.check_alive()
+        else:
+            wait_for_iris_vllm_shutdown(gang.identity, gang.check_alive)
+    if not gang.leader:
+        notify_iris_vllm_stopped(gang.identity)
+        return None
+    return parities

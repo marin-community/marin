@@ -39,6 +39,8 @@ from zephyr.coordinator import (
     WorkerState,
     ZephyrCoordinator,
     ZephyrExecutionResult,
+    _execution_result_path,
+    _read_coordinator_result,
 )
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
@@ -59,7 +61,7 @@ from zephyr.testing.coordinator import (
     start_test_stage,
 )
 from zephyr.worker import ZephyrWorker
-from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
+from zephyr.worker_context import CounterEntry, CounterKey, CounterSnapshot, zephyr_worker_ctx
 
 
 class _UnpicklableError(Exception):
@@ -436,12 +438,20 @@ def test_pull_task_rotates_between_executions(coordinator):
     assert execution_order == ["run-1", "run-2", "run-1", "run-2"]
 
 
-def test_duplicate_execution_id_joins_terminal_execution(coordinator):
+def test_duplicate_execution_id_joins_terminal_execution(coordinator, tmp_path):
     """A repeated execution ID returns the retained terminal result."""
+    result_path = _execution_result_path(str(tmp_path / "chunks"), "same-run")
+    expected = ZephyrExecutionResult(results=[], counters={}, execution_id="same-run")
+
     plan = compute_plan(Dataset.from_list([]))
     coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
-    coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
-    assert list(coordinator._executions) == ["same-run"]
+    assert _read_coordinator_result(result_path) == expected
+
+    # The repeat carries a non-empty plan. Joining returns the first run's stored
+    # result; running it again would wait for workers this coordinator never gets.
+    repeat_plan = compute_plan(Dataset.from_list([1, 2, 3]))
+    coordinator.run_pipeline(repeat_plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
+    assert _read_coordinator_result(result_path) == expected
 
 
 def test_write_jsonl(tmp_path, zephyr_ctx):
@@ -581,29 +591,45 @@ def _make_task(stage_name: str = "test", shard_idx: int = 0) -> ShardTask:
     )
 
 
-def test_draining_pool_releases_idle_workers_during_the_last_stage_tail(tmp_path, actor_context):
-    """A pool that takes no more pipelines shrinks as the last stage drains.
-
-    Once the final stage's queue is empty, a worker holding nothing in flight
-    gets SHUTDOWN so its capacity returns to the cluster while stragglers on
-    other workers finish.
-    """
+def test_draining_pool_keeps_one_idle_worker_for_last_shard_retry(tmp_path, actor_context):
     coordinator = make_test_coordinator(tmp_path, drain_idle_workers=True)
     try:
-        start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
+        run = start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
 
         coordinator.register_worker("worker-0", MagicMock())
         status, _work = coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
-        assert status == PullStatus.RUN_TASK  # drains the queue, worker-0 now busy
+        assert status == PullStatus.RUN_TASK
 
         coordinator.register_worker("worker-1", MagicMock())
         status, _work = coordinator.pull_task("worker-1", TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.NO_WORK_BACKOFF
+
+        coordinator.register_worker("worker-2", MagicMock())
+        status, _work = coordinator.pull_task("worker-2", TEST_WORKER_AVAILABLE)
         assert status == PullStatus.SHUTDOWN
 
-        # worker-0 still owns an in-flight shard that could be requeued onto it,
-        # so it must stay alive even though the queue is empty.
         status, _work = coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
         assert status == PullStatus.NO_WORK_BACKOFF
+
+        coordinator._last_seen["worker-0"] = 0.0
+        coordinator.heartbeat("worker-1")
+        coordinator.check_heartbeats(timeout=1.0)
+
+        status, retry = coordinator.pull_task("worker-1", TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
+        assert retry is not None
+        assert retry.attempt == 1
+        coordinator.report_result(
+            "worker-1",
+            run.execution_id,
+            retry.task.shard_idx,
+            retry.attempt,
+            TaskResult(shard=ListShard(refs=[])),
+            CounterSnapshot.empty(),
+            run.stage_generation,
+        )
+        assert run.completed_shards == run.total_shards
+        assert coordinator.pull_task("worker-1", TEST_WORKER_AVAILABLE)[0] == PullStatus.SHUTDOWN
     finally:
         coordinator.shutdown()
 
@@ -683,7 +709,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
 
     # Once a counter snapshot exists, the throughput segment reappears.
     coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
+        counters={CounterKey("map_only", ZEPHYR_STAGE_ITEM_COUNT_KEY): CounterEntry(7)}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
@@ -693,7 +719,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
 
     # Same when only the byte counter is present.
     coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
+        counters={CounterKey("map_only", ZEPHYR_STAGE_BYTES_PROCESSED_KEY): CounterEntry(1024)}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
         caplog.clear()
@@ -1563,6 +1589,41 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     client.shutdown(wait=True)
 
 
+def test_shared_pool_start_retries_a_failed_coordinator(tmp_path):
+    """A shared pool whose first coordinator fails to start comes up on a retry.
+
+    A dedicated pipeline already retries a failed pool start. The shared pool
+    must too, or one slow coordinator host fails every step that shares it.
+    """
+    client = LocalClient()
+    ctx = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        max_execution_retries=2,
+        name=f"test-shared-start-{uuid.uuid4().hex[:8]}",
+    )
+    original_create_actor_group = client.create_actor_group
+    coordinator_starts = [0]
+
+    def flaky_create_actor_group(actor_class, *args, **kwargs):
+        if actor_class is ZephyrCoordinator:
+            coordinator_starts[0] += 1
+            if coordinator_starts[0] == 1:
+                raise TimeoutError("Only 0/1 actors ready after 900.0s")
+        return original_create_actor_group(actor_class, *args, **kwargs)
+
+    client.create_actor_group = flaky_create_actor_group
+    try:
+        with ctx:
+            results = ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)).results
+        assert sorted(results) == [2, 4, 6]
+        assert coordinator_starts[0] == 2
+    finally:
+        client.shutdown(wait=True)
+
+
 def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
     """ZephyrWorkerError (application errors) are never retried."""
     chunk_prefix = str(tmp_path / "chunks")
@@ -1774,7 +1835,7 @@ def test_telemetry_includes_live_progress_without_recounting_completed_tasks(coo
             emitted[(attributes["run"], self.name)] = value
 
     monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
-    live = CounterSnapshot(counters={"review/completed": CounterEntry(7)}, generation=1)
+    live = CounterSnapshot(counters={CounterKey(None, "review/completed"): CounterEntry(7)}, generation=1)
     coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})
     coordinator._publish_telemetry()
     assert emitted[(TEST_EXECUTION_ID, "review_completed")] == 7
@@ -1785,7 +1846,7 @@ def test_telemetry_includes_live_progress_without_recounting_completed_tasks(coo
         0,
         0,
         TaskResult(shard=ListShard(refs=[])),
-        CounterSnapshot(counters={"review/completed": CounterEntry(10)}, generation=2),
+        CounterSnapshot(counters={CounterKey(None, "review/completed"): CounterEntry(10)}, generation=2),
         run.stage_generation,
     )
     coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})

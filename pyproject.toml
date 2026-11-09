@@ -93,7 +93,7 @@ constraint-dependencies = [
     "fsspec>=2026.6.0",
     "joserfc>=1.7.6",
     "multidict>=6.9.1",
-    "oauthlib>=4.0.0",
+    "oauthlib>=4.0.1",
     "opentelemetry-api>=1.45.1",
     "soupsieve>=2.9.0",
     "urllib3>=2.8.0",
@@ -139,7 +139,7 @@ override-dependencies = [
     "notebook>=7.6.3",
     "orjson>=3.11.9",
     "pillow>=13.0.0",
-    "pyasn1>=0.6.3",
+    "pyasn1>=0.6.5",
     "python-dotenv>=1.1.1",
     "ray>=2.55.1",
     "rich>=14.1.0",
@@ -592,4 +592,4 @@ pythonpath = ["."]
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
 # the Iris markers also apply when lib/iris test paths are passed from the root.
-addopts = "-p marin.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"
+addopts = "-p infra.ci.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

@@ -27,9 +27,7 @@ from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, run
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.evalchemy.runtime import (
-    evalchemy_evaluator_source_hash,
     evalchemy_runtime_descriptor,
-    evalchemy_runtime_source_hash,
 )
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
@@ -67,7 +65,7 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
 
 from experiments.evaluation.evals import (
@@ -153,6 +151,11 @@ class LaunchSpec:
     policy_finalization: PolicyFinalization | None = None
 
 
+# EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
+POLICY_RECORDS_PREFIXES = (DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX)
+POLICY_RECORD_ROOTS = tuple(StoragePath(prefix) for prefix in POLICY_RECORDS_PREFIXES)
+
+
 def _git_sha() -> str:
     for key in ("MARIN_GIT_SHA", "GIT_COMMIT"):
         value = os.environ.get(key)
@@ -187,13 +190,29 @@ def _capability_origin(cluster: str) -> str:
     return config.dashboard_url
 
 
+def _is_catalogued_results_path(path: str) -> bool:
+    """Whether `path` is `<root>/<run_id>/results` under a prefix EvalDash scans for `record.json`."""
+    results = StoragePath(path)
+    return results.name == "results" and results.parent.parent in POLICY_RECORD_ROOTS
+
+
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
-    """Resolve the configured TPU or CoreWeave records store."""
+    """Resolve the configured TPU or CoreWeave records store.
+
+    Policy launches may write remote records only to a prefix EvalDash catalogs; a local path stays
+    available for dry runs and tests.
+    """
     if spec.records_prefix:
-        return spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
-    if accel.target_cluster:
-        return CW_RECORDS_PREFIX
-    return DEFAULT_RECORDS_PREFIX
+        prefix = spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
+    elif accel.target_cluster:
+        prefix = CW_RECORDS_PREFIX
+    else:
+        prefix = DEFAULT_RECORDS_PREFIX
+    if spec.policy_finalization is not None and "://" in prefix and StoragePath(prefix) not in POLICY_RECORD_ROOTS:
+        raise ValueError(
+            f"policy records prefix {prefix!r} is not catalogued by EvalDash; use one of {POLICY_RECORDS_PREFIXES}"
+        )
+    return prefix
 
 
 def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefinition], ...]:
@@ -218,8 +237,8 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
 @dataclass(frozen=True)
 class _ResolvedDefinition:
     record_ref: EvalRef
-    runtime_descriptor: str
-    cache_runtime_descriptor: str
+    runtime_descriptor: str | None
+    cache_runtime_descriptor: str | None
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
@@ -242,13 +261,17 @@ def _resolve_definitions(
             f"{version} requires historical Evalchemy commit {commit}; "
             "run it from a Marin checkout that predates Evalchemy vendoring"
         )
-    evalchemy_source_hash = evalchemy_runtime_source_hash() if evalchemy_definitions else ""
-    evalchemy_evaluator_hash = evalchemy_evaluator_source_hash() if evalchemy_definitions else ""
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
+    harbor_runtime = harbor_runtime_descriptor() if harbor_definitions else None
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
-    validated_configs = iter(preflight_harbor_configs(requests))
+    validated_configs = iter(
+        preflight_harbor_configs(
+            requests,
+            judge_model=canonical_served_name(judge_model.name) if judge_model is not None else None,
+        )
+    )
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
@@ -263,10 +286,8 @@ def _resolve_definitions(
                     name,
                     _ResolvedDefinition(
                         record_ref=definition.record_ref_for(config),
-                        runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras, evalchemy_source_hash),
-                        cache_runtime_descriptor=evalchemy_runtime_descriptor(
-                            config.runtime.extras, evalchemy_evaluator_hash
-                        ),
+                        runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras),
+                        cache_runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras),
                         executor=EvalchemyExecutor(config),
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
@@ -284,8 +305,8 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=harbor_runtime_descriptor(),
-                    cache_runtime_descriptor=harbor_runtime_descriptor(),
+                    runtime_descriptor=harbor_runtime,
+                    cache_runtime_descriptor=harbor_runtime,
                     executor=definition.executor_for(
                         config,
                         model,
@@ -377,6 +398,11 @@ def build_evaluation_batch(
             raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
         if "://" not in spec.resume_results_path:
             raise ValueError("--resume-results-path must be an object-store path")
+        if spec.policy_finalization is not None and not _is_catalogued_results_path(spec.resume_results_path):
+            raise ValueError(
+                f"policy --resume-results-path {spec.resume_results_path!r} is not a run's results directory "
+                f"that EvalDash catalogs; use <root>/<run_id>/results under one of {POLICY_RECORDS_PREFIXES}"
+            )
         validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.resume_identity)
     model_ref = ModelRef(
         name=model.name,
@@ -443,7 +469,11 @@ def build_evaluation_batch(
                 "pipeline": spec.cache_key or group_id,
                 "model": _model_identity(model_ref),
                 "evaluation": _evaluation_identity(definition.record_ref),
-                "runtime": definition.cache_runtime_descriptor if spec.cache_key is not None else None,
+                **(
+                    {"runtime": definition.cache_runtime_descriptor}
+                    if spec.cache_key is not None and definition.cache_runtime_descriptor is not None
+                    else {}
+                ),
                 "judge": (
                     ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
                     if judge is not None
