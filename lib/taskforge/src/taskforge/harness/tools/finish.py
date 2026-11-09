@@ -1,0 +1,25 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import dataclass
+from typing import override
+
+from taskforge.effects.context import Context
+from taskforge.harness.protocol import FinishRequest
+from taskforge.harness.tools.base import ValidatedTool
+
+
+@dataclass(frozen=True, slots=True)
+class FinishArgs:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class FinishTool(ValidatedTool[FinishArgs]):
+    name = "finish"
+    description = "Stop this session without submitting a task."
+    args_type = FinishArgs
+
+    @override
+    async def run(self, ctx: Context, args: FinishArgs) -> FinishRequest:
+        return FinishRequest(args.reason)
