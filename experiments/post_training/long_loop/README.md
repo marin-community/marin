@@ -88,3 +88,9 @@ To repair serialization while retaining the native checkpoint, add
 artifacts, writes a separately timed export under the new version, and then
 continues through endpoint, RL, and evaluation. Both reused and new exports must
 contain all schema-2 per-expert tensors before serving starts.
+
+If the export was repaired under a separate version, combine
+`--reuse-sft-version <native-version>` with `--reuse-export-version <export-version>`.
+The launcher verifies both committed lineages without running either stage again.
+Endpoint and rollout serving share the release in `vllm-release.json`; launcher
+preflight requires its version and wheel URLs to match SkyRL dependency pins.

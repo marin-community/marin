@@ -1,0 +1,51 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""One immutable vLLM release for endpoint and RL serving."""
+
+import json
+import tomllib
+from pathlib import Path
+from urllib.parse import unquote
+
+from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
+from rigging.config_discovery import find_project_root
+
+
+def serving_release() -> VllmGpuRelease:
+    manifest = json.loads(Path(__file__).with_name("vllm-release.json").read_text())
+    return VllmGpuRelease(
+        release_tag="marin-vllm-gpu-20260929-39e62869693c",
+        source_commit=manifest["source"]["fork_commit"],
+        version=manifest["distribution"]["version"],
+        torch_backend=manifest["abi"]["cuda_variant"],
+        torch_version=manifest["abi"]["torch_version"],
+        wheels=tuple(
+            VllmGpuWheel(
+                architecture=p["architecture"],
+                sm_targets=tuple(p["sm_targets"]),
+                url=p["wheel"]["url"],
+                sha256=p["wheel"]["sha256"],
+            )
+            for p in manifest["platforms"]
+        ),
+    )
+
+
+def check_serving_pin(release: VllmGpuRelease, skyrl_project: Path) -> None:
+    project = tomllib.loads(skyrl_project.read_text())
+    sources = project["tool"]["uv"]["sources"]["vllm"]
+    urls = {unquote(source["url"]) for source in sources}
+    requirements = project["project"]["optional-dependencies"]["vllm"]
+    if not any(req.split(";")[0].strip() == f"vllm=={release.version}" for req in requirements):
+        raise ValueError("Endpoint vLLM version differs from the RL stack")
+    if {unquote(wheel.url) for wheel in release.wheels} != urls:
+        raise ValueError("Endpoint vLLM wheels differ from the RL stack")
+
+
+def checked_serving_release() -> VllmGpuRelease:
+    root = find_project_root()
+    assert root is not None
+    release = serving_release()
+    check_serving_pin(release, root / "vendor/skyrl/pyproject.toml")
+    return release

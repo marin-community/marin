@@ -17,6 +17,8 @@ from typing import Any
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuRelease
+
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
 WORKER_PYTHON_VERSION = "3.12"
@@ -269,6 +271,7 @@ class InferenceModelConfig:
 
 @dataclass(frozen=True)
 class VllmEngineConfig:
+    gpu_release: VllmGpuRelease = VLLM_GPU_RELEASE
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None

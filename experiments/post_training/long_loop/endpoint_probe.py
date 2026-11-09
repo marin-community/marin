@@ -22,6 +22,7 @@ from rigging.filesystem.buckets import filesystem_for
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
+from experiments.post_training.long_loop.serving import checked_serving_release
 from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, validate_handoff
 
 
@@ -58,6 +59,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
         capability_origin=origin,
         api_model="long-loop-sft-probe",
     )
+    inference = replace(inference, engine=replace(inference.engine, gpu_release=checked_serving_release()))
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_REPO, revision=tokenizer_revision)
     messages = [{"role": "user", "content": "Reply with the number 2."}]
     with remote_inference(inference) as served:
