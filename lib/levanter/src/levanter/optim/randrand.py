@@ -132,10 +132,9 @@ def _unpack(arrays, template, layouts, treedef):
 def named_randrand(config, *, total_steps, schedule):
     """Wrap the plain-array optimizer without losing Haliax parameter axes."""
 
-    def transform(params):
-        layouts, treedef = parameter_layout(params)
+    def optimizer_for_layouts(layouts):
         labels = tuple(layout.kind for layout in layouts for _ in range(layout.batch_size))
-        return rr.randrand(labels, config, total_steps=total_steps, schedule=schedule), layouts, treedef
+        return rr.randrand(labels, config, total_steps=total_steps, schedule=schedule)
 
     def name_state(raw, params, layouts, treedef):
         # Preserve parameter axes on the large Adam buffers so Levanter's FSDP
@@ -149,13 +148,15 @@ def named_randrand(config, *, total_steps, schedule):
         )
 
     def init_fn(params):
-        tx, layouts, treedef = transform(params)
+        layouts, treedef = parameter_layout(params)
+        tx = optimizer_for_layouts(layouts)
         return name_state(tx.init(_pack(params, layouts)), params, layouts, treedef)
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("RandRAND requires params")
-        tx, layouts, treedef = transform(params)
+        layouts, treedef = parameter_layout(params)
+        tx = optimizer_for_layouts(layouts)
         if jax.tree_util.tree_structure(updates, is_leaf=_is_parameter) != treedef:
             raise ValueError("Gradient and parameter structures differ")
         raw_state = rr.RandRANDState(

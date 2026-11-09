@@ -194,7 +194,11 @@ def _refresh_matrix(state, key, config):
 
 
 def lr_multiplier(count, *, total_steps=TOTAL_STEPS, warmup_steps=WARM_UP, min_lr_ratio=MIN_LR_RATIO):
-    """Completed-step indexing: first LR zero, peak at step index warmup_steps."""
+    """Return the LR multiplier indexed by completed optimizer steps.
+
+    With positive warmup, start at zero and reach one at warmup_steps.
+    With no warmup, start at one and follow cosine decay from the first step.
+    """
     if not 0 <= warmup_steps < total_steps:
         raise ValueError("Require 0 <= warmup_steps < total_steps")
     count = jnp.asarray(count, jnp.float32)
