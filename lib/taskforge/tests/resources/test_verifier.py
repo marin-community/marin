@@ -54,6 +54,11 @@ print(int(clean and Path('/app/answer.txt').read_text() == '12'))
 """
 
 
+# ShellSim's first command on a cold CI runner can take seconds; a timeout here would replace the machine
+# and break the machine and lease counts these tests assert.
+COMMAND_TIMEOUT = 30
+
+
 class CountedMachine(Machine):
     def __init__(self, machine: Machine, die: bool, failure: RuntimeError | None = None) -> None:
         self.machine, self.die, self.closed = machine, die, False
@@ -116,7 +121,7 @@ class CountedFactory(MachineFactory):
 
 
 def setup(factory: CountedFactory) -> tuple[RoundVerifier, GradingResource]:
-    engine = rollout_engine({"shellsim": factory}, command_timeout=1)
+    engine = rollout_engine({"shellsim": factory}, command_timeout=COMMAND_TIMEOUT)
     holder = RoundVerifier(engine, 5)
     return holder, GradingResource(holder, "test", engine)
 
@@ -300,7 +305,7 @@ print(int(clean and valid and rootfile.exists() == expected and (not expected or
 
 
 async def test_backend_without_reset_is_recreated() -> None:
-    engine = rollout_engine({"shellsim": shellsim_factory()}, command_timeout=1)
+    engine = rollout_engine({"shellsim": shellsim_factory()}, command_timeout=COMMAND_TIMEOUT)
     holder = RoundVerifier(engine, 5)
     resource = GradingResource(holder, "test")
     try:
