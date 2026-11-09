@@ -37,7 +37,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
-from levanter.fp32_fields import with_fp32_fields
+from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -482,7 +482,9 @@ def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
         router = jnp.zeros((cfg.hidden_dim, cfg.num_experts), jnp.float32)
         router = router.at[0, :2].set(1).at[1, 0].set(1 / 256)
         model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
-        compute = with_fp32_fields(jmp.get_policy("p=f32,c=bf16"), ("router_bias",)).cast_to_compute(model)
+        compute = with_field_dtype_overrides(
+            jmp.get_policy("p=f32,c=bf16"), {"router_bias": jnp.dtype("float32")}
+        ).cast_to_compute(model)
         inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
         # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
         # following FP32 conversion into a CPU dot with an FP32 accumulator.
@@ -845,7 +847,7 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
                 axes={"data": -1, "replica": 1, "model": 1, "context": 1, "expert": 2},
                 compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
             ),
-            fp32_fields=("router_bias",),
+            field_dtype_overrides={"router_bias": jnp.dtype("float32")},
             use_explicit_mesh_axes=True,
             train_batch_size=max(8, jax.device_count()),
             per_device_parallelism=1,
@@ -894,7 +896,7 @@ def test_fp32_router_training_rejects_missing_fp32_bias_before_loading(tmp_path)
         model=_tiny_config(router_dot_fp32=True),
         data=LmDataConfig(tokenizer=str(tmp_path)),
     )
-    with pytest.raises(ValueError, match="fp32_fields to include router_bias"):
+    with pytest.raises(ValueError, match="field_dtype_overrides to map router_bias to float32"):
         main(config)
 
 
