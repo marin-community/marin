@@ -66,6 +66,7 @@ from levanter.utils.mesh import MeshConfig
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
     init_weights_only_from_checkpoint,
+    load_grug_checkpoint,
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -181,6 +182,36 @@ def restore_template_from(state):
     jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
     gc.collect()
     return template
+
+
+def checkpoint_samples(state) -> tuple:
+    """Sample each local state shard for the first-checkpoint restoration gate."""
+    samples = []
+    for leaf in jax.tree.leaves(state):
+        if not isinstance(leaf, jax.Array):
+            continue
+        for shard in leaf.addressable_shards:
+            flat = shard.data.reshape(-1)
+            indices = np.unique(np.linspace(0, max(flat.size - 1, 0), min(16, flat.size), dtype=np.int64))
+            values = np.asarray(jax.device_get(flat[indices]))
+            samples.append((leaf.shape, str(leaf.dtype), str(shard.index), values.tobytes()))
+    return tuple(samples)
+
+
+def restore_first_checkpoint(state, checkpointer, mesh):
+    """Commit and reload the first full state before continuing optimization."""
+    step = int(state.step)
+    expected = checkpoint_samples(state)
+    checkpointer.on_step(tree=state, step=step, force=True)
+    checkpointer.wait_until_finished()
+    template = restore_template_from(state)
+    restored = load_grug_checkpoint(
+        state=template, candidate=f"{checkpointer.base_path}/step-{step}", mesh=mesh, allow_partial=False
+    )
+    jax.block_until_ready(restored)
+    if int(restored.step) != step or checkpoint_samples(restored) != expected:
+        raise ValueError("First SFT checkpoint restore changed the step or sampled state values")
+    return restored
 
 
 def template_for_candidate_layout(
@@ -431,6 +462,7 @@ class GrugRunConfig:
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
+    first_checkpoint_restore_step: int | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
@@ -1491,6 +1523,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+                if config.first_checkpoint_restore_step is not None and current_step == 0:
+                    with timing.span("first_step_compile", step=current_step):
+                        train_step.lower(state, batch).compile()
                 with timing.span("train_step", step=current_step):
                     state, metrics, inline_watch_stats = train_step(state, batch)
                     if inline_watch_stats is not None and watch_due:
@@ -1540,6 +1575,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
+
+                if current_step == config.first_checkpoint_restore_step:
+                    if checkpointer is None:
+                        raise ValueError("First-step restore gate requires checkpointing")
+                    with timing.span("first_checkpoint_save_restore_gate", step=current_step):
+                        state = restore_first_checkpoint(state, checkpointer, mesh)
 
                 checkpoint_start = time.perf_counter()
                 if checkpointer is not None:

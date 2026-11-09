@@ -23,6 +23,7 @@ import contextlib
 import json
 import math
 import os
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
@@ -187,6 +188,58 @@ class EvaluationStopConfig:
         threshold = self.minimum if self.minimum is not None else self.min_improvement
         if not math.isfinite(threshold):
             raise ValueError("evaluation stop thresholds must be finite")
+
+
+@register_callback("wall_time_budget")
+class WallTimeBudgetCallback(TrainerCallback):
+    """Stop between complete steps with time reserved for drain, save and export."""
+
+    error_behavior = CallbackErrorBehavior.RAISE
+
+    def __init__(self, *, seconds: float, reserve: float, minimum_steps: int, groups_per_step: int):
+        if not 0 < reserve < seconds or minimum_steps < 1 or groups_per_step < 1:
+            raise ValueError("Invalid training wall-time budget")
+        self.seconds = seconds
+        self.reserve = reserve
+        self.minimum_steps = minimum_steps
+        self.groups_per_step = groups_per_step
+        self.started = None
+        self.initial_step = None
+
+    def on_train_begin(self, state, control, **kwargs):
+        self.started = time.monotonic()
+        self.initial_step = state.global_step
+        return control
+
+    def on_log(self, state, control, *, logs, trainer, **kwargs):
+        if self.started is None or self.initial_step is None:
+            raise RuntimeError("Training budget clock was not started")
+        completed = state.global_step - self.initial_step
+        if completed < 1:
+            return control
+        elapsed = time.monotonic() - self.started
+        mean_step = elapsed / completed
+        remaining = self.seconds - self.reserve - elapsed
+        affordable = max(0, math.floor(remaining / mean_step))
+        report = {
+            "step": state.global_step,
+            "completed_steps": completed,
+            "elapsed_seconds": elapsed,
+            "budget_seconds": self.seconds,
+            "reserve_seconds": self.reserve,
+            "consumed_groups_per_hour": completed * self.groups_per_step * 3600 / elapsed,
+            "additional_updates_at_observed_rate": affordable,
+            "semantics": "completed learner groups; includes validation and checkpoint work since training began",
+        }
+        io.write_bytes_atomic(
+            join_resource_path(trainer.cfg.trainer.export_path, "training-budget.json"),
+            json.dumps(report).encode(),
+        )
+        if remaining < mean_step:
+            if completed < self.minimum_steps:
+                raise RuntimeError("RL budget cannot complete the minimum validation-selection window")
+            control.should_training_stop = True
+        return control
 
 
 @register_callback("best_checkpoint")

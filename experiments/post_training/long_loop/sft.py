@@ -55,6 +55,7 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
     trainer["id"] = run_id
+    trainer["log_dir"] = output + "/logs"
     trainer["initialize_from"] = initializer + "/native/step-0"
     trainer["load_checkpoint"] = False
     trainer["load_checkpoint_path"] = []
@@ -72,14 +73,15 @@ def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None
     config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
     (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     run_grug(config)
-    metadata = read_json(output + "/checkpoints/step-15/metadata.json")
-    if metadata.get("step") != 15 or metadata.get("is_temporary") is not False:
-        raise ValueError("SFT did not commit permanent step 15")
+    final_step = config.stop_after_steps or config.trainer.trainer.num_train_steps
+    metadata = read_json(output + f"/checkpoints/step-{final_step}/metadata.json")
+    if metadata.get("step") != final_step or metadata.get("is_temporary") is not False:
+        raise ValueError(f"SFT did not commit permanent step {final_step}")
     (StoragePath(output) / "selected.json").write_text(
         json.dumps(
             {
-                "checkpoint": output + "/checkpoints/step-15",
-                "step": 15,
+                "checkpoint": output + f"/checkpoints/step-{final_step}",
+                "step": final_step,
                 "metadata_digest": digest(metadata),
             }
         )
@@ -90,8 +92,12 @@ def restore_frozen(
     checkpoint: str, metadata_digest: str, config: GrugModelConfig, mesh: jax.sharding.Mesh
 ) -> Transformer:
     metadata = read_json(checkpoint + "/metadata.json")
-    if digest(metadata) != metadata_digest or metadata.get("step") != 15 or metadata.get("is_temporary") is not False:
-        raise ValueError("SFT handoff metadata changed or is not permanent step 15")
+    if (
+        digest(metadata) != metadata_digest
+        or metadata.get("step") != int(checkpoint.rsplit("step-", 1)[1])
+        or metadata.get("is_temporary") is not False
+    ):
+        raise ValueError("SFT handoff metadata changed or is not the selected permanent step")
     template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.key(0))
     state = load_grug_checkpoint(state={"params": template}, candidate=checkpoint, mesh=mesh, allow_partial=False)
     return jax.block_until_ready(state["params"])
@@ -147,23 +153,49 @@ def export_sft(*, output: str, trained: str, model: dict, source_revision: str) 
     validate_handoff(output)
 
 
-def sft_steps(
-    version: str, source_revision: str, prerequisites: tuple[ArtifactStep, ...] = ()
-) -> tuple[ArtifactStep, ArtifactStep[LevanterCheckpoint]]:
+def full_sft_recipe() -> dict:
+    """Use the pinned 10-05 composition at the target 50B-position geometry."""
     recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
-    initializer = apply(
-        "long-loop/base",
-        remote(
-            import_base,
-            name=f"long-loop-base-{version}",
-            resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512GB", disk="500GB", target_cluster=None),
-        ),
-        version=version,
-        output=OUT,
-        model=recipe["model"],
-        revision=BASE_REVISION,
-    )
-    initializer = timed(replace(initializer, deps=(*initializer.deps, *prerequisites)))
+    recipe["resources"]["replicas"] = 32
+    recipe["model"]["max_seq_len"] = 262144
+    recipe["stop_after_steps"] = 746
+    recipe["first_checkpoint_restore_step"] = 1
+    recipe["max_task_failures"] = 0
+    wrapper = recipe["trainer"]
+    wrapper["context_axis_size"] = 8
+    wrapper["gradient_accumulation_steps"] = 8
+    trainer = wrapper["trainer"]
+    trainer["tracker"]["tags"] = ["long-loop", "full", "sft"]
+    trainer["checkpointer"]["keep"] = [{"every": 100}]
+    return recipe
+
+
+def sft_steps(
+    version: str,
+    source_revision: str,
+    prerequisites: tuple[ArtifactStep, ...] = (),
+    *,
+    recipe: dict | None = None,
+    run_kind: str = "plumbing",
+    initializer: ArtifactStep | None = None,
+) -> tuple[ArtifactStep, ArtifactStep[LevanterCheckpoint]]:
+    recipe = yaml.safe_load(SMOKE_CONFIG.read_text()) if recipe is None else recipe
+    if initializer is None:
+        initializer = apply(
+            "long-loop/base",
+            remote(
+                import_base,
+                name=f"long-loop-base-{version}",
+                resources=ResourceConfig.with_gpu(
+                    "H100", count=8, cpu=32, ram="512GB", disk="500GB", target_cluster=None
+                ),
+            ),
+            version=version,
+            output=OUT,
+            model=recipe["model"],
+            revision=BASE_REVISION,
+        )
+        initializer = timed(replace(initializer, deps=(*initializer.deps, *prerequisites)))
     trained = apply(
         "long-loop/sft",
         sft_run,
@@ -171,7 +203,7 @@ def sft_steps(
         output=OUT,
         initializer=initializer,
         recipe=recipe,
-        run_id=f"long-loop-plumbing-sft-{version}",
+        run_id=f"long-loop-{run_kind}-sft-{version}",
     )
     trained = timed(trained)
     return trained, sft_export_step(version, source_revision, trained, recipe["model"])

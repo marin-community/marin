@@ -13,6 +13,8 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.filesystem.transfer import copy
 
+from experiments.post_training.long_loop.hf_archive import file_identity, verify_hf_checkpoint
+
 
 @dataclass(frozen=True)
 class ArchiveInput:
@@ -74,6 +76,8 @@ def seal_archive(root: str, inputs: list[ArchiveInput], provenance: dict) -> dic
     names = [str(PurePosixPath(item.name)) for item in inputs]
     if len(names) != len(set(names)):
         raise ValueError("Archive inputs have duplicate destination names")
+    if any(item.category == "checkpoint" or item.source.endswith((".safetensors", ".distcp")) for item in inputs):
+        raise ValueError("Checkpoint payloads belong in Hugging Face, not the evidence archive")
     objects = [archive_object(item, root) for item in inputs]
     manifest = {"schema": 1, "provenance": provenance, "objects": [asdict(obj) for obj in objects]}
     raw = json.dumps(manifest, sort_keys=True, indent=2).encode()
@@ -97,33 +101,23 @@ def verify_archive(root: str) -> dict:
 
 
 def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidates: list[str]) -> None:
-    """Delete inventoried superseded weights after verifying the archived selected checkpoint."""
+    """Delete inventoried superseded weights after verifying HF publication and evidence."""
     manifest = verify_archive(root)
-    archived = {obj["source"]: obj for obj in manifest["objects"]}
+    reference = verify_hf_checkpoint(manifest["provenance"]["hf_checkpoint"])
     inventory = manifest["provenance"]["checkpoint_inventory"]
-    selected_files = inventory["selected_files"]
     disposable = {obj["source"]: obj for obj in inventory["disposable_files"]}
     if inventory["selected"] != selected or inventory["root"] != checkpoint_root:
         raise ValueError("Cleanup scope differs from sealed inventory")
+    if reference["native_checkpoint"] != selected:
+        raise ValueError("HF publication does not match the selected native checkpoint")
+    if not inventory["ttl"]:
+        raise ValueError("Native checkpoint location and TTL must remain in provenance")
     root_path = StoragePath(checkpoint_root)
     keep_path = StoragePath(selected)
     if str(root_path) != checkpoint_root or str(keep_path) != selected:
         raise ValueError("Checkpoint cleanup requires canonical storage paths")
     if not keep_path.relative_to(root_path):
         raise ValueError("Selected checkpoint must be a child of this experiment's checkpoint root")
-    if not selected_files:
-        raise ValueError("Selected checkpoint inventory is empty")
-    selected_fs, selected_key = filesystem_for(selected)
-    observed_keys = set(selected_fs.find(selected_key))
-    expected_keys = {filesystem_for(obj["source"])[1] for obj in selected_files}
-    if observed_keys != expected_keys:
-        raise ValueError("Selected checkpoint inventory does not cover its complete payload")
-    for obj in selected_files:
-        uri = obj["source"]
-        if not StoragePath(uri).relative_to(keep_path) or uri not in archived:
-            raise ValueError("Selected checkpoint is not completely archived")
-        if (obj["size"], obj["sha256"]) != (archived[uri]["size"], archived[uri]["sha256"]):
-            raise ValueError("Selected checkpoint differs from sealed inventory")
     planned = []
     for uri in candidates:
         path = StoragePath(uri)
@@ -134,7 +128,7 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
         if uri not in disposable:
             raise ValueError(f"Cleanup requires a sealed checkpoint inventory: {uri}")
         fs, key = filesystem_for(uri)
-        if fs.exists(key) and digest(uri) != (disposable[uri]["size"], disposable[uri]["sha256"]):
+        if fs.exists(key) and file_identity(fs.info(key)) != disposable[uri]["storage_identity"]:
             raise ValueError(f"Checkpoint changed since archive: {uri}")
         planned.append((uri, fs, key))
     write_once(

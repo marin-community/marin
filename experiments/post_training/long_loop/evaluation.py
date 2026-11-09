@@ -38,6 +38,7 @@ from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluat
 from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION, SKIPPED_BENCHMARKS
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
+from experiments.post_training.long_loop.rl_selection import validate_full_selection
 from experiments.post_training.long_loop.serving import check_context_limit, snowball_context_override
 from experiments.post_training.long_loop.sft import read_json
 from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_reference
@@ -45,18 +46,21 @@ from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_r
 WHEELS_REVISION = "d5dd315d58f0f47514dd0a2208e90e2a48541328"
 
 
-def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: str) -> None:
+def prepare_micro(
+    *, output: str, dataset: str, revision: str, wheels_revision: str, tasks_per_benchmark: int = 1
+) -> None:
     path = hf_hub_download(dataset, "data/validation.parquet", repo_type="dataset", revision=revision)
     table = pq.read_table(path)
     if table.num_rows != 210:
         raise ValueError("Pinned Micro210 must contain 210 unique tasks")
     chosen = []
-    seen = set()
+    seen = {}
     for i, row in enumerate(table.to_pylist()):
-        if row["benchmark"] not in seen:
+        benchmark = row["benchmark"]
+        if seen.get(benchmark, 0) < tasks_per_benchmark:
             chosen.append(i)
-            seen.add(row["benchmark"])
-    if len(chosen) != 21:
+            seen[benchmark] = seen.get(benchmark, 0) + 1
+    if len(chosen) != 21 * tasks_per_benchmark:
         raise ValueError("Micro smoke must cover all 21 benchmark paths")
     chosen = [i for i in chosen if table["benchmark"][i].as_py() not in SKIPPED_BENCHMARKS]
     smoke = repaired_table(table.take(pa.array(chosen)), wheels_revision)
@@ -77,7 +81,7 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
             "python",
             "-m",
             "experiments.post_training.long_loop.eval_runtime.environment_preflight",
-            "--smoke",
+            *(["--smoke"] if tasks_per_benchmark == 1 else []),
             "--credential-env",
             "DAYTONA_EVAL_API_KEY",
             "--data-uri",
@@ -99,6 +103,7 @@ def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:
 @dataclass(frozen=True)
 class TerminalPolicy:
     step: ArtifactStep[SkyRLRun]
+    expected_step: int | None = 3
 
     def deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
@@ -115,8 +120,12 @@ class TerminalPolicy:
             validate_eval_policy(locator, self.step.path() + "/exports/global_step_3/policy")
             return locator
         result = ctx.resolved(self.step)
-        if result.hf_model_uri is None or result.global_step != 3:
-            raise ValueError("Micro smoke requires the committed final step-3 RL export")
+        if result.hf_model_uri is None or result.global_step is None:
+            raise ValueError("Evaluation requires a committed RL export")
+        if self.expected_step is not None and result.global_step != self.expected_step:
+            raise ValueError("RL export does not match the required checkpoint step")
+        if self.expected_step is None:
+            validate_full_selection(result)
         return ResolvedModelLocator(
             uri=result.hf_model_uri,
             identity=artifact_identity(self.step),
@@ -126,16 +135,26 @@ class TerminalPolicy:
         )
 
 
-def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: ArtifactStep) -> ArtifactStep:
+def evaluation_step(
+    version: str,
+    trained: ArtifactStep[SkyRLRun],
+    data: ArtifactStep,
+    *,
+    replicas: int = 1,
+    expected_step: int | None = 3,
+) -> ArtifactStep:
     config, plan = recipe("runtime://minimax-judge", "DAYTONA_EVAL_API_KEY")
     plan = replace(
         plan,
+        policy_num_nodes=replicas,
         policy_num_gpus_per_node=8,
+        num_inference_engines=replicas,
         inference_engine_tensor_parallel_size=1,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
     )
     _materialize_role_plan_config(config, plan)
+    config["trajectory_runner"]["max_concurrent_tasks"] = 8 * replicas
     for role in ("policy", "ref"):
         config["trainer"][role]["megatron_config"].update(tensor_model_parallel_size=1, expert_model_parallel_size=8)
     config["generator"]["engine_init_kwargs"].update(
@@ -149,13 +168,13 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
     )
     step = skyrl_step(
         SkyRLSpec(
-            name="long-loop/micro-smoke",
+            name="long-loop/micro-smoke" if expected_step == 3 else "long-loop/micro-full",
             version=version,
             config_yaml=yaml.safe_dump(config),
-            model=TerminalPolicy(trained),
+            model=TerminalPolicy(trained, expected_step),
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
-            topology=SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
+            topology=SkyRLTopology(num_nodes=replicas, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=20261030,
         ),
@@ -196,7 +215,7 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
         launch["skyrl"]["generator"]["trajectory_retention"].update(
             model_path=model["uri"],
             model_source_identity=model["identity"],
-            model_checkpoint_step=3,
+            model_checkpoint_step=expected_step if ctx.is_fingerprint else ctx.resolved(trained).global_step,
         )
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         if not ctx.is_fingerprint:
@@ -217,9 +236,9 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
     return replace(step, run=run_judged, build_config=build_config)
 
 
-def micro_inputs(version: str) -> ArtifactStep:
+def micro_inputs(version: str, *, tasks_per_benchmark: int = 1) -> ArtifactStep:
     return apply(
-        "long-loop/micro-inputs",
+        "long-loop/micro-inputs" if tasks_per_benchmark == 1 else "long-loop/micro-full-inputs",
         remote(
             prepare_micro,
             name=f"long-loop-micro-inputs-{version}",
@@ -243,4 +262,5 @@ def micro_inputs(version: str) -> ArtifactStep:
         dataset=DATASET,
         revision=REVISION,
         wheels_revision=WHEELS_REVISION,
+        tasks_per_benchmark=tasks_per_benchmark,
     )

@@ -357,11 +357,13 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        eval_factories: Mapping[str, MachineFactory] | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
+        self.eval_factories = {name: OwnedMachineFactory(factory, name) for name, factory in (eval_factories or {}).items()}
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
@@ -462,7 +464,8 @@ class TaskRolloutWorker:
             )
             lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
             selected_harnesses.append(harnesses)
-        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
+        factories = self.factories if phase == "train" else self.factories | self.eval_factories
+        engines = [RolloutEngine(factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
@@ -580,7 +583,7 @@ class TaskRolloutWorker:
         """Cancel rollouts and release their machines before actor termination."""
         self.closing = True
         deadline = asyncio.get_running_loop().time() + self.shutdown_timeout
-        for factory in self.factories.values():
+        for factory in (*self.factories.values(), *self.eval_factories.values()):
             factory.stop_creating()
         pending = tuple(self.active_requests)
         for task in pending:
@@ -593,7 +596,7 @@ class TaskRolloutWorker:
                     logger.error("Task worker shutdown deadline expired with {} active rollouts", len(remaining))
                     failures.append(TimeoutError("Task rollouts did not stop before the shutdown deadline"))
             results = await asyncio.gather(
-                *(factory.close(deadline) for factory in self.factories.values()), return_exceptions=True
+                *(factory.close(deadline) for factory in (*self.factories.values(), *self.eval_factories.values())), return_exceptions=True
             )
             failures.extend(result for result in results if isinstance(result, Exception))
         finally:
@@ -679,6 +682,7 @@ class TaskRolloutWorkerSpec:
                 ),
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
+        eval_factories = task_machine_factories(self.config.environment.task_sessions, phase="eval")
         if harbor is not None:
             if harbor.environment.type != EnvironmentType.DOCKER:
                 factories[HARBOR_MACHINE_BACKEND] = harbor.machine_factory()
@@ -703,4 +707,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            eval_factories=eval_factories,
         )

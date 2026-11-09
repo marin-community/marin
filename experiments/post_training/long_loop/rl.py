@@ -24,7 +24,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 
-from experiments.post_training.long_loop.archive_selection import trace_retention
+from experiments.post_training.long_loop.archive_selection import trace_retention, validation_selection
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -59,26 +59,46 @@ def smoke_rl_step(
     selection: ArtifactStep[Artifact],
 ) -> ArtifactStep[SkyRLRun]:
     """Consume the preceding verified BF16 handoff, never a fixed released SFT model."""
-    config = smoke_recipe()
+    return _rl_step(
+        version=version,
+        model=model,
+        selection=selection,
+        config=smoke_recipe(),
+        plan=SMOKE_PLAN,
+        name="long-loop-plumbing-rl",
+        retained=2,
+    )
+
+
+def _rl_step(
+    *,
+    version: str,
+    model: ArtifactHfModel,
+    selection: ArtifactStep[Artifact],
+    config: dict,
+    plan: SkyRLRolePlan,
+    name: str,
+    retained: int,
+) -> ArtifactStep[SkyRLRun]:
     config["trainer"]["dump_training_order"] = True
     config["generator"]["trajectory_retention"] = trace_retention(
         f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/rl", version, fraction=0.1, phase="train"
     )
     return skyrl_step(
         SkyRLSpec(
-            name=user_owned_name("checkpoints/long-loop-plumbing-rl"),
+            name=user_owned_name(f"checkpoints/{name}"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
             model=model,
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
-                num_nodes=SMOKE_PLAN.num_nodes,
-                gpus_per_node=SMOKE_PLAN.policy_num_gpus_per_node,
+                num_nodes=plan.num_nodes,
+                gpus_per_node=plan.policy_num_gpus_per_node,
                 gpu_variant="H100",
-                role_plan=SMOKE_PLAN,
+                role_plan=plan,
             ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=retained),
             seed=20261020,
         ),
         IrisSkyRLExecution(
@@ -92,7 +112,7 @@ def smoke_rl_step(
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=36,
-            coordinator_name=f"long-loop-plumbing-{version}",
+            coordinator_name=f"{name.removesuffix('-rl')}-{version}",
             job_timeout_seconds=36 * 60 * 60,
             wandb_entity="marin-community",
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -105,4 +125,76 @@ def smoke_rl_step(
             ),
         ),
         export_hf=True,
+    )
+
+
+FULL_PLAN = SkyRLRolePlan(
+    colocate_all=False,
+    policy_num_nodes=16,
+    policy_num_gpus_per_node=8,
+    num_inference_engines=16,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=8,
+    inference_engine_expert_parallel_size=8,
+    train_batch_size=64,
+    policy_mini_batch_size=64,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=8,
+)
+
+
+def full_recipe(*, initial_model: str, validation_tasks: int) -> dict:
+    """Construct the target geometry; live qualification remains mandatory."""
+    config = yaml.safe_load(Path(__file__).with_name("rl-smoke.yaml").read_text())
+    _materialize_role_plan_config(config, FULL_PLAN)
+    config["context_budget"] = {
+        "request_window_tokens": 94_208,
+        "max_new_tokens_per_turn": 8_192,
+        "max_turns": 128,
+    }
+    trainer = config["trainer"]
+    trainer.update(
+        max_steps=10_000,
+        step_wise_training=False,
+        dump_training_order=True,
+        ckpt_interval=1,
+        max_ckpts_to_keep=-1,
+    )
+    selection = validation_selection(initial_model=initial_model, task_count=validation_tasks)
+    trainer.update(selection)
+    trainer["callbacks"] = [
+        {"type": "checkpoint", "save_steps": 1, "save_on_train_end": True},
+        {"type": "evaluation", "eval_steps": 1, "eval_before_train": False, "eval_on_train_end": True},
+        *selection["callbacks"],
+        {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
+        {"type": "wall_time_budget", "seconds": 8 * 3600, "reserve": 1800, "minimum_steps": 5, "groups_per_step": 64},
+    ]
+    for role in ("policy", "ref"):
+        trainer[role]["megatron_config"]["context_parallel_size"] = 4
+    sessions = config["environment"]["task_sessions"]
+    sessions["daytona"]["eval_api_key_env"] = "DAYTONA_EVAL_API_KEY"
+    sessions["task_spec"] = {
+        "session": {
+            "max_turns": 128,
+            "attempt_timeout": 1800,
+            "total_turn_timeout": 1800,
+            "model_turn_timeout": 1800,
+        }
+    }
+    config["generator"]["max_num_seqs"] = 64
+    config["generator"]["engine_init_kwargs"]["hf_overrides"] = {
+        "max_position_embeddings": 262144,
+        "max_seq_len": 262144,
+    }
+    return config
+
+
+def full_rl_step(
+    *, version: str, model: ArtifactHfModel, selection: ArtifactStep[Artifact], validation_tasks: int
+) -> ArtifactStep[SkyRLRun]:
+    """Bind the full target allocation to its preceding SFT export and fixed data."""
+    raise NotImplementedError(
+        "Full RL launch is blocked until the CP4 natural-long save/restore gate and "
+        "exact 32 agentic / 32 non-agentic consumed-group admission are implemented"
     )

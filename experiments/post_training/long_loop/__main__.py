@@ -15,7 +15,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.cli import graph_handles
 from marin.rl.cli import _skyrl_executions, rl_build_options
-from marin.rl.skyrl import ArtifactHfModel, SkyRLRun, SkyRLRunConfig
+from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG, ArtifactHfModel, IrisSkyRLExecution, SkyRLRun, SkyRLRunConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import require_secret
@@ -23,7 +23,7 @@ from rigging.secrets import require_secret
 from experiments.post_training.long_loop.bixbench import merged_report
 from experiments.post_training.long_loop.endpoint_probe import endpoint_step
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
-from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
+from experiments.post_training.long_loop.evaluation import evaluation_step, micro_inputs
 from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.rl import DEFAULT_SELECTION_URI, SELECTION_PREFIX, smoke_rl_step
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
@@ -31,6 +31,8 @@ from experiments.post_training.long_loop.serving import checked_serving_release
 from experiments.post_training.long_loop.sft import (
     TOKENIZER_REPO,
     TOKENIZER_REVISION,
+    fresh_sft_config,
+    full_sft_recipe,
     read_json,
     sft_export_step,
     sft_steps,
@@ -89,8 +91,35 @@ def plumbing_loop(
         selection=selection,
     )
     rl = timed(replace(rl, deps=(*rl.deps, endpoint)))
-    evaluated = timed(smoke_evaluation(version, rl, inputs))
+    evaluated = timed(evaluation_step(version, rl, inputs))
     return report_step(version, [inputs, base, trained, exported, endpoint, rl, evaluated])
+
+
+def full_sft_stage(version: str, source_revision: str) -> ArtifactStep:
+    """Begin the authorized full round; downstream RL is admitted separately after its gates validate."""
+    base_uri = "s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8"
+    base_record = read_json(base_uri + "/.artifact.json")
+    initializer = ArtifactStep.adopt("long-loop/reused-base", version, base_uri, config={"original_record": base_record})
+    trained, _ = sft_steps(version, source_revision, recipe=full_sft_recipe(), run_kind="full", initializer=initializer)
+    fresh_sft_config(
+        output=trained.path(), initializer=base_uri, recipe=full_sft_recipe(), run_id=f"long-loop-full-sft-{version}"
+    )
+    execution = IrisSkyRLExecution(
+        cluster="cw-rno2a",
+        cluster_config="lib/iris/config/cw-rno2a.yaml",
+        cpu=32,
+        memory="512GB",
+        disk="512GB",
+        priority="interactive",
+        max_retries=0,
+        target_cluster="cw-rno2a",
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_hours=36,
+        coordinator_name=f"long-loop-full-sft-{version}",
+        job_timeout_seconds=36 * 3600,
+        required_env_vars=("MARIN_PREFIX",),
+    )
+    return replace(trained, runtime_args={**trained.runtime_args, "skyrl_execution": execution})
 
 
 def eval_continuation(version: str, rl_version: str, inputs_version: str) -> ArtifactStep:
@@ -121,7 +150,7 @@ def eval_continuation(version: str, rl_version: str, inputs_version: str) -> Art
             )
         )
     inputs, trained = adopted
-    evaluated = timed(smoke_evaluation(version, trained, inputs))
+    evaluated = timed(evaluation_step(version, trained, inputs))
     return report_step(version, [inputs, trained, evaluated])
 
 
@@ -133,7 +162,7 @@ def bixbench_continuation(version: str, rl_version: str, inputs_version: str) ->
     subset_uri = prefix_join(prefix, f"long-loop/bix-inputs/{version}")
     record = read_json(subset_uri + "/.artifact.json")
     subset = ArtifactStep.adopt("long-loop/reused-bix-inputs", version, subset_uri, config={"original_record": record})
-    evaluated = timed(smoke_evaluation(version, trained, subset))
+    evaluated = timed(evaluation_step(version, trained, subset))
     original_uri = prefix_join(prefix, "long-loop/micro-smoke/2026.11.09.9")
     original = ArtifactStep.adopt(
         "long-loop/reused-completed-eval",
@@ -168,7 +197,9 @@ def validate_graph(terminal: ArtifactStep, directory: Path) -> None:
 
 
 @click.command(help=__doc__)
-@click.option("--stage", type=click.Choice(["inputs", "loop", "eval", "bixbench"]), default="loop", show_default=True)
+@click.option(
+    "--stage", type=click.Choice(["inputs", "loop", "eval", "bixbench", "full-sft"]), default="loop", show_default=True
+)
 @click.option("--validation-output", type=click.Path(path_type=Path), default=Path("/tmp/long-loop-validation"))
 @click.option("--reuse-rl-version", help="Committed step-3 RL version for eval-only continuation.")
 @click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
@@ -195,6 +226,12 @@ def main(
         raise click.UsageError("--reuse-export-version requires --reuse-sft-version and --handoff reuse")
     require_secret("HF_TOKEN")
     version = resolve_version("long-loop/micro-smoke", None)
+    if stage == "full-sft":
+        if reuse_sft_version or reuse_rl_version or reuse_export_version:
+            raise click.UsageError("Full SFT starts a new round and does not replay a smoke")
+        terminal = full_sft_stage(version, source_revision)
+        validate_graph(terminal, validation_output / version)
+        return terminal
     if stage in ("eval", "bixbench"):
         if not reuse_rl_version or not reuse_sft_version:
             raise click.UsageError("Eval requires --reuse-rl-version and --reuse-sft-version for inputs")

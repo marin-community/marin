@@ -13,7 +13,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
 
 
-def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactory]:
+def task_machine_factories(task_sessions: DictConfig, *, phase: str = "train") -> dict[str, MachineFactory]:
     """Build the configured task backends, probing host capabilities immediately."""
     factories: dict[str, MachineFactory] = {"shellsim": ShellSimMachineFactory()}
     if task_sessions.get("local") is not None:
@@ -21,7 +21,7 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
     daytona = task_sessions.get("daytona")
     if daytona is not None:
         factories[Backend.DAYTONA] = DaytonaMachineFactory(
-            client_factory=partial(AsyncDaytona, DaytonaConfig(api_key=os.environ[daytona.api_key_env])),
+            client_factory=partial(AsyncDaytona, DaytonaConfig(api_key=os.environ[daytona.get("eval_api_key_env", daytona.api_key_env) if phase == "eval" else daytona.api_key_env])),
             ttl_minutes=int(daytona.ttl_minutes),
         )
     if shutil.which("docker") is not None:
