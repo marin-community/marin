@@ -11,7 +11,8 @@ import ray
 from loguru import logger
 from omegaconf import DictConfig
 
-from skyrl_train.checkpoint_exporter import checkpoint_exporter
+from skyrl_train import hf_model_io
+from skyrl_train.checkpoint_exporter import checkpoint_export_plan, checkpoint_exporter
 from skyrl_train.utils.utils import initialize_ray
 
 _CONFIG_DIR = str(Path(__file__).parent.parent / "config")
@@ -24,6 +25,10 @@ def run_checkpoint_export(cfg: DictConfig):
 
 
 def run(cfg: DictConfig) -> None:
+    plan = checkpoint_export_plan(cfg)
+    if hf_model_io.has_completed_hf_model_export(plan.policy_export_path):
+        logger.info(f"Reusing verified global_step_{plan.step} export at {plan.policy_export_path}")
+        return
     initialize_ray(cfg)
 
     def shutdown_on_sigterm(_signum, _frame):
