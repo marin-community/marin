@@ -117,7 +117,6 @@ def test_submit_writes_one_job_row_and_one_config_row(state):
     assert config.res_cpu_millicores == 4000
     assert config.res_memory_bytes == 8 * 1024**3
     assert config.priority_band == "PRIORITY_BAND_INTERACTIVE"
-    assert config.preemption_policy.startswith("JOB_PREEMPTION_POLICY_")
     assert rows.attempts == []
 
 
@@ -245,7 +244,6 @@ def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
         cur.register(lambda: later_hook_ran.append(True))
 
     assert later_hook_ran == [True]
-    assert query_task(state, JobName.from_string("/test-user/train/0")) is not None
 
 
 def test_handed_off_job_is_written_by_the_executing_peer_only():

@@ -69,16 +69,24 @@ assessment page shows the curation associated with its selected grade.
 ## Browsing sources
 
 **By source** lists individual sources with their catalog, converted example
-count, training/evaluation use, current sampled quality and the curriculum domain
+count, training/evaluation use, current sampled quality, any independent QC the
+pinned release performed, and the curriculum domain
 with the most mapped examples. Search names, datasets or tags; filter by catalog,
 use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
-published curriculum release.
+published curriculum release. An inventory-only declaration without a conversion
+recipe can still carry a pinned row count; the curriculum release lists it with a
+*declared* basis, so its count shows without a placement area and the source is
+excluded from the processed-examples total.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
-completed assessment without enough conclusive judgments. Open a source for
+completed assessment without enough conclusive judgments. Curation never re-grades
+independent QC; the **Independent QC** column and the source details present the
+release's own admission evidence — verdict, method, reviewed count, admitted count
+where the release claims one, and a link to its pinned manifest — beside, and
+distinct from, the sampled quality. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
 within the domain. On small screens, the table keeps name, count and quality
@@ -228,13 +236,18 @@ Converted populations contain successfully converted TaskSpecs before admission.
 They retain training/evaluation intent. Selecting a source shows its full
 conversion ledger in **About counts and matching** when available. Sources
 outside the release remain in the source inventory, where **Not processed**
-filters them for inspection.
+filters them for inspection. An inventory-only declaration with a pinned row
+count joins the release on a *declared* basis: its Examples count shows without
+placement statistics, area or processed-total participation.
 
 Run the embedding graph through `--embed coverage`. The `publication` stage
 counts assignment outcomes by source, reconciles complete converted populations
-against source manifests, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
+against source manifests, folds in declared-only sources, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
 statistics, bounded example Parquet and `coverage.json` without rerunning
-embeddings or matching. Load both manifests:
+embeddings or matching. Re-running from a completed campaign's `corpus.json`
+merges the current dataset declarations over the recorded inventory, so added
+sources or count and independent-QC edits reach the release without re-curation.
+Load both manifests:
 
 ```bash
 uv run python -m infra.marina.apps.rl_data_catalog.load_curriculum \
