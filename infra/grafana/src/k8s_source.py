@@ -1064,6 +1064,11 @@ class K8sFleet:
         self._sources = tuple(sources)
         self._executor = ThreadPoolExecutor(max_workers=max(len(self._sources), 1), thread_name_prefix="k8s")
 
+    @property
+    def cluster_names(self) -> tuple[str, ...]:
+        """Names of clusters represented by this fleet, including unreachable ones."""
+        return tuple(source.target.name for source in self._sources)
+
     def _collect(
         self,
         fn: Callable[[K8sSource], list[_Row]],

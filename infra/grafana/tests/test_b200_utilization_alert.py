@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pyarrow as pa
-from b200_utilization_alert import b200_utilization_alert_rows, b200_utilization_query
+from b200_utilization_alert import b200_capacity_alert_rows, b200_utilization_alert_rows, b200_utilization_query
 from conftest import install_finelog_dialect_macros
 
 NOW = datetime(2026, 11, 9, 12, tzinfo=UTC)
@@ -55,10 +55,13 @@ def test_b200_alert_fires_for_idle_ready_capacity_and_ignores_other_hardware():
     assert rows[1] == {
         "cluster": "cw-us-east-08a",
         "state": "idle",
-        "ready_gpus": "8",
         "value": 0.0,
     }
     assert rows[0]["state"] == "no_ready_capacity" and rows[0]["value"] == 100.0
+    assert b200_capacity_alert_rows(nodes, CLUSTERS) == [
+        {"cluster": "cw-us-east-02a", "value": 0},
+        {"cluster": "cw-us-east-08a", "value": 8},
+    ]
 
 
 def test_b200_alert_stays_normal_with_active_gpus_or_incomplete_telemetry():
@@ -68,6 +71,12 @@ def test_b200_alert_stays_normal_with_active_gpus_or_incomplete_telemetry():
 
     assert active[1]["state"] == "active" and active[1]["value"] == 12.5
     assert missing[1]["state"] == "telemetry_incomplete" and missing[1]["value"] == 100.0
+
+
+def test_b200_alert_distinguishes_inventory_failure_from_zero_capacity():
+    rows = b200_utilization_alert_rows([{"cluster": "cw-us-east-08a", "error_class": "network"}], pa.table({}), CLUSTERS)
+
+    assert rows[1] == {"cluster": "cw-us-east-08a", "state": "capacity_unavailable", "value": 100.0}
 
 
 def test_b200_query_uses_latest_recent_sample_per_gpu():

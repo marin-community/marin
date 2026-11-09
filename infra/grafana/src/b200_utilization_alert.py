@@ -40,15 +40,29 @@ LIMIT {MAX_TELEMETRY_NODES + 1}
 """.strip()
 
 
-def b200_utilization_alert_rows(nodes: list[dict], telemetry: pa.Table, clusters: tuple[str, ...]) -> list[dict]:
-    """Emit active GPU percentages, withholding idle decisions when telemetry is incomplete."""
+def _b200_ready_nodes(nodes: list[dict], clusters: tuple[str, ...]) -> tuple[dict[str, dict[str, int]], set[str]]:
     ready: dict[str, dict[str, int]] = {cluster: {} for cluster in clusters}
+    unavailable: set[str] = set()
     for row in nodes:
         cluster = row.get("cluster")
+        if cluster in ready and "error_class" in row:
+            unavailable.add(cluster)
         if cluster not in ready or "gb200" not in row.get("instance_type", "").lower():
             continue
         if row.get("ready") and not row.get("unschedulable") and row.get("gpu_capacity", 0) > 0:
             ready[cluster][row["node"]] = row["gpu_capacity"]
+    return ready, unavailable
+
+
+def b200_capacity_alert_rows(nodes: list[dict], clusters: tuple[str, ...]) -> list[dict]:
+    """Expose Ready GB200 GPU counts as a separate numeric annotation query."""
+    ready, _ = _b200_ready_nodes(nodes, clusters)
+    return [{"cluster": cluster, "value": sum(capacity.values())} for cluster, capacity in ready.items()]
+
+
+def b200_utilization_alert_rows(nodes: list[dict], telemetry: pa.Table, clusters: tuple[str, ...]) -> list[dict]:
+    """Emit active GPU percentages, withholding idle decisions when telemetry or inventory is incomplete."""
+    ready, unavailable = _b200_ready_nodes(nodes, clusters)
 
     samples: dict[tuple[str, str], dict] = {}
     for row in telemetry.to_pylist():
@@ -67,7 +81,9 @@ def b200_utilization_alert_rows(nodes: list[dict], telemetry: pa.Table, clusters
             observed += node_observed
             active += min(int(sample["active_gpus"]), node_observed)
 
-        if capacity == 0:
+        if cluster in unavailable:
+            state = "capacity_unavailable"
+        elif capacity == 0:
             state = "no_ready_capacity"
         elif observed / capacity < MIN_TELEMETRY_COVERAGE:
             state = "telemetry_incomplete"
@@ -79,7 +95,6 @@ def b200_utilization_alert_rows(nodes: list[dict], telemetry: pa.Table, clusters
             {
                 "cluster": cluster,
                 "state": state,
-                "ready_gpus": str(capacity),
                 "value": round(100 * active / capacity, 1) if state in ("idle", "active") else 100.0,
             }
         )

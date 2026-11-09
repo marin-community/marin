@@ -64,6 +64,7 @@ GET /k8s/node_pools                               NodePool capacity, autoscaling
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
+GET /k8s/alerts/b200_capacity                     per-cluster Ready GB200 GPU count
 GET /k8s/arch_mismatch                            containers killed by an exec-format failure on a non-amd64 node
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
      webhook_ready,degraded,node_deadlocks,       numeric; gpu_rack_trays omits rows for
@@ -607,8 +608,10 @@ schedulable GB200 capacity in each CoreWeave cluster. A GPU is active above
 10 percent utilization. The rule fires after 30 minutes with fewer than
 10 percent of Ready GPUs active. It requires telemetry from at least 80 percent
 of that capacity; lower coverage reports `telemetry_incomplete` with a nonfiring
-value. Clusters with no Ready GB200 capacity do not fire. The notification shows
-the active GPU percentage and Ready capacity, with a link to the accelerator dashboard.
+value. A failed Kubernetes inventory read reports `capacity_unavailable` with a
+nonfiring value. Clusters with no Ready GB200 capacity do not fire. The
+notification shows the active GPU percentage and Ready capacity, with a link
+to the accelerator dashboard.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email

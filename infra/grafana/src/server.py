@@ -69,6 +69,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/arch_mismatch                        containers killed by exec format error on non-amd64 nodes
     GET /k8s/alerts/arch_mismatch                 alert rows: cluster, node, image, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
+    GET /k8s/alerts/b200_capacity                 alert annotation rows: cluster, value(Ready GPUs)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
     GET /health                                  bridge liveness
 
@@ -95,7 +96,12 @@ from http import HTTPStatus
 import pyarrow as pa
 import uvicorn
 from accelerator_observability import accelerator_overview_dataset
-from b200_utilization_alert import MAX_TELEMETRY_NODES, b200_utilization_alert_rows, b200_utilization_query
+from b200_utilization_alert import (
+    MAX_TELEMETRY_NODES,
+    b200_capacity_alert_rows,
+    b200_utilization_alert_rows,
+    b200_utilization_query,
+)
 from cache import TtlCache
 from config import (
     BRIDGE_PORT,
@@ -1213,16 +1219,19 @@ def create_app(
         )
 
     def finelog_alerts_b200_utilization(_: Request) -> JSONResponse:
-        clusters = tuple(cluster.name for cluster in K8S_CLUSTERS)
+        clusters = k8s_fleet.cluster_names
+
+        def nodes() -> list[dict]:
+            return k8s_cache.get_or_compute("nodes", k8s_fleet.nodes)
 
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             telemetry = finelog_sources[target.name].query(b200_utilization_query(now), max_rows=MAX_TELEMETRY_NODES)
-            return b200_utilization_alert_rows(k8s_fleet.nodes(), telemetry, clusters)
+            return b200_utilization_alert_rows(nodes(), telemetry, clusters)
 
         return finelog_alert_endpoint(
             "b200_utilization",
             project,
-            lambda _: b200_utilization_alert_rows(k8s_fleet.nodes(), pa.table({}), clusters),
+            lambda _: b200_utilization_alert_rows(nodes(), pa.table({}), clusters),
         )
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
@@ -1408,6 +1417,14 @@ def create_app(
     def k8s_alerts_gpu_rack_trays(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_gpu_rack_trays", k8s_fleet.alert_gpu_rack_trays)
 
+    def k8s_alerts_b200_capacity(_: Request) -> JSONResponse:
+        return k8s_endpoint(
+            "alerts_b200_capacity",
+            lambda: b200_capacity_alert_rows(
+                k8s_cache.get_or_compute("nodes", k8s_fleet.nodes), k8s_fleet.cluster_names
+            ),
+        )
+
     def k8s_alerts_stuck_gpu_pods(_: Request) -> JSONResponse:
         # The dashboard and alert projection share one fleet LIST per cache TTL.
         rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
@@ -1501,6 +1518,7 @@ def create_app(
             Route("/k8s/alerts/degraded", k8s_alerts_degraded),
             Route("/k8s/alerts/node_deadlocks", k8s_alerts_node_deadlocks),
             Route("/k8s/alerts/gpu_rack_trays", k8s_alerts_gpu_rack_trays),
+            Route("/k8s/alerts/b200_capacity", k8s_alerts_b200_capacity),
             Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
             Route("/k8s/alerts/arch_mismatch", k8s_alerts_arch_mismatch),
         ]
