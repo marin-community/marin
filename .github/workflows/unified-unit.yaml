@@ -567,6 +567,7 @@ jobs:
             infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py skyrl-train/tests/test_*.py \
             skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py \
             skyrl-train/tests/cpu/test_compact_distillation.py \
+            skyrl-train/tests/cpu/test_grug_log_scaling.py \
             skyrl-train/tests/cpu/test_reference_likelihood.py
 
   unit_tests:
