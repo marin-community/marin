@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from lib.taskforge.tests.resources.test_inference import Backend, provider_completion, request
 
 from taskforge import wiring
 from taskforge.llm import glm_client
@@ -16,7 +17,6 @@ from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.policy import load_policy
 from taskforge.resources.provider import WaitingBackend
 from taskforge.wiring import provider_policy
-from tests.resources.test_inference import Backend, provider_completion, request
 
 
 class Time:
