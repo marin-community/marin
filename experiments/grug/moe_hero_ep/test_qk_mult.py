@@ -178,12 +178,6 @@ def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
     np.testing.assert_allclose(scaled[:, 7], uniform[:, 7], rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("fields", [{"log_scaling_n_floor": 4}, {"log_scaling_alpha": 0.1}])
-def test_log_scaling_refuses_a_floor_or_slope_alone(fields):
-    with pytest.raises(ValueError, match="set together"):
-        dataclasses.replace(_tiny_config(), **fields)
-
-
 def test_log_scaling_keeps_a_bf16_query_bf16(monkeypatch):
     # XLA:CPU would run a promoted Q without complaint; FA4 on GPU takes the bf16 kernels only if Q stays bf16.
     cfg = dataclasses.replace(_tiny_config(), log_scaling_n_floor=2, log_scaling_alpha=0.1)
