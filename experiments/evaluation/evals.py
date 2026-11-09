@@ -21,8 +21,8 @@ from marin.evaluation.records import EvalRef, EvalTaskRef, EvaluationSelection, 
 from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
 
+from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.curated import requires_judge
-from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
 
 logger = logging.getLogger(__name__)
 

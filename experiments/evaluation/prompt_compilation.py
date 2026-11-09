@@ -32,24 +32,24 @@ from taskcompendium.importers.fewshot import read_choice_file as read_fewshot_ch
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
-FEWSHOT_PROTOCOL_VERSION = "2026.11.05.3"
+PROMPT_COMPILER_VERSION = "2026.11.05.3"
 
 
-def fewshot_choice_source(
+def multiple_choice_evaluation(
+    *,
     name: str,
     benchmark: str,
     source: HfSource,
     population: int,
     template: ChoiceTemplate,
     metrics: tuple[LikelihoodMetric, ...],
-    *,
     subject: str = "",
-) -> RlDataSource[EvalDataset]:
+) -> RlDataSource[EvaluationCorpusRecipe]:
     """Bind a family's explicit prompt and normalization policies to a curated corpus."""
     policy = template.fewshot
     return RlDataSource(
@@ -61,7 +61,7 @@ def fewshot_choice_source(
             tags=("eval", "benchmark"),
             count=population,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="checkpoint-" + name,
                 source=replace(source, read=partial(read_fewshot_choices, template=template)),
@@ -71,12 +71,12 @@ def fewshot_choice_source(
                     else {}
                 ),
                 convert=partial(convert_choice_document, benchmark=benchmark),
-                version=FEWSHOT_PROTOCOL_VERSION,
+                version=PROMPT_COMPILER_VERSION,
                 intended_use=IntendedUse.EVAL,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=FEWSHOT_PROTOCOL_VERSION,
+                version=PROMPT_COMPILER_VERSION,
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
@@ -91,11 +91,12 @@ def fewshot_choice_source(
             ),
             partial(choice_item, subject=subject),
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def choice_source(
+def lm_eval_multiple_choice(
+    *,
     name: str,
     repo: str,
     revision: str,
@@ -103,11 +104,10 @@ def choice_source(
     population: int,
     template: HarnessTemplate,
     normalizations: tuple[LikelihoodNormalization, ...],
-    *,
     metric_kind: MetricKind = MetricKind.BINARY,
     scoring: Literal["most_likely", "probability_mass"] = "most_likely",
     version: str = "2026.11.02",
-) -> RlDataSource[EvalDataset]:
+) -> RlDataSource[EvaluationCorpusRecipe]:
     """Bind pinned rows and few-shots, with the first normalization as the headline."""
     names = {
         LikelihoodNormalization.RAW: "acc,none",
@@ -145,7 +145,7 @@ def choice_source(
             ),
             count=population,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             recipe=recipe,
             protocol=EvaluationProtocol(
                 benchmark=name,
@@ -177,11 +177,12 @@ def choice_source(
             item_builder=partial(choice_item, subject=template.subject),
             protocol_name="harness",
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def fewshot_generation_source(
+def text_generation_evaluation(
+    *,
     name: str,
     benchmark: str,
     source: HfSource,
@@ -191,7 +192,7 @@ def fewshot_generation_source(
     sampling: Sampling,
     scorer: str,
     grader: Environment,
-) -> RlDataSource[EvalDataset]:
+) -> RlDataSource[EvaluationCorpusRecipe]:
     """Bind a family's compiled demonstrations, scorer and sampling protocol."""
     return RlDataSource(
         info=SourceInfo(
@@ -202,18 +203,18 @@ def fewshot_generation_source(
             tags=("eval", "benchmark"),
             count=population,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="checkpoint-" + name,
                 source=replace(source, read=partial(read_generation_file, template=template)),
                 convert=partial(convert_generation, scorer=scorer),
-                version=FEWSHOT_PROTOCOL_VERSION + "-" + scorer_revision(scorer),
+                version=PROMPT_COMPILER_VERSION + "-" + scorer_revision(scorer),
                 intended_use=IntendedUse.EVAL,
                 grader=grader,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=FEWSHOT_PROTOCOL_VERSION,
+                version=PROMPT_COMPILER_VERSION,
                 operation=OperationKind.TEXT_GENERATION,
                 sampling=sampling,
                 trials=TrialPolicy(count=1, seed=None),
@@ -225,5 +226,5 @@ def fewshot_generation_source(
             ),
             generation_item,
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )

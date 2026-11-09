@@ -3,7 +3,7 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
+from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     structure_closure,

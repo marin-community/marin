@@ -233,7 +233,7 @@ To extend the catalog:
 
 - Add model YAML under `serve/models/<org>/<model>.yaml`; see the
   [model schema](serve/models/README.md).
-- Add pinned evaluation source recipes under `experiments/post_training/task_curation/datasets/`
+- Add benchmark data and supported evaluation configurations under `experiments/evaluation/benchmarks/`
   and expose their supported protocols through `benchmarks()`. Add suite choices or run overrides in [configs/evalchemy.yaml](configs/evalchemy.yaml); ordinary default selections need no menu entry.
 - Add Harbor files under `configs/harbor/` and register them with
   `harbor_definition()`. Add keys to `SUITES` when they belong in a suite.

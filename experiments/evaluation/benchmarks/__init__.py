@@ -1,4 +1,4 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evalchemy dataset declarations."""
+"""Benchmark-owned datasets and evaluation configurations."""

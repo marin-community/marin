@@ -16,7 +16,8 @@ from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -24,7 +25,7 @@ SOURCE_REVISION = "623134de90723e7f189036da005067f36817b6e7"
 FINANCEBENCH_SHA256 = "0df2b2080400693d98eeccac6970432af72d7e092287b08bcc9bd013d2c3232e"
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
@@ -35,7 +36,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
                 count=50,
             ),
-            config=EvalDataset(
+            config=EvaluationCorpusRecipe(
                 CurationRecipe(
                     name="evalchemy-financebench",
                     source=UrlSource(
@@ -70,7 +71,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 ),
                 chat_item,
             ),
-            pipeline=curate,
+            pipeline=prepare_evaluation,
         )
     ]
 

@@ -6,12 +6,15 @@
 from collections import defaultdict
 from functools import cache, partial
 
-from experiments.post_training.task_curation.datasets.evalchemy import (
+from experiments.evaluation.benchmarks import (
     code,
     commonsense,
     financebench,
-    harness,
-    instructions,
+    gsm8k,
+    instruction_following,
+    lambada,
+    multiple_choice,
+    question_answering,
     jee,
     long_context,
     math,
@@ -20,18 +23,15 @@ from experiments.post_training.task_curation.datasets.evalchemy import (
     reasoning,
     simpleqa,
 )
-from experiments.post_training.task_curation.evaluation import (
-    EvalDataset,
-    EvaluationBenchmark,
-    ProtocolVariant,
-)
+from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
+from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
 
 
 def _build_protocol(
     builders: dict[ProtocolVariant, EvaluationBenchmark],
     variant: ProtocolVariant,
-) -> tuple[RlDataSource[EvalDataset], ...]:
+) -> tuple[RlDataSource[EvaluationCorpusRecipe], ...]:
     return builders[variant].build(variant)
 
 
@@ -40,11 +40,14 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
     declarations = [
         benchmark
         for family in (
-            harness,
+            multiple_choice,
+            question_answering,
+            gsm8k,
+            lambada,
             mmlu,
             code,
             commonsense,
-            instructions,
+            instruction_following,
             jee,
             math,
             reasoning,

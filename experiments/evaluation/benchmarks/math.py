@@ -19,9 +19,10 @@ from taskcompendium.importers.evalchemy.scorers.math import CHAT_REQUEST_STOPS
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, MATH_JUDGE_GRADER
-from experiments.post_training.task_curation.datasets.evalchemy.protocols import fewshot_generation_source
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.benchmarks.environments import MATH_GRADER, MATH_JUDGE_GRADER
+from experiments.evaluation.prompt_compilation import text_generation_evaluation
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -34,7 +35,7 @@ AMC23_SHA256 = "02ae54425741562778916b5fa8f6ff07749689cfcd7a53e65e1d88a89e5065f9
 MATH_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
 
 
-def fewshot_sources() -> list[RlDataSource[EvalDataset]]:
+def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     result = []
     for subject, population in (
         ("algebra", 1187),
@@ -46,24 +47,7 @@ def fewshot_sources() -> list[RlDataSource[EvalDataset]]:
         ("precalculus", 546),
     ):
         result.append(
-            fewshot_generation_source(
-                "minerva_math-" + subject,
-                "minerva_math",
-                HfSource(
-                    "EleutherAI/hendrycks_math",
-                    MATH_REVISION,
-                    (subject + "/test-00000-of-00001.parquet",),
-                    SourceFormat.PARQUET,
-                ),
-                population,
-                minerva_template(subject),
-                ("exact_match,none", "math_verify,none"),
-                Sampling(
-                    temperature=0, top_p=None, top_k=None, max_tokens=None, stop=("Problem:",), chat_template_kwargs={}
-                ),
-                "minerva_math",
-                MATH_GRADER,
-            )
+            text_generation_evaluation(name='minerva_math-' + subject, benchmark='minerva_math', source=HfSource('EleutherAI/hendrycks_math', MATH_REVISION, (subject + '/test-00000-of-00001.parquet',), SourceFormat.PARQUET), population=population, template=minerva_template(subject), metrics=('exact_match,none', 'math_verify,none'), sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=None, stop=('Problem:',), chat_template_kwargs={}), scorer='minerva_math', grader=MATH_GRADER)
         )
     return result
 
@@ -86,7 +70,7 @@ def math_dataset(
     rows: int,
     trials: int,
     temperature: float,
-) -> RlDataSource[EvalDataset]:
+) -> RlDataSource[EvaluationCorpusRecipe]:
     recipe = CurationRecipe(
         name="evalchemy-" + name,
         source=source,
@@ -104,7 +88,7 @@ def math_dataset(
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math"),
             count=rows,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             recipe,
             EvaluationProtocol(
                 benchmark=benchmark,
@@ -126,11 +110,11 @@ def math_dataset(
             ),
             partial(chat_item, response_selection="final_or_complete_boxed_reasoning"),
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
+def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
     benchmark = "OlympiadBench" if judged else "OlympiadBenchDeterministic"
     count = 10 if judged else 1
     return RlDataSource(
@@ -142,7 +126,7 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "math", "legacy-subset"),
             count=30,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="evalchemy-" + benchmark.lower(),
                 source=bundled_source("OlympiadBench", "olympiadbench.jsonl", OLYMPIAD_SHA256),
@@ -172,11 +156,11 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataset]:
             ),
             chat_item,
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def base_sources() -> list[RlDataSource[EvalDataset]]:
+def base_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         math_dataset(
             "math500",
@@ -205,7 +189,7 @@ def base_sources() -> list[RlDataSource[EvalDataset]]:
     ]
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     # AIME25 and AMC23 source generation sets do_sample=False despite temperature=.7.
     aime = math_dataset(
         "aime25",

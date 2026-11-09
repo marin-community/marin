@@ -3,8 +3,14 @@
 
 """CommonsenseQA, COPA and WSC likelihood prompts from lm-eval v0.4.12."""
 
-from taskcompendium.importers.evaluation_harness import ChoiceDocument
-from taskcompendium.importers.fewshot import ChoiceLayout, ChoiceTemplate, Document, FewshotPolicy, FewshotSampling
+from taskcompendium.importers.fewshot import (
+    ChoiceDocument,
+    ChoiceLayout,
+    ChoiceTemplate,
+    Document,
+    FewshotPolicy,
+    FewshotSampling,
+)
 
 
 def commonsense_qa_document(doc: Document) -> ChoiceDocument:

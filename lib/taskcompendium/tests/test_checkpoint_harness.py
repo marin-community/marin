@@ -84,6 +84,17 @@ def test_checkpoint_gpqa_cleans_answers_before_shuffling_and_selecting_gold(tmp_
     assert "[ignored]" not in operation.requests[3].context
 
 
+def test_winogrande_fewshots_precede_both_candidate_contexts():
+    document = {"sentence": "Alice _ the race.", "option1": "won", "option2": "lost", "answer": "1"}
+    example = {"sentence": "Bob _ the ball.", "option1": "caught", "option2": "dropped", "answer": "1"}
+    (row,) = compile_choice_documents([document], [example, example], HarnessTemplate("winogrande", 1))
+    operation = ChoiceLikelihood.model_validate(row["operation"])
+    assert [(request.context, request.continuation) for request in operation.requests] == [
+        ("Bob caught the ball.\n\nAlice won", " the race."),
+        ("Bob caught the ball.\n\nAlice lost", " the race."),
+    ]
+
+
 @pytest.mark.parametrize("family", ["boolq", "piqa", "truthfulqa_mc2"])
 def test_validation_fewshots_follow_pinned_harness_draws_across_documents(family):
     documents = [

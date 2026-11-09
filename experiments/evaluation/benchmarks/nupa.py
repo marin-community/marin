@@ -19,8 +19,9 @@ from taskcompendium.importers.evaluation_nupa import convert_nupa, nupa_item, re
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.benchmarks.environments import BASIC_GRADER
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -29,7 +30,7 @@ PANEL_SHA256 = "27f122972d76dc2a1170a3d105a9856b55beedabe037f697c1a1aa2baeb67036
 PANEL_SOURCE_COMMIT = "623134de90723e7f189036da005067f36817b6e7"
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     result = []
     for name, rows, reader, seed in (
         ("NUPA-Loose", 238926, read_nupa_sample, None),
@@ -58,7 +59,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
                     count=rows,
                 ),
-                config=EvalDataset(
+                config=EvaluationCorpusRecipe(
                     recipe=CurationRecipe(
                         name="evalchemy-" + name.lower(),
                         source=HfSource(
@@ -108,7 +109,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     ),
                     item_builder=nupa_item,
                 ),
-                pipeline=curate,
+                pipeline=prepare_evaluation,
             )
         )
     return result

@@ -11,8 +11,8 @@ import yaml
 from marin.evaluation.historical_protocols import HISTORICAL_PROTOCOLS
 from taskcompendium.importers.evalchemy.code import CRUX_DIRECTIONS
 
+from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.curated import load_evaluations
-from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
 
 CAMPAIGN = Path(__file__).resolve().parent
 ROOT = CAMPAIGN.parents[3]

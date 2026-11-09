@@ -18,7 +18,7 @@ from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.curated import load_evaluations
-from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
+from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.campaign import CampaignStatus, SourceOutcome, write_campaign_report
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.pipeline import source_recipe

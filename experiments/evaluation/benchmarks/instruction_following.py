@@ -20,12 +20,13 @@ from taskcompendium.importers.evalchemy.scorers.instruction_spec import Instruct
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import (
+from experiments.evaluation.benchmarks.environments import (
     IFBENCH_GRADER,
     IFEVAL_GRADER,
 )
-from experiments.post_training.task_curation.datasets.evalchemy.harness import chat_source
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.preparation import chat_source
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -45,7 +46,8 @@ IFBENCH_METRICS = (
 )
 
 
-def instruction_source(
+def instruction_following_evaluation(
+    *,
     name: str,
     benchmark: str,
     source: HfSource,
@@ -53,7 +55,7 @@ def instruction_source(
     profile: InstructionProfile,
     max_tokens: int,
     seed: int,
-) -> RlDataSource[EvalDataset]:
+) -> RlDataSource[EvaluationCorpusRecipe]:
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
         info=SourceInfo(
@@ -64,7 +66,7 @@ def instruction_source(
             tags=("eval", "source:evalchemy", "benchmark", "single-turn", "instruction-following"),
             count=population,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="evalchemy-" + name,
                 source=source,
@@ -104,32 +106,14 @@ def instruction_source(
             ),
             partial(instruction_item, profile=profile),
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
-        instruction_source(
-            "ifeval",
-            "ifeval",
-            HfSource("google/IFEval", IFEVAL_REVISION, ("ifeval_input_data.jsonl",), SourceFormat.JSONL),
-            541,
-            InstructionProfile.HARNESS,
-            1280,
-            1234,
-        ),
-        instruction_source(
-            "ifbench",
-            "IFBench",
-            HfSource(
-                "allenai/IFBench_test", IFBENCH_REVISION, ("data/train-00000-of-00001.parquet",), SourceFormat.PARQUET
-            ),
-            300,
-            InstructionProfile.IFBENCH,
-            1024,
-            42,
-        ),
+        instruction_following_evaluation(name='ifeval', benchmark='ifeval', source=HfSource('google/IFEval', IFEVAL_REVISION, ('ifeval_input_data.jsonl',), SourceFormat.JSONL), population=541, profile=InstructionProfile.HARNESS, max_tokens=1280, seed=1234),
+        instruction_following_evaluation(name='ifbench', benchmark='IFBench', source=HfSource('allenai/IFBench_test', IFBENCH_REVISION, ('data/train-00000-of-00001.parquet',), SourceFormat.PARQUET), population=300, profile=InstructionProfile.IFBENCH, max_tokens=1024, seed=42),
     ]
 
 

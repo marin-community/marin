@@ -23,8 +23,8 @@ from taskcompendium.evaluation.spec import (
     EvaluationItem,
 )
 from taskcompendium.importers.evalchemy.grader import source_package
-from taskcompendium.importers.evaluation_harness import ChoiceDocument
 from taskcompendium.importers.fewshot import (
+    ChoiceDocument,
     ChoiceTemplate,
     Document,
     FewshotPolicy,
