@@ -28,6 +28,8 @@ cache-keys = [
     "Cargo.lock",
     "build.rs",
     "src/**/*.rs",
+    "../../rigging/rust/Cargo.toml",
+    "../../rigging/rust/src/**/*.rs",
     "proto/**",
     "pyext/Cargo.toml",
     "pyext/src/**/*.rs",

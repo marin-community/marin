@@ -425,6 +425,9 @@ fn authorized_cluster<'a>(
             }
         }
         Some(AuthIdentity::Network) => Ok(requested),
+        Some(AuthIdentity::SharedGrant { .. }) => Err(ConnectError::permission_denied(
+            "read grants cannot ingest logs",
+        )),
         None => Err(ConnectError::internal(
             "finelog: request reached a handler with no auth identity",
         )),

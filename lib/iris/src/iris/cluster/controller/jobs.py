@@ -14,6 +14,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.secrets import validate_secret_name
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
+from rigging.shared_grants import SHARED_GRANT_ROLE
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
 
@@ -27,7 +28,13 @@ from iris.cluster.constraints import (
     validate_tpu_request,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
+from iris.cluster.controller.auth import (
+    ADMIN_ROLE,
+    TASK_ROLE,
+    ControllerAuth,
+    authorize_owner_if_configured,
+    authorize_shared_operation,
+)
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import (
     BackendCapability,
@@ -396,6 +403,9 @@ def _authorize_job_actor(dependencies: JobDependencies, job_id: JobName) -> None
     if not dependencies.auth.provider:
         return
     identity = get_verified_identity()
+    if identity is not None and identity.role == SHARED_GRANT_ROLE:
+        # The RPC handler has checked the actual job and operation with the authority.
+        return
     if identity is not None and identity.role == FEDERATION_PEER_ROLE:
         with dependencies.db.read_snapshot() as snapshot:
             handoff = reads.received_handoff(snapshot, job_id)
@@ -481,6 +491,7 @@ class LaunchIdentity:
     received_handoff: bool
     submitting_user: str
     budget_user: str
+    shared_grant_id: str = ""
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
@@ -530,6 +541,8 @@ def _launch_job_id(
     received_handoff: bool,
 ) -> JobName:
     job_id = requested_job_id
+    if identity is not None and identity.role == SHARED_GRANT_ROLE:
+        return job_id
     if (
         dependencies.auth.provider
         and identity is not None
@@ -570,12 +583,25 @@ def _launch_identity(
     received_handoff = request.HasField("federation")
     _authorize_launch(dependencies, identity, request, context, requested_job_id, received_handoff)
     job_id = _launch_job_id(dependencies, identity, requested_job_id, received_handoff)
+    shared_grant_id = ""
+    if identity is not None and identity.role == SHARED_GRANT_ROLE:
+        if received_handoff:
+            raise ConnectError(Code.PERMISSION_DENIED, "Shared grants cannot submit federation handoffs")
+        access = authorize_shared_operation(
+            dependencies.auth,
+            context,
+            action="job.submit",
+            resource=job_id.to_wire(),
+        )
+        assert access is not None
+        shared_grant_id = access.grant_id
     submitting_user = _launch_submitting_user(dependencies, identity, request, job_id)
     return LaunchIdentity(
         job_id=job_id,
         received_handoff=received_handoff,
         submitting_user=submitting_user,
         budget_user=job_id.user,
+        shared_grant_id=shared_grant_id,
     )
 
 
@@ -626,6 +652,12 @@ def _validate_launch_profile(
     launch: LaunchIdentity,
 ) -> None:
     """Authorize elevated profiles and reject unsupported runtime combinations."""
+    identity = get_verified_identity()
+    if identity is not None and identity.role == SHARED_GRANT_ROLE:
+        if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+            raise ConnectError(Code.PERMISSION_DENIED, "Shared-grant jobs require sandbox isolation")
+        if request.entrypoint.workdir_files or request.entrypoint.workdir_file_refs:
+            raise ConnectError(Code.PERMISSION_DENIED, "Shared-grant jobs require a self-contained task image")
     # Backends treat an unrecognized profile as DEFAULT, which would silently drop
     # the isolation a newer client asked for.
     if resolve_container_profile(request.container_profile) not in CONTAINER_PROFILE_VALUES:
@@ -979,6 +1011,12 @@ def _insert_local_job(
             priority_band=priority_band,
             submitting_user=launch.submitting_user,
         )
+        if launch.shared_grant_id:
+            cur.execute(
+                jobs_table.update()
+                .where(jobs_table.c.job_id == launch.job_id)
+                .values(shared_grant_id=launch.shared_grant_id)
+            )
     dependencies.runtime.wake()
 
     with dependencies.db.read_snapshot() as snapshot:
@@ -1005,6 +1043,8 @@ def launch_job(
 
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
+    if launch.shared_grant_id and plan.disposition != SubmitDisposition.LOCAL:
+        raise ConnectError(Code.PERMISSION_DENIED, "Shared-grant jobs require local cluster execution")
     if plan.disposition == SubmitDisposition.LOCAL:
         _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
@@ -1036,7 +1076,9 @@ def get_job_status(
     ctx: RequestContext,
 ) -> controller_pb2.Controller.GetJobStatusResponse:
     """Return job status and aggregate task counts."""
-    del ctx
+    authorize_shared_operation(
+        dependencies.auth, ctx, action="job.read", resource=JobName.from_wire(request.job_id).to_wire()
+    )
     with dependencies.db.read_snapshot() as q:
         job = reads.get_job_detail(q, JobName.from_wire(request.job_id))
         if not job:
@@ -1082,8 +1124,11 @@ def get_job_state(
     Returns only the state enum for each requested job, avoiding the cost
     of loading tasks, attempts, and worker addresses.
     """
-    del ctx
     wire_ids = list(request.job_ids)
+    for wire_id in wire_ids:
+        authorize_shared_operation(
+            dependencies.auth, ctx, action="job.read", resource=JobName.from_wire(wire_id).to_wire()
+        )
     if not wire_ids:
         return controller_pb2.Controller.GetJobStateResponse()
 
@@ -1105,8 +1150,8 @@ def terminate_job(
     ctx: RequestContext,
 ) -> job_pb2.Empty:
     """Cancel a job tree or route cancellation to its execution peer."""
-    del ctx
     job_id = JobName.from_wire(request.job_id)
+    authorize_shared_operation(dependencies.auth, ctx, action="job.cancel", resource=job_id.to_wire())
     with dependencies.db.read_snapshot() as snapshot:
         state = reads.get_job_state(snapshot, job_id)
     if state is None:

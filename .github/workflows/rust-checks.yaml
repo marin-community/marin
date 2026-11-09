@@ -38,9 +38,11 @@ jobs:
               - '.github/workflows/rust-checks.yaml'
             finelog:
               - 'lib/finelog/rust/**'
+              - 'lib/rigging/rust/**'
               - '.github/workflows/rust-checks.yaml'
             iris:
               - 'lib/iris/rust/**'
+              - 'lib/rigging/rust/**'
               - '.github/workflows/rust-checks.yaml'
             # The dev-mode guard inspects the pyprojects a leaked rust path source
             # lands in, plus the script that writes it.
@@ -127,6 +129,11 @@ jobs:
         run: cargo clippy --manifest-path lib/iris/rust/Cargo.toml --workspace --all-targets -- -D warnings
       - name: cargo test
         run: cargo test --manifest-path lib/iris/rust/Cargo.toml --workspace
+      - name: Shared grant contract
+        run: |
+          cargo fmt --manifest-path lib/rigging/rust/Cargo.toml -- --check
+          cargo clippy --manifest-path lib/rigging/rust/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path lib/rigging/rust/Cargo.toml
 
   rust-checks:
     name: rust-checks

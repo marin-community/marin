@@ -59,13 +59,14 @@ ARG SOURCE_COMMIT=""
 ARG SOURCE_TREE=""
 ARG SOURCE_DIRTY=""
 
-WORKDIR /build/rust
+WORKDIR /build/lib/finelog/rust
+COPY lib/rigging/rust/ /build/lib/rigging/rust/
 COPY lib/finelog/rust/ ./
 ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
     FINELOG_SOURCE_TREE=${SOURCE_TREE} \
     FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/rust/target \
+    --mount=type=cache,target=/build/lib/finelog/rust/target \
     mold -run cargo build --profile ${CARGO_PROFILE} -p finelog \
       --bin finelog-server --bin finelog-migrate \
     && cp target/${CARGO_PROFILE}/finelog-server /finelog-server \

@@ -1,0 +1,14 @@
+[
+  {
+    "principal": "service:grafana",
+    "owner": "service:grafana",
+    "max_ttl": 3600,
+    "delegation_depth": 1
+  },
+  {
+    "principal": "example-researcher",
+    "owner": "example-researcher",
+    "max_ttl": 3600,
+    "delegation_depth": 2
+  }
+]

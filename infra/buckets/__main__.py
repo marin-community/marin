@@ -13,7 +13,9 @@ import pulumi_gcp as gcp
 from iac.buckets import DataBuckets
 from iac.buckets.r2 import R2PublicBucket
 from iac.config import CLOUDFLARE_OA_DEV_ZONE_ID
+from iac.coreweave.identity import CoreweaveIdentity, CoreweaveIdentityPolicies
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config_from_dirs
+from rigging.grants import Permission
 
 GCP_PROJECT = "hai-gcp-models"
 GCP_LOG_BUCKET = "marin-usage-logs"
@@ -22,6 +24,20 @@ R2_BUCKET_NAME = "marin-na"
 R2_PUBLIC_HOSTNAME = "public.oa.dev"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIRS = (REPO_ROOT / "config",)
+
+
+def identity_from_metadata(metadata: dict) -> CoreweaveIdentity:
+    return CoreweaveIdentity(
+        subject=metadata["subject"],
+        permissions=tuple(
+            Permission(
+                service=permission["service"],
+                actions=frozenset(permission["actions"]),
+                resource=permission["resource"],
+            )
+            for permission in metadata["permissions"]
+        ),
+    )
 
 
 def main() -> None:
@@ -33,6 +49,23 @@ def main() -> None:
         "coreweave-object-storage",
         s3_endpoint=s3_data_config.stores[StoreType.COREWEAVE].endpoint,
     )
+    config = pulumi.Config("marin-buckets")
+    identity_names = config.get_object("auth_identity_names")
+    if identity_names:
+        if len(set(identity_names)) != len(identity_names):
+            raise ValueError("auth_identity_names must select each provider identity once")
+        auth = pulumi.StackReference(config.require("auth_stack"))
+        metadata = auth.require_output("coreweave_identities")
+        identities = {
+            name: metadata.apply(lambda values, identity_name=name: identity_from_metadata(values[identity_name]))
+            for name in identity_names
+        }
+        CoreweaveIdentityPolicies(
+            "auth-identities",
+            issuer=auth.require_output("issuer"),
+            identities=identities,
+            coreweave_provider=coreweave_provider,
+        )
     cloudflare_provider = cloudflare.Provider("cloudflare-r2")
 
     DataBuckets(

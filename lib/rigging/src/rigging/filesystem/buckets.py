@@ -10,10 +10,9 @@ listing GCS and CoreWeave side by side, or a copy from CoreWeave to GCS.
 
 :func:`filesystem_for` routes instead on the bucket's declared backend
 (``config/*.yaml`` via :func:`rigging.filesystem.cluster_config.data_buckets`), building each
-S3-compatible filesystem with explicit endpoint, signing region, and credentials
-rather than reading or writing environment variables. GCS and unregistered buckets
-fall through to the guarded factory, so cross-region metering and ``mirror://``
-still apply where they already did.
+S3-compatible filesystem with its own endpoint, signing region, and credentials.
+GCS and unregistered buckets fall through to the guarded factory, so cross-region
+metering and ``mirror://`` still apply where they already did.
 """
 
 import logging
@@ -27,6 +26,8 @@ from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_bucket
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.paged_listing import with_listing
 from rigging.filesystem.s3_compat import (
+    coreweave_federated_s3_options,
+    coreweave_federation,
     credentials_hint,
     fsspec_s3_conf,
     s3_credentials,
@@ -94,6 +95,12 @@ def _s3_filesystem(spec: BucketSpec, upload_policy: S3UploadPolicy) -> s3fs.S3Fi
     The signing region is the bucket's own for CoreWeave, whose endpoint routes on it, and
     ``"auto"`` for R2, which ignores the AWS region scheme entirely.
     """
+    if spec.store is StoreType.COREWEAVE and (federation := coreweave_federation()):
+        return s3fs.S3FileSystem(
+            **coreweave_federated_s3_options(spec, federation),
+            fixed_upload_size=upload_policy is S3UploadPolicy.FIXED_PARTS,
+        )
+
     credentials = s3_credentials(spec.store)
     if credentials is None:
         raise MissingCredentials(f"no credentials for {spec.store} bucket {spec.name!r}: {credentials_hint(spec.store)}")

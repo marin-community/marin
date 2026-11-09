@@ -23,10 +23,12 @@ import os
 import posixpath
 import re
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlencode, urlparse
 
@@ -36,6 +38,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from rigging.grants import GrantDenied
 from rigging.server_auth import (
     RequestAuthPolicy,
     RouteAuthMiddleware,
@@ -47,6 +50,7 @@ from rigging.server_auth import (
     scope_client_address,
     scope_headers,
 )
+from rigging.shared_grants import SharedGrantClient, SharedGrantConfig, SharedGrantUnavailable
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -69,7 +73,7 @@ from marina.applets import (
     read_applet_package,
     validate_backend_import,
 )
-from marina.auth import build_policy, identity_for
+from marina.auth import SharedGrantMiddleware, build_policy, grant_action, identity_for
 from marina.db import DatabaseSpec, database_from_env
 from marina.host_bindings import normalize_hostname
 from marina.mcp import marina_mcp
@@ -144,6 +148,7 @@ class MarinaConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     require_registered_apps: bool = False
     local_publisher: str | None = None
+    shared_grants: SharedGrantConfig | None = None
 
     @classmethod
     def from_env(cls) -> "MarinaConfig":
@@ -156,11 +161,19 @@ class MarinaConfig:
         except ValueError as error:
             raise ValueError(f"{MARINA_SURFACE_ENV} must be authenticated or public_applets") from error
         audience = os.environ.get(IAP_AUDIENCE_ENV) or None
-        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not audience and surface is MarinaSurface.AUTHENTICATED:
+        shared_file = os.environ.get("MARINA_SHARED_GRANTS_CONFIG")
+        shared = SharedGrantConfig.model_validate_json(Path(shared_file).read_text()) if shared_file else None
+        if (
+            os.environ.get(CLOUD_RUN_SERVICE_ENV)
+            and not audience
+            and shared is None
+            and surface is MarinaSurface.AUTHENTICATED
+        ):
             raise ValueError(f"{IAP_AUDIENCE_ENV} must be set when running on Cloud Run")
         return cls(
             data_root=data_root,
             iap_audience=audience,
+            shared_grants=shared,
             database=database_from_env(os.environ),
             host_apps=parse_host_mapping(os.environ.get(HOST_APPS_ENV, ""), HOST_APPS_ENV),
             canonical_origin=(os.environ.get(CANONICAL_ORIGIN_ENV) or "").rstrip("/") or None,
@@ -184,6 +197,30 @@ class MarinaConfig:
             require_registered_apps=bool(os.environ.get(CLOUD_RUN_SERVICE_ENV))
             and surface is MarinaSurface.AUTHENTICATED,
         )
+
+
+def legacy_host_aliases(app: ASGIApp, host_apps: dict[str, str], origin: str) -> ASGIApp:
+    """Resolve legacy API hosts before authentication derives an app resource."""
+
+    async def serve(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await app(scope, receive, send)
+        request = Request(scope)
+        host = request.headers.get("host", "")
+        path = request.url.path
+        app_name = legacy_api_app(host, path, host_apps)
+        if app_name is not None:
+            prefix = f"/{app_name}"
+            scope = {**scope, "path": prefix + path, "raw_path": prefix.encode() + scope["raw_path"]}
+            return await app(scope, receive, send)
+        target = host_redirect(host, path, host_apps, origin)
+        if target is None:
+            return await app(scope, receive, send)
+        query = f"?{request.url.query}" if request.url.query else ""
+        response = RedirectResponse(target + query, status_code=307, headers={"Cache-Control": "no-store"})
+        return await response(scope, receive, send)
+
+    return serve
 
 
 def parse_host_mapping(spec: str, env_name: str) -> dict[str, str]:
@@ -329,6 +366,7 @@ def applet_directory(
     store: AppletStore | None,
     applet_origin: str | None,
     public_applet_origin: str | None,
+    can_read: Callable[[uuid.UUID], bool] | None = None,
 ) -> list[dict[str, object]]:
     if store is None:
         return []
@@ -347,6 +385,7 @@ def applet_directory(
             "mode": applet.mode.value,
         }
         for applet in store.active_applets()
+        if can_read is None or can_read(applet.id)
     ]
 
 
@@ -610,7 +649,8 @@ async def call_applet_api(app: ASGIApp, request: Request, path: str) -> Response
     headers = {
         name: value
         for name, value in request.headers.items()
-        if name.lower() not in {"content-length", "host", "transfer-encoding"}
+        if name.lower()
+        not in {"content-length", "host", "transfer-encoding", "authorization", "cookie", "x-goog-iap-jwt-assertion"}
     }
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://applet") as client:
         response = await client.request(
@@ -715,9 +755,36 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         if applet_store is None:
             raise ValueError("Runtime cutover requires the application registry")
         config.runtime.require_registrations({app.name: app.id for app in applet_store.active_applets() if app.name})
-    if config.local_publisher is not None and config.iap_audience is not None:
+    if config.local_publisher is not None and (config.iap_audience is not None or config.shared_grants is not None):
         raise ValueError("A local publisher is available only to a loopback operator kernel")
-    policy = build_policy(config.iap_audience)
+    shared = SharedGrantClient(config.shared_grants, audience="marina") if config.shared_grants is not None else None
+    policy = build_policy(config.iap_audience, shared)
+
+    def resolve_grant_app(name: str) -> uuid.UUID:
+        if applet_store is None:
+            raise GrantDenied("No application registry is configured")
+        try:
+            return applet_store.named_applet(name).id
+        except AppletNotFound as error:
+            raise GrantDenied("Application not found") from error
+
+    def directory_for(request: Request) -> list[dict[str, object]]:
+        def can_read(applet_id: uuid.UUID) -> bool:
+            if shared is None:
+                return True
+            token = extract_bearer_token(dict(request.headers))
+            if token is None:
+                return False
+            try:
+                shared.authorize(token, action="app.read", resource=f"/apps/{applet_id}/")
+                return True
+            except GrantDenied:
+                return False
+            except SharedGrantUnavailable as error:
+                raise HTTPException(status_code=503, detail="shared authorization is unavailable") from error
+
+        return applet_directory(applet_store, config.applet_origin, config.public_applet_origin, can_read)
+
     providers = (
         []
         if applet_store is None or applet_runtime is None
@@ -799,11 +866,12 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.get("/api/marina/apps")
     @requires_auth
-    def list_apps() -> JSONResponse:
+    @grant_action("directory")
+    def list_apps(request: Request) -> JSONResponse:
         return JSONResponse(
             {
                 "apps": [
-                    *applet_directory(applet_store, config.applet_origin, config.public_applet_origin),
+                    *directory_for(request),
                 ]
             },
             headers={"Cache-Control": DIRECTORY_CACHE_CONTROL},
@@ -811,20 +879,23 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.get("/api/marina/applets")
     @requires_auth
-    def list_applets() -> JSONResponse:
+    @grant_action("directory")
+    def list_applets(request: Request) -> JSONResponse:
         return JSONResponse(
-            {"applets": applet_directory(applet_store, config.applet_origin, config.public_applet_origin)},
+            {"applets": directory_for(request)},
             headers={"Cache-Control": DIRECTORY_CACHE_CONTROL},
         )
 
     @api.get("/api/marina/me")
     @requires_auth
+    @grant_action("identity")
     def me(request: Request) -> JSONResponse:
         identity = identity_for(request, policy)
         return JSONResponse({"user": identity.user_id, "role": identity.role})
 
     @api.get("/api/marina/agent/config")
     @requires_auth
+    @grant_action("app.read")
     def agent_config(app: str) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="app not found")
@@ -885,15 +956,15 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.get("/", include_in_schema=False)
     @requires_auth
+    @grant_action("directory")
     def landing(
+        request: Request,
         sort: Literal["name", "released"] = "released",
         order: Literal["asc", "desc"] = "desc",
         page: int = Query(default=1, ge=1),
     ) -> HTMLResponse:
         return HTMLResponse(
-            landing_page(
-                applet_directory(applet_store, config.applet_origin, config.public_applet_origin), sort, order, page
-            ),
+            landing_page(directory_for(request), sort, order, page),
             headers={"Cache-Control": DIRECTORY_CACHE_CONTROL},
         )
 
@@ -917,12 +988,15 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.post("/api/marina/applets/{applet_id}")
     @requires_auth
+    @grant_action("app.release")
     async def update_applet(
         applet_id: uuid.UUID,
         base_version: int,
         request: Request,
         mode: AppletMode | None = None,
     ) -> JSONResponse:
+        if shared is not None and mode is not None:
+            raise HTTPException(status_code=403, detail="Release grants cannot change application visibility")
         if applet_store is None:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
         package = await uploaded_applet_package(request)
@@ -963,6 +1037,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.get("/api/marina/applets/{applet_id}")
     @requires_auth
+    @grant_action("app.read")
     async def applet_details(applet_id: uuid.UUID) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="applet not found")
@@ -1075,12 +1150,14 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.get("/a/{applet_id}", include_in_schema=False)
     @public
+    @grant_action("app.read")
     def applet_without_slash(applet_id: uuid.UUID, request: Request) -> RedirectResponse:
         require_applet_read(applet_id, request)
         return RedirectResponse(f"/a/{applet_id}/")
 
     @api.get("/a/{applet_id}/", include_in_schema=False)
     @public
+    @grant_action("app.read")
     def current_applet(applet_id: uuid.UUID, request: Request) -> RedirectResponse:
         require_applet_read(applet_id, request)
         if applet_store is None:
@@ -1120,11 +1197,13 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.post("/a/{applet_id}/query")
     @requires_auth
+    @grant_action("app.read")
     async def query_applet(applet_id: uuid.UUID, request: Request) -> JSONResponse:
         return await execute_applet_query(applet_id, request)
 
     @api.post("/a/{applet_id}/v/{version}/query")
     @requires_auth
+    @grant_action("app.read")
     async def versioned_applet_query(applet_id: uuid.UUID, version: int, request: Request) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="applet not found")
@@ -1140,6 +1219,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         include_in_schema=False,
     )
     @public
+    @grant_action("app.read")
     async def current_applet_api_read(applet_id: uuid.UUID, path: str, request: Request) -> Response:
         if config.surface is MarinaSurface.PUBLIC_APPLETS:
             await run_in_threadpool(require_applet_read, applet_id, request)
@@ -1152,6 +1232,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         include_in_schema=False,
     )
     @public
+    @grant_action("app.read")
     async def versioned_applet_api_read(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
         if config.surface is MarinaSurface.PUBLIC_APPLETS:
             await run_in_threadpool(require_applet_read, applet_id, request)
@@ -1229,6 +1310,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         include_in_schema=False,
     )
     @public
+    @grant_action("app.read")
     def applet_root(applet_id: uuid.UUID, version: int, request: Request) -> Response:
         require_applet_read(applet_id, request)
         return applet_file_response(applet_id, version, "", request)
@@ -1239,6 +1321,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         include_in_schema=False,
     )
     @public
+    @grant_action("app.read")
     def applet_file(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
         require_applet_read(applet_id, request)
         return applet_file_response(applet_id, version, path, request)
@@ -1278,29 +1361,12 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             if origin.endswith(f"//{host}"):
                 raise ValueError(f"{HOST_APPS_ENV}: {host} is the canonical origin and would redirect to itself")
 
-        @api.middleware("http")
-        async def redirect_aliased_hosts(request: Request, call_next):
-            host = request.headers.get("host", "")
-            path = request.url.path
-            app_name = legacy_api_app(host, path, config.host_apps)
-            if app_name is not None:
-                prefix = f"/{app_name}"
-                request.scope["path"] = prefix + path
-                request.scope["raw_path"] = prefix.encode() + request.scope["raw_path"]
-                return await call_next(request)
-            target = host_redirect(host, path, config.host_apps, origin)
-            if target is None:
-                return await call_next(request)
-            query = f"?{request.url.query}" if request.url.query else ""
-            # 307, not 308: a permanent redirect is cached hard, and a browser that kept an
-            # earlier target would keep following it after this mapping changes.
-            return RedirectResponse(target + query, status_code=307, headers={"Cache-Control": "no-store"})
-
     api.mount(MCP_READ_PATH, AuthenticatedMount(read_mcp_app, policy))
     api.mount(MCP_PATH, AuthenticatedMount(mcp_app, policy))
 
     @api.api_route("/{name}", methods=["GET", "HEAD"], include_in_schema=False)
     @requires_auth
+    @grant_action("app.read")
     def named_without_slash(name: str) -> RedirectResponse:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="app not found")
@@ -1316,6 +1382,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         include_in_schema=False,
     )
     @requires_auth
+    @grant_action("app.read")
     async def named_application(name: str, path: str, request: Request) -> Response:
         if applet_store is None:
             raise HTTPException(status_code=404, detail="app not found")
@@ -1364,7 +1431,12 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         response.headers["Content-Security-Policy"] = content_security_policy(connect_src)
         return response
 
-    authenticated = RouteAuthMiddleware(api, policy)
+    authenticated: ASGIApp = RouteAuthMiddleware(api, policy)
+    if shared is not None and config.surface is MarinaSurface.AUTHENTICATED:
+        authenticated = SharedGrantMiddleware(authenticated, api.router, shared, resolve_grant_app)
+    if config.host_apps:
+        assert config.canonical_origin is not None
+        authenticated = legacy_host_aliases(authenticated, config.host_apps, config.canonical_origin)
     if config.surface is MarinaSurface.PUBLIC_APPLETS:
         return public_applet_surface(authenticated)
     if config.applet_domains:

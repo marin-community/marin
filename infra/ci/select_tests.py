@@ -29,6 +29,7 @@ import subprocess
 import tomllib
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
 # Ordered list of workspace member short names.
@@ -47,6 +48,7 @@ SCOPES: tuple[str, ...] = (
     "verifyit",
     "deploy",
     "iac",
+    "auth",
 )
 
 
@@ -64,7 +66,11 @@ EXPERIMENTS_DIR = "experiments"
 EXPERIMENT_README = "README.md"
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    *(
+        SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src")
+        for scope in SCOPES
+        if scope not in {"deploy", "iac", "auth"}
+    ),
     SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
     SourceRoot("lib/shellbox/src/shellbox", "lib/shellbox/src"),
     SourceRoot("lib/taskcompendium/src/taskcompendium", "lib/taskcompendium/src"),
@@ -74,6 +80,8 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("infra/shellsim", "."),
     SourceRoot(EXPERIMENTS_DIR, "."),
     SourceRoot("infra/ci", "."),
+    SourceRoot("infra/auth", "."),
+    SourceRoot("infra/loom-cw", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
     SourceRoot("infra/marina/apps", "infra/marina/apps"),
 )
@@ -104,6 +112,7 @@ UV_PACKAGE: dict[str, str] = {
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
+    "auth": "marin-auth",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
@@ -126,16 +135,17 @@ BROAD_TRIGGER_REASON = "broad-trigger"
 DIFF_DRIVEN_REASON = "diff-driven"
 
 TEST_DIRS: dict[str, tuple[str, ...]] = {
-    **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
+    **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin", "auth"}},
     "deploy": ("infra/deploy/tests",),
     # The Loom Pulumi program imports iac and runs in its environment. It mixes source
     # and tests, so its non-Python inputs force the scope.
     "iac": ("infra/pulumi/tests", "infra/loom"),
+    "auth": ("infra/auth/tests",),
     "marin": ("tests", EXPERIMENTS_DIR),
 }
 
-# Files outside a scope's test directories that its tests read. The import graph cannot
-# see these reads, so a change to one runs the whole scope.
+# File patterns outside a scope's test directories that need its full suite.
+# The import graph cannot see data reads or executions of standalone entrypoints.
 EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
     "iac": frozenset(
         {
@@ -144,6 +154,22 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
             ".github/workflows/ops-fork-ferry.yaml",
             ".github/workflows/ops-loom-holistic-review.yaml",
             ".github/workflows/ops-loom-review.yaml",
+            "infra/auth/__main__.py",
+            "infra/auth/Pulumi*.yaml",
+            "infra/postgres/__main__.py",
+            "infra/postgres/Pulumi*.yaml",
+            "infra/loom-cw/__main__.py",
+            "infra/loom-cw/Pulumi*.yaml",
+        }
+    ),
+    "auth": frozenset(
+        {
+            "infra/auth/bootstrap.py",
+            "infra/auth/service.py",
+            "infra/auth/Dockerfile",
+            "infra/auth/policy/*",
+            "infra/postgres/prove.py",
+            "infra/postgres/Dockerfile",
         }
     ),
 }
@@ -769,12 +795,20 @@ def classify(
             broad = True
             continue
 
-        forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+        forced.update(
+            scope
+            for scope, patterns in EXTERNAL_TEST_INPUTS.items()
+            if any(fnmatchcase(filepath, pattern) for pattern in patterns)
+        )
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
         # import graph, so force-select the owning scope and mark it for a source
         # build; its own tests exercise the extension.
+        if filepath.startswith("lib/rigging/rust/"):
+            forced.update({"iris", "finelog"})
+            native_changed.update({"iris", "finelog"})
+            continue
         native_scope = next(
             (scope for scope, crate_dir in NATIVE_CRATE_DIR.items() if filepath.startswith(f"{crate_dir}/")),
             None,
@@ -831,7 +865,9 @@ def classify(
                     forced.add(scope)
                 break
 
-            package_root = {"deploy": "infra/deploy", "iac": "infra/pulumi"}.get(scope, f"lib/{scope}")
+            package_root = {"deploy": "infra/deploy", "iac": "infra/pulumi", "auth": "infra/auth"}.get(
+                scope, f"lib/{scope}"
+            )
             if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break

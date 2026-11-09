@@ -1900,6 +1900,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "libc",
+ "marin-grants",
  "object_store",
  "parquet",
  "protoc-bin-vendored",
@@ -2342,6 +2343,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2748,6 +2750,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
 dependencies = [
  "twox-hash",
+]
+
+[[package]]
+name = "marin-grants"
+version = "0.1.0"
+dependencies = [
+ "jsonwebtoken",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -3635,6 +3648,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+ "webpki-roots",
 ]
 
 [[package]]

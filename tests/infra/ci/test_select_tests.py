@@ -333,6 +333,79 @@ def test_changed_test_module_runs_directly(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "changed_path,expected_paths",
+    [
+        ("infra/auth/service.py", ["infra/auth/tests"]),
+        ("infra/auth/tests/test_service.py", ["infra/auth/tests/test_service.py"]),
+        ("infra/auth/pyproject.toml", ["infra/auth/tests"]),
+    ],
+)
+def test_auth_changes_run_in_the_auth_environment(tmp_path: Path, changed_path: str, expected_paths: list[str]) -> None:
+    write(tmp_path, "infra/auth/service.py", "AUTHORITY = 1\n")
+    write(
+        tmp_path,
+        "infra/auth/tests/test_service.py",
+        "from infra.auth.service import AUTHORITY\ndef test_service():\n    assert AUTHORITY\n",
+    )
+    write(tmp_path, "tests/infra/test_other.py", "def test_unrelated():\n    pass\n")
+
+    matrix = select_matrix([changed_path], tmp_path)
+
+    assert scopes_in(matrix) == {"auth"}
+    assert leg_paths(matrix, "auth") == expected_paths
+    assert matrix[0].package == "marin-auth"
+    assert matrix[0].extras == ""
+
+
+@pytest.mark.parametrize(
+    "changed_path,scope,test_directory",
+    [
+        ("infra/auth/bootstrap.py", "auth", "infra/auth/tests"),
+        ("infra/auth/service.py", "auth", "infra/auth/tests"),
+        ("infra/auth/Dockerfile", "auth", "infra/auth/tests"),
+        ("infra/auth/policy/schema.json", "auth", "infra/auth/tests"),
+        ("infra/auth/policy/model.json", "auth", "infra/auth/tests"),
+        ("infra/auth/policy/example-entities.json", "auth", "infra/auth/tests"),
+        ("infra/auth/policy/nested/new-entities.json", "auth", "infra/auth/tests"),
+        ("infra/auth/__main__.py", "iac", "infra/pulumi/tests"),
+        ("infra/auth/Pulumi.yaml", "iac", "infra/pulumi/tests"),
+        ("infra/auth/Pulumi.another-stack.yaml", "iac", "infra/pulumi/tests"),
+        ("infra/loom-cw/__main__.py", "iac", "infra/pulumi/tests"),
+        ("infra/loom-cw/Pulumi.yaml", "iac", "infra/pulumi/tests"),
+        ("infra/loom-cw/Pulumi.another-stack.yaml", "iac", "infra/pulumi/tests"),
+    ],
+)
+def test_auth_execution_and_policy_inputs_select_suites_without_importers(
+    tmp_path: Path, changed_path: str, scope: str, test_directory: str
+) -> None:
+    write(tmp_path, changed_path)
+    write(tmp_path, "infra/auth/tests/test_runtime.py", "def test_runtime():\n    assert True\n")
+    write(tmp_path, "infra/pulumi/tests/test_stack.py", "def test_stack():\n    assert True\n")
+    write(tmp_path, "tests/test_unrelated.py", "def test_unrelated():\n    assert True\n")
+
+    matrix = select_matrix([changed_path], tmp_path)
+
+    assert scopes_in(matrix) == {scope}
+    expected_paths = [test_directory, "infra/loom"] if scope == "iac" else [test_directory]
+    assert leg_paths(matrix, scope) == expected_paths
+
+
+def test_auth_library_changes_keep_import_driven_selection(tmp_path: Path) -> None:
+    write(tmp_path, "infra/auth/client.py", "CLIENT = 1\n")
+    write(
+        tmp_path,
+        "infra/auth/tests/test_client.py",
+        "from infra.auth.client import CLIENT\ndef test_client():\n    assert CLIENT\n",
+    )
+    write(tmp_path, "infra/auth/tests/test_unrelated.py", "def test_unrelated():\n    assert True\n")
+
+    matrix = select_matrix(["infra/auth/client.py"], tmp_path)
+
+    assert scopes_in(matrix) == {"auth"}
+    assert leg_paths(matrix, "auth") == ["infra/auth/tests/test_client.py"]
+
+
 def test_deleted_test_module_is_not_handed_to_pytest(tmp_path: Path) -> None:
     """git reports deleted paths; pytest aborts the whole run on a missing path."""
     _workspace(tmp_path)

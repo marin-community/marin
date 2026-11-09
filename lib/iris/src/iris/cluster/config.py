@@ -33,9 +33,11 @@ from rigging.secrets import (
     is_secret_reference,
     resolve_secret_spec,
 )
+from rigging.shared_grants import SharedGrantConfig
 from rigging.timing import Duration
 
 from iris.cluster.egress import parse_egress_rules
+from iris.cluster.platforms.k8s.constants import DEFAULT_SANDBOX_RUNTIME_CLASS
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
@@ -615,9 +617,15 @@ class IapAuthConfig(_Config):
     unprovisioned_role: UserRole = "dashboard"
 
 
+class SharedAttemptConfig(_Config):
+    identity_token_file: Path
+
+
 class AuthConfig(_OneofConfig):
-    _ONEOF_ARMS = ("iap",)
+    _ONEOF_ARMS = ("iap", "shared_grants")
     iap: IapAuthConfig | None = None
+    shared_grants: SharedGrantConfig | None = None
+    shared_attempts: SharedAttemptConfig | None = None
     # Network-location trust, orthogonal to the login-provider arm: a tokenless
     # request whose *direct transport peer* is inside one of these CIDRs
     # authenticates as the anonymous admin identity (like loopback). Requests
@@ -655,6 +663,14 @@ class AuthConfig(_OneofConfig):
     # it explicitly, e.g. ["*@openathena.ai"]. A local_admin (CIDR/loopback) identity
     # is never a valid federation submitter regardless of this list.
     allowed_submitters: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_explicit_shared_auth(self):
+        if self.shared_attempts is not None and self.shared_grants is None:
+            raise ValueError("Shared attempt credentials require shared-grant authentication")
+        if self.shared_grants is not None and (self.optional or self.trusted_cidrs):
+            raise ValueError("Shared-grant deployments cannot admit anonymous or network-trusted callers")
+        return self
 
     @field_validator("trusted_cidrs")
     @classmethod
@@ -738,6 +754,7 @@ class KubernetesProviderConfig(_Config):
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     service_account: str = ""
     host_network: bool = False
+    sandbox_runtime_class: str = Field(default=DEFAULT_SANDBOX_RUNTIME_CLASS, min_length=1)
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
     node_health: NodeHealthConfig | None = None

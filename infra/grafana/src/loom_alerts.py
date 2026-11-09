@@ -20,12 +20,16 @@ import dataclasses
 import hashlib
 import json
 import logging
+import ssl
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
-from config import DEFAULT_OPERATOR_BEHAVIOR, OPERATOR_BEHAVIOR_LABEL, LoomAlertConfig, SlackAlertConfig
+from config import DEFAULT_OPERATOR_BEHAVIOR, OPERATOR_BEHAVIOR_LABEL, LoomAlertConfig, SharedLoomAuth, SlackAlertConfig
+from rigging.grant_auth import JWT_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT
+from rigging.openbao import OpenBaoClient
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +269,83 @@ class SlackAnnouncer:
         return thread or SlackThread(channel=self._slack.channel, thread_ts=ts)
 
 
+class LoomRunLauncher(Protocol):
+    async def launch(self, client: httpx.AsyncClient, request: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class GoogleLoomLauncher:
+    def __init__(self, url: str):
+        self.url = url
+
+    async def launch(self, client: httpx.AsyncClient, request: dict[str, Any]) -> dict[str, Any]:
+        identity = await client.get(
+            METADATA_IDENTITY_URL, params={"audience": self.url, "format": "full"}, headers={"Metadata-Flavor": "Google"}
+        )
+        identity.raise_for_status()
+        google_token = identity.text.strip()
+        if not google_token:
+            raise LoomAlertDeliveryError("Google metadata server returned an empty identity token")
+        federation = await client.post(f"{self.url}/api/auth/federate", json={"token": google_token})
+        federation.raise_for_status()
+        token = _required_string(federation.json(), "token", "Loom federation response")
+        run = await client.post(
+            f"{self.url}/api/runs/create", json=request, headers={"Authorization": f"Bearer {token}"}
+        )
+        run.raise_for_status()
+        result = run.json()
+        if not isinstance(result, dict):
+            raise LoomAlertDeliveryError("Loom run response was not a JSON object")
+        return result
+
+
+class GrantLoomLauncher:
+    """Keep alert retries on one durable grant and launch only a trusted profile."""
+
+    def __init__(self, config: SharedLoomAuth, profile: str):
+        self.config = config
+        self.profile = profile
+        self.bao = OpenBaoClient(config.bao_address, config.bao_token_file, ca_bundle=config.ca_bundle or True)
+
+    async def launch(self, client: httpx.AsyncClient, request: dict[str, Any]) -> dict[str, Any]:
+        identity = await run_in_threadpool(self.bao.request, "GET", "/identity/oidc/token/marin-auth")
+        identity_token = _required_string(identity["data"], "token", "OpenBao identity response")
+        grant = await client.post(
+            self.config.authority_url.rstrip("/") + "/v1/grants",
+            headers={"Authorization": f"Bearer {identity_token}"},
+            json={
+                "actor": self.config.actor,
+                "permissions": [{"service": "loom", "actions": ["session.create"], "resource": f"/{self.profile}/"}],
+                "expires_at": time.time() + self.config.grant_ttl,
+                "idempotency_key": "grafana:" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest(),
+            },
+        )
+        grant.raise_for_status()
+        grant_id = _required_string(grant.json(), "id", "Grant response")
+        exchange = await client.post(
+            self.config.authority_url.rstrip("/") + "/oauth/token",
+            data={
+                "grant_type": TOKEN_EXCHANGE_GRANT,
+                "subject_token_type": JWT_TOKEN_TYPE,
+                "subject_token": identity_token,
+                "audience": "loom",
+                "grant_id": grant_id,
+            },
+        )
+        exchange.raise_for_status()
+        token = _required_string(exchange.json(), "access_token", "Token exchange response")
+        run = await client.post(
+            self.config.authority_url.rstrip("/") + "/v1/loom/launch",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"template": self.profile, "title": request["session"]["title"], "goal": request["session"]["goal"]},
+        )
+        run.raise_for_status()
+        result = run.json()
+        return {
+            "id": _required_string(result, "run_id", "Grant launch response"),
+            "session_id": _required_string(result, "session_id", "Grant launch response"),
+        }
+
+
 class LoomAlertClient:
     """Announce a Grafana webhook in Slack and open a Loom run on that thread."""
 
@@ -274,9 +355,15 @@ class LoomAlertClient:
         *,
         behaviors: Sequence[OperatorBehavior],
         transport: httpx.AsyncBaseTransport | None = None,
+        launcher: LoomRunLauncher | None = None,
     ) -> None:
         self._config = config
         self._transport = transport
+        self._launcher = launcher or (
+            GrantLoomLauncher(config.shared_auth, config.profile)
+            if config.shared_auth
+            else GoogleLoomLauncher(config.url)
+        )
         self._announcer = SlackAnnouncer(config.slack)
         self._behaviors = {behavior.name: behavior for behavior in behaviors}
         if len(self._behaviors) != len(behaviors) or DEFAULT_OPERATOR_BEHAVIOR not in self._behaviors:
@@ -290,7 +377,12 @@ class LoomAlertClient:
         """
         firing = _firing_alerts(payload)
         thread_key = _thread_key(payload)
-        async with httpx.AsyncClient(timeout=self._config.http_timeout, transport=self._transport) as client:
+        tls = ssl.create_default_context()
+        if self._config.shared_auth is not None and self._config.shared_auth.ca_bundle is not None:
+            tls.load_verify_locations(self._config.shared_auth.ca_bundle)
+        async with httpx.AsyncClient(
+            timeout=self._config.http_timeout, transport=self._transport, verify=tls, follow_redirects=False
+        ) as client:
             if not firing:
                 await self._announcer.announce_resolution(client, payload, thread_key)
                 return None
@@ -313,32 +405,7 @@ class LoomAlertClient:
             behavior=behavior,
         )
         try:
-            identity = await client.get(
-                METADATA_IDENTITY_URL,
-                params={"audience": self._config.url, "format": "full"},
-                headers={"Metadata-Flavor": "Google"},
-            )
-            identity.raise_for_status()
-            google_token = identity.text.strip()
-            if not google_token:
-                raise LoomAlertDeliveryError("Google metadata server returned an empty identity token")
-
-            federation = await client.post(
-                f"{self._config.url}/api/auth/federate",
-                json={"token": google_token},
-            )
-            federation.raise_for_status()
-            loom_token = _required_string(federation.json(), "token", "Loom federation response")
-
-            run = await client.post(
-                f"{self._config.url}/api/runs/create",
-                json=request,
-                headers={"Authorization": f"Bearer {loom_token}"},
-            )
-            run.raise_for_status()
-            response = run.json()
-            if not isinstance(response, dict):
-                raise LoomAlertDeliveryError("Loom run response was not a JSON object")
+            response = await self._launcher.launch(client, request)
         except httpx.HTTPStatusError as err:
             raise await self._report_delivery_failure(
                 client,
