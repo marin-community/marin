@@ -224,7 +224,7 @@ def one_epoch_weight_stages(
 
     Each block takes an even share of every SFT component's sequences and fills the rest with replay,
     split by ``replay_weights`` with at least one draw per replay component. Stage steps count from the
-    data start, matching ``GrugTrainerConfig.data_start_step``.
+    mixture's start step (``LmDataConfig.mixture_start_step``).
     """
     if plan.block_size % plan.batch_size:
         raise ValueError("Mixture block boundaries must fall on training steps")
@@ -257,10 +257,11 @@ def sft_data_config(
     stores: Mapping[str, SftStore],
     plan: SftMixturePlan,
     *,
+    start_step: int,
     replay: LmDataConfig,
     validation: Mapping[str, DatasetComponentBase],
 ) -> LmDataConfig:
-    """The SFT epoch plus replay from the first stage of ``replay``, and zero-weight ``validation``."""
+    """The SFT epoch from ``start_step``, replay from the first stage of ``replay``, and zero-weight ``validation``."""
     components, sft_counts = sft_components(stores, plan)
     replay_stage = replay.train_weights[0][1] if isinstance(replay.train_weights, list) else replay.train_weights
     assert replay_stage is not None
@@ -285,6 +286,7 @@ def sft_data_config(
         block_cross_document_attention=True,
         mixture_block_size=plan.block_size,
         stop_strategy=StopStrategy.RESTART_STRATEGY,
+        mixture_start_step=start_step,
     )
 
 
@@ -393,7 +395,6 @@ def build_sft_run(
             balance_attention_rows=HERO_BALANCE_ATTENTION_ROWS,
             gc_interval=100,
         ),
-        data_start_step=start_step,
         router_bias_mode=router_bias_mode,
         special_tokens=special_token_init(start_step),
     )
@@ -488,7 +489,9 @@ def build_sft_run(
             validation=[],
             stats_path=ctx.artifact_path(length_statistics),
         )
-        data = sft_data_config(stores, plan, replay=replay, validation=validation_components(ctx, validation))
+        data = sft_data_config(
+            stores, plan, start_step=start_step, replay=replay, validation=validation_components(ctx, validation)
+        )
         return GrugRunConfig(
             model=model,
             data=data,

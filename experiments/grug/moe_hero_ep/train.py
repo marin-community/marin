@@ -388,10 +388,6 @@ class GrugTrainerConfig:
     balance_attention_rows: bool = False
     sharding_dump_path: str | None = None
     router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE
-    # The step that reads the mixture's first sequence. A run that continues from another run's checkpoint
-    # on a new multi-stage mixture sets it to the restored step; `LmDataConfig.mixture_start_step` covers
-    # only single-stage mixtures.
-    data_start_step: int = 0
     # SFT from a pretrained checkpoint: reseed chat-token rows once and train them faster.
     special_tokens: SpecialTokenInit | None = None
 
@@ -803,12 +799,13 @@ def log_device_memory(step_info) -> None:
     )
 
 
-def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule, data_start_step: int):
+def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
     last_mixture_stage = -1
 
     def log_mixture_stage(step_info):
         nonlocal last_mixture_stage
-        seq_index = batch_schedule.global_data_offset_by_step(step_info.step - data_start_step)
+        # Stages are laid out from the mixture's first readable index, which `mixture_start_step` can move.
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step) - train_dataset.first_readable_index()
         block_id = seq_index // train_dataset.block_size
         stage = train_dataset._get_stage_for_block(block_id)
         if stage == last_mixture_stage:
@@ -1439,12 +1436,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             batch_source = itertools.repeat(synthetic_batch)
         else:
             assert train_loader is not None
-            data_step = int(state.step) - config.trainer.data_start_step
-            if data_step < 0:
-                raise ValueError(
-                    f"Restored step {int(state.step)} precedes data_start_step={config.trainer.data_start_step}"
-                )
-            batch_source = train_loader.iter_from_step(data_step)
+            batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
@@ -1473,9 +1465,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 every=1,
             )
         if train_dataset is not None:
-            state_callbacks.add_hook(
-                _make_mixture_stage_callback(train_dataset, batch_schedule, config.trainer.data_start_step), every=1
-            )
+            state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
