@@ -744,7 +744,9 @@ def _validate_completed_source(
     if current_inventory != completed_inventory:
         raise VerifiedCopyError("source path or size changed after destination completion")
     for source, completed in zip(sources, verified, strict=True):
-        if source.identity is not None:
+        # A manifest written before its source gained an identity key, such as an HF
+        # blob ID, records no identity; such files are checked by content instead.
+        if source.identity is not None and completed.source_identity is not None:
             if source.identity != completed.source_identity:
                 raise VerifiedCopyError(f"source identity changed after destination completion: {source.path}")
             continue

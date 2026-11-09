@@ -547,6 +547,24 @@ def test_verified_copy_resumes_hugging_face_files_by_blob_id(tmp_path, monkeypat
     assert (result.copied_files, result.resumed_files) == (0, 2)
 
 
+def test_verified_copy_completed_without_source_identity_accepts_unchanged_hugging_face_files(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(b"weights")
+    source_filesystem, _ = verified_copy_module.filesystem_for(str(source))
+    # Earlier verified copies recognized no HF listing field as a source identity.
+    _route_filesystems(monkeypatch, {str(source): _ListedSource(source_filesystem, lambda _name: {})})
+    verified_copy_prefix(str(source), str(destination), workers=1)
+
+    _route_filesystems(
+        monkeypatch, {str(source): _ListedSource(source_filesystem, lambda _name: {"blob_id": "model-blob"})}
+    )
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert (result.copied_files, result.resumed_files) == (0, 1)
+
+
 def test_verified_copy_does_not_reuse_status_from_another_source(tmp_path):
     first_source = tmp_path / "first-source"
     second_source = tmp_path / "second-source"
