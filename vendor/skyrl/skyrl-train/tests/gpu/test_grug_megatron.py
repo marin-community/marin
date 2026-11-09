@@ -684,6 +684,8 @@ def test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_
     write_tiny_checkpoint(model_path)
     cfg = _config(str(model_path), world_size=4, pp=1, ep=4)
     cfg.trainer.placement.colocate_all = True
+    cfg.trainer.micro_train_batch_size_per_gpu = 1
+    cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.generator.inference_engine_data_parallel_size = 4
     cfg.generator.inference_engine_expert_parallel_size = 4
     cfg.generator.weight_sync_transport = "expert_block"
