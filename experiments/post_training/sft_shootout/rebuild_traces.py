@@ -121,7 +121,10 @@ def harbor_results(root: StoragePath) -> dict[str, dict]:
             continue
         trial_id = (directory / ID_FILE).read_text().strip()
         attempt = directory.parent
-        result = json.loads((attempt / RESULT_FILE).read_text())
+        result_path = attempt / RESULT_FILE
+        if not result_path.exists():
+            continue  # Running, interrupted, or superseded attempts have no final result yet.
+        result = json.loads(result_path.read_text())
         results[trial_id] = {
             "task_name": result["task_name"],
             "trial_name": result["trial_name"],

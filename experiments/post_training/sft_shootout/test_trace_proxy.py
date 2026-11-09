@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 from pathlib import Path
 
 import httpx
@@ -274,3 +275,19 @@ def test_backend_retries_keep_capability_urls_out_of_logs(tmp_path, monkeypatch,
     assert any(record.name == trace_proxy.__name__ for record in caplog.records)
     assert secret not in caplog.text
     assert secret not in log_path.read_text()
+
+
+def test_rebuild_keeps_completed_trials_when_an_attempt_has_no_result(tmp_path):
+    jobs = tmp_path / "jobs"
+    shutil.copytree(FIXTURE / "jobs", jobs)
+    incomplete = jobs / "interrupted" / "agent"
+    incomplete.mkdir(parents=True)
+    (incomplete / "trial_correlation_id.txt").write_text("interrupted-trial")
+    records = [json.loads(line) for line in (FIXTURE / "requests.jsonl").read_text().splitlines()]
+    records.append({**records[0], "trial": "interrupted-trial"})
+    rows = rebuilt_rows(records, harbor_results(StoragePath(str(jobs))))
+    completed = next(row for row in rows if row["trial_id"] != "interrupted-trial")
+    unfinished = next(row for row in rows if row["trial_id"] == "interrupted-trial")
+    assert completed["reward"] == 0.0 and completed["problems"] == []
+    assert unfinished["problems"] == ["no Harbor trial carries this correlation id"]
+    assert unfinished["messages"]
