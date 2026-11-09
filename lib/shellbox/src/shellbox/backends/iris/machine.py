@@ -215,12 +215,16 @@ class IrisMachine:
         status = detail.removeprefix("Non-integer exec status: ")
         prefix = "invalid literal for int() with base 10: "
         if status.startswith(prefix):
+            quoted = status.removeprefix(prefix)
             try:
-                decoded = ast.literal_eval(status.removeprefix(prefix))
+                decoded = ast.literal_eval(quoted)
                 if isinstance(decoded, str):
                     detail = decoded
             except (ValueError, SyntaxError):
-                pass
+                # The controller truncates long exec errors, leaving an unterminated repr; keep its text so the
+                # transport-failure markers below still classify it instead of surfacing a parser bug.
+                if quoted[:1] in ("'", '"'):
+                    detail = quoted[1:]
         if status.startswith("invalid literal for int()"):
             error = RuntimeError(f"Iris exec failed: {detail}")
             if status.startswith(prefix) and detail.startswith("Internal error occurred"):

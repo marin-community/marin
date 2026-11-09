@@ -707,6 +707,14 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
             RuntimeError,
             None,
         ),
+        # The controller truncates long exec errors mid-repr; the transport marker must still classify them.
+        (
+            "invalid literal for int() with base 10: 'Internal error occurred: error executing command in"
+            ' container: failed to start exec "5281c76e": OCI runtime exec f',
+            MachineUnavailable,
+            "Internal error occurred: error executing command in container: failed to start exec"
+            ' "5281c76e": OCI runtime exec f',
+        ),
     ]
     + [
         (
