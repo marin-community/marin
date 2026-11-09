@@ -21,7 +21,8 @@ Init sources (the :class:`ModelSource` implementations):
 
 - :class:`HFModel` — SFT of an HF checkpoint used verbatim (``initialize_from_hf`` +
   ``use_hf_model_config``); Levanter re-derives the arch from the checkpoint. A pinned Hub ref is
-  first copied to the regional prefix by a CPU download step, so the accelerator never reads the Hub.
+  first copied to the regional prefix by a CPU download step, so the accelerator reads its weights
+  (and, by default, its tokenizer) from the bucket rather than the Hub.
 - :class:`PreparedModel` — like :class:`HFModel`, but the base checkpoint + tokenizer are produced
   by an upstream preparation :class:`ArtifactStep` (e.g. the Delphi reserved-slot rename), resolved
   to that step's output directory. The step becomes a dependency.

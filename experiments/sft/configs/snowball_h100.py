@@ -23,7 +23,6 @@ SPEC = SFTSpec(
     version="2026.09.23",
     model=HFModel(
         model_ref=f"{HF_MODEL}@{HF_REVISION}",
-        tokenizer_path=HF_MODEL,
         model_type="snowball",
         eos_token_ids=(128001, 128009),
     ),
