@@ -58,7 +58,7 @@ SNOWBALL_CONTEXT_LIMIT = 262144
 
 def snowball_context_override(requested_window: int) -> dict[str, int]:
     check_context_limit("Snowball", SNOWBALL_CONTEXT_LIMIT, requested_window)
-    return {"max_position_embeddings": SNOWBALL_CONTEXT_LIMIT}
+    return {"max_position_embeddings": SNOWBALL_CONTEXT_LIMIT, "max_seq_len": SNOWBALL_CONTEXT_LIMIT}
 
 
 def check_context_limit(model: str, max_position_embeddings: int, max_model_len: int) -> None:

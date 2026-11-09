@@ -32,6 +32,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.post_training.long_loop.archive_selection import trace_retention
+from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION, SKIPPED_BENCHMARKS
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
@@ -191,6 +192,14 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
         run = step.build_config(ctx)
         launch = yaml.safe_load(run.launch_config_yaml)
         model = launch["inputs"]["model"]
+        if not ctx.is_fingerprint:
+            exact_config = read_json(model["uri"].rstrip("/") + "/config.json")
+            validate_context_evidence(
+                exact_config,
+                config["generator"]["engine_init_kwargs"]["hf_overrides"],
+                config["context_budget"]["request_window_tokens"],
+                context_evidence(),
+            )
         if not ctx.is_fingerprint:
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
         if not ctx.is_fingerprint:

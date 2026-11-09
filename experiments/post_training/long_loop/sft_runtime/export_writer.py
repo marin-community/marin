@@ -62,6 +62,7 @@ def export_weights(
     if config.max_position_embeddings < config.model.max_seq_len:
         raise ValueError("Export context bound is smaller than the training sequence length")
     hf_config["max_position_embeddings"] = config.max_position_embeddings
+    hf_config["max_seq_len"] = config.max_position_embeddings
     request = {
         "export_version": EXPORT_VERSION,
         "weights_kind": weights_kind,

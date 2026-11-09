@@ -97,6 +97,7 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
         )
         assert json.loads((destination / "config.json").read_text())["grugmoe_artifact_schema_version"] == 2
         assert json.loads((destination / "config.json").read_text())["max_position_embeddings"] == 262144
+        assert json.loads((destination / "config.json").read_text())["max_seq_len"] == 262144
         index = json.loads((destination / "model.safetensors.index.json").read_text())["weight_map"]
         tensors = {}
         for shard in set(index.values()):

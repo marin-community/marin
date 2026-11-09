@@ -10,6 +10,7 @@ import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from rolloutengine.models import TaskRolloutSpec
 
+from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_row
 from experiments.post_training.long_loop.evaluation import TerminalPolicy, smoke_evaluation, validate_eval_policy
 from experiments.post_training.long_loop.serving import check_context_limit
@@ -48,7 +49,7 @@ def test_eval_launch_preserves_base_context_and_all_trace_retention():
     binding = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     launch = yaml.safe_load(binding.skyrl.launch_config_yaml)
     generator = launch["skyrl"]["generator"]
-    assert generator["engine_init_kwargs"]["hf_overrides"] == {"max_position_embeddings": 262144}
+    assert generator["engine_init_kwargs"]["hf_overrides"] == {"max_position_embeddings": 262144, "max_seq_len": 262144}
     assert generator["trajectory_retention"]["sample_fraction"] == 1.0
     assert generator["trajectory_retention"]["required"]
     assert launch["inputs"]["model"]["local_path"].startswith("/")
@@ -58,3 +59,16 @@ def test_context_preflight_rejects_packing_length_as_serving_limit():
     with pytest.raises(ValueError, match="max_model_len=65536"):
         check_context_limit("packed-SFT", 32768, 65536)
     check_context_limit("base-context override", 262144, 65536)
+
+
+def test_pinned_vllm_proof_rejects_previous_inputs_and_invalidates_changed_config():
+    config = json.loads((Path(__file__).parents[1] / "context-fixtures/config.json").read_text())
+    evidence = context_evidence()
+    with pytest.raises(ValueError, match="vLLM rejected"):
+        validate_context_evidence(config, {"max_position_embeddings": 262144}, 65536, evidence)
+    corrected = {"max_position_embeddings": 262144, "max_seq_len": 262144}
+    validate_context_evidence(config, corrected, 65536, evidence)
+    with pytest.raises(ValueError, match="vLLM rejected"):
+        validate_context_evidence(config, {**corrected, "n_positions": 32768}, 65536, evidence)
+    with pytest.raises(ValueError, match="lack a pinned"):
+        validate_context_evidence({**config, "seq_length": 8192}, corrected, 65536, evidence)
