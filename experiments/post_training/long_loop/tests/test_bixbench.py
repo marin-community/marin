@@ -43,9 +43,51 @@ def test_merge_preserves_nineteen_results_and_rejects_changed_task(tmp_path):
     names = ["bixbench-pi"] + [f"benchmark-{i}" for i in range(19)]
     before = write_results(original, names, failed=["bixbench-pi"])
     after = write_results(repair, ["bixbench-pi"])
-    # Dataset-local indices change in the subset; the exact prompt must not.
+    for root in (original, repair):
+        pq.write_table(pa.table({"benchmark": ["bixbench-pi"], "task": ["same-task"]}), root / "rollouts.parquet")
+        config = {
+            "artifacts": {},
+            "run": {},
+            "iris": {"job_name": root.name},
+            "ray": {"rendezvous_dir": "local", "log_dir": "local"},
+            "inputs": {
+                "validation_data": [{"uri": str(root), "relative_path": "rollouts.parquet"}],
+                "model": {"uri": "pinned-model", "tokenizer_revision": "pinned-tokenizer", "identity": root.name},
+            },
+            "runtime": {"task_env": {"JUDGE_BASE_URL": "run-endpoint"}, "image": "pinned-image"},
+            "skyrl": {
+                "data": {"val_data": []},
+                "terminal_bench_config": {"installed_agent": {"output_path": "local"}},
+                "environment": {"task_sessions": {"remote_judge": {"base_url": "endpoint", "model": "judge-pin"}}},
+                "trainer": {
+                    "export_path": "local",
+                    "ckpt_path": "local",
+                    "run_name": root.name,
+                    **{
+                        role: {
+                            "model": {
+                                "revision": "adopted",
+                                "tokenizer_revision": "adopted",
+                                "source_identity": "adopted",
+                            }
+                        }
+                        for role in ("policy", "ref")
+                    },
+                },
+                "generator": {
+                    "trajectory_retention": {
+                        "run_id": root.name,
+                        "model_source_identity": "adopted",
+                        "output_path": "local",
+                    }
+                },
+            },
+        }
+        (root / "terminal.json").write_text(json.dumps({"config": config}))
+    # A repaired trajectory may reach more turns than the failed original.
     repaired = json.loads((after / "bixbench-pi.jsonl").read_text())
     repaired["uid"] = "0"
+    repaired["prompt_token_ids"] = [3, 7, 11, 12]
     (after / "bixbench-pi.jsonl").write_text(json.dumps(repaired) + "\n")
     output = tmp_path / "merged"
     merge_results(output=str(output), original=str(original), repair=str(repair))
@@ -54,7 +96,10 @@ def test_merge_preserves_nineteen_results_and_rejects_changed_task(tmp_path):
             before / (name + ".jsonl")
         ).read_bytes()
     assert json.loads((output / "evaluation.json").read_text())["all_verified"]
-    repaired["prompt_token_ids"] = [99]
-    (after / "bixbench-pi.jsonl").write_text(json.dumps(repaired))
+    config["runtime"]["image"] = "wrong-image"
+    (repair / "terminal.json").write_text(json.dumps({"config": config}))
+    with pytest.raises(ValueError, match="model/runtime"):
+        merge_results(output=str(tmp_path / "bad-runtime"), original=str(original), repair=str(repair))
+    pq.write_table(pa.table({"benchmark": ["bixbench-pi"], "task": ["different-task"]}), repair / "rollouts.parquet")
     with pytest.raises(ValueError, match="task identity"):
         merge_results(output=str(tmp_path / "bad"), original=str(original), repair=str(repair))

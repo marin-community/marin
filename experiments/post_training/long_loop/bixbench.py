@@ -13,6 +13,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.post_training.long_loop.archive import write_once
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
 from experiments.post_training.long_loop.sft import read_json
 
@@ -46,7 +47,66 @@ def prepare_subset(*, output: str, source: str) -> None:
     )
 
 
+def merge_identity(original: str, repair: str) -> dict:
+    """Verify task content and consumed configs, allowing only run-local locators."""
+    configs = [read_json(root + "/terminal.json")["config"] for root in (original, repair)]
+    row_hashes = []
+    for config in configs:
+        data = config["inputs"]["validation_data"]
+        if len(data) != 1:
+            raise ValueError("Expected one pinned validation input")
+        fs, key = filesystem_for(data[0]["uri"] + "/" + data[0]["relative_path"])
+        with fs.open(key, "rb") as stream:
+            rows = [row for row in pq.read_table(stream).to_pylist() if row["benchmark"] == "bixbench-pi"]
+        if len(rows) != 1:
+            raise ValueError("Expected one BixBench task identity")
+        row_hashes.append(hashlib.sha256(json.dumps(rows[0], sort_keys=True, default=str).encode()).hexdigest())
+    if row_hashes[0] != row_hashes[1]:
+        raise ValueError("Repair task identity differs from the original")
+    # These fields locate a run, its output, or its equivalent adopted artifact.
+    # Model URI, tokenizer pin, judge model, sampling and verifier settings remain compared.
+    run_local = [
+        "artifacts",
+        "run",
+        "iris/job_name",
+        "ray/rendezvous_dir",
+        "ray/log_dir",
+        "inputs/validation_data",
+        "inputs/model/identity",
+        "runtime/task_env/JUDGE_BASE_URL",
+        "skyrl/data/val_data",
+        "skyrl/terminal_bench_config/installed_agent/output_path",
+        "skyrl/environment/task_sessions/remote_judge/base_url",
+        "skyrl/trainer/export_path",
+        "skyrl/trainer/ckpt_path",
+        "skyrl/trainer/run_name",
+        "skyrl/generator/trajectory_retention/run_id",
+        "skyrl/generator/trajectory_retention/model_source_identity",
+        "skyrl/generator/trajectory_retention/output_path",
+    ]
+    for role in ("policy", "ref"):
+        for field in ("revision", "tokenizer_revision", "source_identity"):
+            run_local.append(f"skyrl/trainer/{role}/model/{field}")
+    normalized = json.loads(json.dumps(configs))
+    for config in normalized:
+        for path in run_local:
+            keys = path.split("/")
+            parent = config
+            for key in keys[:-1]:
+                parent = parent[key]
+            del parent[keys[-1]]
+    if normalized[0] != normalized[1]:
+        raise ValueError("Repair model/runtime or task/verifier configuration differs")
+    return {
+        "task_row_sha256": row_hashes[0],
+        "compared_config_sha256": hashlib.sha256(json.dumps(normalized[0], sort_keys=True).encode()).hexdigest(),
+        "excluded_run_local_fields": run_local,
+        "terminal_uris": [root + "/terminal.json" for root in (original, repair)],
+    }
+
+
 def merge_results(*, output: str, original: str, repair: str) -> None:
+    identity = merge_identity(original, repair)
     before = audit(original, 20)
     after = audit(repair, 1)
     if before["completed_rollouts"] != 20 or not after["all_verified"]:
@@ -59,8 +119,9 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
         raise ValueError("Repair must contain BixBench only")
     original_bix = json.loads(original_fs.cat_file(original_root + "/bixbench-pi.jsonl"))
     repaired_bix = json.loads(repair_fs.cat_file(replacements[0]))
-    if original_bix["prompt_token_ids"] != repaired_bix["prompt_token_ids"]:
-        raise ValueError("Repair task identity differs from the original")
+    identity["original_prompt_is_prefix"] = (
+        repaired_bix["prompt_token_ids"][: len(original_bix["prompt_token_ids"])] == original_bix["prompt_token_ids"]
+    )
     out_fs, out_root = filesystem_for(output + suffix)
     out_fs.makedirs(out_root, exist_ok=True)
     provenance = []
@@ -72,7 +133,7 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
             (repair_fs, repair_root) if name == "bixbench-pi.jsonl" else (original_fs, original_root)
         )
         payload = source_fs.cat_file(source_root + "/" + name)
-        out_fs.pipe_file(out_root + "/" + name, payload)
+        write_once(output + suffix + name, payload)
         provenance.append(
             {
                 "file": name,
@@ -83,12 +144,12 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     merged = audit(output, 20)
     if not merged["all_verified"]:
         raise ValueError("Merged result does not verify all 20 paths")
-    fs, root = filesystem_for(output)
-    fs.pipe_file(root + "/evaluation.json", json.dumps(merged, indent=2).encode())
-    fs.pipe_file(
-        root + "/merge-provenance.json",
+    write_once(output + "/evaluation.json", json.dumps(merged, indent=2).encode())
+    write_once(
+        output + "/merge-provenance.json",
         json.dumps(
             {
+                "identity": identity,
                 "original": original,
                 "repair": repair,
                 "preserved": 19,

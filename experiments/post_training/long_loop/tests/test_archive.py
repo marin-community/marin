@@ -104,7 +104,12 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
     native.mkdir()
     (native / "bench.jsonl").write_text(
         json.dumps(
-            {"uid": "task1", "data_source": "bench", "verification": {"status": "verified", "score": 1, "passed": True}}
+            {
+                "uid": "task1",
+                "data_source": "bench",
+                "env_class": "taskcompendium",
+                "verification": {"status": "verified", "score": 1, "passed": True},
+            }
         )
         + "\n"
     )

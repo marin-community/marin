@@ -11,7 +11,7 @@ from marin.evaluation.records import EvalRunRecord
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from rigging.filesystem.buckets import filesystem_for
 
-from experiments.post_training.long_loop.archive import ArchiveInput, checkpoint_cleanup, seal_archive
+from experiments.post_training.long_loop.archive import ArchiveInput, checkpoint_cleanup, digest, seal_archive
 from experiments.post_training.long_loop.eval_archive import publish_evaluation
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "checkpoint", "wandb"}
@@ -69,6 +69,13 @@ def archive_step(version: str, plan: dict, completed_report: ArtifactStep) -> Ar
 @click.option("--output", required=True, help="Durable destination without a TTL lifecycle.")
 def main(plan: Path, output: str) -> None:
     inventory = json.loads(plan.read_text())
+    checkpoint = inventory["provenance"]["checkpoint_inventory"]
+    for entry in checkpoint["selected_files"]:
+        if "sha256" not in entry:
+            size, checksum = digest(entry["source"])
+            if size != entry["size"]:
+                raise ValueError("Selected checkpoint size changed since inventory")
+            entry["sha256"] = checksum
     archive_run(output=output, plan=inventory, completed_report=inventory["completed_report"])
 
 

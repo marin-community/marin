@@ -69,7 +69,7 @@ def publish_evaluation(*, source: str, record: EvalRunRecord, records_prefix: st
                     EvalSample(
                         task=task,
                         doc_id=uid,
-                        kind=SampleKind.AGENTIC,
+                        kind=SampleKind.AGENTIC if row["env_class"] == "harbor_trial" else SampleKind.GENERATION,
                         trajectory_uri=trajectory,
                         grading=Grading(
                             method="native-verifier",

@@ -13,8 +13,18 @@ def test_evaldash_archive_keeps_failed_trial_without_counting_it_as_zero_reward(
     source = tmp_path / "source"
     source.mkdir()
     rows = [
-        {"uid": "a", "data_source": "bench", "verification": {"status": "verified", "score": 0.8, "passed": True}},
-        {"uid": "b", "data_source": "bench", "verification": {"status": "error", "score": None}},
+        {
+            "uid": "a",
+            "data_source": "bench",
+            "env_class": "taskcompendium",
+            "verification": {"status": "verified", "score": 0.8, "passed": True},
+        },
+        {
+            "uid": "b",
+            "data_source": "bench",
+            "env_class": "taskcompendium",
+            "verification": {"status": "error", "score": None},
+        },
     ]
     raw = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
     (source / "bench.jsonl").write_bytes(raw)
