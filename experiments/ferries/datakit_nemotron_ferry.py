@@ -3,9 +3,8 @@
 
 """Datakit nemotron ferry: weekly reference-DAG run on the Nemotron-CC high-quality actual split.
 
-The input is the normalized Nemotron-CC v1 ``hq_actual`` split in eu-west4. The raw
-Common Crawl dump that the ferry read before is no longer in GCS. The first step
-confirms that the split is at ``NEMOTRON_HQ_ACTUAL_PATH`` and never rebuilds it.
+The input is the normalized Nemotron-CC v1 ``hq_actual`` split in eu-west4. The first
+step confirms that the split is at ``NEMOTRON_HQ_ACTUAL_PATH`` and never rebuilds it.
 Normalize runs again on those Parquet shards. Normalize and every reference stage
 after it write one-day TTL outputs; see :mod:`experiments.ferries.datakit_reference_ferry`.
 """
@@ -18,8 +17,7 @@ from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
 from rigging.filesystem.cluster_config import check_path_in_region, region_from_metadata
-from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
@@ -76,17 +74,16 @@ def _verify_nemotron_hq_actual_present(output_path: str) -> None:
     """Confirm the normalized split is at ``output_path``; never rebuilds it.
 
     StepRunner calls this only on a cache miss, which means the split's
-    ``.executor_status`` is gone. The ferry then fails instead of normalizing
-    multi-TB data that is no longer in GCS.
+    ``.executor_status`` is gone. The ferry then fails instead of rebuilding a
+    multi-TB split.
     """
-    data_dir = f"{output_path}/{NEMOTRON_HQ_ACTUAL_DATA_SUBDIR}"
-    fs, _ = url_to_fs(data_dir)
-    if not fs.exists(data_dir):
+    data_dir = StoragePath(output_path) / NEMOTRON_HQ_ACTUAL_DATA_SUBDIR
+    if not data_dir.exists():
         raise RuntimeError(
             f"Normalized Nemotron-CC hq_actual not found at {data_dir}. "
             "The nemotron ferry does not rebuild its input; restore the split or point the ferry at another copy."
         )
-    sample = fs.glob(f"{data_dir}/*.parquet")
+    sample = (data_dir / "*.parquet").glob()
     if not sample:
         raise RuntimeError(f"Normalized Nemotron-CC hq_actual at {data_dir} contains no .parquet files.")
     logger.info("Normalized Nemotron-CC hq_actual confirmed at %s (e.g. %s)", data_dir, sample[0])
