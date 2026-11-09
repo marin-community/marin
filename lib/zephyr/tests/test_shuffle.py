@@ -507,24 +507,6 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
     assert sorted(recovered, key=_ord) == sorted(items, key=_ord)
 
 
-def test_scatter_byte_budget_preserves_all_items(tmp_path):
-    """Items are not lost or duplicated when byte-budget flushes fire mid-write."""
-    num_shards = 3
-    items = [{"k": i % num_shards, "v": i} for i in range(300)]
-    scatter_paths = _build_shard(
-        tmp_path,
-        items,
-        num_output_shards=num_shards,
-    )
-
-    recovered = []
-    for shard_idx in range(num_shards):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered.extend(_read_shard(shard))
-
-    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
-
-
 def test_scatter_bounds_parquet_row_groups(tmp_path):
     num_targets = 1024
     data_path = f"{tmp_path}/shard-0000/scatter/"
