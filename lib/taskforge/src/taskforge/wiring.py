@@ -69,10 +69,9 @@ from taskforge.resources.web import ParallelWeb, WebClient, WebFetch, WebSearch,
 from taskforge.stages.rules import default_review
 
 
-# Source: acceptance-measure worktree, taskforge/llm/glm_client.py:168-196.
 @dataclass(frozen=True, slots=True)
 class RelayEndpoint(EndpointSource):
-    """Resolve the live Iris relay; copied from Taskforge's acceptance-measure branch."""
+    """The endpoint that the Iris relay job ``job`` registers for ``model``, resolved on every call."""
 
     job: str
     token: str = field(repr=False)
