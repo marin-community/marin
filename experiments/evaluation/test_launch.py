@@ -321,6 +321,22 @@ def test_policy_judge_rejects_incompatible_placement_before_submission(
     assert submitted_batches == []
 
 
+@pytest.mark.parametrize(
+    "records_prefix",
+    ["s3://marin-rno2a/marin/evals", "s3://marin-us-east-02a/marin/evals/ablations/regrade-20261009"],
+)
+def test_policy_launch_rejects_records_prefix_outside_evaldash(tmp_path, submitted_batches, records_prefix):
+    command = _command(tmp_path)
+    command[command.index("--records-prefix") + 1] = records_prefix
+    command[command.index("--evals") + 1] = "financebench"
+    config = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    command.extend(["--policy-finalization-config", str(config)])
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code != 0
+    assert "not catalogued by EvalDash" in result.output
+    assert submitted_batches == []
+
+
 def test_policy_snapshot_uses_project_python_and_preserves_judge_configuration(tmp_path):
     campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
     bin_dir = tmp_path / "bin"

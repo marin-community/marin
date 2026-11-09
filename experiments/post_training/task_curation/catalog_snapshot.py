@@ -14,6 +14,7 @@ from finestore.rl.curation import (
     CURRENT,
     INVENTORY,
     ITEMS,
+    MAX_UNAVAILABLE_JUDGMENT_SHARE,
     POPULATIONS,
     SNAPSHOTS,
     AdmissionCounts,
@@ -93,6 +94,9 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
     packets = {row["task_id"]: row for path in inputs.packet_paths for row in load_parquet(path)}
     grades = [row for path in judgments.grade_paths for row in load_parquet(path)]
     validate_coverage(inputs.sample, grades)
+    unavailable = sum(row["status"] != JudgmentStatus.REVIEWED for row in grades)
+    if grades and unavailable / len(grades) > MAX_UNAVAILABLE_JUDGMENT_SHARE:
+        raise ValueError(f"Assessment has {unavailable} unavailable judgments above the allowed share")
     if set(packets) != {row.task_id for row in inputs.sample}:
         raise ValueError("Packet records do not match the selected assessment sample")
     key = attempt.pipeline_key
@@ -102,8 +106,6 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
         packet = packets[grade["task_id"]]
         evidence = json.loads(packet["packet_json"])
         status = JudgmentStatus(grade["status"])
-        if status != JudgmentStatus.REVIEWED:
-            raise ValueError(f"Completed assessment has unavailable judgment: {grade['task_id']}")
         uri = store.write_object(
             f"{prefix}/tasks/{grade['task_id']}.json",
             json.dumps(evidence, ensure_ascii=False, allow_nan=False).encode(),

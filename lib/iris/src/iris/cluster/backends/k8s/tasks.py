@@ -3187,7 +3187,8 @@ class K8sTaskProvider:
                     self._released_output_attempts.add(entry)
                 else:
                     logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
-            except KubectlError:
+            except Exception:
+                # Output release is best effort; a failed pod must not block the rest of this scan.
                 logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
 
         if time.monotonic() - started < policy.finalization_timeout.to_seconds():

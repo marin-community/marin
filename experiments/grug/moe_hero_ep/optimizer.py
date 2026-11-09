@@ -180,6 +180,25 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+@dataclass(frozen=True)
+class ScheduleExtension:
+    """Learning rate for training past the end of the schedule.
+
+    From the schedule's floor, ``min_lr_ratio`` of peak, the rate moves linearly to ``final_lr_ratio`` of peak
+    over ``steps`` steps and then stays there. ``final_lr_ratio == min_lr_ratio`` holds the floor. The heuristic,
+    weight decay, and data stages keep the schedule's length, which an extension does not change.
+    """
+
+    steps: int
+    final_lr_ratio: float
+
+    def __post_init__(self):
+        if self.steps <= 0:
+            raise ValueError(f"steps must be positive, got {self.steps}")
+        if self.final_lr_ratio < 0:
+            raise ValueError(f"final_lr_ratio must not be negative, got {self.final_lr_ratio}")
+
+
 @OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -209,6 +228,24 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     use_syrk: bool = True
     gate_router_weight_decay: float = 0.0
     expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
+    schedule_extension: ScheduleExtension | None = None
+
+    def __post_init__(self):
+        extension = self.schedule_extension
+        if extension is not None and extension.final_lr_ratio > self.min_lr_ratio:
+            raise ValueError(
+                f"final_lr_ratio={extension.final_lr_ratio} would raise the rate above min_lr_ratio={self.min_lr_ratio}"
+            )
+
+    def lr_scheduler(self, num_train_steps, override_lr=None):
+        schedule = super().lr_scheduler(num_train_steps, override_lr)
+        extension = self.schedule_extension
+        if extension is None:
+            return schedule
+        peak = self.learning_rate if override_lr is None else override_lr
+        tail = optax.linear_schedule(peak * self.min_lr_ratio, peak * extension.final_lr_ratio, extension.steps)
+        # The schedule itself still serves `num_train_steps`, so every step through it keeps its exact value.
+        return lambda count: jnp.where(count <= num_train_steps, schedule(count), tail(count - num_train_steps))
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -295,5 +332,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 __all__ = [
     "ExpertNormalization",
     "GrugMoeMuonHConfig",
+    "ScheduleExtension",
     "scale_with_grug_muonh",
 ]
