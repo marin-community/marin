@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
-import { fleetBest, isPartialCoverage } from '@/utils/panel'
+import { ALL_COHORTS, UNVERSIONED_COHORT, fleetBest, isPartialCoverage } from '@/utils/panel'
 import { isSmokeEval } from '@/constants'
 import { INTERVAL_KIND, type Meta, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
@@ -40,8 +40,8 @@ const ALL = '__all__'
 const scope = computed<string | null>(() => {
   const selected = route.query.cohort
   const cohort = typeof selected === 'string' && selected ? selected : meta.value?.default_cohort
-  if (cohort === 'all') return ALL
-  if (cohort === 'unversioned') return null
+  if (cohort === ALL_COHORTS) return ALL
+  if (cohort === UNVERSIONED_COHORT) return null
   return cohort ?? data.value?.current_version ?? null
 })
 watch(
@@ -54,7 +54,7 @@ watch(
 )
 
 function selectCohort(version: string | null) {
-  router.push({ query: { ...route.query, cohort: version === ALL ? 'all' : (version ?? 'unversioned') } })
+  router.push({ query: { ...route.query, cohort: version === ALL ? ALL_COHORTS : (version ?? UNVERSIONED_COHORT) } })
 }
 
 // Benchmarks this model has runs for, in the panel's column order where known (no smoke).
@@ -114,7 +114,7 @@ function onPick(task: string) {
   if (runId) router.push(`/runs/${runId}/samples`)
 }
 
-const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.value ?? 'unversioned')))
+const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.value ?? UNVERSIONED_COHORT)))
 const location = computed(() => data.value?.location ?? null)
 
 function coverageNote(cell: PanelCell): string {
@@ -165,7 +165,7 @@ function coverageNote(cell: PanelCell): string {
             "
             @click="selectCohort(c.version)"
           >
-            {{ c.version ?? 'unversioned' }}
+            {{ c.version ?? UNVERSIONED_COHORT }}
           </button>
           <button
             class="font-mono text-xs px-2.5 py-1 rounded border"
