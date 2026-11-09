@@ -151,6 +151,19 @@ def test_hf_model_bucket_path_loads_in_place():
     assert train_config.data.tokenizer == path
 
 
+def test_hf_model_relative_local_dir_loads_in_place(tmp_path, monkeypatch):
+    """A relative local directory shaped like ``org/model`` is loaded in place, not treated as a Hub repo."""
+    monkeypatch.chdir(tmp_path)
+    path = "checkpoints/prepared"
+    (tmp_path / path).mkdir(parents=True)
+    step = sft_step(_spec(HFModel(path)), ResourceConfig.with_cpu())
+
+    assert [d.name for d in step.deps] == ["documents/ds"]
+    train_config = materialized_config(step, _PREFIX).train_config
+    assert train_config.initialize_from_hf == path
+    assert train_config.data.tokenizer == path
+
+
 @pytest.mark.parametrize("model_ref", ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-0.6B@main", "Qwen/Qwen3-0.6B@c1899de"])
 def test_hf_model_rejects_unpinned_hub_ref(model_ref):
     """A Hub ref must name a full commit, so the mirror's address and identity cannot drift."""

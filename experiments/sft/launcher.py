@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -281,8 +282,13 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
 
 
 def _is_hub_ref(model_ref: str) -> bool:
-    """True for a Hub repo ref (``org/model[@rev]``); False for an object-store URL or a local path."""
-    return "://" not in model_ref and not model_ref.startswith(("/", "."))
+    """True for a Hub repo ref (``org/model[@rev]``); False for an object-store URL or a local path.
+
+    ``org/model`` and a relative directory have the same shape, so an existing local directory wins.
+    """
+    if "://" in model_ref or model_ref.startswith(("/", ".")):
+        return False
+    return not os.path.isdir(model_ref)
 
 
 def _hf_mirror_step(model_ref: str) -> ArtifactStep[LevanterCheckpoint] | None:
