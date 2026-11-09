@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from marina.applets import AppletServices, validate_query
+from marina.applets import AppletServices
 from marina.client import AppletQuery
-from sqlalchemy import create_engine, event, text
+from marina.testing import EngineServices, engine_query, migrated_schema
+from rigging.filesystem.storage_path import StoragePath
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from infra.marina.apps.sft_mix_viewer.load import load_snapshot
@@ -25,80 +25,42 @@ from infra.marina.apps.sft_mix_viewer.sample import (
     sft_sources,
 )
 from infra.marina.apps.sft_mix_viewer.server.app import create_api, migrate
-
-
-@dataclass(frozen=True)
-class ViewerServices:
-    database_engine: Engine
-
-    def engine(self) -> Engine:
-        return self.database_engine
+from infra.marina.apps.sft_mix_viewer.snapshot import (
+    MixSource,
+    Sample,
+    SampledSource,
+    SourceKind,
+    read_snapshot,
+    write_snapshot,
+)
 
 
 @pytest.fixture
 def viewer_database(database_url: str) -> Iterator[Engine]:
-    admin = create_engine(database_url)
-    schema = "sft_mix_test_" + uuid.uuid4().hex
-    with admin.begin() as connection:
-        connection.execute(text(f"CREATE SCHEMA {schema}"))
-    engine = create_engine(database_url)
-
-    @event.listens_for(engine, "connect")
-    def select_schema(connection, _record):
-        with connection.cursor() as cursor:
-            cursor.execute(f"SET search_path TO {schema}, public")
-
-    try:
-        with engine.begin() as connection:
-            migrate(connection)
+    with migrated_schema(database_url, "sft_mix_test", migrate) as engine:
         yield engine
-    finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f"DROP SCHEMA {schema} CASCADE"))
-        admin.dispose()
 
 
 @pytest.fixture
 def viewer_query(viewer_database: Engine) -> AppletQuery:
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        validate_query(sql)
-        with viewer_database.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
-
-    return query
+    return engine_query(viewer_database)
 
 
-def source_row(name: str, kind: str, share: float) -> dict[str, Any]:
-    return {
-        "name": name,
-        "kind": kind,
-        "family": name.split("/")[0],
-        "share": share,
-        "documents": 100,
-        "cache_path": f"gs://bucket/{name}",
-    }
+def sampled_source(name: str, kind: SourceKind, share: float, documents: dict[int, str]) -> SampledSource:
+    source = MixSource(name, kind, name.split("/")[0], share, f"gs://bucket/{name}")
+    samples = tuple(Sample(index, 7, len(value), value) for index, value in documents.items())
+    return SampledSource(source, 100, samples)
 
 
-def sample_row(source: str, doc_index: int, text_value: str) -> dict[str, Any]:
-    return {"source": source, "doc_index": doc_index, "tokens": 7, "chars": len(text_value), "text": text_value}
+def test_loaded_snapshot_replaces_the_served_one(viewer_database: Engine, viewer_query: AppletQuery, tmp_path) -> None:
+    written = [
+        sampled_source("chat/a", SourceKind.SFT, 0.8, {2: "two", 5: "<|start_think|>\nfive"}),
+        sampled_source("replay/c01/q0/gt_64k", SourceKind.REPLAY, 0.2, {9: "nine"}),
+    ]
+    write_snapshot(StoragePath.parse(str(tmp_path)), 0, written)
+    load_snapshot(read_snapshot(StoragePath.parse(str(tmp_path))), viewer_query)
 
-
-def test_loaded_snapshot_replaces_the_served_one(viewer_database: Engine, viewer_query: AppletQuery) -> None:
-    load_snapshot(
-        [source_row("chat/a", "sft", 0.8), source_row("replay/c01/q0/gt_64k", "replay", 0.2)],
-        [
-            sample_row("chat/a", 5, "<|start_think|>\nfive"),
-            sample_row("chat/a", 2, "two"),
-            sample_row("replay/c01/q0/gt_64k", 9, "nine"),
-        ],
-        viewer_query,
-    )
-    with TestClient(create_api(cast(AppletServices, ViewerServices(viewer_database)))) as client:
+    with TestClient(create_api(cast(AppletServices, EngineServices(viewer_database)))) as client:
         sources = client.get("/sources").json()
         assert [(source["name"], source["share"]) for source in sources] == [
             ("chat/a", 0.8),
@@ -111,7 +73,7 @@ def test_loaded_snapshot_replaces_the_served_one(viewer_database: Engine, viewer
         sample = client.get("/sample", params={"source": "chat/a", "doc_index": 5}).json()
         assert sample["text"] == "<|start_think|>\nfive"
 
-        load_snapshot([source_row("chat/b", "sft", 1.0)], [sample_row("chat/b", 1, "one")], viewer_query)
+        load_snapshot([sampled_source("chat/b", SourceKind.SFT, 1.0, {1: "one"})], viewer_query)
         assert [source["name"] for source in client.get("/sources").json()] == ["chat/b"]
         assert client.get("/sample", params={"source": "chat/a", "doc_index": 5}).status_code == 404
     with viewer_database.connect() as connection:
@@ -121,8 +83,10 @@ def test_loaded_snapshot_replaces_the_served_one(viewer_database: Engine, viewer
 def test_load_rejects_a_source_without_samples(viewer_query: AppletQuery) -> None:
     with pytest.raises(ValueError, match="chat/empty"):
         load_snapshot(
-            [source_row("chat/a", "sft", 0.5), source_row("chat/empty", "sft", 0.5)],
-            [sample_row("chat/a", 0, "zero")],
+            [
+                sampled_source("chat/a", SourceKind.SFT, 0.5, {0: "zero"}),
+                sampled_source("chat/empty", SourceKind.SFT, 0.5, {}),
+            ],
             viewer_query,
         )
 

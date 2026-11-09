@@ -12,9 +12,9 @@ from typing import Any
 import click
 from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, CurationCatalog, JudgmentStatus, validate_items
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
+from marina.table_load import insert_load_rows
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
 TABLE_COLUMNS = {
@@ -33,39 +33,6 @@ TABLE_COLUMNS = {
     ),
     "packets": "pipeline_key TEXT, task_id TEXT, packet TEXT",
 }
-
-
-def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
-    """Bound SQL request bodies by encoded bytes, including packet escaping."""
-    batch: list[str] = []
-    size = 2
-    for row in rows:
-        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        # The SQL API carries the row array as a JSON string, adding another escape layer.
-        length = len(json.dumps(encoded).encode()) + 1
-        if length + 2 > MAX_BATCH_BYTES:
-            raise ValueError("One catalog row exceeds the SQL batch budget")
-        if size + length > MAX_BATCH_BYTES:
-            yield "[" + ",".join(batch) + "]"
-            batch, size = [], 2
-        batch.append(encoded)
-        size += length
-    if batch:
-        yield "[" + ",".join(batch) + "]"
-
-
-def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
-    """Insert byte-bounded batches and return the stored row count."""
-    names = ", ".join(column.strip().split()[0] for column in columns.split(","))
-    count = 0
-    for body in batches(rows):
-        result = query(
-            f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
-            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
-            {"load_id": load_id, "rows": body},
-        )
-        count += result["row_count"]
-    return count
 
 
 def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
@@ -92,7 +59,7 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict[str, Any]]) -> int:
-        return insert_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
+        return insert_load_rows(execute, f"atlas_{table}", TABLE_COLUMNS[table], load_id, rows)
 
     execute(
         """

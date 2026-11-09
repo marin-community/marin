@@ -3,13 +3,11 @@
 
 import json
 import shutil
-import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any, cast
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -34,9 +32,10 @@ from finestore.rl.curation import (
     register_catalog,
 )
 from finestore.store import DataStore
-from marina.applets import AppletServices, validate_query
+from marina.applets import AppletServices
 from marina.client import AppletQuery
-from sqlalchemy import create_engine, event, text
+from marina.testing import EngineServices, engine_query, migrated_schema
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
@@ -47,40 +46,13 @@ from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 
 @pytest.fixture
 def catalog_database(database_url: str) -> Iterator[Engine]:
-    admin = create_engine(database_url)
-    schema = "catalog_test_" + uuid.uuid4().hex
-    with admin.begin() as connection:
-        connection.execute(text(f"CREATE SCHEMA {schema}"))
-    engine = create_engine(database_url)
-
-    @event.listens_for(engine, "connect")
-    def select_schema(connection, _record):
-        with connection.cursor() as cursor:
-            cursor.execute(f"SET search_path TO {schema}, public")
-
-    try:
-        with engine.begin() as connection:
-            migrate(connection)
+    with migrated_schema(database_url, "catalog_test", migrate) as engine:
         yield engine
-    finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f"DROP SCHEMA {schema} CASCADE"))
-        admin.dispose()
 
 
 @pytest.fixture
 def catalog_query(catalog_database: Engine) -> AppletQuery:
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        validate_query(sql)
-        with catalog_database.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
-
-    return query
+    return engine_query(catalog_database)
 
 
 def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "math") -> None:
@@ -178,14 +150,6 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False,
             tx.table(INVENTORY).add(source.model_dump(mode="json"))
             tx.table(SNAPSHOTS).add(snapshot.model_dump())
             tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
-
-
-@dataclass(frozen=True)
-class CatalogServices:
-    database_engine: Engine
-
-    def engine(self) -> Engine:
-        return self.database_engine
 
 
 def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_context") -> Path:
@@ -362,7 +326,7 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
+    monkeypatch.setattr("marina.table_load.MAX_BATCH_BYTES", 2500)
     monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
     query = catalog_query
@@ -374,7 +338,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_root = str(tmp_path / "catalog")
     publish_sample(catalog_root, "graded", source_id="a")
     load_catalog(CurationCatalog(catalog_root), query)
-    with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
+    with TestClient(create_api(cast(AppletServices, EngineServices(engine)))) as client:
         source = client.get("/sources").json()["sources"][0]
         assert source["task_count"] == 3
         assert source["coverage"] == {
@@ -486,7 +450,7 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         """
             )
         )
-    services = cast(AppletServices, CatalogServices(engine))
+    services = cast(AppletServices, EngineServices(engine))
     with TestClient(create_api(services)) as client:
         inventory = client.get("/sources").json()
         assert inventory["sources"][0]["coverage"] is None

@@ -39,6 +39,6 @@ uv run python -m infra.marina.apps.sft_mix_viewer.load \
   --app-id 378c3d80-275c-49f2-9913-0bd2c292c354
 ```
 
-The loader inserts the rows under a new snapshot id, points `mix_current` at
-it, and deletes the snapshots it replaced. Releasing the app does not load
+The loader inserts the rows under a new load id, points `mix_current` at
+it, and deletes the loads it replaced. Releasing the app does not load
 data.

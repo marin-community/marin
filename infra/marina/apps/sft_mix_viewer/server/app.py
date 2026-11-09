@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve the selected snapshot of sampled SFT-mix documents from Postgres."""
+"""Serve the selected load of sampled SFT-mix documents from Postgres."""
 
 from typing import Any
 
@@ -12,18 +12,21 @@ from sqlalchemy.engine import Connection
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS mix_sources (
-    snapshot TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, family TEXT NOT NULL,
+    load_id TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, family TEXT NOT NULL,
     share DOUBLE PRECISION NOT NULL, documents BIGINT NOT NULL, cache_path TEXT NOT NULL,
-    PRIMARY KEY (snapshot, name)
+    PRIMARY KEY (load_id, name)
 );
 CREATE TABLE IF NOT EXISTS mix_samples (
-    snapshot TEXT NOT NULL, source TEXT NOT NULL, doc_index BIGINT NOT NULL,
+    load_id TEXT NOT NULL, source TEXT NOT NULL, doc_index BIGINT NOT NULL,
     tokens BIGINT NOT NULL, chars BIGINT NOT NULL, text TEXT NOT NULL,
-    PRIMARY KEY (snapshot, source, doc_index)
+    PRIMARY KEY (load_id, source, doc_index)
 );
-CREATE TABLE IF NOT EXISTS mix_current (name TEXT PRIMARY KEY, snapshot TEXT NOT NULL)
+CREATE TABLE IF NOT EXISTS mix_current (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton), load_id TEXT NOT NULL
+)
 """
 
+# mix_current holds at most one row: the load being served.
 SOURCES_SQL = """
 SELECT s.name, s.kind, s.family, s.share, s.documents, s.cache_path,
     COALESCE(
@@ -32,19 +35,18 @@ SELECT s.name, s.kind, s.family, s.share, s.documents, s.cache_path,
                 json_build_object('doc_index', m.doc_index, 'tokens', m.tokens, 'chars', m.chars)
                 ORDER BY m.doc_index
             )
-            FROM mix_samples m WHERE m.snapshot = s.snapshot AND m.source = s.name
+            FROM mix_samples m WHERE m.load_id = s.load_id AND m.source = s.name
         ),
         '[]'::json
     ) AS samples
-FROM mix_sources s JOIN mix_current c ON c.snapshot = s.snapshot
-WHERE c.name = 'latest'
+FROM mix_sources s JOIN mix_current c USING (load_id)
 ORDER BY s.kind DESC, s.name
 """
 
 SAMPLE_SQL = """
 SELECT m.source, m.doc_index, m.tokens, m.chars, m.text
-FROM mix_samples m JOIN mix_current c ON c.snapshot = m.snapshot
-WHERE c.name = 'latest' AND m.source = :source AND m.doc_index = :doc_index
+FROM mix_samples m JOIN mix_current c USING (load_id)
+WHERE m.source = :source AND m.doc_index = :doc_index
 """
 
 
@@ -59,7 +61,7 @@ def create_api(services: AppletServices) -> FastAPI:
 
     @api.get("/sources")
     def sources() -> list[dict[str, Any]]:
-        """Every source of the selected snapshot with the sizes of its sampled documents."""
+        """Every source of the served load with the sizes of its sampled documents."""
         with engine.connect() as connection:
             return [dict(row) for row in connection.execute(text(SOURCES_SQL)).mappings()]
 
@@ -70,7 +72,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 connection.execute(text(SAMPLE_SQL), {"source": source, "doc_index": doc_index}).mappings().one_or_none()
             )
         if row is None:
-            raise HTTPException(status_code=404, detail="No such sample in the selected snapshot")
+            raise HTTPException(status_code=404, detail="No such sample in the served load")
         return dict(row)
 
     return api

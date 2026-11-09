@@ -10,12 +10,15 @@ coexist and nothing is left behind.
 
 import os
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
 import sqlalchemy
 
+from marina.applets import validate_query
+from marina.client import AppletQuery
 from marina.db import DatabaseSpec, engine_for
 from marina.local_postgres import docker_database
 
@@ -34,6 +37,58 @@ class SourceServices:
         if self.database is None:
             raise RuntimeError(f"app {self.name} needs a database")
         return engine_for(self.database, self.name)
+
+
+@dataclass(frozen=True)
+class EngineServices:
+    """Backend services for a unit test that hands the app an engine it already built."""
+
+    database_engine: sqlalchemy.Engine
+
+    def engine(self) -> sqlalchemy.Engine:
+        return self.database_engine
+
+
+@contextmanager
+def migrated_schema(
+    database_url: str, prefix: str, migrate: Callable[[sqlalchemy.Connection], None]
+) -> Iterator[sqlalchemy.Engine]:
+    """Yield an engine whose connections use a fresh schema that ``migrate`` has set up."""
+    admin = sqlalchemy.create_engine(database_url)
+    schema = f"{prefix}_{uuid.uuid4().hex}"
+    with admin.begin() as connection:
+        connection.execute(sqlalchemy.text(f"CREATE SCHEMA {schema}"))
+    engine = sqlalchemy.create_engine(database_url)
+
+    @sqlalchemy.event.listens_for(engine, "connect")
+    def select_schema(connection, _record):
+        with connection.cursor() as cursor:
+            cursor.execute(f"SET search_path TO {schema}, public")
+
+    try:
+        with engine.begin() as connection:
+            migrate(connection)
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(sqlalchemy.text(f"DROP SCHEMA {schema} CASCADE"))
+        admin.dispose()
+
+
+def engine_query(engine: sqlalchemy.Engine) -> AppletQuery:
+    """Stand in for an app's SQL endpoint: validate each statement, then run it on ``engine``."""
+
+    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        validate_query(sql)
+        with engine.begin() as connection:
+            result = connection.execute(sqlalchemy.text(sql), parameters)
+            return {
+                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
+                "row_count": result.rowcount,
+            }
+
+    return query
 
 
 @contextmanager

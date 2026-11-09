@@ -3,81 +3,51 @@
 
 """Load a snapshot written by ``sample.py`` into the SFT Mix Viewer and select it."""
 
-import io
 import json
 import uuid
-from collections.abc import Iterable
+from dataclasses import asdict
 from typing import Any
 
 import click
-import pyarrow.parquet as pq
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
+from marina.table_load import insert_load_rows
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-MAX_BATCH_BYTES = 1_000_000
-SOURCES_FILE = "sources.json"
-SAMPLES_FILE = "samples.parquet"
+from infra.marina.apps.sft_mix_viewer.snapshot import SampledSource, read_snapshot
+
 TABLE_COLUMNS = {
-    "mix_sources": "name TEXT, kind TEXT, family TEXT, share DOUBLE PRECISION, documents BIGINT, cache_path TEXT",
+    "mix_sources": "name TEXT, kind TEXT, family TEXT, share DOUBLE PRECISION, cache_path TEXT, documents BIGINT",
     "mix_samples": "source TEXT, doc_index BIGINT, tokens BIGINT, chars BIGINT, text TEXT",
 }
 
 
-def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
-    """Group rows into JSON arrays whose encoded SQL request stays under the batch budget."""
-    batch: list[str] = []
-    size = 2
-    for row in rows:
-        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        # The SQL API carries the row array as a JSON string, adding another escape layer.
-        length = len(json.dumps(encoded).encode()) + 1
-        if length + 2 > MAX_BATCH_BYTES:
-            raise ValueError("One row exceeds the SQL batch budget")
-        if size + length > MAX_BATCH_BYTES:
-            yield "[" + ",".join(batch) + "]"
-            batch, size = [], 2
-        batch.append(encoded)
-        size += length
-    if batch:
-        yield "[" + ",".join(batch) + "]"
-
-
-def insert_rows(query: AppletQuery, table: str, snapshot: str, rows: Iterable[dict[str, Any]]) -> int:
-    columns = TABLE_COLUMNS[table]
-    names = ", ".join(column.split()[0] for column in columns.split(", "))
-    count = 0
-    for body in batches(rows):
-        result = query(
-            f"INSERT INTO {table} (snapshot, {names}) SELECT :snapshot, {names} "
-            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
-            {"snapshot": snapshot, "rows": body},
-        )
-        count += result["row_count"]
-    return count
-
-
-def load_snapshot(sources: list[dict[str, Any]], samples: list[dict[str, Any]], query: AppletQuery) -> dict[str, Any]:
-    """Stage the rows under a new snapshot id, select it, then drop the snapshots it replaces."""
-    sampled = {row["source"] for row in samples}
-    missing = [row["name"] for row in sources if row["name"] not in sampled]
-    if missing:
-        raise ValueError(f"Sources without samples: {missing[:5]}")
-    snapshot = uuid.uuid4().hex
-    counts = {
-        "mix_sources": insert_rows(query, "mix_sources", snapshot, sources),
-        "mix_samples": insert_rows(query, "mix_samples", snapshot, samples),
+def load_snapshot(sampled: list[SampledSource], query: AppletQuery) -> dict[str, Any]:
+    """Stage the rows under a new load id, select it, then drop the loads it replaces."""
+    empty = [entry.source.name for entry in sampled if not entry.samples]
+    if empty:
+        raise ValueError(f"Sources without samples: {empty[:5]}")
+    rows = {
+        "mix_sources": [{**asdict(entry.source), "documents": entry.documents} for entry in sampled],
+        "mix_samples": [
+            {"source": entry.source.name, **asdict(sample)} for entry in sampled for sample in entry.samples
+        ],
     }
-    if counts != {"mix_sources": len(sources), "mix_samples": len(samples)}:
+    load_id = uuid.uuid4().hex
+    counts = {
+        table: insert_load_rows(query, table, TABLE_COLUMNS[table], load_id, table_rows)
+        for table, table_rows in rows.items()
+    }
+    if counts != {table: len(table_rows) for table, table_rows in rows.items()}:
         raise RuntimeError(f"Staged row counts differ from the snapshot: {counts}")
     query(
-        "INSERT INTO mix_current (name, snapshot) VALUES ('latest', :snapshot) "
-        "ON CONFLICT (name) DO UPDATE SET snapshot = EXCLUDED.snapshot",
-        {"snapshot": snapshot},
+        "INSERT INTO mix_current (load_id) VALUES (:load_id) "
+        "ON CONFLICT (singleton) DO UPDATE SET load_id = EXCLUDED.load_id",
+        {"load_id": load_id},
     )
     for table in TABLE_COLUMNS:
-        query(f"DELETE FROM {table} WHERE snapshot NOT IN (SELECT snapshot FROM mix_current)", {})
-    return {"snapshot": snapshot, **counts}
+        query(f"DELETE FROM {table} WHERE load_id NOT IN (SELECT load_id FROM mix_current)", {})
+    return {"load_id": load_id, **counts}
 
 
 @click.command(help=__doc__)
@@ -86,10 +56,8 @@ def load_snapshot(sources: list[dict[str, Any]], samples: list[dict[str, Any]], 
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(input_root: str, applet_id: str, service_url: str) -> None:
     configure_coreweave_s3()
-    root = StoragePath.parse(input_root)
-    sources = json.loads((root / SOURCES_FILE).read_text())["sources"]
-    samples = pq.read_table(io.BytesIO((root / SAMPLES_FILE).read_bytes())).to_pylist()
-    click.echo(json.dumps(load_snapshot(sources, samples, applet_query(service_url, applet_id))))
+    sampled = read_snapshot(StoragePath.parse(input_root))
+    click.echo(json.dumps(load_snapshot(sampled, applet_query(service_url, applet_id))))
 
 
 if __name__ == "__main__":

@@ -5,7 +5,9 @@
 
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.csv as pa_csv
@@ -13,8 +15,11 @@ import pyarrow.json as pa_json
 import pyarrow.parquet as pa_parquet
 from fastapi.encoders import jsonable_encoder
 
+from marina.client import AppletQuery
+
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 INSERT_BATCH_ROWS = 250
+MAX_BATCH_BYTES = 1_000_000
 
 
 def read_table(path: Path) -> pa.Table:
@@ -86,3 +91,39 @@ def table_statements(
             values.append("(" + ", ".join(placeholders) + ")")
         inserts.append((f"INSERT INTO {target} ({', '.join(columns)}) VALUES {', '.join(values)}", parameters))
     return schema_sql, inserts
+
+
+def json_row_batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
+    """Group rows into JSON arrays whose encoded SQL request stays under ``MAX_BATCH_BYTES``."""
+    batch: list[str] = []
+    size = 2
+    for row in rows:
+        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        # The SQL API carries the row array as a JSON string, adding another escape layer.
+        length = len(json.dumps(encoded).encode()) + 1
+        if length + 2 > MAX_BATCH_BYTES:
+            raise ValueError("One row exceeds the SQL batch budget")
+        if size + length > MAX_BATCH_BYTES:
+            yield "[" + ",".join(batch) + "]"
+            batch, size = [], 2
+        batch.append(encoded)
+        size += length
+    if batch:
+        yield "[" + ",".join(batch) + "]"
+
+
+def insert_load_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
+    """Insert byte-bounded batches tagged with ``load_id`` and return the stored row count.
+
+    ``columns`` is the ``name TYPE, ...`` list of the row fields; the table also has a ``load_id`` column.
+    """
+    names = ", ".join(column.strip().split()[0] for column in columns.split(","))
+    count = 0
+    for body in json_row_batches(rows):
+        result = query(
+            f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
+            f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
+            {"load_id": load_id, "rows": body},
+        )
+        count += result["row_count"]
+    return count

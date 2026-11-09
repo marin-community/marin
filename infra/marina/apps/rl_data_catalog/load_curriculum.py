@@ -13,11 +13,10 @@ from typing import Any
 import click
 import pyarrow.parquet as pq
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
+from marina.table_load import insert_load_rows, json_row_batches
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
-
-from infra.marina.apps.rl_data_catalog.load import batches, insert_rows
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -121,7 +120,7 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
         return query(sql, parameters)
 
     def insert(table: str, rows: Iterable[dict]) -> int:
-        return insert_rows(execute, f"curriculum_{table}", TABLE_COLUMNS[table], load_id, rows)
+        return insert_load_rows(execute, f"curriculum_{table}", TABLE_COLUMNS[table], load_id, rows)
 
     stale = execute(
         "SELECT load_id FROM curriculum_loads WHERE load_id NOT IN "
@@ -192,7 +191,7 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
 
     counts["tasks"] = 0
     counts["matches"] = 0
-    for body in batches(checked_tasks()):
+    for body in json_row_batches(checked_tasks()):
         rows = json.loads(body)
         counts["tasks"] += insert("tasks", rows)
         counts["matches"] += insert(
