@@ -16,11 +16,13 @@ A word is a letter or digit followed by any letters, digits and combining marks 
 with apostrophes and zero-width joiners or non-joiners inside it, so ``don't`` is one word,
 ``high-risk`` is two and a Devanagari vowel sign stays in its word. A run of Han or kana characters
 is one word, which undercounts Chinese and Japanese, except in a check that compares words, where
-each such letter is one word. A sentence ends at a line break, at ``.``, ``!``, ``?`` or an ellipsis
-before whitespace, after any closing quotes or brackets, and at a Chinese, Japanese, Devanagari,
-Arabic, Armenian or Ethiopic sentence-final mark wherever it stands, after any closing quotes or
-brackets that follow it. Only ``detectable_format:sentence_hyphens`` reads the dot of an
-abbreviation, such as ``Dr.`` or ``e.g.``, as no sentence end.
+each such letter is one word, and where a number with separators, such as ``1,000`` or ``10:30``,
+and single letters joined by dots, such as ``U.S.``, are one word each. A sentence ends at a line
+break, at ``.``, ``!``, ``?`` or an ellipsis before whitespace, after any closing quotes or
+brackets, and at a Chinese, Japanese, Devanagari, Arabic, Armenian or Ethiopic sentence-final mark
+wherever it stands, after any closing quotes or brackets that follow it. Only
+``detectable_format:sentence_hyphens`` reads the dot of an abbreviation, such as ``Dr.`` or
+``e.g.``, as no sentence end.
 """
 
 import json
@@ -83,8 +85,13 @@ UNSPACED_RANGES = (
 )
 UNSPACED_LETTER = re.compile(f"[{UNSPACED_RANGES}]")
 SPACED_WORD_CHARACTER = rf"(?![{UNSPACED_RANGES}]){WORD_CHARACTER}"
+SPACED_LETTER = rf"(?![{UNSPACED_RANGES}])[^\W\d_]"
+# In a check that compares words, a number written with separators, such as "1,000", "3.5" or "10:30", and single
+# letters joined by dots, such as "U.S." or "e.g.", are one word each, so "1,000" and "2,000" share no word "000".
+SEPARATED_NUMBER = r"\d+(?:[.,:]\d+)+"
+DOTTED_LETTERS = rf"(?<![\w.]){SPACED_LETTER}(?:\.{SPACED_LETTER})+(?![^\W_])"
 COMPARED_WORD = re.compile(
-    rf"[{UNSPACED_RANGES}]|(?![{UNSPACED_RANGES}])[^\W_]"
+    rf"{SEPARATED_NUMBER}|{DOTTED_LETTERS}|[{UNSPACED_RANGES}]|(?![{UNSPACED_RANGES}])[^\W_]"
     rf"(?:{SPACED_WORD_CHARACTER}|[{re.escape(WORD_JOINERS)}](?={SPACED_WORD_CHARACTER}))*"
 )
 BULLET = re.compile(r"^\s*[\*\-]\s+\S")
