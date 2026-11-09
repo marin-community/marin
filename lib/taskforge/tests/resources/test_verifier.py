@@ -54,11 +54,6 @@ print(int(clean and Path('/app/answer.txt').read_text() == '12'))
 """
 
 
-# ShellSim's first command on a cold CI runner can take seconds; a timeout here would replace the machine
-# and break the machine and lease counts these tests assert.
-COMMAND_TIMEOUT = 30
-
-
 class CountedMachine(Machine):
     def __init__(self, machine: Machine, die: bool, failure: RuntimeError | None = None) -> None:
         self.machine, self.die, self.closed = machine, die, False
@@ -121,18 +116,36 @@ class CountedFactory(MachineFactory):
 
 
 def setup(factory: CountedFactory) -> tuple[RoundVerifier, GradingResource]:
-    engine = rollout_engine({"shellsim": factory}, command_timeout=COMMAND_TIMEOUT)
+    engine = rollout_engine({"shellsim": factory}, command_timeout=1)
     holder = RoundVerifier(engine, 5)
     return holder, GradingResource(holder, "test", engine)
 
 
-def event(script: bytes = SCRIPT) -> GradeCandidate:
+@pytest.fixture(scope="module", autouse=True)
+def warm_shellsim() -> None:
+    """Pay ShellSim's one-time CPython start in each test process before the timed tests run.
+
+    The first python3 in a fresh process is a native start of about 10 s on a cold Linux host that cannot be
+    interrupted. Under the 5 s grader timeout below it would close and replace the machines these tests count.
+    """
+
+    async def warm() -> None:
+        holder, resource = setup(CountedFactory())
+        try:
+            assert (await resource.grade(event(grader_timeout=120))).reward == 1
+        finally:
+            await holder.close()
+
+    asyncio.run(warm())
+
+
+def event(script: bytes = SCRIPT, *, grader_timeout: float = 5) -> GradeCandidate:
     grader = ScriptGrader(
         argv=("python3", "/tests/grade.py"),
         reward=StdoutReward(),
         environment=requirements(image=None),
         answer_path="/app/answer.txt",
-        timeout=5,
+        timeout=grader_timeout,
     )
     task = arithmetic_task(grader=grader, resources=ResourceGroups(verifier=(inline_resource("grade.py", script),)))
     spec = lower_with_settings(
@@ -305,7 +318,7 @@ print(int(clean and valid and rootfile.exists() == expected and (not expected or
 
 
 async def test_backend_without_reset_is_recreated() -> None:
-    engine = rollout_engine({"shellsim": shellsim_factory()}, command_timeout=COMMAND_TIMEOUT)
+    engine = rollout_engine({"shellsim": shellsim_factory()}, command_timeout=1)
     holder = RoundVerifier(engine, 5)
     resource = GradingResource(holder, "test")
     try:
