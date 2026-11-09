@@ -53,68 +53,35 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     url = publication.publish_result(record, "http://localhost")
     assert url.endswith("#run=test%2Fcontrol&attempt=native-first")
     publication.publish_result(copy.deepcopy(record), "http://localhost")
-    changed = copy.deepcopy(record)
-    changed.update(issue=456, label="corrected label", verdict="fail")
-    changed["final"]["reward"] = 0.9
     failed = record | {
         "attempt_id": "native-second",
-        "started_at": "2026-11-03T00:00:00Z",
-        "completed_at": "2026-11-03T01:00:00Z",
+        "started_at": "2026-11-03T00:00:00+00:00",
+        "completed_at": "2026-11-03T01:00:00+00:00",
         "status": "failed",
         "optimizer_steps": 0,
     }
     publication.publish_result(failed, "http://localhost")
+    changed = copy.deepcopy(record)
+    changed.update(issue=456, label="corrected label", verdict="fail")
+    changed["final"]["reward"] = 0.9
     publication.publish_result(changed, "http://localhost")
-    below = copy.deepcopy(record)
-    below.update(run_id="test/under-coverage", attempt_id="native-third")
-    below["final"]["scored"] = 98
-    publication.publish_result(below, "http://localhost")
-    other_membership = copy.deepcopy(record)
-    other_membership.update(run_id="test/different-membership", attempt_id="native-fourth")
-    other_membership["evaluation"]["membership_sha256"] = "b" * 64
-    publication.publish_result(other_membership, "http://localhost")
-    partial_baseline = copy.deepcopy(record)
-    partial_baseline.update(run_id="test/partial-baseline", attempt_id="native-fifth")
-    partial_baseline["baseline"]["scored"] = 98
-    publication.publish_result(partial_baseline, "http://localhost")
-    for field, value in (
-        ("label", "arbitrary label"),
-        ("issue", 987),
-        ("timing_scope", "launcher_start_to_finish"),
-    ):
-        distinct = copy.deepcopy(record)
-        distinct.update(run_id="test/" + field, attempt_id=field)
-        distinct[field] = value
-        publication.publish_result(distinct, "http://localhost")
-    unknown = copy.deepcopy(record)
-    unknown.update(run_id="test/unknown-protocol", attempt_id="unknown")
-    unknown["evaluation"].update(protocol=None, protocol_sha256=None)
-    publication.publish_result(unknown, "http://localhost")
-    unknown_time = record | {
-        "run_id": "test/unknown-time",
-        "attempt_id": "unknown-time",
+    partial = copy.deepcopy(record)
+    partial.update(run_id="test/partial", attempt_id="partial")
+    partial["final"]["scored"] = 98
+    publication.publish_result(partial, "http://localhost")
+    unknown = record | {
+        "run_id": "test/unknown",
+        "attempt_id": "unknown",
+        "verdict": "invalid",
         "elapsed_seconds": None,
         "run_date": None,
         "started_at": None,
         "completed_at": None,
+        "baseline": None,
+        "final": None,
     }
-    publication.publish_result(unknown_time, "http://localhost")
-    publication.publish_result(
-        record
-        | {
-            "run_id": "test/resumed",
-            "attempt_id": "resumed",
-            "resume_from": "source@1",
-            "baseline": None,
-            "final": None,
-        },
-        "http://localhost",
-    )
-    overflow = copy.deepcopy(record)
-    overflow.update(run_id="test/overflow", attempt_id="bad")
-    overflow["baseline"]["reward"], overflow["final"]["reward"] = -1e308, 1e308
+    publication.publish_result(unknown, "http://localhost")
     for run_id, invalid in (
-        ("test/overflow", overflow),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
     ):
@@ -124,11 +91,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             query_path,
             json_body={
                 "sql": publication.INSERT,
-                "parameters": {
-                    "run_id": run_id,
-                    "attempt_id": "bad",
-                    "record": json.dumps(invalid),
-                },
+                "parameters": {"run_id": run_id, "attempt_id": "bad", "record": json.dumps(invalid)},
             },
         )
     huge_extra = json.dumps(
@@ -143,40 +106,15 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "parameters": {"run_id": "test/huge-extra", "attempt_id": "bad", "record": huge_extra},
         },
     )
-    for verdict in ("fail", "invalid"):
-        publication.publish_result(
-            record | {"run_id": "test/" + verdict, "attempt_id": verdict, "verdict": verdict}, "http://localhost"
-        )
-    api = client.get(f"/a/{publication.APPLET_ID}/api/runs")
-    assert api.status_code == 200
-    payload = api.json()
+    payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
+    assert len(payload["runs"]) == 4
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert len(rows) == 13
-    assert rows["resumed"]["provisional"] and not rows["resumed"]["pareto_eligible"]
-    assert rows["fail"]["pareto_eligible"]
-    assert not rows["invalid"]["pareto_eligible"] and rows["invalid"]["provisional"]
-    good = rows["native-first"]
-    assert good["final"]["reward"] == 0.9
-    assert good["label"] == "corrected label" and good["issue"] == 456 and good["verdict"] == "fail"
-    assert sum(row["run_id"] == "test/control" and row["attempt_id"] == "native-first" for row in payload["runs"]) == 1
-    assert good["partial_coverage"] and good["pareto_eligible"] and good["trusted_gain_eligible"]
-    assert not good["provisional"] and good["gain_per_hour"] == pytest.approx(0.7)
-    assert rows["native-second"]["status"] == "failed"
-    assert rows["native-second"]["final"]["reward"] == 0.4
-    assert not rows["native-second"]["pareto_eligible"]
-    assert rows["native-third"]["provisional"] and not rows["native-third"]["pareto_eligible"]
-    assert rows["native-fourth"]["comparison_key"] != good["comparison_key"]
-    assert rows["native-fifth"]["pareto_eligible"] and not rows["native-fifth"]["trusted_gain_eligible"]
-    assert rows["label"]["comparison_key"] == rows["issue"]["comparison_key"] == good["comparison_key"]
-    assert rows["timing_scope"]["comparison_key"] != good["comparison_key"]
-    assert rows["unknown-time"]["final"]["reward"] == 0.4
-    assert rows["unknown-time"]["elapsed_seconds"] is None and rows["unknown-time"]["gain_per_hour"] is None
-    assert rows["unknown-time"]["provisional"] and not rows["unknown-time"]["pareto_eligible"]
-    assert rows["unknown"]["comparison_key"] is None
-    assert rows["unknown"]["provisional"] and not rows["unknown"]["pareto_eligible"]
-    assert not rows["unknown"]["trusted_gain_eligible"]
+    assert rows["native-first"]["final"]["reward"] == 0.9
+    assert rows["native-first"] == changed
+    assert rows["native-second"] == failed
+    assert rows["partial"] == partial and rows["unknown"] == unknown
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
-    assert set(skipped) == {"test/bad-shape", "test/overflow", "test/huge-extra", "test/wrong-sql-key"}
+    assert set(skipped) == {"test/bad-shape", "test/huge-extra", "test/wrong-sql-key"}
 
     def rejected_record(origin, method, path, **kwargs):
         if path.endswith("/api/runs"):

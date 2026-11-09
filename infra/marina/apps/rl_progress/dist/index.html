@@ -9,18 +9,12 @@
 </head>
 <body>
   <main>
-    <header><div><span class="eyebrow">POST-TRAINING / EXPERIMENTS</span><h1>RL iteration progress</h1><p>Reward, iteration time, and the evidence behind each run.</p></div><button id="refresh">Refresh</button></header>
+    <header><div><span class="eyebrow">POST-TRAINING / EXPERIMENTS</span><h1>RL iteration progress</h1><p>Native attempts and their recorded experiment results.</p></div><button id="refresh">Refresh</button></header>
     <div id="error" role="alert" hidden></div>
     <div id="warnings" class="warning" role="status" hidden></div>
     <div class="toolbar"><span id="count"></span></div>
-    <section class="panel lead" aria-labelledby="pareto-title"><div class="panel-heading"><div><span class="eyebrow">PARETO</span><h2 id="pareto-title">Reward / time frontier</h2></div><span>↖ Higher reward, shorter loop</span></div><p class="note">Click any dot to inspect its run, evaluation coverage, and links.</p><div id="pareto" class="chart"></div><p id="frontier-note" class="note"></p><div id="legend" class="legend"></div></section>
-    <div class="chart-grid">
-      <section class="panel"><h2>Reward over time</h2><p class="note">Hollow: baseline · Filled: final</p><div id="reward" class="chart"></div></section>
-      <section class="panel"><h2>Iteration time</h2><p class="note">Elapsed time under each run’s recorded timing scope.</p><div id="duration" class="chart"></div></section>
-      <section class="panel"><h2>Reward gain / hour</h2><p class="note">Gain eligibility uses baseline and final coverage; other points are descriptive.</p><div id="gain" class="chart"></div></section>
-    </div>
-    <section class="panel"><div class="panel-heading"><h2>Recorded runs</h2><span class="note">Select an attempt; latest first. Run dates use America/Los_Angeles.</span></div><div class="table-scroll"><table><thead><tr><th>Run / attempt</th><th>Baseline → final</th><th>Elapsed</th><th>Updates</th><th>Coverage</th><th>Evidence</th></tr></thead><tbody id="attempts"></tbody></table></div></section>
-    <p class="note footer">Single-seed development screens. Unknown protocols remain unranked; records with different comparison identities are not a controlled comparison.</p>
+    <section class="panel"><div class="panel-heading"><h2>Recorded runs</h2><span class="note">Select an attempt; latest first. Native timestamps use UTC.</span></div><div class="table-scroll"><table><thead><tr><th>Run / attempt</th><th>Baseline → final</th><th>Elapsed</th><th>Updates</th><th>Coverage</th><th>Evidence</th></tr></thead><tbody id="attempts"></tbody></table></div></section>
+    <p class="note footer">Single-seed development screens.</p>
   </main>
   <dialog id="run-detail" aria-labelledby="detail-title"><div class="dialog-heading"><span class="eyebrow">RUN DETAILS</span><button id="close-detail" aria-label="Close run details">Close ×</button></div><div class="dialog-scroll"><h2 id="detail-title"></h2><div id="detail-body"></div></div></dialog>
 </body>

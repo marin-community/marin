@@ -4,15 +4,12 @@ Maintained source for the private [RL progress dashboard](https://applets.marina
 The stable UUID is declared in `applet.toml`. Preserve it when releasing updates.
 
 Each run has one row with its attempts in a dropdown, latest first. Failed attempts
-are marked. The selected attempt supplies the run's graph points and details.
-Series comes from record fields; names do not define a comparison group.
+are marked. The selected attempt supplies the run's details.
+Series comes from record fields.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
 run URL; an `issue` field links to the experiment's GitHub issue.
 
-The frontend leads with reward versus elapsed time. The backend applies each record's
-coverage threshold and evaluation identity to comparison eligibility. Incomplete
-coverage remains visible, including attempts that meet their recorded threshold.
 Malformed records are skipped individually and named in a visible note.
 
 ## Data contract
@@ -21,8 +18,7 @@ The app's release migration creates its `rl_runs` table in the application schem
 Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
 publication replaces that attempt's record; other attempts remain separate.
 
-The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` adds coverage and
-comparison fields and lists malformed rows in `skipped_records`. See the
+The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` returns stored records and lists malformed rows in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/snowball-rl.md#dashboard-publication)
 for record semantics, retries and publishing pinned controls.
 
@@ -37,8 +33,8 @@ uv run marina validate infra/marina/apps/rl_progress
 uv run marina release infra/marina/apps/rl_progress --local --json
 ```
 
-Check each graph's point links, cold-loaded run hash links,
-coverage exclusions, and the detail dialog's scrolling body, close control, Escape,
+Check cold-loaded run and attempt hash links, refresh after repeat publication,
+and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 
 Deploy a Marina runtime containing `marin.rl.rl_progress` before releasing the app package.
