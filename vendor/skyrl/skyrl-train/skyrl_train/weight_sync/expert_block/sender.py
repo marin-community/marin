@@ -87,6 +87,7 @@ class ExpertBlockSender:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             device,
+            backend=init_info["backend"],
             sources=self.sources,
             expert_sources=self.expert_sources,
         )

@@ -182,7 +182,10 @@ class ExpertBlockSync:
         schedule, participants = plan_from_inventories(policy_rows, receivers)
         planned = time.perf_counter()
         self.store = RendezvousStore(f"expert-block-{id(self):x}", timeout_seconds=self.timeout_seconds)
-        init_info = {"schedule": to_wire(schedule), "rendezvous": asdict(self.store.rendezvous)}
+        # NCCL 2.29 rejects two communicator ranks on the same physical GPU. Gloo's
+        # CUDA broadcast path supports the trainer/receiver pair in colocated runs.
+        backend = "gloo" if self.colocated else "nccl"
+        init_info = {"schedule": to_wire(schedule), "rendezvous": asdict(self.store.rendezvous), "backend": backend}
         try:
             bound = await asyncio.gather(
                 self._policy("trainer_init", init_info),
