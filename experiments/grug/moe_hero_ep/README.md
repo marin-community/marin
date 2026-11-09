@@ -665,6 +665,52 @@ python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
 Submit a rung through the Marin Iris controller as with the launchers above, swapping the module and
 passing `--size`. Runs report to W&B group `moe-hero-ep-scaling-ladder`.
 
+### Full-model SFT
+
+`launch_hero_sft.py` continues a hero checkpoint on the SFT recipe of
+`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05`. It reads the 216 packed stores of the
+2026.09.29 full A/B mix from their CoreWeave copies (`hero_sft_stores_2026_09_29.json`) and draws
+replay from the hero's 262K Harrier mix. Each store is read exactly once, spread evenly across
+mixture blocks of about 64,000 sequences. The block size is rounded to whole steps, so 11 racks use
+blocks of 64,064 sequences and run 6,916 updates.
+
+The run resumes the checkpoint's optimizer state, with no warmup. The learning rate is constant,
+then decays linearly over the final 10% to 0.1×. At the start step, the seven chat special-token
+columns of the LM head are copied from single-token anchors, and only their optimizer moments are
+zeroed. Those rows and the matching embedding rows then train at √32 times the learning rate. The
+store tokenizer, `s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18`, maps 128005 and
+128011 to `<tool_call>` and `</tool_call>`, so exports must ship it with EOS `[128001, 128009]`.
+
+Every rate and the router-bias mode are required flags.
+
+- The 10.05 recipe froze the router bias. It trained with expert axis 1, which has no capacity
+  drops.
+- On one hero rack, `--router-bias frozen` drops 5.8–8.1% of expert assignments.
+- `--router-bias update` keeps quantile balancing on and drops about 3e-5. Over the first
+  20 updates, its loss is higher.
+
+`--eval-every` counts absolute steps. The trainer's first-step eval never fires on a restored run,
+so the first eval of a run that starts at step 393491 with `--eval-every 500` lands at step 393500.
+
+Print the plan for a one-rack smoke test. It writes every checkpoint below a 3-day TTL prefix:
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_hero_sft \
+  --run-id hero-sft-smoke \
+  --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
+  --dp-racks 1 --router-bias update --stop-after-steps 20 --eval-every 393511 \
+  --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
+  --version dev
+```
+
+Submit it through the Marin Iris controller as with
+[Bounded diagnostics](#bounded-diagnostics). Give the job its own `IRIS_PORT_JAX`, and set
+`WANDB_PROJECT=marin_moe_sft`. A production run omits `--checkpoint-root` and
+`--stop-after-steps`. Its hourly resume checkpoint then goes to the hero's temporary prefix, and
+the final checkpoint goes to the run's durable output. Track the run on
+[#8089](https://github.com/marin-community/marin/issues/8089).
+
 ## Result Record
 
 The experiment record is in [`.agents/logbooks/7279-moe-hero-ep.md`](../../../.agents/logbooks/7279-moe-hero-ep.md).
