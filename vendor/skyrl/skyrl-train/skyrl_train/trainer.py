@@ -149,7 +149,7 @@ from skyrl_train.telemetry import (
 )
 from skyrl_train.rollout_observability import async_phase_window, monitor_event_loop_lag
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
+from skyrl_train.utils.importance_ratio_diagnostics import UNKNOWN_POLICY_AGE, mismatch_ratio_metrics
 from skyrl_train.timing_observability import StepWallTime, publish_startup_timings, publish_step_timings
 from skyrl_train.hf_export import (
     protected_hf_export_steps,
@@ -2255,7 +2255,12 @@ class RayPPOTrainer:
                 "rewards": rewards_tensor,
                 "loss_mask": loss_masks_tensor,
                 "rollout_logprobs": rollout_logprobs_tensor,
-                "rollout_staleness": rollout_staleness_tensor,
+                # Lease ages limit admission but do not identify generating weights.
+                "rollout_staleness": (
+                    torch.where(policy_steps >= 0, rollout_staleness_tensor, UNKNOWN_POLICY_AGE)
+                    if policy_steps is not None
+                    else torch.full_like(rollout_staleness_tensor, UNKNOWN_POLICY_AGE)
+                ),
                 "is_last_step": (
                     torch.tensor(trajectory_batch["is_last_step"], dtype=torch.bool)
                     if trajectory_batch.get("is_last_step", None) is not None

@@ -13,6 +13,7 @@ from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
+UNKNOWN_POLICY_AGE = -1
 
 
 LOG_RATIO_TAIL_CAPACITY = 8192
@@ -23,6 +24,7 @@ LOG_RATIO_COLLAPSE = math.log(1e-5)
 
 # Mismatch staleness buckets and each one's inclusive lower bound.
 MISMATCH_STALENESS_BUCKETS = (
+    ("unknown", UNKNOWN_POLICY_AGE),
     ("staleness0", 0),
     ("staleness1", 1),
     ("staleness2", 2),
@@ -163,7 +165,7 @@ def mismatch_ratio_metrics(
     }
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
     # Only these two buckets get the sorted statistics; the others take moments from the grid.
-    staleness0 = groups < 4
+    staleness0 = torch.masked_select(staleness, mask) == 0
     pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
     full_statistics = {
         "pooled": pooled,
