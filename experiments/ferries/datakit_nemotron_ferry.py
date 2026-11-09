@@ -3,9 +3,10 @@
 
 """Datakit nemotron ferry: weekly reference-DAG run on the Nemotron-CC high-quality actual split.
 
-The input is the normalized Nemotron-CC v1 ``hq_actual`` split in eu-west4. The first
-step confirms that the split is at ``NEMOTRON_HQ_ACTUAL_PATH`` and never rebuilds it.
-Normalize runs again on those Parquet shards. Normalize and every reference stage
+The input is the normalized Nemotron-CC v1 ``hq_actual`` split in eu-west4. Before the
+DAG starts, the ferry confirms that the split at ``NEMOTRON_HQ_ACTUAL_PATH`` is complete;
+it never rebuilds the split or writes into its directory. Normalize runs again on those
+Parquet shards. Normalize and every reference stage
 after it write one-day TTL outputs; see :mod:`experiments.ferries.datakit_reference_ferry`.
 """
 
@@ -14,6 +15,7 @@ import os
 
 from fray.types import ResourceConfig
 from marin.datakit.normalize import normalize_step
+from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
 from rigging.filesystem.cluster_config import check_path_in_region, region_from_metadata
@@ -70,31 +72,36 @@ TIER3_SCALE = PipelineScale(
 )
 
 
-def _verify_nemotron_hq_actual_present(output_path: str) -> None:
-    """Confirm the normalized split is at ``output_path``; never rebuilds it.
+def _require_nemotron_hq_actual() -> None:
+    """Fail unless the normalized split at ``NEMOTRON_HQ_ACTUAL_PATH`` is complete.
 
-    StepRunner calls this only on a cache miss, which means the split's
-    ``.executor_status`` is gone. The ferry then fails instead of rebuilding a
-    multi-TB split.
+    Other pipelines read the split's directory too. With its ``SUCCESS`` status
+    confirmed here, the input step is a StepRunner cache hit, so StepRunner writes
+    nothing into that directory.
     """
-    data_dir = StoragePath(output_path) / NEMOTRON_HQ_ACTUAL_DATA_SUBDIR
-    if not data_dir.exists():
+    if not check_cache(NEMOTRON_HQ_ACTUAL_PATH):
         raise RuntimeError(
-            f"Normalized Nemotron-CC hq_actual not found at {data_dir}. "
+            f"Normalized Nemotron-CC hq_actual at {NEMOTRON_HQ_ACTUAL_PATH} has no SUCCESS status. "
             "The nemotron ferry does not rebuild its input; restore the split or point the ferry at another copy."
         )
+    data_dir = StoragePath(NEMOTRON_HQ_ACTUAL_PATH) / NEMOTRON_HQ_ACTUAL_DATA_SUBDIR
     sample = (data_dir / "*.parquet").glob()
     if not sample:
         raise RuntimeError(f"Normalized Nemotron-CC hq_actual at {data_dir} contains no .parquet files.")
     logger.info("Normalized Nemotron-CC hq_actual confirmed at %s (e.g. %s)", data_dir, sample[0])
 
 
+def _refuse_input_rebuild(output_path: str) -> None:
+    """Fail if StepRunner runs the input step, so it never writes a record into the split."""
+    raise RuntimeError(f"The nemotron ferry never rebuilds its input at {output_path}.")
+
+
 def build_sources(output_prefix: str) -> dict[str, StepSpec]:
-    # Verify-only input step. The absolute override points at the normalized split
-    # regardless of MARIN_PREFIX.
+    # Input step at the normalized split, regardless of MARIN_PREFIX. ``main`` checks
+    # its SUCCESS status first, so StepRunner serves it from cache.
     download = StepSpec(
         name=f"{FERRY_NAME}/download",
-        fn=_verify_nemotron_hq_actual_present,
+        fn=_refuse_input_rebuild,
         override_output_path=NEMOTRON_HQ_ACTUAL_PATH,
     )
     # The input already has a content-hash ``id`` and keeps the WARC record ID in
@@ -122,6 +129,7 @@ def main() -> None:
     region = region_from_metadata()
     if region:
         check_path_in_region("nemotron_hq_actual", NEMOTRON_HQ_ACTUAL_PATH, region)
+    _require_nemotron_hq_actual()
 
     output_prefix = ferry_output_prefix(FERRY_NAME, os.environ["SMOKE_RUN_ID"])
     run_reference_ferry(

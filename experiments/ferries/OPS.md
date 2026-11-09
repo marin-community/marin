@@ -24,8 +24,8 @@ Both are present in `gs://marin-us-west4` and `gs://marin-eu-west4`. To run a
 ferry in a different region, copy them there first. They are about 250 MB in total.
 
 Tier 3 also reads the normalized Nemotron-CC v1 split at
-`gs://marin-eu-west4/normalized/nemotron_v1/hq_actual_d6502d2c`. Its first step
-fails if that split is absent; it never rebuilds the split.
+`gs://marin-eu-west4/normalized/nemotron_v1/hq_actual_d6502d2c`. The ferry fails
+before the DAG starts if that split is incomplete; it never rebuilds the split.
 
 ## Submit
 
