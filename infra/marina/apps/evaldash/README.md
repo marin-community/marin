@@ -187,10 +187,12 @@ in the selected cohort and benchmarks. Compare's searchable Add model dropdown s
 selections, with controls to remove one model or clear the set. Model names wrap in the picker,
 comparison results, and model cards; config digests remain visible on a separate line.
 
-Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
-benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
-it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
-are not verified as comparable. A named verified cohort admits only records with its approved
+Historical cohort labels remain selectable. `cohort=unversioned` selects runs launched without a
+version label (`version: null`); the selector lists it whenever such runs exist. `cohort=all`
+selects the newest admissible run per benchmark across cohorts. Panel and Compare accept it, so
+models whose newest runs sit in different cohorts can be compared, and each compared cell names its
+cohort and links its source run. The UI marks all-cohort and unverified historical views with an
+asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved
 benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.

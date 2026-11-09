@@ -252,3 +252,15 @@ def test_links_without_a_cohort_open_on_the_newest_scores_across_cohorts(journey
     journey.visit("/models/snowball")
     journey.page.wait_for_url(re.compile(r"[?&]cohort=all"))
     journey.sees("cohort all runs")
+
+
+def test_a_cross_cohort_comparison_names_each_cell_cohort_and_links_its_run(journey: Journey) -> None:
+    comparison = cast(dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,qwen3-8b"))
+    row = next(row for row in comparison["rows"] if len(row["cells"]) == 2)
+    cell = row["cells"]["qwen3-8b"]
+
+    journey.visit("/compare?cohort=all&models=snowball,qwen3-8b")
+    link = journey.page.get_by_role("link", name=cell["version"], exact=True).first
+    expect(link).to_be_visible()
+    link.click()
+    journey.page.wait_for_url(re.compile(r"/runs/"))

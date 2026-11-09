@@ -13,7 +13,7 @@ import { apiGet, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cohortWarning, isPartialCoverage } from '@/utils/panel'
+import { UNVERSIONED_COHORT, cohortWarning, isPartialCoverage } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, Panel, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -313,7 +313,7 @@ const chartSeries = computed(() =>
                       backgroundColor: scoreTint(cell(row, m)!.value),
                       ...(row.leader === m ? { '--tw-ring-color': 'var(--c-best)' } : {}),
                     }"
-                    :title="`${cell(row, m)!.metric} · ${cell(row, m)!.n_scored} items graded`"
+                    :title="`${cell(row, m)!.metric} · ${cell(row, m)!.n_scored} items graded · cohort ${cell(row, m)!.version ?? UNVERSIONED_COHORT}`"
                   >
                     <span class="font-mono font-medium tabular-nums">{{ formatScore(cell(row, m)!.value) }}</span>
                     <span class="block font-mono text-[10px] text-text-muted tabular-nums leading-none">
@@ -329,6 +329,12 @@ const chartSeries = computed(() =>
                       class="block font-mono text-[9px] leading-none text-text-muted"
                       :title="`95% interval for this model's gap to ${row.leader}`"
                       >{{ gapLabel(row, m) }}</span
+                    >
+                    <RouterLink
+                      :to="`/runs/${encodeURIComponent(cell(row, m)!.run_id)}`"
+                      class="block font-mono text-[9px] leading-none text-text-muted hover:text-accent mt-0.5"
+                      :title="`Open the run behind this score (${cell(row, m)!.run_id})`"
+                      >{{ cell(row, m)!.version ?? UNVERSIONED_COHORT }}</RouterLink
                     >
                   </div>
                   <span v-else class="text-text-muted">—</span>
