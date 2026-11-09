@@ -60,9 +60,14 @@ def main():
 @click.option("--federated-cluster", required=True)
 @click.option("--records-prefix", required=True)
 @click.option("--accelerator", default=None)
+@click.option(
+    "--priority-band", type=click.Choice(["production", "interactive"]), default="production", show_default=True
+)
 @click.option("--dry-run", is_flag=True)
-def launch(model_config, harbor_config, run_prefix, runs, federated_cluster, records_prefix, accelerator, dry_run):
-    """Submit >=5 independent standard Harbor runs at production priority."""
+def launch(
+    model_config, harbor_config, run_prefix, runs, federated_cluster, records_prefix, accelerator, priority_band, dry_run
+):
+    """Submit >=5 independent standard Harbor runs."""
     model = load_model_config(model_config)
     spec = LaunchSpec(
         model=model,
@@ -75,7 +80,7 @@ def launch(model_config, harbor_config, run_prefix, runs, federated_cluster, rec
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
-        priority_band=priority_band_value("production"),
+        priority_band=priority_band_value(priority_band),
     )
     specs = repeat_specs(spec, run_prefix=run_prefix, runs=runs)
     if dry_run:

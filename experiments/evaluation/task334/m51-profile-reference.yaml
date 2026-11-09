@@ -1,0 +1,26 @@
+name: snowball-pathb-bfcl-m51-r1
+location: s3://marin-rno2a/tmp/ttl=14d/snowball-identity/path-b/merge-sweep-20261030-r1/M51/hf
+revision: null
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+tokenizer: open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12
+tokenizer_revision: 4eeb756b404db25bc04e4daf49dfb9817bceb741
