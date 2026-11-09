@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 import hashlib
 import io
 import os
@@ -9,6 +10,7 @@ import huggingface_hub.constants
 import numpy as np
 import pytest
 import rigging.timing
+from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import save, save_file
 
 from cloud.iris import hf_model_cache
@@ -404,3 +406,99 @@ def test_policy_manifest_without_tokenizer_mode_remains_compatible(tmp_path: Pat
     value.pop("tokenizer_mode")
 
     assert ModelManifest.from_mapping(value, "memory://models/policy") == manifest
+
+
+def _aging_model_cache(tmp_path, monkeypatch, *, ttl_days=14):
+    cache = tmp_path / "ttl=14d" / "region-cache"
+    source = fsspec.filesystem("memory")
+    source_root = f"aging-source/{tmp_path.name}"
+    files, weights = _model_snapshot(source, source_root)
+    opened = []
+
+    def open_snapshot(model_id, revision):
+        opened.append((model_id, revision))
+        return HuggingFaceSnapshot(source, source_root, files)
+
+    monkeypatch.setattr(hf_model_cache, "marin_temp_bucket", lambda *_args, **_kwargs: str(cache))
+    monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)
+    uri, manifest = ensure_hugging_face_model_cache(
+        "org/model",
+        "a" * 40,
+        ttl_days=ttl_days,
+        source_prefix="s3://region/run",
+    )
+    old = (datetime.now(UTC) - timedelta(days=13)).timestamp()
+    for path in cache.iterdir():
+        os.utime(path, (old, old))
+    return cache, uri, manifest, weights, opened
+
+
+@pytest.mark.parametrize("requested_ttl", [14, 100])
+@pytest.mark.parametrize("fresh_marker", [False, True])
+def test_near_expiry_mirror_refreshes_all_objects_without_redownloading(
+    tmp_path,
+    monkeypatch,
+    requested_ttl,
+    fresh_marker,
+):
+    cache, uri, manifest, weights, opened = _aging_model_cache(tmp_path, monkeypatch, ttl_days=requested_ttl)
+    marker = cache / ".marinskyrl-model-manifest.json"
+    if fresh_marker:
+        marker.touch()
+    cutoff = (datetime.now(UTC) - timedelta(days=7)).timestamp()
+    repeated_uri, repeated_manifest = ensure_hugging_face_model_cache(
+        "org/model",
+        "a" * 40,
+        ttl_days=requested_ttl,
+        source_prefix="s3://region/another-run",
+    )
+    assert repeated_uri == uri
+    assert repeated_manifest == manifest
+    assert all(path.stat().st_mtime >= cutoff for path in cache.iterdir())
+    assert (cache / "model.safetensors").read_bytes() == weights
+    assert opened == [("org/model", "a" * 40)]
+
+
+@pytest.mark.parametrize("partial_cache", [False, True])
+def test_interrupted_lifetime_refresh_cannot_publish_fresh_marker_over_aging_weights(
+    tmp_path,
+    monkeypatch,
+    partial_cache,
+):
+    cache, _uri, _manifest, _weights, _opened = _aging_model_cache(tmp_path, monkeypatch)
+    marker = cache / ".marinskyrl-model-manifest.json"
+    old_marker_time = marker.stat().st_mtime
+    if partial_cache:
+        marker.unlink()
+    original_refresh = StoragePath.refresh_lifetime
+
+    def interrupted_refresh(path, *, before):
+        if path.name == "tokenizer.json":
+            raise OSError("interrupted refresh")
+        original_refresh(path, before=before)
+
+    monkeypatch.setattr(StoragePath, "refresh_lifetime", interrupted_refresh)
+    with pytest.raises(OSError, match="interrupted refresh"):
+        ensure_hugging_face_model_cache("org/model", "a" * 40, ttl_days=14, source_prefix="s3://region/run")
+    assert (cache / "model.safetensors").stat().st_mtime > old_marker_time
+    if partial_cache:
+        assert not marker.exists()
+    else:
+        assert marker.stat().st_mtime == old_marker_time
+
+
+def test_mirror_with_an_expired_weight_is_repaired_before_returning(tmp_path, monkeypatch):
+    cache, uri, manifest, weights, opened = _aging_model_cache(tmp_path, monkeypatch)
+    (cache / "model.safetensors").unlink()
+    marker = cache / ".marinskyrl-model-manifest.json"
+    marker.touch()
+    repaired_uri, repaired_manifest = ensure_hugging_face_model_cache(
+        "org/model",
+        "a" * 40,
+        ttl_days=14,
+        source_prefix="s3://region/run",
+    )
+    assert repaired_uri == uri
+    assert repaired_manifest == manifest
+    assert (cache / "model.safetensors").read_bytes() == weights
+    assert len(opened) == 2

@@ -50,6 +50,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import (
     ArtifactSource,
+    FileEntry,
     atomic_directory_update,
     file_inventory,
     fs_and_path,
@@ -258,25 +259,35 @@ def stage_task_data(data_json: str, *, role: str) -> None:
 
 def stage_model(model: HuggingFaceModelCache) -> Path:
     """Restore a CPU-made bucket mirror into this node's offline HF cache."""
-    manifest = load_model_manifest(model.uri)
-    if manifest.identity != model.identity or manifest.model_id != model.model_id:
-        raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
-    if not manifest.revision or not is_hugging_face_commit(manifest.revision):
-        raise ValueError(f"Hugging Face mirror requires an immutable revision: {model.uri}")
-    cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model.model_id.replace('/', '--')}"
-    local_path = cache_root / "snapshots" / manifest.revision
-    _log(f"Staging bucket mirror on node {_rank()}/{_num_tasks()}: {model.uri} -> {local_path}")
-    filesystem, root = fs_and_path(model.uri)
-    inventory = tuple(item for item in file_inventory(filesystem, root) if item[1].path.endswith(MODEL_CACHE_SUFFIXES))
-    validate_hf_model_weights({entry.path for _, entry in inventory}, model.uri)
-    materialize_inventory(ArtifactSource(model.uri, model.identity, str(local_path)), filesystem, inventory)
-    if model.revision != manifest.revision:
-        refs = (cache_root / "refs").resolve()
-        ref = (refs / model.revision).resolve()
-        ref.relative_to(refs)
-        ref.parent.mkdir(parents=True, exist_ok=True)
-        ref.write_text(manifest.revision)
-    return local_path
+    try:
+        manifest = load_model_manifest(model.uri)
+        if manifest.identity != model.identity or manifest.model_id != model.model_id:
+            raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
+        if not manifest.revision or not is_hugging_face_commit(manifest.revision):
+            raise ValueError(f"Hugging Face mirror requires an immutable revision: {model.uri}")
+        cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model.model_id.replace('/', '--')}"
+        local_path = cache_root / "snapshots" / manifest.revision
+        _log(f"Staging bucket mirror on node {_rank()}/{_num_tasks()}: {model.uri} -> {local_path}")
+        filesystem, root = fs_and_path(model.uri)
+        inventory = tuple(
+            (join_resource_path(root, entry.path), FileEntry(entry.path, entry.size))
+            for entry in manifest.files
+            if entry.path.endswith(MODEL_CACHE_SUFFIXES)
+        )
+        validate_hf_model_weights({entry.path for _, entry in inventory}, model.uri)
+        materialize_inventory(ArtifactSource(model.uri, model.identity, str(local_path)), filesystem, inventory)
+        if model.revision != manifest.revision:
+            refs = (cache_root / "refs").resolve()
+            ref = (refs / model.revision).resolve()
+            ref.relative_to(refs)
+            ref.parent.mkdir(parents=True, exist_ok=True)
+            ref.write_text(manifest.revision)
+        return local_path
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            f"Hugging Face mirror is missing or expired: {model.uri}; "
+            "relaunch the experiment so its CPU coordinator refreshes the model cache"
+        ) from error
 
 
 def stage_hugging_face_models(config: DictConfig) -> None:

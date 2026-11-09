@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ from huggingface_hub.hf_api import RepoFile
 from loguru import logger
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.filesystem.storage_path import StoragePath
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -116,7 +118,10 @@ class _MirroredSnapshot:
 
 def load_model_manifest(model_uri: str) -> ModelManifest:
     marker_uri = join_resource_path(model_uri, MODEL_MANIFEST_FILENAME)
-    return ModelManifest.from_mapping(read_json(marker_uri), marker_uri)
+    payload = read_json(marker_uri)
+    if payload is None:
+        raise FileNotFoundError(f"Model mirror manifest is missing: {marker_uri}")
+    return ModelManifest.from_mapping(payload, marker_uri)
 
 
 def _cached_manifest(
@@ -133,7 +138,7 @@ def _cached_manifest(
     # identifies a partial cache that the next lock holder can rebuild.
     try:
         manifest = load_model_manifest(cache_uri)
-    except ValueError:
+    except (FileNotFoundError, ValueError):
         return None
     if manifest.model_id != model_id or manifest.revision != revision or manifest.tokenizer_mode != tokenizer_mode:
         return None
@@ -455,6 +460,7 @@ def publish_hugging_face_snapshot(
     model_id: str,
     revision: str,
     tokenizer_mode: Literal["embedded", "policy"] = "embedded",
+    refresh_before: datetime | None = None,
 ) -> ModelManifest:
     """Stream a pinned Hub snapshot into object storage and publish its manifest last."""
     model_source = f"{model_id}@{revision}"
@@ -502,6 +508,8 @@ def publish_hugging_face_snapshot(
         revision,
         tokenizer_mode=tokenizer_mode,
     )
+    if refresh_before is not None:
+        _refresh_model_files(destination_uri, manifest, before=refresh_before)
     expected_paths = set(manifest_files) | {MODEL_MANIFEST_FILENAME}
     _remove_unexpected_files(destination_filesystem, destination_root, expected_paths)
     manifest_bytes = (json.dumps(manifest.model_dump(mode="json"), indent=2, sort_keys=True) + "\n").encode()
@@ -526,6 +534,14 @@ def publish_hugging_face_snapshot(
     return manifest
 
 
+def _refresh_model_files(model_uri: str, manifest: ModelManifest, *, before: datetime) -> None:
+    # Refresh shards before metadata, and leave the completion marker to the caller.
+    # A failed refresh must not publish a new marker over aging or missing weights.
+    files = sorted(manifest.files, key=lambda entry: (not _is_weight(entry.path), entry.path))
+    for entry in files:
+        StoragePath(join_resource_path(model_uri, entry.path)).refresh_lifetime(before=before)
+
+
 def ensure_hugging_face_model_cache(
     model_id: str,
     revision: str,
@@ -542,19 +558,32 @@ def ensure_hugging_face_model_cache(
         prefix=f"{_CACHE_PREFIX}/{immutable_model_cache_key(cache_identity, revision)}",
         source_prefix=source_prefix,
     ).rstrip("/")
-    if manifest := _cached_manifest(cache_uri, model_id, revision, tokenizer_mode):
-        return cache_uri, manifest
-
+    # Use the actual lifecycle prefix because the bucket router can clamp the requested TTL.
+    effective_ttl = next(
+        (
+            int(part[4:-1])
+            for part in StoragePath(cache_uri).segments
+            if part.startswith("ttl=") and part.endswith("d") and part[4:-1].isdigit()
+        ),
+        ttl_days,
+    )
+    refresh_before = datetime.now(UTC) - timedelta(days=effective_ttl / 2)
     lock = create_lock(f"{cache_uri}.lock")
     while not lock.try_acquire():
-        if manifest := _cached_manifest(cache_uri, model_id, revision, tokenizer_mode):
-            return cache_uri, manifest
         time.sleep(_CACHE_POLL_INTERVAL)
 
     try:
-        if manifest := _cached_manifest(cache_uri, model_id, revision, tokenizer_mode):
-            return cache_uri, manifest
         with lease_refresh(lock):
+            if manifest := _cached_manifest(cache_uri, model_id, revision, tokenizer_mode):
+                try:
+                    _refresh_model_files(cache_uri, manifest, before=refresh_before)
+                    StoragePath(join_resource_path(cache_uri, MODEL_MANIFEST_FILENAME)).refresh_lifetime(
+                        before=refresh_before
+                    )
+                except FileNotFoundError:
+                    logger.info("Hugging Face mirror lost files to expiry; repairing: {}", cache_uri)
+                else:
+                    return cache_uri, manifest
             with hugging_face_hub_online():
                 snapshot = _open_hugging_face_snapshot(model_id, revision)
                 manifest = publish_hugging_face_snapshot(
@@ -563,6 +592,7 @@ def ensure_hugging_face_model_cache(
                     model_id=model_id,
                     revision=revision,
                     tokenizer_mode=tokenizer_mode,
+                    refresh_before=refresh_before,
                 )
         return cache_uri, manifest
     finally:

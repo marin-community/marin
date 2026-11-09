@@ -356,3 +356,21 @@ def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, mo
     )
     assert (path / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
     assert not (cache / "models--org--teacher").exists()
+
+
+@pytest.mark.parametrize("missing", ["model.safetensors", ".marinskyrl-model-manifest.json"])
+def test_expired_node_mirror_requests_a_cpu_relaunch(tmp_path, monkeypatch, missing):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        _memory_model_snapshot(f"expired-source/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    (mirror / missing).unlink()
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    locator = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity)
+    with pytest.raises(FileNotFoundError, match="relaunch.*CPU coordinator"):
+        task_runtime.stage_model(locator)
+    assert not tuple(cache.glob("**/model.safetensors"))
