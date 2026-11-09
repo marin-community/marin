@@ -91,6 +91,30 @@ def test_top_level_import_reaches_transitive_dependents(tmp_path: Path) -> None:
     assert "zephyr" not in scopes_in(matrix), "a lazy import must not propagate"
 
 
+def test_taskforge_source_change_selects_external_importers_and_its_dedicated_suite(tmp_path: Path) -> None:
+    write(tmp_path, "lib/taskforge/src/taskforge/__init__.py")
+    write(tmp_path, "lib/taskforge/src/taskforge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/driver.py", "from taskforge.events import Event\n")
+    write(tmp_path, "lib/iris/tests/test_driver.py", "from iris import driver\n")
+
+    selection = select_changed_tests(["lib/taskforge/src/taskforge/events.py"], tmp_path)
+
+    assert leg_paths(selection.matrix, "iris") == ["lib/iris/tests/test_driver.py"]
+    assert "taskforge-unit" in selection.suites
+
+
+@pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
+def test_taskforge_source_change_runs_affected_taskforge_tests_locally_and_in_ci(
+    tmp_path: Path, select_tests: Callable[..., SelectionResult]
+) -> None:
+    write(tmp_path, "lib/taskforge/src/taskforge/__init__.py")
+    write(tmp_path, "lib/taskforge/src/taskforge/events.py", "class Event: pass\n")
+    write(tmp_path, "lib/taskforge/tests/test_events.py", "from taskforge.events import Event\n")
+    selection = select_tests(["lib/taskforge/src/taskforge/events.py"], tmp_path)
+    assert leg_paths(selection.matrix, "taskforge") == ["lib/taskforge/tests/test_events.py"]
+
+
 def test_selection_is_empty_when_nothing_depends_on_the_change(tmp_path: Path) -> None:
     _workspace(tmp_path)
     write(tmp_path, "lib/rigging/src/rigging/unused.py", "X = 1\n")
@@ -447,11 +471,12 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
-        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
+        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel", "taskforge-unit"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("lib/taskforge/src/taskforge/unimported.py", ["taskforge-unit"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -475,15 +500,6 @@ def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path
     selection = select_changed_tests([path], tmp_path)
 
     assert "harbor-unit" in selection.suites
-
-
-@pytest.mark.parametrize(
-    "path", ["experiments/post_training/capability_driven_envs/generate_tasks.py", "experiments/post_training/glm.py"]
-)
-def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path, path: str) -> None:
-    selection = select_changed_tests([path], tmp_path)
-
-    assert "taskforge-unit" in selection.suites
 
 
 @pytest.mark.parametrize(

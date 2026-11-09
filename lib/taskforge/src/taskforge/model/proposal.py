@@ -1,0 +1,302 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Source: Taskforge integration 9807c5cfb3, stage10_proposal/model.py.
+
+"""Typed proposal JSON with a Markdown body.
+
+The JSON object holds ``header`` and ``body``. Parsing checks the environment,
+research decision and citations, and the ordered Markdown section headings.
+Canonical rendering sorts keys and normalizes body whitespace, so formatting
+alone does not change a proposal's content digest. Generation uses the JSON
+schema derived from these same dataclasses; semantic checks run after decoding.
+"""
+
+import json
+import re
+from dataclasses import dataclass, replace
+from enum import StrEnum
+from pathlib import PurePosixPath
+from typing import Annotated
+
+from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, model_validator, with_config
+from verifyit.json_objects import unique_object
+
+from taskforge.model.content_hash import digest, pretty_json
+
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+CODE_FENCES = ("```", "~~~")
+FENCE_INDENT = " \t"
+
+REQUIRED_HEADINGS = (
+    "Task",
+    "Realism and workflow",
+    "Research plan",
+    "Build plan",
+    "Grader design and controls",
+    "Risks and null conditions",
+)
+
+RESEARCH_CITATION = re.compile(r"research\[(\d+)\]")
+
+
+class SourceKind(StrEnum):
+    CAPABILITY = "capability"
+    REPO = "repo"
+
+
+class Environment(StrEnum):
+    """What the solver works in: a prompt only, a simulated shell, or a real container."""
+
+    REASONING = "reasoning"
+    SHELLSIM = "shellsim"
+    CONTAINER = "container"
+
+
+class Verification(StrEnum):
+    """How the private evaluator grades.
+
+    ``answer_in_box``: a generic match of a final answer whose format is unambiguous (exact, numeric, math,
+    choice). ``code``: the usual kind; the task states an exact answer structure (named fields, a units field
+    per quantity, enumerated labels) that the grader parses strictly against build-computed ground truth, or
+    the work is what only execution can judge (behavioural tests, running systems). ``decision_model``: a
+    decision model compares the answer with the reference answer against a rubric, only where fields cannot
+    capture the answer, and its fooling cases must earn no credit. ``llm_as_judge``: a model judge
+    for deliverables whose prose is the product. ``composite``: a weighted list of the other kinds
+    (``CompositePart``). Composite documents parse, but lowering requires a single supported grader.
+    """
+
+    ANSWER_IN_BOX = "answer_in_box"
+    DECISION_MODEL = "decision_model"
+    CODE = "code"
+    LLM_AS_JUDGE = "llm_as_judge"
+    COMPOSITE = "composite"
+
+
+COMPOSITE_MIN_PARTS = 2
+COMPOSITE_WEIGHT_TOLERANCE = 1e-6
+"""How far the parts' weights may sum from 1."""
+
+
+class Grounding(StrEnum):
+    """Whether the proposal's factual claims were checked against a real source before triage."""
+
+    UNVERIFIED = "unverified"
+    GROUNDED = "grounded"
+
+
+class ResearchKind(StrEnum):
+    WEB = "web"
+    GITHUB = "github"
+
+
+class ResearchNeed(StrEnum):
+    """Whether the build depends on external facts or artifacts that must be looked up."""
+
+    NEEDED = "needed"
+    NOT_NEEDED = "not_needed"
+
+
+class ProposalFormatError(ValueError):
+    """The document does not match the proposal format; the message names the field."""
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True, slots=True)
+class SourceRef:
+    """Where the proposal came from: a catalog capability id or a repository, and its content hash."""
+
+    kind: SourceKind
+    ref: Text
+    hash: Text
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True, slots=True)
+class ResearchItem:
+    kind: ResearchKind
+    purpose: Text
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True, slots=True)
+class BuildItem:
+    """One named build artifact and a one-line description; the body explains it."""
+
+    name: Text
+    description: Text
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True, slots=True)
+class CompositePart:
+    """One part of a composite verification: a grader of ``kind`` and its share of the reward.
+
+    For now a composite is deliberately strict: a weighted list of the other kinds, repeats allowed, whose
+    weights sum to 1. It is meant to become an arbitrary program over graders.
+    """
+
+    kind: Verification
+    weight: Annotated[float, Field(strict=True, gt=0, le=1)]
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True, slots=True)
+class ProposalHeader:
+    id: Text
+    source: SourceRef
+    environment: Environment
+    verification: Verification
+    composite: tuple[CompositePart, ...]
+    grounding: Grounding
+    research_need: ResearchNeed
+    research_reason: Text
+    research: tuple[ResearchItem, ...]
+    build: tuple[BuildItem, ...]
+    resources: tuple[Text, ...]
+    null_reason: Text | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_header(cls, value: object) -> object:
+        """Existing input catalogs carry solver_machine; environment is now the sole choice."""
+        return {k: v for k, v in value.items() if k != "solver_machine"} if isinstance(value, dict) else value
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True, slots=True)
+class TaskProposal:
+    header: ProposalHeader
+    body: str
+
+    @property
+    def digest(self) -> str:
+        return digest(replace(self, body=_canonical_body(self.body)))
+
+
+def render(p: TaskProposal) -> str:
+    """Return the canonical JSON of ``p``."""
+    return pretty_json(replace(p, body=_canonical_body(p.body))) + "\n"
+
+
+def _canonical_body(body: str) -> str:
+    lines = [line.rstrip() for line in body.replace("\r\n", "\n").strip().split("\n")]
+    return "\n".join(lines) + "\n"
+
+
+def parse(text: str) -> TaskProposal:
+    """Parse and validate a proposal document; raise ``ProposalFormatError`` naming the bad field."""
+    try:
+        proposal = TASK_PROPOSAL.validate_python(json.loads(text, object_pairs_hook=unique_object))
+    except ValueError as error:
+        raise ProposalFormatError(str(error)) from error
+    header, body = proposal.header, proposal.body
+    check_composite(header)
+    _check_build(header)
+    if header.null_reason is None:
+        _check_headings(body)
+    elif not body.strip():
+        raise ProposalFormatError("body: a null proposal still needs a body explaining the null reason")
+    _check_research(header, body)
+    return TaskProposal(header=header, body=_canonical_body(body))
+
+
+def _heading_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Index and text of each level-two heading in ``lines``, ignoring lines inside fenced code blocks."""
+    headings = []
+    fence: str | None = None
+    for i, line in enumerate(lines):
+        marker = line.lstrip(FENCE_INDENT)[:3]
+        if fence is None and marker in CODE_FENCES:
+            fence = marker
+        elif fence is not None and marker == fence:
+            fence = None
+        elif fence is None and line.startswith("## "):
+            headings.append((i, line[3:].strip()))
+    return headings
+
+
+def _headings(body: str) -> list[str]:
+    return [heading for _, heading in _heading_lines(body.split("\n"))]
+
+
+def body_sections(body: str) -> dict[str, str]:
+    """Map each level-two heading in ``body`` to the text under it, up to the next level-two heading.
+
+    Headings inside fenced code blocks are ignored; a repeated heading's sections are joined.
+    """
+    lines = body.split("\n")
+    headings = _heading_lines(lines)
+    ends = [i for i, _ in headings[1:]] + [len(lines)]
+    sections: dict[str, list[str]] = {}
+    for (start, heading), end in zip(headings, ends, strict=True):
+        sections.setdefault(heading, []).extend(lines[start + 1 : end])
+    return {heading: "\n".join(text).strip() for heading, text in sections.items()}
+
+
+def _check_headings(body: str) -> None:
+    found = _headings(body)
+    required = [h for h in found if h in REQUIRED_HEADINGS]
+    missing = [h for h in REQUIRED_HEADINGS if h not in found]
+    if missing:
+        raise ProposalFormatError(f"body: missing required heading(s) {['## ' + h for h in missing]}")
+    if required != list(REQUIRED_HEADINGS):
+        raise ProposalFormatError(
+            f"body: required headings must appear once each in the order {list(REQUIRED_HEADINGS)}; found {required}"
+        )
+
+
+def check_composite(header: ProposalHeader) -> None:
+    """A composite lists at least ``COMPOSITE_MIN_PARTS`` parts whose weights sum to 1; other kinds list none.
+
+    A null proposal may leave a composite's parts empty: it is never built.
+
+    Raises:
+        ProposalFormatError: the parts contradict the verification.
+    """
+    parts = header.composite
+    if any(part.kind is Verification.COMPOSITE for part in parts):
+        raise ProposalFormatError("composite: a part may be any kind but composite")
+    if header.verification is not Verification.COMPOSITE:
+        if parts:
+            raise ProposalFormatError(f"composite: verification is {header.verification}, so composite must be []")
+        return
+    if not parts and header.null_reason is not None:
+        return
+    if len(parts) < COMPOSITE_MIN_PARTS:
+        raise ProposalFormatError(f"composite: a composite verification lists at least {COMPOSITE_MIN_PARTS} parts")
+    total = sum(part.weight for part in parts)
+    if abs(total - 1) > COMPOSITE_WEIGHT_TOLERANCE:
+        raise ProposalFormatError(f"composite: the parts' weights sum to {total}, not 1")
+
+
+def _check_research(header: ProposalHeader, body: str) -> None:
+    """The research decision agrees with the list, and a non-null body cites exactly the listed items."""
+    count = len(header.research)
+    if header.research_need is ResearchNeed.NEEDED and not count:
+        raise ProposalFormatError("research: research_need is needed but research is empty")
+    if header.research_need is ResearchNeed.NOT_NEEDED and count:
+        raise ProposalFormatError(f"research: research_need is not_needed but research lists {count} items")
+    if header.null_reason is not None:
+        return
+    cited = {int(index) for index in RESEARCH_CITATION.findall(body)}
+    for index in sorted(cited):
+        if index >= count:
+            raise ProposalFormatError(f"body: cites research[{index}] but research has {count} items")
+    for index in range(count):
+        if index not in cited:
+            raise ProposalFormatError(f"body: research[{index}] is never cited as research[{index}]")
+
+
+def _check_build(header: ProposalHeader) -> None:
+    names = [item.name for item in header.build]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        raise ProposalFormatError(f"build: names repeat: {repeated}")
+    escaping = [r for r in header.resources if PurePosixPath(r).is_absolute() or ".." in PurePosixPath(r).parts]
+    if escaping:
+        raise ProposalFormatError(f"resources: must be relative paths inside the build root: {escaping}")
+
+
+TASK_PROPOSAL = TypeAdapter(TaskProposal)
