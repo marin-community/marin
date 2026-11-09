@@ -241,3 +241,15 @@ def test_unversioned_runs_have_their_own_cohort_entry(journey: Journey) -> None:
     journey.sees("Runs launched without a version label")
     expect(journey.page.locator("tr").filter(has_text="llama3-8b")).to_have_count(2)
     expect(journey.page.locator("tr").filter(has_text="snowball")).to_have_count(0)
+
+
+def test_a_cross_cohort_comparison_names_each_cell_cohort_and_links_its_run(journey: Journey) -> None:
+    comparison = cast(dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,qwen3-8b"))
+    row = next(row for row in comparison["rows"] if len(row["cells"]) == 2)
+    cell = row["cells"]["qwen3-8b"]
+
+    journey.visit("/compare?cohort=all&models=snowball,qwen3-8b")
+    link = journey.page.get_by_role("link", name=cell["version"], exact=True).first
+    expect(link).to_be_visible()
+    link.click()
+    journey.page.wait_for_url(re.compile(r"/runs/"))
