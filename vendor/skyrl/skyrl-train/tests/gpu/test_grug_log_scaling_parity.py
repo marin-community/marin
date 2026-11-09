@@ -1,15 +1,19 @@
 """Megatron Grug log scaling against the committed JAX Hero oracle.
 
 The oracle is a tiny Hero-shaped model whose floor is 16 keys, so most positions of its two documents
-are scaled, and whose log-probabilities move by 0.35 to 0.6 nats when log scaling is turned off. Megatron
-must match the scaled oracle unpacked, packed, and packed under CP2, where each document's positions
-come from the zigzag chunks. With the config fields null, it must match the unscaled oracle instead.
+are scaled. Megatron runs in bf16, which its packed and context-parallel attention kernels require, so
+the gate is set by the noise in the same run: queries that see at most 16 keys have a factor of 1, and
+Megatron's error there is the bf16 noise floor. Past the floor, the error against the right oracle must
+stay within NOISE_RATIO of that floor, and the wrong oracle must be WRONG_ORACLE_RATIO further away.
+Megatron must pass unpacked, packed, and packed under CP2, with the log scaling fields set and null. A
+checkpoint whose power is 1 instead of the oracle's 2 must fail the same gate.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -23,8 +27,6 @@ from skyrl_train.utils import initialize_ray
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_tiny_checkpoint import TOKENIZER
 from tests.gpu.test_grug_megatron import (
-    LOGPROB_MAX_ABS_TOLERANCE,
-    LOGPROB_MEAN_ABS_TOLERANCE,
     _config,
     _init_policy,
     _megatron_response_logprobs,
@@ -34,16 +36,17 @@ ORACLE_DIR = Path(__file__).parents[1] / "fixtures" / "grug_log_scaling_oracle"
 LOG_SCALING_FIELDS = ("log_scaling_n_floor", "log_scaling_alpha", "log_scaling_power")
 LEFT_PADDING = (3, 0)
 PAD_TOKEN_ID = 0
-# The wrong oracle must sit this many times further from Megatron than the right one.
-NEGATIVE_CONTROL_RATIO = 5.0
+# Queries before this prediction index see at most the floor's 16 keys, so their factor is exactly 1.
+FLOOR_PREDICTIONS = 16
+NOISE_RATIO = 1.5
+WRONG_ORACLE_RATIO = 2.0
 
 
-def _write_checkpoint(path: Path, *, log_scaling: bool) -> None:
+def _write_checkpoint(path: Path, config_overrides: dict) -> None:
     path.mkdir()
     shutil.copy(ORACLE_DIR / "model.safetensors", path / "model.safetensors")
     config = json.loads((ORACLE_DIR / "config.json").read_text())
-    if not log_scaling:
-        config.update(dict.fromkeys(LOG_SCALING_FIELDS))
+    config.update(config_overrides)
     (path / "config.json").write_text(json.dumps(config))
     AutoTokenizer.from_pretrained(TOKENIZER).save_pretrained(path)
 
@@ -85,28 +88,36 @@ def _document_logprobs(output: torch.Tensor, documents: list[np.ndarray]) -> lis
     ]
 
 
-def _mean_and_max_error(actual: list[np.ndarray], expected: list[np.ndarray]) -> tuple[float, float]:
-    errors = np.concatenate([np.abs(a - e) for a, e in zip(actual, expected, strict=True)])
-    return float(errors.mean()), float(errors.max())
+@dataclass(frozen=True)
+class Gate:
+    noise_floor: float
+    past_floor_error: float
+    wrong_oracle_error: float
+
+    @property
+    def passed(self) -> bool:
+        return (
+            self.past_floor_error <= NOISE_RATIO * self.noise_floor
+            and self.wrong_oracle_error >= WRONG_ORACLE_RATIO * self.past_floor_error
+        )
 
 
-@pytest.mark.parametrize("log_scaling", [True, False], ids=["log_scaling", "null_fields"])
-@pytest.mark.parametrize(
-    ("packing", "context_parallel_size"),
-    [(False, 1), (True, 1), (True, 2)],
-    ids=["unpacked", "packed_cp1", "packed_cp2"],
-)
-def test_grug_megatron_log_scaling_matches_jax(tmp_path, log_scaling, packing, context_parallel_size):
-    require_hoppers(context_parallel_size)
-    with np.load(ORACLE_DIR / "observations.npz") as archive:
-        oracle = {name: archive[name] for name in archive.files}
-    documents = [oracle["tokens_0"], oracle["tokens_1"]]
-    scaled = [oracle["logprobs_on_0"], oracle["logprobs_on_1"]]
-    unscaled = [oracle["logprobs_off_0"], oracle["logprobs_off_1"]]
-    expected, other = (scaled, unscaled) if log_scaling else (unscaled, scaled)
+def _gate(actual: list[np.ndarray], expected: list[np.ndarray], wrong: list[np.ndarray]) -> Gate:
+    def errors(oracle, below_floor):
+        part = slice(None, FLOOR_PREDICTIONS) if below_floor else slice(FLOOR_PREDICTIONS, None)
+        return float(np.concatenate([np.abs(a - o)[part] for a, o in zip(actual, oracle, strict=True)]).mean())
 
+    gate = Gate(errors(expected, True), errors(expected, False), errors(wrong, False))
+    print(
+        f"log scaling gate: noise floor {gate.noise_floor:.4f}, past-floor error {gate.past_floor_error:.4f}, "
+        f"wrong oracle {gate.wrong_oracle_error:.4f}, passed {gate.passed}"
+    )
+    return gate
+
+
+def _megatron_logprobs(tmp_path: Path, config_overrides: dict, packing: bool, context_parallel_size: int, documents):
     model_path = tmp_path / "model"
-    _write_checkpoint(model_path, log_scaling=log_scaling)
+    _write_checkpoint(model_path, config_overrides)
     cfg = _config(str(model_path), world_size=context_parallel_size, pp=1, ep=1)
     cfg.trainer.flash_attn = True
     cfg.trainer.use_sample_packing = packing
@@ -119,13 +130,39 @@ def test_grug_megatron_log_scaling_matches_jax(tmp_path, log_scaling, packing, c
     initialize_ray(cfg)
     try:
         policy = _init_policy(cfg, context_parallel_size)
-        actual = _document_logprobs(_megatron_response_logprobs(policy, batch), documents)
+        return _document_logprobs(_megatron_response_logprobs(policy, batch), documents)
     finally:
         ray.shutdown()
 
-    mean_error, max_error = _mean_and_max_error(actual, expected)
-    control_error, _ = _mean_and_max_error(actual, other)
-    print(f"log scaling parity: mean {mean_error:.4f}, max {max_error:.4f}; wrong oracle mean {control_error:.4f}")
-    assert mean_error < LOGPROB_MEAN_ABS_TOLERANCE
-    assert max_error < LOGPROB_MAX_ABS_TOLERANCE
-    assert control_error > NEGATIVE_CONTROL_RATIO * mean_error
+
+def _oracle() -> dict[str, list[np.ndarray]]:
+    with np.load(ORACLE_DIR / "observations.npz") as archive:
+        return {name: [archive[f"{name}_0"], archive[f"{name}_1"]] for name in ("tokens", "logprobs_on", "logprobs_off")}
+
+
+@pytest.mark.parametrize("log_scaling", [True, False], ids=["log_scaling", "null_fields"])
+@pytest.mark.parametrize(
+    ("packing", "context_parallel_size"),
+    [(False, 1), (True, 1), (True, 2)],
+    ids=["unpacked", "packed_cp1", "packed_cp2"],
+)
+def test_grug_megatron_log_scaling_matches_jax(tmp_path, log_scaling, packing, context_parallel_size):
+    require_hoppers(context_parallel_size)
+    oracle = _oracle()
+    overrides = {} if log_scaling else dict.fromkeys(LOG_SCALING_FIELDS)
+    expected, wrong = (
+        (oracle["logprobs_on"], oracle["logprobs_off"]) if log_scaling else (oracle["logprobs_off"], oracle["logprobs_on"])
+    )
+
+    actual = _megatron_logprobs(tmp_path, overrides, packing, context_parallel_size, oracle["tokens"])
+
+    assert _gate(actual, expected, wrong).passed
+
+
+def test_gate_rejects_the_wrong_log_scaling_power(tmp_path):
+    require_hoppers(1)
+    oracle = _oracle()
+
+    actual = _megatron_logprobs(tmp_path, {"log_scaling_power": 1.0}, False, 1, oracle["tokens"])
+
+    assert not _gate(actual, oracle["logprobs_on"], oracle["logprobs_off"]).passed

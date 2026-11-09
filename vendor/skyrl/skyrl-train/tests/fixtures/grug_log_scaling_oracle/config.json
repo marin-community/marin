@@ -15,7 +15,7 @@
     "0": "LABEL_0",
     "1": "LABEL_1"
   },
-  "initializer_range": 0.25,
+  "initializer_range": 0.125,
   "is_encoder_decoder": false,
   "label2id": {
     "LABEL_0": 0,

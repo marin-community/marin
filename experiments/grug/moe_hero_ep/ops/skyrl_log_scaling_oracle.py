@@ -58,7 +58,9 @@ ORACLE_MODEL = dataclasses.replace(
     global_every=2,
     # Every token keeps its experts, as in Megatron's dropless dispatch.
     capacity_factor=8.0,
-    initializer_std=2.0 / math.sqrt(64),
+    # Twice the Hero's 0.5 / sqrt(hidden): log scaling moves past-floor log-probabilities by about 12x
+    # the bf16 noise, and that noise is the same below and past the floor.
+    initializer_std=1.0 / math.sqrt(64),
     log_scaling_n_floor=16,
     log_scaling_alpha=1.0,
     log_scaling_power=2.0,
