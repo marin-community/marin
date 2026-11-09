@@ -1474,6 +1474,18 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                         # ID-only captures expose IDs and numeric scores only. The
                         # separate response detokenizer still produces the text.
                         state.logprobs_processor.tokenizer = None
+                    logprobs = output.new_logprobs
+                    if (
+                        logprobs is not None
+                        and state.logprobs_processor.num_logprobs == 0
+                        and logprobs.logprob_token_ids.shape[-1] > 1
+                    ):
+                        # A capturing neighbor widens every row in a decode batch.
+                        # Ordinary requests retain only the first, sampled column;
+                        # drop unused heads before vLLM decodes their token strings.
+                        output.new_logprobs = logprobs._replace(
+                            logprob_token_ids=logprobs.logprob_token_ids[:, :1], logprobs=logprobs.logprobs[:, :1]
+                        )
                     self._policy_steps.observe(state.external_req_id, len(output.new_token_ids), engine_core_timestamp)
             return process_outputs(engine_core_outputs, engine_core_timestamp, iteration_stats)
 
