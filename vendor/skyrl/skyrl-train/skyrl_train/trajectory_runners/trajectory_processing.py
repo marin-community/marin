@@ -753,7 +753,7 @@ def prepare_trajectory_request(
     n_samples_per_prompt: int,
     sampling_params: Dict[str, Any],
     training_phase: TrainingPhase,
-    global_step: int,
+    global_step: int | None,
 ) -> Tuple[TrajectoryRequestBatch, List[str]]:
     """Return repeated typed inputs with attempt IDs and one UID per repeated input."""
     inputs = tuple(row["input"] for row in rows for _ in range(n_samples_per_prompt))

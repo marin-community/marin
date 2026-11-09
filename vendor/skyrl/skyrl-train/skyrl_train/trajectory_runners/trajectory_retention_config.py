@@ -28,6 +28,7 @@ class TrajectoryRetentionConfig:
     redact_fields: tuple[str, ...] = ()
     model_path: str | None = None
     model_source_identity: str | None = None
+    model_checkpoint_step: int | None = None
     resume_path: str | None = None
     inference_backend: str | None = None
 
@@ -74,6 +75,7 @@ def parse_trajectory_retention_config(config: Mapping[str, Any] | None) -> Traje
         redact_fields=tuple(str(field) for field in redact_value),
         model_path=_optional_string(config.get("model_path", defaults.model_path)),
         model_source_identity=_optional_string(config.get("model_source_identity", defaults.model_source_identity)),
+        model_checkpoint_step=_optional_int(config.get("model_checkpoint_step", defaults.model_checkpoint_step)),
         resume_path=_optional_string(config.get("resume_path", defaults.resume_path)),
         inference_backend=_optional_string(config.get("inference_backend", defaults.inference_backend)),
     )

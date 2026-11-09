@@ -192,6 +192,12 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
         run = step.build_config(ctx)
         launch = yaml.safe_load(run.launch_config_yaml)
         model = launch["inputs"]["model"]
+        launch["skyrl"]["generator"]["trajectory_retention"].update(
+            model_path=model["uri"],
+            model_source_identity=model["identity"],
+            model_checkpoint_step=3,
+        )
+        run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         if not ctx.is_fingerprint:
             exact_config = read_json(model["uri"].rstrip("/") + "/config.json")
             validate_context_evidence(
