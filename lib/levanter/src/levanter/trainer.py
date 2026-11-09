@@ -73,7 +73,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
-from levanter.fp32_fields import check_fp32_fields, with_fp32_fields
+from levanter.field_dtype_overrides import check_field_dtype_overrides, with_field_dtype_overrides
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -342,7 +342,7 @@ class Trainer:
 
     @property
     def mp(self) -> jmp.Policy:
-        """Returns the mixed precision policy, with ``fp32_fields`` kept in float32"""
+        """Returns the mixed precision policy, with ``field_dtype_overrides`` applied"""
         return self.config.precision_policy
 
     @property
@@ -476,7 +476,7 @@ class Trainer:
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
-            check_fp32_fields(model, self.config.fp32_fields)
+            check_field_dtype_overrides(model, self.config.field_dtype_overrides)
             # only force trainable params to param precision. Other params are cast to compute precision
             state = TrainerState.init(
                 self.optimizer,
@@ -876,10 +876,12 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
-    fp32_fields: tuple[str, ...] = ()
-    """Model attribute names, matched at any depth (e.g. ``router_bias``), that stay float32 everywhere.
+    field_dtype_overrides: dict[str, jnp.dtype] = field(default_factory=dict)
+    """Model attribute name, matched at any depth (e.g. ``router_bias``), to the floating dtype it keeps.
 
-    ``mp`` never casts them: not on load, not in the trainer state, not in the compute view and not in HF exports.
+    ``mp`` casts an overridden field only to its own dtype: in the trainer state and the compute view, on HF load in
+    train_lm, train_dpo and lora_lm, and in HF exports. The eval and sampling entry points still load HF checkpoints in
+    the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
     """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
@@ -915,8 +917,8 @@ class TrainerConfig:
 
     @property
     def precision_policy(self) -> jmp.Policy:
-        """``mp`` with ``fp32_fields`` kept in float32."""
-        return with_fp32_fields(self.mp, self.fp32_fields)
+        """``mp`` with ``field_dtype_overrides`` applied."""
+        return with_field_dtype_overrides(self.mp, self.field_dtype_overrides)
 
     @property
     def batch_axis_name(self) -> str | None:

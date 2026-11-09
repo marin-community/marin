@@ -32,6 +32,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.snowball import SnowballConfig
@@ -181,8 +182,7 @@ def _load_lm_model_from_configured_source(
             # Passing None here would reload a second time and discard those settings.
             config=config.model,
             axis_mapping=parameter_axis_mapping,
-            # Load fp32 fields at their stored dtype; casting the whole model to compute dtype here would round them.
-            dtype=None if config.trainer.fp32_fields else trainer.mp.compute_dtype,
+            dtype=hf_load_dtype(trainer.mp),
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
@@ -207,8 +207,8 @@ def _load_lm_model_from_configured_source(
 
 def main(config: TrainLmConfig):
     if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
-        if "router_bias" not in config.trainer.fp32_fields:
-            raise ValueError("FP32 router dot requires trainer.fp32_fields to include router_bias")
+        if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
+            raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
