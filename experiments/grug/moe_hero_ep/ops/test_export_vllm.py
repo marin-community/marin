@@ -25,26 +25,23 @@ from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 
-def test_log_scaled_config_round_trips_through_the_hf_config_at_schema_3():
-    model = GrugModelConfig(vocab_size=32, log_scaling_n_floor=16, log_scaling_alpha=0.1, log_scaling_power=2.0)
+@pytest.mark.parametrize(
+    "log_scaling",
+    [
+        {"log_scaling_n_floor": 16, "log_scaling_alpha": 0.1, "log_scaling_power": 2.0},
+        {"log_scaling_n_floor": None, "log_scaling_alpha": None, "log_scaling_power": None},
+    ],
+)
+def test_hf_config_round_trips_log_scaling_at_schema_3(log_scaling):
+    model = GrugModelConfig(vocab_size=32, **log_scaling)
 
-    hf_config = model.to_hf_config(model.vocab_size).to_dict()
+    hf_config = model.to_hf_config(model.vocab_size)
+    loaded = GrugModelConfig.from_hf_config(hf_config)
 
-    assert hf_config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
-    assert (hf_config["log_scaling_n_floor"], hf_config["log_scaling_alpha"], hf_config["log_scaling_power"]) == (
-        16,
-        0.1,
-        2.0,
-    )
-    loaded = GrugModelConfig.from_hf_config(model.to_hf_config(model.vocab_size))
-    assert (loaded.log_scaling_n_floor, loaded.log_scaling_alpha, loaded.log_scaling_power) == (16, 0.1, 2.0)
-
-
-def test_config_without_log_scaling_keeps_schema_2_and_omits_the_fields():
-    hf_config = GrugModelConfig(vocab_size=32).to_hf_config(32).to_dict()
-
-    assert hf_config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 2
-    assert not any(key.startswith("log_scaling") for key in hf_config)
+    serialized = hf_config.to_dict()
+    assert serialized[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
+    assert {name: serialized[name] for name in log_scaling} == log_scaling
+    assert {name: getattr(loaded, name) for name in log_scaling} == log_scaling
 
 
 def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:

@@ -101,10 +101,9 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
-# Schema 2 plus per-position log scaling of global queries. Serving stacks that predate log scaling reject
-# schema 3 instead of ignoring the log_scaling_* fields and serving the wrong temperature past the floor.
-GRUG_MOE_LOG_SCALING_ARTIFACT_SCHEMA_VERSION = 3
+# Schema 3 adds the log_scaling_* fields, null when off. Readers that predate it reject schema 3 instead of
+# ignoring the fields and serving the wrong temperature past the floor.
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 3
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -555,17 +554,12 @@ class GrugModelConfig:
             "sconv": self.sconv,
             "sconv_kernel": self.sconv_kernel,
             "sconv_sites": list(self.sconv_sites),
+            "log_scaling_n_floor": self.log_scaling_n_floor,
+            "log_scaling_alpha": self.log_scaling_alpha,
+            "log_scaling_power": self.log_scaling_power,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
-        # Exports without log scaling keep their schema-2 config.json byte for byte.
-        if self.log_scaling_n_floor is not None:
-            config.update(
-                log_scaling_n_floor=self.log_scaling_n_floor,
-                log_scaling_alpha=self.log_scaling_alpha,
-                log_scaling_power=self.log_scaling_power,
-            )
-            config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] = GRUG_MOE_LOG_SCALING_ARTIFACT_SCHEMA_VERSION
         if config_overrides is not None:
             config.update(config_overrides)
         return GrugMoeHfConfig(**config)
