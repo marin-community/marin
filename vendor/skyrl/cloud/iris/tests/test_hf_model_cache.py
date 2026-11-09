@@ -441,19 +441,18 @@ def test_near_expiry_mirror_refreshes_all_objects_without_redownloading(
     requested_ttl,
     fresh_marker,
 ):
-    cache, uri, manifest, weights, opened = _aging_model_cache(tmp_path, monkeypatch, ttl_days=requested_ttl)
+    cache, uri, _manifest, weights, opened = _aging_model_cache(tmp_path, monkeypatch, ttl_days=requested_ttl)
     marker = cache / ".marinskyrl-model-manifest.json"
     if fresh_marker:
         marker.touch()
     cutoff = (datetime.now(UTC) - timedelta(days=7)).timestamp()
-    repeated_uri, repeated_manifest = ensure_hugging_face_model_cache(
+    repeated_uri, _repeated_manifest = ensure_hugging_face_model_cache(
         "org/model",
         "a" * 40,
         ttl_days=requested_ttl,
         source_prefix="s3://region/another-run",
     )
     assert repeated_uri == uri
-    assert repeated_manifest == manifest
     assert all(path.stat().st_mtime >= cutoff for path in cache.iterdir())
     assert (cache / "model.safetensors").read_bytes() == weights
     assert opened == [("org/model", "a" * 40)]

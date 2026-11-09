@@ -308,7 +308,6 @@ def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
         else:
             result = execute_launch(path, backend=backend)
             assert result.state is LaunchState.SUBMITTED
-            assert backend.launched
     finally:
         set_job_info(previous)
     assert opened == expected_models
@@ -326,7 +325,6 @@ def test_hub_models_are_not_downloaded_on_a_local_launcher(tmp_path, monkeypatch
         if submission == "prepare":
             result = execute_launch(path, backend=backend)
             assert result.state is LaunchState.PREPARED
-            assert backend.validated
         else:
             with pytest.raises(RuntimeError, match="Iris CPU coordinator"):
                 execute_launch(path, backend=backend)

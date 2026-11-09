@@ -546,7 +546,6 @@ def _refresh_model_files(model_uri: str, manifest: ModelManifest, *, before: dat
     metadata = [entry.path for entry in manifest.files if not _is_weight(entry.path)]
     with ThreadPoolExecutor(max_workers=_REFRESH_PARALLELISM) as pool:
         for paths in (weights, metadata):
-            # list() waits for every copy in this group and re-raises the first failure.
             list(
                 pool.map(
                     lambda path: StoragePath(join_resource_path(model_uri, path)).refresh_lifetime(before=before),

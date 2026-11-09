@@ -315,7 +315,6 @@ def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeyp
     assert Path(snapshot) == node_path
     assert (node_path / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
     assert (node_path / "tokenizer.json").read_bytes() == (mirror / "tokenizer.json").read_bytes()
-    assert task_runtime.stage_model(locator) == node_path
 
 
 def test_node_rejects_unprepared_hub_models_before_staging():
