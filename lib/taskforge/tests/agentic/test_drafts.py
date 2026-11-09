@@ -493,7 +493,7 @@ async def test_one_blind_solve_that_the_grader_fails_shows_the_agent_its_answer(
     assert await tools.blind_solve_problems(task, expected) == [] and solver.calls == 1
 
 
-async def test_a_blind_solve_that_the_grader_passes_refuses_nothing():
+async def test_a_blind_solve_that_the_grader_passes_asks_once_for_a_harder_task():
     task = exact_task("example")
     [expected] = exact_expected(task)
     tools = DraftTools(
@@ -501,6 +501,8 @@ async def test_a_blind_solve_that_the_grader_passes_refuses_nothing():
         dataclasses.replace(config(ScriptedAgent([])), blind_solver=BlindSolver(expected)),
     )
 
+    [problem] = await tools.blind_solve_problems(task, expected)
+    assert "likely too easy" in problem
     assert await tools.blind_solve_problems(task, expected) == []
 
 

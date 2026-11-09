@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 DRAFT_TOOLS = "taskforge-drafts:v1"
 """The action interface of the draft tools, in the agent task's ``tool_providers``."""
 DRAFT_HARNESS = "taskforge-draft"
-DRAFT_REVISION = "16"
+DRAFT_REVISION = "17"
 """The revision of the draft agent task in the ``Source`` of each session."""
 DRAFT_MAX_ANSWER_SHARE = 0.625
 """The largest share of the variants of a draft's program that can have one reference answer. It is looser than
@@ -415,8 +415,10 @@ class DraftTools:
             logger.warning("The blind solve of %s did not run: %s", task.id, error.rollout.failure)
             return []
         grade = outcome.grade
-        if grade.status != Outcome.GRADED or grade.reward is None or grade_passed(grade):
+        if grade.status != Outcome.GRADED or grade.reward is None:
             return []
+        if grade_passed(grade):
+            return [BLIND_SOLVE_PASSED]
         return [blind_solve_failure(final_answer(outcome.rollout), right_answer, grade)]
 
     async def _grade(self, task: TaskSpec, answer: str) -> GradeResult | None:
@@ -434,6 +436,14 @@ class DraftTools:
         return grade
 
 
+BLIND_SOLVE_PASSED = (
+    "A blind solve, the drafting model answering the prompt without right_answer, passes the grader on its first try. "
+    "A later step drops a task that a solver passes in 8 of 8 tries, so this one is likely too easy. Make it harder "
+    "within the proposal's design: add a dependent step, or data that the solver must select from among irrelevant "
+    "values, then update right_answer and submit. This check runs once per session"
+)
+
+
 def blind_solve_failure(answer: str, right_answer: str, grade: GradeResult) -> str:
     """The answer of a blind solve that the grader fails, with the judge's failed criteria or reason."""
     detail = grade.detail or {}
@@ -446,8 +456,9 @@ def blind_solve_failure(answer: str, right_answer: str, grade: GradeResult) -> s
         f"{right_answer[:300]!r} on each graded value, verdict or label. Where the prompt's facts and rules also "
         "support the blind value, add the fact or rule that decides it, or make the grader credit both. Where "
         "right_answer contradicts the task's files, fix it. Where the grader requires something that the prompt "
-        "never asks for, ask for it in the prompt or drop it from the grader. Where the blind value is wrong by the "
-        "prompt's stated rules, the task is fine as it is: submit again. This check runs once per session"
+        "never asks for, ask for it in the prompt or drop it from the grader. Where the blind solve only got a hard "
+        "step wrong by the prompt's stated rules, keep that step as it is: it is what makes the task worth keeping, "
+        "so do not make the task easier to pass. This check runs once per session"
     )
 
 

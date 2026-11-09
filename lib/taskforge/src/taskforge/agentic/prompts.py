@@ -232,7 +232,8 @@ starts a value of right_answer.
 that asks for it. Ask in the prompt for any that has none, or drop it from the grader.
 - The first submit that passes every other check of a task with no solver machine runs one blind solve: the \
 drafting model answers the prompt without right_answer. If the grader fails that answer, submit shows it to you: \
-settle each graded value on which it differs, as that reply says.
+settle each graded value on which it differs, as that reply says, but keep a hard step that it only got wrong. If \
+the grader passes it, the task is likely too easy: make it harder before you submit again.
 - A judge's reference is the answer, never the task's text, which the solver sees. A judge question gives no \
 score scale, weights, caps or reply format: verifyit sets those. Set incomplete_retry_tokens to 32768, as the \
 judge example does.
