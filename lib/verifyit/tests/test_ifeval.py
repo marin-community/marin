@@ -429,6 +429,30 @@ CASES = [
         "My answer is no. Sorry about that.",
     ),
     (
+        "detectable_format:sentence_hyphens",
+        {},
+        "First sentence.-Second sentence.",
+        "First sentence.Second sentence.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "Is it done?-Yes!-Good.",
+        "Is it done?Yes!Good.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "Stop here.-Wait.",
+        "Stop here.\u2013Wait.",
+    ),
+    (
+        "detectable_format:sentence_hyphens",
+        {},
+        "The U.S.Army paid 3.5 dollars at example.com.-We met Dr.Smith.",
+        "The army paid.Then it left.",
+    ),
+    (
         "last_word:last_word_sent",
         {"last_word": "baseball"},
         "<<We love baseball!>> Everyone plays baseball.",
@@ -995,6 +1019,8 @@ CASES = [
             False,
         ),
         ("detectable_format:sentence_hyphens", {}, "Wait" + "!" * 40_000, True),
+        ("detectable_format:sentence_hyphens", {}, "U.S." * 25_000, True),
+        ("detectable_format:sentence_hyphens", {}, "Dr." * 33_000, True),
         ("detectable_content:number_placeholders", {"num_placeholders": 1}, "See [" + "a" * 100_000, False),
         ("detectable_format:title", {}, "<<" + "a" * 100_000, False),
         ("detectable_format:square_brackets", {}, " ".join(["[word]"] * 20_000), True),
@@ -1006,6 +1032,8 @@ CASES = [
     ids=[
         "sentence_marks",
         "hyphen_marks",
+        "initials_without_spaces",
+        "abbreviations_without_spaces",
         "open_bracket",
         "open_title",
         "many_brackets",

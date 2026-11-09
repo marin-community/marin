@@ -97,10 +97,18 @@ DOUBLE_ANGLE_SPAN = re.compile(r"<<((?:(?!<<|>>)[^\n])*)>>")
 JSON_FENCE = re.compile(r"^```(?:json)?[ \t]*\r?\n(.*)\n```\s*$", re.DOTALL)
 # One to three asterisks on each side; as in CommonMark, the span does not start or end with whitespace.
 MARKDOWN_HIGHLIGHT = re.compile(r"(?<!\*)(\*{1,3})(?![\s*])([^*\n]*?[^\s*])\1(?!\*)")
+# How far sentence_hyphens reads around final marks with no space after them for an initial, an abbreviation or an
+# address; a longer run without spaces is none of these, and the bound keeps a reply without spaces linear in length.
+TOKEN_WINDOW = 32
+# Dashes that are not hyphens, such as the en and em dashes; one does not join two sentences as a hyphen does.
+NON_HYPHEN_DASHES = "\u2012\u2013\u2014\u2015\u2e3a\u2e3b\ufe58"
 # A sentence end that no hyphen joins to the next sentence: final marks and any closers before
-# whitespace, or before a hyphen and whitespace; or a script's sentence-final marks and any closers
-# before anything but a hyphen and the next sentence.
-UNJOINED_SENTENCE_END = re.compile(rf"{FINAL_MARK_RUN}(?:\s|-\s)|{SCRIPT_MARK_RUN}(?!-\S|\s*$)")
+# whitespace, before a hyphen and whitespace, before a dash that is not a hyphen, or right before a
+# letter or digit, which sentence_hyphens reads as the next sentence's start or not; or a script's
+# sentence-final marks and any closers before anything but a hyphen and the next sentence.
+UNJOINED_SENTENCE_END = re.compile(
+    rf"{FINAL_MARK_RUN}(?:\s|-\s|(?=[{NON_HYPHEN_DASHES}]|[^\W_]))|{SCRIPT_MARK_RUN}(?!-\S|\s*$)"
+)
 # Exactly three asterisks; a longer run is not the divider.
 DIVIDER = r"(?<!\*)\*\*\*(?!\*)"
 DIVIDER_SPLIT = re.compile(rf"\s?{DIVIDER}\s?")
@@ -129,7 +137,7 @@ DOTS = ".\uff0e\ufe52\u2024\u2025\u2026"
 ANSWER_WRAPPING = re.compile(r'^(\*{1,2}|")(.*)\1$', re.DOTALL)
 # Abbreviations whose dot ends no sentence in detectable_format:sentence_hyphens. "No.", "Fig." and
 # "Vol." are ones only before a number, as in "No. 5", since "no", "fig" and "vol" are also words.
-ABBREVIATIONS = frozenset({"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "etc", "cf", "approx"})
+ABBREVIATIONS = frozenset({"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "etc", "cf", "approx", "ph"})
 NUMBER_ABBREVIATIONS = frozenset({"no", "fig", "vol"})
 # Letters joined by dots, such as "e.g", "U.S" or "9a.m"; in detectable_format:sentence_hyphens the dot
 # after such a token ends no sentence.
@@ -663,19 +671,51 @@ def square_brackets(text: str, params: dict) -> tuple[bool, str]:
     return uncovered is None, f"word outside one-word brackets: {uncovered!r}" if uncovered else "every word bracketed"
 
 
+def starts_unspaced_sentence(text: str, match: re.Match) -> bool:
+    """Whether what follows final marks with no space, as in "One.Two.", is the next sentence: a dash other than a
+    hyphen is, and so is a letter or digit after "!" or "?". After a dot or an ellipsis only a capital or caseless
+    letter is, and not after an initial, an acronym or an abbreviation or inside an address, as in "U.S.Army",
+    "ASP.NET", "Dr.Smith" or "john.Doe@example.com"; a digit or a lowercase letter there, as in "3.5" or
+    "example.com", is not. It reads at most TOKEN_WINDOW characters on each side of the marks."""
+    following = text[match.end()]
+    if not following.isalnum() or "!" in match.group(1) or "?" in match.group(1):
+        return True
+    if following.isdigit() or following.islower():
+        return False
+    start = match.start()
+    window_start = max(0, start - TOKEN_WINDOW)
+    letters_start = start
+    while letters_start > window_start and text[letters_start - 1].isalpha():
+        letters_start -= 1
+    letters = text[letters_start:start]
+    if len(letters) == 1 or letters.isupper():
+        return False
+    token = token_before(text[window_start:start], start - window_start)
+    if abbreviation_dot(token, following):
+        return False
+    address = token + re.match(r"\S*", text[match.end() : match.end() + TOKEN_WINDOW]).group(0)
+    return not ("@" in address or "://" in address or address.lower().startswith("www."))
+
+
 @constraint("detectable_format:sentence_hyphens")
 def sentence_hyphens(text: str, params: dict) -> tuple[bool, str]:
     """Sentences must be joined by hyphens with no whitespace between them, as in "One.-Two.". A line break is such
-    whitespace, so a reply must stay on one line; one with no sentence end to join is one sentence and passes."""
+    whitespace, so a reply must stay on one line. Sentences that touch with nothing between them, as in "One.Two.",
+    or that a dash other than a hyphen joins are not joined by a hyphen either. A reply with no sentence end to join
+    is one sentence and passes."""
     stripped = text.strip()
     if not WORD.search(stripped):
         return False, "no sentences"
     if len(stripped.splitlines()) > 1:
         return False, "a line break stands between two lines"
     for match in UNJOINED_SENTENCE_END.finditer(stripped):
-        following = stripped[match.end() : match.end() + 1]
-        if match.group(1) == "." and abbreviation_dot(token_before(stripped, match.start()), following):
-            continue
+        if match.group(1) is not None and not match.group(0)[-1].isspace():
+            if not starts_unspaced_sentence(stripped, match):
+                continue
+        else:
+            following = stripped[match.end() : match.end() + 1]
+            if match.group(1) == "." and abbreviation_dot(token_before(stripped, match.start()), following):
+                continue
         before = stripped[max(0, match.start() - 20) : match.start() + 1].strip()
         return False, f"sentence end without a hyphen at {before!r}"
     return True, "sentences joined by hyphens"
