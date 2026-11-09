@@ -46,6 +46,7 @@ import uuid
 from typing import Any, Protocol
 
 import huggingface_hub.constants
+from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import (
@@ -275,13 +276,17 @@ def stage_model(model: HuggingFaceModelCache) -> Path:
             if entry.path.endswith(MODEL_CACHE_SUFFIXES)
         )
         validate_hf_model_weights({entry.path for _, entry in inventory}, model.uri)
-        materialize_inventory(ArtifactSource(model.uri, model.identity, str(local_path)), filesystem, inventory)
-        if model.revision != manifest.revision:
-            refs = (cache_root / "refs").resolve()
-            ref = (refs / model.revision).resolve()
-            ref.relative_to(refs)
-            ref.parent.mkdir(parents=True, exist_ok=True)
-            ref.write_text(manifest.revision)
+        # Iris tasks share the host HF cache, including separately submitted jobs.
+        # Lock the materializer's existence check and install, plus the ref update.
+        cache_root.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(cache_root / ".stage.lock")):
+            materialize_inventory(ArtifactSource(model.uri, model.identity, str(local_path)), filesystem, inventory)
+            if model.revision != manifest.revision:
+                refs = (cache_root / "refs").resolve()
+                ref = (refs / model.revision).resolve()
+                ref.relative_to(refs)
+                ref.parent.mkdir(parents=True, exist_ok=True)
+                ref.write_text(manifest.revision)
         return local_path
     except FileNotFoundError as error:
         raise FileNotFoundError(

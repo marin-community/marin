@@ -258,11 +258,16 @@ def _hub_snapshot(tmp_path: Path) -> HuggingFaceSnapshot:
     return HuggingFaceSnapshot(filesystem, root, tuple(files))
 
 
+@pytest.mark.parametrize("separate_tokenizer", [False, True])
 @pytest.mark.parametrize(("hub_failure", "shared_model"), [(False, False), (False, True), (True, False)])
 def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
-    tmp_path, monkeypatch, hub_failure, shared_model
+    tmp_path, monkeypatch, hub_failure, shared_model, separate_tokenizer
 ):
     path = _hub_config_path(tmp_path)
+    if separate_tokenizer:
+        config = yaml.safe_load(path.read_text())
+        config["inputs"]["model"]["tokenizer_uri"] = "org/tokenizer"
+        path.write_text(yaml.safe_dump(config))
     if shared_model:
         config = yaml.safe_load(path.read_text())
         config["skyrl"]["teachers"]["local"]["model"] = {"path": "org/policy", "revision": "a" * 40}
@@ -280,6 +285,12 @@ def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
         opened.append(model_id)
         if hub_failure and model_id == "org/teacher":
             raise OSError("Hub unavailable")
+        if separate_tokenizer and not shared_model and model_id == "org/policy":
+            return HuggingFaceSnapshot(
+                snapshot.filesystem,
+                snapshot.root,
+                tuple(entry for entry in snapshot.files if not entry.path.startswith("tokenizer")),
+            )
         return snapshot
 
     monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)

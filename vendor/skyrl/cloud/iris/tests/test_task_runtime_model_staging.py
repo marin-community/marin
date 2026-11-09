@@ -1,4 +1,6 @@
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from dataclasses import asdict
 import hashlib
 from pathlib import Path
@@ -373,3 +375,27 @@ def test_expired_node_mirror_requests_a_cpu_relaunch(tmp_path, monkeypatch, miss
     with pytest.raises(FileNotFoundError, match="relaunch.*CPU coordinator"):
         task_runtime.stage_model(locator)
     assert not tuple(cache.glob("**/model.safetensors"))
+
+
+def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        _memory_model_snapshot(f"concurrent-staging/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    locator = HuggingFaceModelCache("org/policy", "main", str(mirror), manifest.identity)
+    ready = Barrier(8)
+
+    def stage():
+        ready.wait(timeout=10)
+        return task_runtime.stage_model(locator)
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        paths = list(workers.map(lambda _: stage(), range(8)))
+    assert len(set(paths)) == 1
+    assert (paths[0] / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
+    assert Path(huggingface_hub.snapshot_download("org/policy", revision="main", local_files_only=True)) == paths[0]

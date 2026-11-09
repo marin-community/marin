@@ -21,6 +21,7 @@ from omegaconf import DictConfig, OmegaConf
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import ensure_hugging_face_model_cache
+from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
@@ -114,13 +115,22 @@ def _prepare_model_caches(config: DictConfig) -> None:
         raise RuntimeError(
             "Hugging Face model pre-caching requires an Iris CPU coordinator; run your rl_build_options experiment with --run"
         )
+    plan = compile_distillation_plan_from_config(config.skyrl)
+    teacher_models = (
+        {teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE}
+        if plan is not None
+        else set()
+    )
     caches = []
     for model in models:
+        separate_tokenizer = str(config.inputs.model.tokenizer_uri) != model.path
+        policy_only = model.path == str(config.inputs.model.uri) and model not in teacher_models
         uri, manifest = ensure_hugging_face_model_cache(
             model.path,
             model.revision,
             ttl_days=int(config.artifacts.hugging_face_cache_ttl_days),
             source_prefix=str(config.artifacts.checkpoint_root),
+            tokenizer_mode="policy" if policy_only and separate_tokenizer else "embedded",
         )
         caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity))
     config.inputs.hugging_face_models = caches
