@@ -28,6 +28,8 @@ packages = ["src/taskforge"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Tests import shared fixtures as lib.taskforge.tests.* and the launcher as experiments.taskforge.
+pythonpath = ["../.."]
 timeout = 60
 addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not live_glm'"
 markers = [
