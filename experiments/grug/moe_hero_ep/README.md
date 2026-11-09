@@ -10,7 +10,8 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
   (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
-  1.66, times 1.108 on the global layers (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
+  1.66 (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), with global-layer queries past 65536 keys scaled by
+  (1 + 0.1 ln(n/65536))^2, up to 2.15 at 262K, sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
   shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are
@@ -48,7 +49,8 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Inference export
 
-Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. The device
+Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Neither exporter accepts a model with log scaling,
+so the current run's 262K checkpoints cannot be exported yet. The device
 exporter below remains a byte-parity reference and supports checkpoint layouts
 handled by the native loader, including flat checkpoints.
 
@@ -204,6 +206,14 @@ paths = hero_checkpoint_paths()
 
 The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
 Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
+
+The current run is `hero-lce-log65536sq-step390k`. It trained the 262K extension with log floor 65536 squared, the hero's
+262K recipe (see [Context-length switches](#context-length-switches)), and ended at
+`s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491`, the starting point
+for downstream training. The comparison against a global 1.84 arm is in the
+[#8435 result](https://github.com/marin-community/marin/issues/8435#issuecomment-6748198431) and
+[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Inference export and the Hugging Face
+upload refuse log scaling, so they cannot convert this run's checkpoints yet.
 
 Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
 for preflight, the 200-step trial, and rollback. `current_run.py` records the
@@ -423,10 +433,11 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default: the hero's 1.108, which gives 1.84 from 1.66) |
-| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + alpha * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
-| `--log-scaling-alpha` | the slope `alpha` of that scale; required with `--log-scaling-n-floor` |
-| `--log-scaling-power` | raises that scale to this exponent; required with `--log-scaling-n-floor` |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default 1) |
+| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `(1 + alpha * ln(max(n / this value, 1))) ** power`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
+| `--log-scaling-alpha` | the slope `alpha` of that scale; unset keeps the hero's 0.1 |
+| `--log-scaling-power` | raises that scale to this exponent; unset keeps the hero's 2 |
+| `--no-log-scaling` | turns the hero's log scaling off, for a control arm such as global 1.84 (`--qk-mult-long-scale 1.108`); excludes the other log scaling options |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
