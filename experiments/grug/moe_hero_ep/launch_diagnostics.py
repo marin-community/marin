@@ -611,7 +611,7 @@ def build_diagnostic_run(
     "--log-scaling-power",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Exponent on the log scaling factor. Defaults to 1; anything else requires --log-scaling-n-floor.",
+    help="Exponent on the log scaling factor. Required with --log-scaling-n-floor.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @click.option(

@@ -149,7 +149,9 @@ def test_log_scaling_scales_only_rows_beyond_the_floor_and_matches_a_uniform_sca
     base = _log_scaling_config()
     tokens = _log_scaling_tokens(base)
     off = _log_scaling_logits(base, tokens)
-    scaled = _log_scaling_logits(dataclasses.replace(base, log_scaling_n_floor=4, log_scaling_alpha=alpha), tokens)
+    scaled = _log_scaling_logits(
+        dataclasses.replace(base, log_scaling_n_floor=4, log_scaling_alpha=alpha, log_scaling_power=1.0), tokens
+    )
     # The last row sees 8 keys, twice the floor.
     uniform = _log_scaling_logits(dataclasses.replace(base, qk_mult_long_scale=1 + alpha * math.log(2)), tokens)
 
@@ -167,7 +169,9 @@ def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
     segment_ids = jnp.asarray([[-1, 0, 0, 0, 1, 1, 1, 1]], dtype=jnp.int32)
     mask = AttentionMask.causal().with_segment_ids(segment_ids)
     off = _log_scaling_logits(base, tokens, mask)
-    scaled = _log_scaling_logits(dataclasses.replace(base, log_scaling_n_floor=3, log_scaling_alpha=0.1), tokens, mask)
+    scaled = _log_scaling_logits(
+        dataclasses.replace(base, log_scaling_n_floor=3, log_scaling_alpha=0.1, log_scaling_power=1.0), tokens, mask
+    )
     # Row 7 is the fourth token of its document, not the eighth of the sequence.
     uniform = _log_scaling_logits(dataclasses.replace(base, qk_mult_long_scale=1 + 0.1 * math.log(4 / 3)), tokens, mask)
 
@@ -180,7 +184,7 @@ def test_log_scaling_counts_keys_from_the_document_start_and_skips_padding():
 
 def test_log_scaling_keeps_a_bf16_query_bf16(monkeypatch):
     # XLA:CPU would run a promoted Q without complaint; FA4 on GPU takes the bf16 kernels only if Q stays bf16.
-    cfg = dataclasses.replace(_tiny_config(), log_scaling_n_floor=2, log_scaling_alpha=0.1)
+    cfg = dataclasses.replace(_tiny_config(), log_scaling_n_floor=2, log_scaling_alpha=0.1, log_scaling_power=1.0)
     x = jax.random.normal(jax.random.key(62), (2, 8, cfg.hidden_dim), dtype=jnp.bfloat16)
     # A strong float32, like the real factor. A weakly typed scale would leave Q bf16 even without the cast.
     scale = jnp.full((2, 8), 1.125, dtype=jnp.float32)

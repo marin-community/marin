@@ -40,6 +40,7 @@ def _tiny_hero(
     num_layers: int = 5,
     log_scaling_n_floor: int | None = None,
     log_scaling_alpha: float | None = None,
+    log_scaling_power: float | None = None,
 ) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
@@ -70,6 +71,7 @@ def _tiny_hero(
         initializer_std=0.2,
         log_scaling_n_floor=log_scaling_n_floor,
         log_scaling_alpha=log_scaling_alpha,
+        log_scaling_power=log_scaling_power,
     )
     mesh = Mesh(
         np.asarray(devices[:context_axis_size]).reshape(1, 1, 1, context_axis_size, 1),
@@ -185,7 +187,13 @@ def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimato
 
 def test_hero_pipeline_applies_log_scaling():
     mesh, off = _tiny_hero(QbEstimator.TOPK, devices=jax.local_devices())
-    _, model = _tiny_hero(QbEstimator.TOPK, devices=jax.local_devices(), log_scaling_n_floor=2, log_scaling_alpha=0.1)
+    _, model = _tiny_hero(
+        QbEstimator.TOPK,
+        devices=jax.local_devices(),
+        log_scaling_n_floor=2,
+        log_scaling_alpha=0.1,
+        log_scaling_power=1.0,
+    )
     batch = _packed_batch()
     with jax.set_mesh(mesh):
         expected_hidden, _ = eqx.filter_jit(Transformer.__call__)(model, batch.tokens, batch.attn_mask)

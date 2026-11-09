@@ -241,9 +241,7 @@ def _sequence_axis_of(x: jax.Array) -> str | None:
     return spec[1] if spec is not None and len(spec) > 1 else None
 
 
-def log_scaling_factor(
-    visible_keys: Int[Array, "B S"], n_floor: int, alpha: float, power: float = 1.0
-) -> Float[Array, "B S"]:
+def log_scaling_factor(visible_keys: Int[Array, "B S"], n_floor: int, alpha: float, power: float) -> Float[Array, "B S"]:
     """Return the fixed Q multiplier ``(1 + alpha * ln(max(n / n_floor, 1))) ** power``.
 
     This is Inkling's log scaling, except that ``n`` counts the keys in the query's own document, not its
@@ -270,7 +268,7 @@ def _global_query_scale(
     """Return the per-query scale for the global layers, or None with log scaling off."""
     if cfg.log_scaling_n_floor is None:
         return None
-    assert cfg.log_scaling_alpha is not None
+    assert cfg.log_scaling_alpha is not None and cfg.log_scaling_power is not None
     visible_keys = _visible_full_causal_keys(long_lower_bounds, valid)
     return log_scaling_factor(visible_keys, cfg.log_scaling_n_floor, cfg.log_scaling_alpha, cfg.log_scaling_power)
 
@@ -347,8 +345,8 @@ class GrugModelConfig:
     this many keys. None disables it."""
     log_scaling_alpha: float | None = None
     """Slope of ``log_scaling_factor``, required exactly when ``log_scaling_n_floor`` is set."""
-    log_scaling_power: float = 1.0
-    """Exponent of ``log_scaling_factor``. Anything but 1 requires ``log_scaling_n_floor``."""
+    log_scaling_power: float | None = None
+    """Exponent of ``log_scaling_factor``, required exactly when ``log_scaling_n_floor`` is set."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -392,14 +390,13 @@ class GrugModelConfig:
             raise ValueError("global_every must be positive")
         if self.log_scaling_n_floor is not None and self.log_scaling_n_floor <= 0:
             raise ValueError("log_scaling_n_floor must be positive")
-        if (self.log_scaling_n_floor is None) != (self.log_scaling_alpha is None):
-            raise ValueError("log_scaling_n_floor and log_scaling_alpha must be set together")
+        log_scaling_fields = (self.log_scaling_n_floor, self.log_scaling_alpha, self.log_scaling_power)
+        if len({field is None for field in log_scaling_fields}) != 1:
+            raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be set together")
         if self.log_scaling_alpha is not None and self.log_scaling_alpha <= 0:
             raise ValueError("log_scaling_alpha must be positive")
-        if self.log_scaling_power <= 0:
+        if self.log_scaling_power is not None and self.log_scaling_power <= 0:
             raise ValueError("log_scaling_power must be positive")
-        if self.log_scaling_n_floor is None and self.log_scaling_power != 1.0:
-            raise ValueError("log_scaling_power requires log_scaling_n_floor")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
