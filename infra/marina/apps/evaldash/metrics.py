@@ -605,8 +605,7 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
 def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
 
-    ``current_version`` is the version of the model's most recent non-smoke run -- the cohort the view
-    opens on -- and ``cohorts`` lists one entry per distinct version, both excluding ``-smoke`` suites
+    ``current_version`` is the version of the model's most recent non-smoke run, and ``cohorts`` lists one entry per distinct version, both excluding ``-smoke`` suites
     as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
     and ``runs`` spans every run for the model (smoke included), newest first.
     """
