@@ -101,6 +101,8 @@ scores the same IDs at the same causal positions before and during optimization.
 Outside the head, old and behavior probabilities are modeled as proportional to
 the current policy, preserving their measured omitted masses.
 
+Here, score means the gradient of the current-policy token log probability.
+
 SC subtracts the sampler's expected clipped, TIS-weighted score contribution.
 Its probability coefficients and clip decisions are detached; gradients flow
 through current-policy log probabilities. The correction already integrates TIS
