@@ -36,6 +36,7 @@ from experiments.post_training.long_loop.eval_runtime.profile import DATASET, RE
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
 from experiments.post_training.long_loop.sft import read_json
+from vendor.skyrl.marinskyrl.resource_locator import validate_replayable_model_reference
 
 WHEELS_REVISION = "d5dd315d58f0f47514dd0a2208e90e2a48541328"
 
@@ -87,6 +88,10 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
     validate_environment_preflight(read_json(output + "/environment.json"), output)
 
 
+def validate_eval_policy(model: ResolvedModelLocator, source_uri: str) -> None:
+    validate_replayable_model_reference(model.local_path, source_uri, model.identity)
+
+
 @dataclass(frozen=True)
 class TerminalPolicy:
     step: ArtifactStep[SkyRLRun]
@@ -96,20 +101,22 @@ class TerminalPolicy:
 
     def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
         if ctx.is_fingerprint:
-            return ResolvedModelLocator(
+            locator = ResolvedModelLocator(
                 uri=artifact_identity(self.step) + "/terminal-export",
                 identity=artifact_identity(self.step),
-                local_path="models/long-loop-terminal",
+                local_path="/tmp/marinskyrl/models/long-loop-terminal",
                 tokenizer_uri="<terminal-tokenizer>",
                 tokenizer_revision="<terminal-tokenizer-revision>",
             )
+            validate_eval_policy(locator, self.step.path() + "/exports/global_step_3/policy")
+            return locator
         result = ctx.resolved(self.step)
         if result.hf_model_uri is None or result.global_step != 3:
             raise ValueError("Micro smoke requires the committed final step-3 RL export")
         return ResolvedModelLocator(
             uri=result.hf_model_uri,
             identity=artifact_identity(self.step),
-            local_path="models/long-loop-terminal",
+            local_path="/tmp/marinskyrl/models/long-loop-terminal",
             tokenizer_uri=result.tokenizer_uri,
             tokenizer_revision=result.tokenizer_revision,
         )
@@ -170,6 +177,10 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
 
     def build_config(ctx: StepContext) -> JudgedEvaluation:
         run = step.build_config(ctx)
+        launch = yaml.safe_load(run.launch_config_yaml)
+        model = launch["inputs"]["model"]
+        if not ctx.is_fingerprint:
+            validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
         if not ctx.is_fingerprint:
             manifest = read_json(ctx.artifact_path(data) + "/environment.json")
             validate_environment_preflight(manifest, ctx.artifact_path(data))

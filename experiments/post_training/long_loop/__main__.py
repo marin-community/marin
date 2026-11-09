@@ -11,7 +11,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import graph_handles
 from marin.rl.cli import _skyrl_executions, rl_build_options
-from marin.rl.skyrl import ArtifactHfModel
+from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.endpoint_probe import endpoint_step
@@ -84,8 +84,41 @@ def plumbing_loop(
     return report_step(version, [inputs, base, trained, exported, endpoint, rl, evaluated])
 
 
+def eval_continuation(version: str, rl_version: str, inputs_version: str) -> ArtifactStep:
+    checked_serving_release()
+    prefix = "s3://marin-us-east-02a/marin/"
+    sources = (
+        ("long-loop/micro-inputs", inputs_version, None),
+        ("users/benfeuer/checkpoints/long-loop-plumbing-rl", rl_version, SkyRLRun),
+    )
+    adopted = []
+    for name, original_version, kind in sources:
+        source = prefix + name + "/" + original_version
+        record = read_json(source + "/.artifact.json")
+        if record["name"] != name or record["version"] != original_version:
+            raise ValueError(f"Committed artifact identity differs: {source}")
+        if kind is SkyRLRun:
+            terminal = read_json(source + "/terminal.json")["result"]
+            if terminal["state"] != "succeeded" or terminal["model"]["global_step"] != 3:
+                raise ValueError("Eval-only continuation requires committed successful RL step 3")
+        options = {"kind": kind} if kind else {}
+        adopted.append(
+            ArtifactStep.adopt(
+                "long-loop/reused-eval-" + name.rsplit("/", 1)[-1],
+                version,
+                source,
+                config={"original_record": record},
+                **options,
+            )
+        )
+    inputs, trained = adopted
+    evaluated = timed(smoke_evaluation(version, trained, inputs))
+    return report_step(version, [inputs, trained, evaluated])
+
+
 @click.command(help=__doc__)
-@click.option("--stage", type=click.Choice(["inputs", "loop"]), default="loop", show_default=True)
+@click.option("--stage", type=click.Choice(["inputs", "loop", "eval"]), default="loop", show_default=True)
+@click.option("--reuse-rl-version", help="Committed step-3 RL version for eval-only continuation.")
 @click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
 @click.option("--reuse-sft-version", help="Reuse committed input, base, SFT and export artifacts from this version.")
 @click.option(
@@ -94,7 +127,12 @@ def plumbing_loop(
 @click.option("--handoff", type=click.Choice(["reuse", "reexport"]), default="reuse", show_default=True)
 @rl_build_options
 def main(
-    source_revision: str, stage: str, reuse_sft_version: str | None, handoff: str, reuse_export_version: str | None
+    source_revision: str,
+    stage: str,
+    reuse_sft_version: str | None,
+    handoff: str,
+    reuse_export_version: str | None,
+    reuse_rl_version: str | None,
 ) -> ArtifactStep:
     if len(source_revision) != 40 or any(c not in "0123456789abcdef" for c in source_revision):
         raise click.BadParameter("Expected a full Git commit SHA", param_hint="--source-revision")
@@ -104,6 +142,10 @@ def main(
         raise click.UsageError("--reuse-export-version requires --reuse-sft-version and --handoff reuse")
     require_secret("HF_TOKEN")
     version = resolve_version("long-loop/micro-smoke", None)
+    if stage == "eval":
+        if not reuse_rl_version or not reuse_sft_version:
+            raise click.UsageError("Eval requires --reuse-rl-version and --reuse-sft-version for inputs")
+        return eval_continuation(version, reuse_rl_version, reuse_sft_version)
     loop = plumbing_loop(version, source_revision, reuse_sft_version, handoff, reuse_export_version)
     if stage == "loop":
         return loop
