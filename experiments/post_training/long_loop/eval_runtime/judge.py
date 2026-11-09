@@ -19,6 +19,7 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import remote_inference
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from experiments.post_training.long_loop.timing import EventLog
@@ -49,7 +50,7 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     validation = validate_before_allocation(config.skyrl.launch_config_yaml)
     launch = yaml.safe_load(config.skyrl.launch_config_yaml)
     validation_fs, validation_key = filesystem_for(
-        launch["artifacts"]["terminal_manifest_uri"].rsplit("/", 1)[0] + "/preallocation-validation.json"
+        str(StoragePath(launch["artifacts"]["terminal_manifest_uri"]).parent / "preallocation-validation.json")
     )
     validation_fs.pipe_file(validation_key, json.dumps(validation, indent=2).encode())
     inference = inference_config_for_model(
@@ -61,8 +62,8 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
         api_model=config.judge.location,
     )
     attempt = uuid4().hex
-    destination = launch["artifacts"]["terminal_manifest_uri"].rsplit("/", 1)[0]
-    fs, key = filesystem_for(destination + f"/timing/judge-{attempt}.jsonl")
+    destination = str(StoragePath(launch["artifacts"]["terminal_manifest_uri"]).parent)
+    fs, key = filesystem_for(prefix_join(destination, f"timing/judge-{attempt}.jsonl"))
     with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
         log = EventLog(Path(directory) / "events.jsonl", launch["run"]["id"], "eval", attempt)
         try:

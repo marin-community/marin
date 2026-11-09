@@ -8,7 +8,7 @@ import json
 from dataclasses import replace
 
 import draccus
-from fray.types import ResourceConfig
+from fray.types import DeviceConfig, GpuConfig, ResourceConfig
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
@@ -20,8 +20,20 @@ from experiments.post_training.long_loop.archive_stage import archive_selected_r
 from experiments.post_training.long_loop.endpoint_probe import probe
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
 from experiments.post_training.long_loop.rl import configured_rl_step
+from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
 from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
+
+
+def runtime_execution(value: dict) -> IrisSkyRLExecution:
+    gpu = value["coordinator_gpu"]
+    return IrisSkyRLExecution(
+        **{
+            **value,
+            "coordinator_gpu": GpuConfig(**gpu) if gpu is not None else None,
+            "required_env_vars": tuple(value["required_env_vars"]),
+        }
+    )
 
 
 def verify_inputs(*, output: str, manifests: dict) -> None:
@@ -38,26 +50,34 @@ def verify_inputs(*, output: str, manifests: dict) -> None:
     (StoragePath(output) / "verified.json").write_text(json.dumps(verified, indent=2))
 
 
-def build_spec_graph(resolved: dict, version: str) -> ArtifactStep:
-    if resolved["blockers"]:
-        raise ValueError("Run is not admitted: " + "; ".join(resolved["blockers"]))
+def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactStep:
+    blockers = stage_blockers(resolved, through)
+    if blockers:
+        raise ValueError("Run is not admitted: " + "; ".join(blockers))
     datasets = resolved["datasets"]
     name = resolved["name"]
     execution = resolved["execution"]
-    resources = {key: draccus.decode(ResourceConfig, value) for key, value in execution.items() if key != "coordinator"}
+    resources = {
+        key: ResourceConfig(**{**value, "device": draccus.decode(DeviceConfig, value["device"])})
+        for key, value in execution.items()
+        if key != "coordinator"
+    }
     verified = timed(
         apply(
             f"{name}/inputs",
             remote(verify_inputs, resources=resources["inputs"]),
             version=version,
             output=OUT,
-            manifests=datasets,
+            manifests=(
+                {"sft": datasets["sft"], "initializer": resolved["initializer"]} if through == "sft" else datasets
+            ),
         )
     )
     base_manifest = resolved["initializer"]
     base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
     recipe = resolved["sft"]
-    fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=name)
+    run_id = f"{name.replace('/', '-')}-sft-{version}"
+    fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=run_id)
     trained = timed(
         apply(
             f"{name}/sft",
@@ -66,10 +86,14 @@ def build_spec_graph(resolved: dict, version: str) -> ArtifactStep:
             output=OUT,
             initializer=base,
             recipe=recipe,
-            run_id=f"{name}-{version}",
+            run_id=run_id,
         )
     )
     trained = replace(trained, deps=(*trained.deps, verified))
+    coordinator = runtime_execution(execution["coordinator"])
+    coordinator = replace(coordinator, coordinator_name=f"{coordinator.coordinator_name}-{version}")
+    if through == "sft":
+        return replace(trained, runtime_args={**trained.runtime_args, "skyrl_execution": coordinator})
     tokenizer = resolved["tokenizer"]
     exported = timed(
         apply(
@@ -120,7 +144,7 @@ def build_spec_graph(resolved: dict, version: str) -> ArtifactStep:
         validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
         config=rl_config,
         plan=draccus.decode(SkyRLRolePlan, rl["role_plan"]),
-        execution=draccus.decode(IrisSkyRLExecution, rl["execution"]),
+        execution=runtime_execution(rl["execution"]),
         retained=rl["retained"],
         seed=rl["seed"],
     )
@@ -148,7 +172,7 @@ def build_spec_graph(resolved: dict, version: str) -> ArtifactStep:
             name=evaluation["name"],
             config=evaluation["config"],
             role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
-            execution=draccus.decode(IrisSkyRLExecution, evaluation["execution"]),
+            execution=runtime_execution(evaluation["execution"]),
             judge=draccus.decode(ModelConfig, evaluation["judge"]),
             seed=evaluation["seed"],
             expected_step=None,
@@ -181,6 +205,6 @@ def build_spec_graph(resolved: dict, version: str) -> ArtifactStep:
         archived,
         runtime_args={
             **archived.runtime_args,
-            "skyrl_execution": draccus.decode(IrisSkyRLExecution, execution["coordinator"]),
+            "skyrl_execution": coordinator,
         },
     )

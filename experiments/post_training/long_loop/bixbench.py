@@ -112,9 +112,9 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     after = audit(repair, 1)
     if before["completed_rollouts"] != 20 or not after["all_verified"]:
         raise ValueError("Merge requires the original 20 results and one verified repair")
-    suffix = "/exports/dumped_evals/eval_only/"
-    original_fs, original_root = filesystem_for(original + suffix)
-    repair_fs, repair_root = filesystem_for(repair + suffix)
+    suffix = "exports/dumped_evals/eval_only"
+    original_fs, original_root = filesystem_for(prefix_join(original, suffix))
+    repair_fs, repair_root = filesystem_for(prefix_join(repair, suffix))
     replacements = [
         p for p in repair_fs.glob(prefix_join(repair_root, "*.jsonl")) if not p.endswith("aggregated_results.jsonl")
     ]
@@ -125,7 +125,7 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     identity["original_prompt_is_prefix"] = (
         repaired_bix["prompt_token_ids"][: len(original_bix["prompt_token_ids"])] == original_bix["prompt_token_ids"]
     )
-    out_fs, out_root = filesystem_for(output + suffix)
+    out_fs, out_root = filesystem_for(prefix_join(output, suffix))
     out_fs.makedirs(out_root, exist_ok=True)
     provenance = []
     for row in before["benchmarks"]:
@@ -136,11 +136,11 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
             (repair_fs, repair_root) if name == "bixbench-pi.jsonl" else (original_fs, original_root)
         )
         payload = source_fs.cat_file(prefix_join(source_root, name))
-        write_once(output + suffix + name, payload)
+        write_once(prefix_join(prefix_join(output, suffix), name), payload)
         provenance.append(
             {
                 "file": name,
-                "source": (repair if name == "bixbench-pi.jsonl" else original) + suffix + name,
+                "source": prefix_join(prefix_join(repair if name == "bixbench-pi.jsonl" else original, suffix), name),
                 "sha256": hashlib.sha256(payload).hexdigest(),
             }
         )
@@ -158,7 +158,7 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
                 "preserved": 19,
                 "replaced": "bixbench-pi.jsonl",
                 "files": provenance,
-                "original_failed_result": original + suffix + "bixbench-pi.jsonl",
+                "original_failed_result": prefix_join(prefix_join(original, suffix), "bixbench-pi.jsonl"),
             },
             indent=2,
         ).encode(),

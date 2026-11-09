@@ -158,3 +158,14 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
     if max(peaks.values()) > 256:
         raise ValueError(f"Run exceeds the authorized 256 H100 allocation: {peaks}")
     return peaks
+
+
+def stage_blockers(resolved: dict, through: str) -> list[str]:
+    if through == "archive":
+        return resolved["blockers"]
+    documents = {
+        "sft": resolved["datasets"]["sft"],
+        "initializer": resolved["initializer"],
+        "tokenizer": resolved["tokenizer"],
+    }
+    return [f"{name}: {reason}" for name, value in documents.items() for reason in value.get("admission_pending", [])]

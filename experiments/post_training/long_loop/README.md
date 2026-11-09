@@ -14,8 +14,12 @@ Add `--smoke` to use the same inputs with the spec's scale overrides. Add
 `--run --max-concurrent 1` only for an admitted run. The resolved JSON records the
 spec digest, complete configs, dataset identities, scale changes and blockers.
 Strict SkyRL composition runs on the actual graph documents before allocation.
-The example is intentionally **not launchable yet**: the admitted agentic cohort,
-heldout/exclusion evidence and several runtime provenance bindings are pending.
+The complete example is intentionally **not launchable yet**: the selected Smartie
+cohorts still need complete exclusion evidence and runtime qualification.
+Use `--through sft` for the admitted SFT prefix while those checks finish.
+Before submission, copy the spec inputs into a relative workspace directory and
+pin `marin_revision` to the clean code commit; Iris bundles those explicit inputs.
+Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
 The smoke keeps the full SFT weight schedule, 262k SFT packing, 102,400-token RL

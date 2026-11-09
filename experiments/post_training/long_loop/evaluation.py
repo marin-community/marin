@@ -166,7 +166,10 @@ def evaluation_step(
     config["generator"]["sampling_params"].update(skip_special_tokens=False, stop_token_ids=[128001, 128009])
     config["generator"]["eval_sampling_params"].update(skip_special_tokens=False, stop_token_ids=[128001, 128009])
     config["generator"]["trajectory_retention"] = trace_retention(
-        f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/eval", version, fraction=1.0, phase="eval"
+        prefix_join(prefix_join("s3://marin-us-east-02a/marin/long-loop/traces", version), "eval"),
+        version,
+        fraction=1.0,
+        phase="eval",
     )
     root = find_project_root()
     assert root is not None, "Run from the Marin worktree"

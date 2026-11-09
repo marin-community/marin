@@ -23,6 +23,7 @@ from marin.rl.skyrl import (
     _materialize_role_plan_config,
     skyrl_step,
 )
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive_selection import trace_retention, validation_selection
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
@@ -62,7 +63,10 @@ def smoke_rl_step(
     config = smoke_recipe()
     config["trainer"]["dump_training_order"] = True
     config["generator"]["trajectory_retention"] = trace_retention(
-        f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/rl", version, fraction=0.1, phase="train"
+        prefix_join(prefix_join("s3://marin-us-east-02a/marin/long-loop/traces", version), "rl"),
+        version,
+        fraction=0.1,
+        phase="train",
     )
     return configured_rl_step(
         version=version,

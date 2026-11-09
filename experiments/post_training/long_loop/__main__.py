@@ -6,10 +6,12 @@
 import hashlib
 import json
 import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import click
+from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import graph_handles
@@ -20,7 +22,7 @@ from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
-from experiments.post_training.long_loop.run_spec import resolve_spec
+from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 
@@ -53,20 +55,28 @@ def validate_graph(terminal: ArtifactStep, directory: Path) -> None:
 @click.command(help=__doc__)
 @click.option("--spec", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--smoke", is_flag=True, help="Apply only the spec's explicit scale overrides.")
+@click.option("--through", type=click.Choice(["sft", "archive"]), default="archive", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
 @rl_build_options
-def main(spec: Path, smoke: bool, validation_output: Path) -> ArtifactStep:
+def main(spec: Path, smoke: bool, through: str, validation_output: Path) -> ArtifactStep:
     resolved = resolve_spec(spec, smoke=smoke)
+    resolved["through"] = through
+    resolved["active_stage_blockers"] = stage_blockers(resolved, through)
+    # Iris ships the validated workspace bundle without Git metadata.
+    if get_job_info() is None:
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        if revision != resolved["marin_revision"]:
+            resolved["active_stage_blockers"].append("Run spec's Marin revision differs from the checked-out code")
     validation_output.mkdir(parents=True, exist_ok=True)
     plan = validation_output / "resolved-plan.json"
     plan.write_text(json.dumps(resolved, indent=2))
     click.echo(json.dumps(resolved, indent=2))
-    if resolved["blockers"]:
-        raise click.ClickException("Run is not admitted: " + "; ".join(resolved["blockers"]))
+    if resolved["active_stage_blockers"]:
+        raise click.ClickException("Run is not admitted: " + "; ".join(resolved["active_stage_blockers"]))
     configure_coreweave_s3()
     require_secret("HF_TOKEN")
     version = resolve_version(resolved["name"], None)
-    terminal = build_spec_graph(resolved, version)
+    terminal = build_spec_graph(resolved, version, through=through)
     validate_graph(terminal, validation_output / version)
     return terminal
 

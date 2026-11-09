@@ -192,9 +192,14 @@ def checkpoint_samples(state) -> tuple:
         if not isinstance(leaf, jax.Array):
             continue
         for shard in leaf.addressable_shards:
-            flat = shard.data.reshape(-1)
-            indices = np.unique(np.linspace(0, max(flat.size - 1, 0), min(16, flat.size), dtype=np.int64))
-            values = np.asarray(jax.device_get(flat[indices]))
+            local_mesh = Mesh(
+                np.asarray([shard.device]), ("checkpoint_sample",), axis_types=(jax.sharding.AxisType.Explicit,)
+            )
+            # Local shard operations must not inherit the distributed training mesh.
+            with jax.set_mesh(local_mesh):
+                flat = jax.device_put(shard.data, NamedSharding(local_mesh, P())).reshape(-1)
+                indices = np.unique(np.linspace(0, max(flat.size - 1, 0), min(16, flat.size), dtype=np.int64))
+                values = np.asarray(jax.device_get(flat[indices]))
             samples.append((leaf.shape, str(leaf.dtype), str(shard.index), values.tobytes()))
     return tuple(samples)
 
@@ -587,12 +592,7 @@ def _to_dropless_local(
 
 
 def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
-    """Wrap ``hook`` so that it runs one time only, after the first optimization step.
-
-    ``StateCallbackRunner`` dispatches on ``next_step % every``, thus ``every=1`` is the only
-    interval that covers the first step. The gate makes that registration one-shot. A resumed run
-    starts above step 1 and never fires it.
-    """
+    """Run the hook only after the first optimization step, never after a resumed step."""
 
     # `LambdaCallback` reads the signature to decide whether to pass `force`, and the `**kwargs`
     # below would otherwise advertise a `force` parameter that the wrapped hook can lack.
@@ -1074,7 +1074,6 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     balance_rows: bool = False,
     special_token_ids: tuple[int, ...] = (),
     special_token_lr_multiplier: float = 1.0,
@@ -1105,20 +1104,10 @@ def _make_train_step(
         )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
-        if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
-            if state.master_params is None:
-                raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
-            master_params_in = _tree_to_memory_kind(state.master_params, "device")
-            master_grads = _FP32_POLICY.cast_to_param(grads)
-            updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
-            master_params = optax.apply_updates(master_params_in, updates)
-            params = mp.cast_to_param(master_params)
-            master_params = _tree_to_memory_kind(master_params, "pinned_host")
-        else:
-            updates, opt_state = optimizer.update(grads, opt_state_in, train_params)
-            updates = scale_special_token_updates(updates, special_token_ids, special_token_lr_multiplier)
-            params = optax.apply_updates(train_params, updates)
-            master_params = None
+        updates, opt_state = optimizer.update(grads, opt_state_in, train_params)
+        updates = scale_special_token_updates(updates, special_token_ids, special_token_lr_multiplier)
+        params = optax.apply_updates(train_params, updates)
+        master_params = None
 
         params = eqx.tree_at(
             lambda m: m.stacked_blocks.stacked.mlp.router_bias,
@@ -1205,7 +1194,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
-        master_param_mode=config.trainer.master_param_mode,
         balance_rows=config.trainer.balance_attention_rows,
         special_token_ids=config.trainer.special_token_ids,
         special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
@@ -1494,7 +1482,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         current_step = int(state.step)
         gc_start_step = current_step + GC_WARMUP_STEPS
 
-        # Main optimization loop.
         try:
             while current_step < stop_step:
                 iteration_start = time.perf_counter()

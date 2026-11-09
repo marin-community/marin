@@ -191,10 +191,7 @@ def _unflatten_tokens(x_flat: jax.Array, like: Float[Array, "B S D"]) -> jax.Arr
 
 
 def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
-    """Per-token top-k expert indices, in ``jax.lax.top_k``'s order, from a fused GPU kernel.
-
-    XLA sorts every row of a few hundred logits in full; the kernel selects in registers.
-    """
+    """Return per-token top-k expert indices in ``jax.lax.top_k`` order."""
     token_spec = _token_spec()
     return shard_map(
         lambda local: top_k_indices(local, k),
@@ -1049,7 +1046,6 @@ class MoEMLP(eqx.Module):
         selected_experts = _router_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = jnp.take_along_axis(biased_logits, selected_experts[:, -1:], axis=-1)
         selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
@@ -1508,13 +1504,6 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         axis_types=(jax.sharding.AxisType.Explicit,) * len(axis_names),
     )
     return mesh, P(("replica_dcn", "data", "expert"), None)
-
-
-def apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
-    new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
 def _with_state_dict_prefix(prefix: str | None, name: str) -> str:

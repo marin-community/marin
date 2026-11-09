@@ -1,5 +1,5 @@
 # Long-loop-owned recipe, copied from the quick-loop composition at Marin 1cf5c009d3.
-# Role geometry is supplied only by SMOKE_PLAN in rl.py.
+# Historical base recipe; the current launcher reads explicit stage configs from a run spec.
 entrypoint: taskcompendium
 context_budget:
   request_window_tokens: 24576
