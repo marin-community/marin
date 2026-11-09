@@ -408,7 +408,7 @@ def test_policy_manifest_without_tokenizer_mode_remains_compatible(tmp_path: Pat
     assert ModelManifest.from_mapping(value, "memory://models/policy") == manifest
 
 
-def _aging_model_cache(tmp_path, monkeypatch, *, ttl_days=14):
+def _aging_model_cache(tmp_path, monkeypatch, *, ttl_days=14, age_days=13):
     cache = tmp_path / "ttl=14d" / "region-cache"
     source = fsspec.filesystem("memory")
     source_root = f"aging-source/{tmp_path.name}"
@@ -427,7 +427,7 @@ def _aging_model_cache(tmp_path, monkeypatch, *, ttl_days=14):
         ttl_days=ttl_days,
         source_prefix="s3://region/run",
     )
-    old = (datetime.now(UTC) - timedelta(days=13)).timestamp()
+    old = (datetime.now(UTC) - timedelta(days=age_days)).timestamp()
     for path in cache.iterdir():
         os.utime(path, (old, old))
     return cache, uri, manifest, weights, opened
@@ -456,6 +456,21 @@ def test_near_expiry_mirror_refreshes_all_objects_without_redownloading(
     assert repeated_manifest == manifest
     assert all(path.stat().st_mtime >= cutoff for path in cache.iterdir())
     assert (cache / "model.safetensors").read_bytes() == weights
+    assert opened == [("org/model", "a" * 40)]
+
+
+def test_mirror_younger_than_refresh_threshold_is_left_alone(tmp_path, monkeypatch):
+    # 10 days is under 80% of the 14-day TTL, so nothing is copied.
+    cache, uri, _manifest, _weights, opened = _aging_model_cache(tmp_path, monkeypatch, age_days=10)
+    ages = {path.name: path.stat().st_mtime for path in cache.iterdir()}
+    repeated_uri, _ = ensure_hugging_face_model_cache(
+        "org/model",
+        "a" * 40,
+        ttl_days=14,
+        source_prefix="s3://region/another-run",
+    )
+    assert repeated_uri == uri
+    assert {path.name: path.stat().st_mtime for path in cache.iterdir()} == ages
     assert opened == [("org/model", "a" * 40)]
 
 

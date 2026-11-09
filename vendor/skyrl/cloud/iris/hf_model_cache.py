@@ -58,6 +58,8 @@ from marinskyrl.speculative_decoding import is_hugging_face_commit
 
 _CACHE_PREFIX = "marinskyrl/hf-models"
 _CACHE_POLL_INTERVAL = 10.0
+# Refresh mirror objects once this fraction of their lifecycle TTL has passed.
+_REFRESH_AFTER_TTL_FRACTION = 0.8
 _WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth")
 _STREAM_CHUNK_BYTES = 8 * 2**20
 _MAX_METADATA_BYTES = 256 * 2**20
@@ -567,7 +569,7 @@ def ensure_hugging_face_model_cache(
         ),
         ttl_days,
     )
-    refresh_before = datetime.now(UTC) - timedelta(days=effective_ttl / 2)
+    refresh_before = datetime.now(UTC) - timedelta(days=effective_ttl * _REFRESH_AFTER_TTL_FRACTION)
     lock = create_lock(f"{cache_uri}.lock")
     while not lock.try_acquire():
         time.sleep(_CACHE_POLL_INTERVAL)

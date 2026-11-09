@@ -100,7 +100,7 @@ Iris task
 Before submitting the GPU job, the CPU launch process ensures a regional mirror
 for each Hub policy and `local_inference` teacher. The locked cache reuses a
 completed mirror for the same model revision. Before submission, it refreshes every
-object older than half the bucket's lifecycle TTL using a server-side copy. Weight
+object older than 80% of the bucket's lifecycle TTL using a server-side copy. Weight
 shards are refreshed before metadata and the completion manifest. The resolved
 config records the mirror URI and manifest identity in `inputs.hugging_face_models`.
 Every GPU node copies these mirrors into its local Hugging Face cache before Ray
@@ -109,7 +109,7 @@ local or object-store model inputs keep their existing loading paths.
 
 `artifacts.hugging_face_cache_ttl_days` controls the mirror retention period
 (default 14 days), including draft-model mirrors. A launch therefore has roughly
-seven days before its mirrors can expire with the default TTL. Relaunch through
+three days (20% of the TTL) before its mirrors can expire with the default TTL. Relaunch through
 the CPU coordinator if a run or its node retries outlast that remaining lifetime;
 nodes report a missing or expired mirror instead of downloading from the Hub.
 `prepare` only validates the config. Submitting Hub models requires Iris job context; run the
