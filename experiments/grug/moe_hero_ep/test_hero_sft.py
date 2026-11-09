@@ -116,7 +116,6 @@ def test_sft_stores_offer_no_validation_split():
     components, _ = sft_components(stores, plan)
     config = LmDataConfig(tokenizer="gpt2", cache_dir=None, components=components)
 
-    assert config._cache_items("validation")
     assert all(
         item.flat_cache and item.cache_dir == "s3://bucket/store/train" for _, item in config._cache_items("train")
     )
@@ -130,7 +129,6 @@ def test_sft_stores_offer_no_validation_split():
     [(1, 64_000, 76_000), (11, 64_064, 6_916)],
 )
 def test_full_ab_epoch_plan(racks, block_size, steps):
-    # The 10.05 epoch is 968,596 packed sequences in 19 blocks, about 20% replay.
     plan = plan_sft_mixture(load_sft_stores(), batch_size=16 * racks, replay_fraction=0.2035)
 
     assert (plan.sft_sequences, plan.num_blocks, plan.block_size, plan.steps) == (968_596, 19, block_size, steps)

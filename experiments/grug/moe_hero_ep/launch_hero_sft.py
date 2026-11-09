@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-model SFT of the hero from a pretrained checkpoint, following the Grug 67B 10.05 recipe.
-
-The recipe is the one behind ``open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05``: one packed epoch
-of 216 SFT stores, spread across complete mixture blocks, with long-context pretraining replay, a resumed
-optimizer, and seven reseeded chat-token LM-head columns with a sqrt(32) learning-rate multiplier. 10.05 froze
-the router bias; the hero's capacity-limited expert parallelism makes that a launch choice. Replay comes from
-the hero's own 262K Harrier mix. Tracking: marin#8089.
-"""
+"""Launch full-model hero SFT on the Grug 67B 10.05 recipe."""
 
 import dataclasses
 import json
