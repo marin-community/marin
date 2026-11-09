@@ -27,6 +27,7 @@ from shellbox.machine import (
     MachineOutputLimitExceeded,
     MachineTerminated,
     MachineUnavailable,
+    ParentJobTerminated,
 )
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -43,7 +44,7 @@ from verifyit.spec import NumericSpec
 
 from forge.effects.context import Context
 from forge.effects.events import Event, Retrying
-from forge.effects.issues import OutputBudgetExhausted, Restart, Transient
+from forge.effects.issues import DriverCancelled, OutputBudgetExhausted, Restart, Transient
 from forge.effects.log import EventLog
 from forge.model.controls import Candidate
 from forge.resources.grading import GradeCandidate, GradingResource, candidate_turns, grade
@@ -220,7 +221,7 @@ def test_empty_interruption_causes_keep_exception_types() -> None:
 @pytest.mark.parametrize(
     "failure",
     [
-        MachineCancelled("parent job terminated"),
+        MachineCancelled("sandbox job terminated"),
         MachineUnavailable("controller unavailable"),
         MachineOutputLimitExceeded("output budget exhausted"),
     ],
@@ -235,3 +236,15 @@ def test_machine_failure_policy(operation: RolloutOperation, failure: RuntimeErr
     )
     decision = interruption(error)
     assert type(decision) is expected and str(failure) in str(decision)
+
+
+async def test_parent_job_cancellation_stops_rollout_without_retry() -> None:
+    interrupted = RolloutInterrupted(Rollout("trial", (), "interrupted"), RolloutOperation.START)
+    interrupted.__cause__ = ParentJobTerminated("parent job terminated")
+    engine = FakeEngine((interrupted,))
+    resource = RolloutResource(engine, twelve, "test-config")
+    events: list[Event[None]] = []
+    with pytest.raises(DriverCancelled):
+        await run_rollout(SolverRollout(rollout_spec(arithmetic_task()), 4, 2), resource, notify=events.append)
+    assert engine.run_ids == ["arithmetic:4:2"]
+    assert events == []

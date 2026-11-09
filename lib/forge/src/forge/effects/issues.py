@@ -14,6 +14,10 @@ class Transient(EffectIssue):
     """Retry this effect inside its executor; interrupted startup replays its stage."""
 
 
+class DriverCancelled(EffectIssue):
+    """Stop the driver when its Iris parent job is killed; further sandbox launches will fail."""
+
+
 class Restart(EffectIssue):
     """Reconstruct an interrupted stage on a fresh machine, replaying resolved effects.
 

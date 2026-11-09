@@ -25,7 +25,7 @@ from forge import checkpoint, driver
 from forge.config import ForgeConfig
 from forge.coordinator import run_workpiece
 from forge.effects.events import StageCompleted
-from forge.effects.issues import Restart, Transient
+from forge.effects.issues import DriverCancelled, Restart, Transient
 from forge.effects.log import EventLog, JsonlSink, fold
 from forge.harness.protocol import Stopped, StopReason
 from forge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
@@ -471,6 +471,46 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
     if failures == 3:
         assert "Transient: Environment startup did not resolve" in str(result.decisions[-1])
         assert "bug:" not in str(result.decisions[-1])
+
+
+@pytest.mark.parametrize("mixed_failure", [False, True])
+async def test_driver_one_signals_parent_cancellation_and_resumes_on_restart(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch, mixed_failure: bool
+) -> None:
+    class Cancelling(Envs):
+        calls = 0
+
+        @override
+        async def create(self, requirements: EnvironmentRequirements) -> RecordingEnv:
+            self.calls += 1
+            if self.calls == 1:
+                cancelled = DriverCancelled("parent job terminated")
+                if mixed_failure:
+                    raise ExceptionGroup("concurrent failures", (cancelled, RuntimeError("other failure")))
+                raise cancelled
+            return await super().create(requirements)
+
+    envs = Cancelling()
+
+    @asynccontextmanager
+    async def fake_runtime(
+        policy: Policy, arm: str, _source: EndpointSource, _key: str
+    ) -> AsyncIterator[tuple[ForgeConfig, Resources]]:
+        yield config(arm), resources(envs, script("S"))
+
+    monkeypatch.setattr(driver, "runtime", fake_runtime)
+    assert await driver.one(driver_args) == driver.DRIVER_CANCELLED_EXIT_CODE
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    assert json.loads((destination / "status.json").read_text())["terminal"] is None
+    interrupted = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    assert interrupted.terminal is None
+    if mixed_failure:
+        assert "other failure" in str(interrupted.decisions[-1])
+    assert envs.calls == 1
+
+    driver_args.work_dir += "-restart"
+    assert await driver.one(driver_args) == 0
+    assert WORKPIECE.validate_json((destination / "workpiece.json").read_bytes()).terminal is Terminal.ACCEPTED
 
 
 async def test_recover_resumes_a_stream_published_without_status(tmp_path: Path) -> None:

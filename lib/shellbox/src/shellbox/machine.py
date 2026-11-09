@@ -228,6 +228,10 @@ class MachineCancelled(RuntimeError):
     """The machine or its owning job was cancelled before the operation completed."""
 
 
+class ParentJobTerminated(MachineCancelled):
+    """The Iris parent job ended, so no more machines can be started by this process."""
+
+
 class MachineResourceExhausted(MachineTerminated):
     """The machine exhausted its resource budget; recreating it cannot repair the task."""
 

@@ -43,6 +43,7 @@ from shellbox.machine import (
     MachineTerminated,
     MachineUnavailable,
     NetworkPolicy,
+    ParentJobTerminated,
     UnsupportedMachineSpec,
 )
 
@@ -789,7 +790,7 @@ def test_parent_termination_at_submit_is_typed_after_cleanup(monkeypatch, code, 
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
-    with pytest.raises(MachineCancelled if cancelled else ConnectError) as caught:
+    with pytest.raises(ParentJobTerminated if cancelled else ConnectError) as caught:
         asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert cleaned == ["client", "endpoint"]
     if cancelled:

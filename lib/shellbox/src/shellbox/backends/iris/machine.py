@@ -49,6 +49,7 @@ from shellbox.machine import (
     MachineTerminated,
     MachineUnavailable,
     NetworkPolicy,
+    ParentJobTerminated,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -614,5 +615,5 @@ class IrisMachineFactory:
                 and error.code == Code.FAILED_PRECONDITION
                 and re.fullmatch(r"Cannot submit job: parent job .+ has terminated \(state=JOB_STATE_\w+\)", str(error))
             ):
-                raise MachineCancelled("parent job terminated") from error
+                raise ParentJobTerminated("parent job terminated") from error
             raise

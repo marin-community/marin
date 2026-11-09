@@ -20,13 +20,14 @@ from shellbox.machine import (
     MachineTerminated,
     MachineUnavailable,
     PackageSpec,
+    ParentJobTerminated,
     Result,
 )
 from shellsim import SimulationError
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from forge.effects.events import Event, Note, Resolved, Retrying
-from forge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient
+from forge.effects.issues import DriverCancelled, Hold, OutputBudgetExhausted, Restart, Transient
 from forge.resources import env as env_module
 from forge.resources.env import (
     CommandResult,
@@ -192,7 +193,8 @@ async def test_restore_refuses_wrong_image_before_mutating_files() -> None:
     [
         (MachineTerminated("gone"), Restart),
         (MachineOutputLimitExceeded("ShellSim terminated: output_limit_exceeded"), OutputBudgetExhausted),
-        (MachineCancelled("parent job terminated"), Transient),
+        (ParentJobTerminated("parent job terminated"), DriverCancelled),
+        (MachineCancelled("sandbox job terminated"), Transient),
         (MachineResourceExhausted("Iris sandbox OOMKilled"), Hold),
         (MachineTerminated("Iris sandbox is preempted: WorkloadEvictedDueToPreempted"), Restart),
         (MachineTerminated("Machine is closed"), Restart),
@@ -281,9 +283,27 @@ async def test_websocket_setup_failure_retries_only_three_times() -> None:
     assert len(events) == 2 and all(isinstance(event, Retrying) for event in events)
 
 
-@pytest.mark.parametrize("failure", [ExecSetupFailed("handshake refused"), MachineCancelled("parent job terminated")])
-async def test_machine_startup_expected_failure_is_transient(
-    monkeypatch: pytest.MonkeyPatch, failure: RuntimeError
+async def test_parent_job_cancellation_stops_environment_command_without_retry() -> None:
+    machine = MemoryMachine()
+    machine.failure = ParentJobTerminated("parent job terminated")
+    env = ShellboxEnv(machine, "image", Notes(), AsyncExitStack())
+    events: list[Event[None]] = []
+    with pytest.raises(DriverCancelled):
+        await run_command(RunCommand(COMMAND, 5), env, notify=events.append)
+    assert machine.calls == 1
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    "failure,decision",
+    [
+        (ExecSetupFailed("handshake refused"), Transient),
+        (MachineCancelled("sandbox job terminated"), Transient),
+        (ParentJobTerminated("parent job terminated"), DriverCancelled),
+    ],
+)
+async def test_machine_startup_failure_classification(
+    monkeypatch: pytest.MonkeyPatch, failure: RuntimeError, decision: type[Exception]
 ) -> None:
 
     @asynccontextmanager
@@ -293,7 +313,7 @@ async def test_machine_startup_expected_failure_is_transient(
 
     monkeypatch.setattr(env_module, "prepare_machine", failed_start)
     factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
-    with pytest.raises(Transient) as caught:
+    with pytest.raises(decision) as caught:
         await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
     assert caught.value.__cause__ is failure
 

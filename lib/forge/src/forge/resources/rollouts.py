@@ -13,10 +13,11 @@ from shellbox.machine import (
     MachineOutputLimitExceeded,
     MachineTerminated,
     MachineUnavailable,
+    ParentJobTerminated,
 )
 
 from forge.effects.events import Event, Fingerprint, ReplayPolicy
-from forge.effects.issues import OutputBudgetExhausted, Restart, Transient, describe_exception
+from forge.effects.issues import DriverCancelled, OutputBudgetExhausted, Restart, Transient, describe_exception
 from forge.resources.execution import Notify, has_cause, retry_effect
 
 
@@ -31,8 +32,8 @@ class Engine(Protocol):
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout: ...
 
 
-def interruption(error: RolloutInterrupted) -> Transient | Restart:
-    """Retry startup and confirmed pre-command websocket setup failures."""
+def interruption(error: RolloutInterrupted) -> DriverCancelled | Transient | Restart:
+    """Classify rollout interruptions for cancellation, retry, or restart."""
     causes: list[str] = []
     seen = {id(error)}
     cause = error.__cause__
@@ -42,6 +43,8 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
+    if has_cause(error, ParentJobTerminated):
+        return DriverCancelled(message)
     if error.operation is RolloutOperation.ADVANCE and has_cause(error, MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
     if has_cause(error, MachineCancelled) or has_cause(error, MachineUnavailable):
