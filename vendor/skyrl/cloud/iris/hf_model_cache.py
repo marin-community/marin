@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -60,6 +61,8 @@ _CACHE_PREFIX = "marinskyrl/hf-models"
 _CACHE_POLL_INTERVAL = 10.0
 # Refresh mirror objects once this fraction of their lifecycle TTL has passed.
 _REFRESH_AFTER_TTL_FRACTION = 0.8
+# Server-side copies run at about 100 MiB/s each on CoreWeave, so refresh several at once.
+_REFRESH_PARALLELISM = 8
 _WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth")
 _STREAM_CHUNK_BYTES = 8 * 2**20
 _MAX_METADATA_BYTES = 256 * 2**20
@@ -539,9 +542,17 @@ def publish_hugging_face_snapshot(
 def _refresh_model_files(model_uri: str, manifest: ModelManifest, *, before: datetime) -> None:
     # Refresh shards before metadata, and leave the completion marker to the caller.
     # A failed refresh must not publish a new marker over aging or missing weights.
-    files = sorted(manifest.files, key=lambda entry: (not _is_weight(entry.path), entry.path))
-    for entry in files:
-        StoragePath(join_resource_path(model_uri, entry.path)).refresh_lifetime(before=before)
+    weights = [entry.path for entry in manifest.files if _is_weight(entry.path)]
+    metadata = [entry.path for entry in manifest.files if not _is_weight(entry.path)]
+    with ThreadPoolExecutor(max_workers=_REFRESH_PARALLELISM) as pool:
+        for paths in (weights, metadata):
+            # list() waits for every copy in this group and re-raises the first failure.
+            list(
+                pool.map(
+                    lambda path: StoragePath(join_resource_path(model_uri, path)).refresh_lifetime(before=before),
+                    paths,
+                )
+            )
 
 
 def ensure_hugging_face_model_cache(
