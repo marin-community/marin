@@ -166,11 +166,9 @@ class HeldoutSelection:
 class PanelSource(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: str
     source_id: str
     rows: PositiveInt
     format: PanelFormat
-    required_tags: tuple[str, ...]
     family: str
     aaii_category: str
     license: str
@@ -186,7 +184,7 @@ class PanelMeasurement(BaseModel):
     model_revision: str
 
 
-class TestPanelRecipe(BaseModel):
+class PanelRecipe(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
@@ -200,8 +198,8 @@ class TestPanelRecipe(BaseModel):
 
 
 @dataclass(frozen=True)
-class TestPanelConfig:
-    recipe: TestPanelRecipe
+class PanelConfig:
+    recipe: PanelRecipe
     sources: dict[str, HeldoutSource]
     output_path: str
 
@@ -273,7 +271,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
         raise ValueError("Heldout source machine contract changed")
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:
         raise ValueError("The heldout source must use the one-turn Shellbox contract")
-    if isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image is not None:
+    if isinstance(task.grader, ScriptGrader) and _grader_kind(task) == GraderKind.IMAGE:
         dataset = _grader_contract(task)["dataset"]
         if dataset not in grader_environments:
             raise ValueError(f"No admitted grader environment for {BLENDS[HELDOUT_BLEND][dataset].id}")
@@ -289,25 +287,34 @@ def validation_family(task: TaskSpec) -> str:
     return HELDOUT_FAMILIES[_grader_contract(task)["dataset"]]
 
 
+def _stratified_sample(
+    tasks: tuple[TaskSpec, ...], families: Mapping[str, str], counts: Mapping[str, int], seed: int
+) -> tuple[TaskSpec, ...]:
+    selected: set[str] = set()
+    for family, size in counts.items():
+        count, sample = seeded_sample(
+            (task for task in tasks if families[task.id] == family),
+            size=size,
+            key=lambda task: seeded_order(task.id, seed),
+        )
+        if count < size:
+            raise ValueError(f"Panel source lacks enough {family} tasks")
+        selected.update(task.id for task in sample)
+    return tuple(task for task in tasks if task.id in selected)
+
+
 def select_heldout(full: tuple[TaskSpec, ...], recipe: SelectionRecipe) -> HeldoutSelection:
     """Retain the full exclusion set and choose a seeded panel within each family."""
     if len({task.id for task in full}) != len(full):
         raise ValueError("Heldout task IDs are not unique")
     families = {task.id: validation_family(task) for task in full}
-    selected: set[str] = set()
-    for family in sorted(set(families.values())):
-        count, sample = seeded_sample(
-            (task for task in full if families[task.id] == family),
-            size=recipe.validation_per_family,
-            key=lambda task: seeded_order(task.id, recipe.seed),
-        )
-        if count < recipe.validation_per_family:
-            raise ValueError(f"Heldout source lacks enough {family} tasks")
-        selected.update(task.id for task in sample)
+    sample = _stratified_sample(
+        full, families, dict.fromkeys(sorted(set(families.values())), recipe.validation_per_family), recipe.seed
+    )
     return HeldoutSelection(
         full=full,
-        sample=tuple(task for task in full if task.id in selected),
-        family_counts=dict(Counter(families[task.id] for task in full if task.id in selected)),
+        sample=sample,
+        family_counts=dict(Counter(families[task.id] for task in sample)),
     )
 
 
@@ -385,7 +392,7 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
         if record is None:
             raise ValueError(f"No admitted grader environment for {source.source_id}")
         task = TaskSpec.model_validate_json(record[TASK_JSON_COLUMN])
-        if not isinstance(task.grader, ScriptGrader) or task.grader.environment.docker_image is not None:
+        if not isinstance(task.grader, ScriptGrader) or _grader_kind(task) != GraderKind.PACKAGE:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
         environments[components[source.source_id]] = task.grader.environment
     return environments
@@ -399,7 +406,11 @@ def _grader_kind(task: TaskSpec) -> GraderKind:
     if not isinstance(task.grader, ScriptGrader | VerifyitGrader) or task.grader.environment is None:
         raise ValueError(f"Task has no runnable grader: {task.id}")
     environment = task.grader.environment
-    return GraderKind.IMAGE if environment.docker_image is not None else GraderKind.PACKAGE
+    return (
+        GraderKind.PACKAGE
+        if environment.packages_lock is not None or environment.package_spec is not None
+        else GraderKind.IMAGE
+    )
 
 
 def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
@@ -498,6 +509,8 @@ def prepare(config: SelectionConfig) -> None:
     """Publish selected training TaskSpecs and the fixed and complete heldout panels."""
     environments = _grader_environments(config.sources)
     heldout = tuple(task for source in config.heldout for task in _panel_source_tasks(source, environments))
+    if any(_grader_kind(task) not in (GraderKind.IN_PROCESS, GraderKind.PACKAGE) for task in heldout):
+        raise ValueError("Development panel requires local graders")
     selection = select_heldout(heldout, config.recipe)
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
@@ -634,25 +647,20 @@ def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, PanelRate
             raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
 
 
-def _fast_subset(recipe: TestPanelRecipe, selected: list[tuple[TaskSpec, PanelSource]]) -> tuple[TaskSpec, ...]:
+def _fast_subset(recipe: PanelRecipe, selected: list[tuple[TaskSpec, PanelSource]]) -> tuple[TaskSpec, ...]:
     """The seeded per-family fast quotas, in full-panel order."""
     if recipe.fast_counts.keys() != {part.family for _, part in selected}:
         raise ValueError("Fast-panel quotas must cover every selected family")
-    fast_ids = set()
-    for family, size in recipe.fast_counts.items():
-        count, sample = seeded_sample(
-            (task for task, part in selected if part.family == family),
-            size=size,
-            key=lambda task: seeded_order(task.id, recipe.seed),
-        )
-        if count < size:
-            raise ValueError(f"Fast-panel source shortfall for {family}")
-        fast_ids.update(task.id for task in sample)
-    return tuple(task for task, _ in selected if task.id in fast_ids)
+    return _stratified_sample(
+        tuple(task for task, _ in selected),
+        {task.id: part.family for task, part in selected},
+        recipe.fast_counts,
+        recipe.seed,
+    )
 
 
 def select_test_panel(
-    recipe: TestPanelRecipe,
+    recipe: PanelRecipe,
     sources: Mapping[str, Iterator[TaskSpec]],
     excluded: Iterator[TaskSpec],
     rates: Mapping[str, PanelRate],
@@ -665,12 +673,10 @@ def select_test_panel(
 
     def candidates(part: PanelSource, counts: Counter[str]) -> Iterator[TaskSpec]:
         seen: set[tuple[str, str]] = set()
-        for task in sources[part.name]:
+        for task in sources[part.source_id]:
             counts["input"] += 1
             keys = _panel_keys(task)
-            if not set(part.required_tags).issubset(task.tags):
-                counts["filtered"] += 1
-            elif not excluded_keys.isdisjoint(keys.exclusion):
+            if not excluded_keys.isdisjoint(keys.exclusion):
                 counts["overlap"] += 1
             elif "eval" not in task.tags:
                 raise ValueError(f"Test panel source must reserve its tasks for evaluation: {task.id}")
@@ -688,18 +694,18 @@ def select_test_panel(
             candidates(part, counts), size=part.count, key=lambda task: seeded_order(task.id, recipe.seed)
         )
         if eligible < part.count:
-            raise ValueError(f"Test panel part shortfall: {part.name}: requested {part.count}, eligible {eligible}")
+            raise ValueError(f"Test panel part shortfall: {part.source_id}: requested {part.count}, eligible {eligible}")
         selected.extend((task, part) for task in tasks)
         taken.update(key for task in tasks for key in _panel_keys(task).exact)
         counts.update(eligible=eligible, selected=len(tasks))
-        audit[part.name] = counts
+        audit[part.source_id] = counts
     selected.sort(key=lambda entry: entry[0].id)
     if recipe.pass_rates is not None:
         _check_pass_rates(tuple(task for task, _ in selected), rates)
     return PanelSelection(tuple(selected), _fast_subset(recipe, selected), audit)
 
 
-def prepare_test_panel(config: TestPanelConfig) -> None:
+def prepare_test_panel(config: PanelConfig) -> None:
     """Read pinned sources and publish the selected full panel, fast subset, manifest and audit summary."""
     recipe = config.recipe
     rates = _panel_measurements(recipe.pass_rates)
@@ -716,7 +722,7 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
             "aaii_category": part.aaii_category,
             "agentic": "agentic" in task.tags,
             "grader_kind": _grader_kind(task),
-            "part": part.name,
+            "part": part.source_id,
             "source": task.source.model_dump_json(),
             "license": part.license,
             "difficulty": 1 - rates[task.id].mean_score if rates else None,
@@ -735,52 +741,53 @@ def prepare_test_panel(config: TestPanelConfig) -> None:
             "validation_rows": len(selection.fast),
             "family_counts": dict(Counter(part.family for _, part in selection.tasks)),
             "category_counts": dict(Counter(part.aaii_category for _, part in selection.tasks)),
-            "source_counts": {
-                part.name: {"source_id": part.source_id, **selection.counts[part.name]} for part in recipe.sources
-            },
+            "source_counts": {part.source_id: dict(selection.counts[part.source_id]) for part in recipe.sources},
         }
         _publish_selection(directory, config.output_path, (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME), summary)
 
 
-def test_panel_step(curated: dict[str, ArtifactStep], recipe: TestPanelRecipe) -> ArtifactStep[Artifact]:
+def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> ArtifactStep[Artifact]:
     """Bind named recipe parts and training/development exclusions to their versioned source artifacts."""
-    if len({part.name for part in recipe.sources}) != len(recipe.sources):
-        raise ValueError("Panel recipe parts must have unique names")
     missing = {part.source_id for part in recipe.sources} - curated.keys()
     if missing:
         raise ValueError(f"Panel requires corpus sources: {', '.join(sorted(missing))}")
-    inputs = {part.name: curated[part.source_id] for part in recipe.sources}
+    inputs = {part.source_id: curated[part.source_id] for part in recipe.sources}
     excluded = (*recipe.training, recipe.development)
     exclusions = _pinned_inputs(f"{recipe.name}/exclude", excluded)
-    rates = () if recipe.pass_rates is None else (recipe.pass_rates,)
-    measurement = tuple(
-        ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{recipe.name}/pass-rates", rate.version, rate.uri)
-        for rate in rates
+    rate = recipe.pass_rates
+    measurement = (
+        None
+        if rate is None
+        else ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{recipe.name}/pass-rates", rate.version, rate.uri)
     )
 
-    def build_config(context: StepContext) -> TestPanelConfig:
+    def build_config(context: StepContext) -> PanelConfig:
         *training, development = _resolved(context, excluded, exclusions)
         update = {
             "training": tuple(training),
             "development": development,
-            "pass_rates": next(iter(_resolved(context, rates, measurement)), None),
+            "pass_rates": (
+                rate.model_copy(update={"uri": context.artifact_path(measurement)})
+                if rate is not None and measurement is not None
+                else None
+            ),
         }
         sources = {
-            part.name: HeldoutSource(
-                uri=context.artifact_path(inputs[part.name]),
-                version=inputs[part.name].version,
+            part.source_id: HeldoutSource(
+                uri=context.artifact_path(inputs[part.source_id]),
+                version=inputs[part.source_id].version,
                 rows=part.rows,
                 format=part.format,
             )
             for part in recipe.sources
         }
-        return TestPanelConfig(recipe.model_copy(update=update), sources, context.output_path)
+        return PanelConfig(recipe.model_copy(update=update), sources, context.output_path)
 
     return ArtifactStep(
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=(*dict.fromkeys(inputs.values()), *exclusions, *measurement),
+        deps=(*dict.fromkeys(inputs.values()), *exclusions, *((measurement,) if measurement is not None else ())),
         run=prepare_test_panel,
         build_config=build_config,
     )
