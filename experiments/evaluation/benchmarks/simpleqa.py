@@ -17,14 +17,15 @@ from taskcompendium.importers.evalchemy.simpleqa import convert_simpleqa, read_s
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 
 
-def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
+def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCorpusRecipe]:
     name = "simpleqa-mini" if mini else "simpleqa"
     rows = 500 if mini else 4326
     return RlDataSource(
@@ -36,7 +37,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
             count=rows,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="evalchemy-" + name,
                 source=HfSource(
@@ -71,11 +72,11 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
             ),
             simpleqa_item,
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [simpleqa_source(benchmark, mini=mini) for benchmark, mini in (("SimpleQA", False), ("SimpleQAMini", True))]
 
 

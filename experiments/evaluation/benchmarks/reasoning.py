@@ -31,12 +31,13 @@ from taskcompendium.importers.fewshot import pinned_prompts
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import Converter, IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
-from experiments.post_training.task_curation.datasets.evalchemy.protocols import (
-    fewshot_choice_source,
-    fewshot_generation_source,
+from experiments.evaluation.benchmarks.environments import BASIC_GRADER
+from experiments.evaluation.prompt_compilation import (
+    multiple_choice_evaluation,
+    text_generation_evaluation,
 )
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -46,43 +47,16 @@ MMLU_TEST_FILE = "data/test-00000-of-00001.parquet"
 BBH_REVISION = "b5306be6f827cfafbb545ff5a51f96916029b0fd"
 
 
-def likelihood_sources() -> list[RlDataSource[EvalDataset]]:
+def likelihood_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     raw = LikelihoodMetric(name="acc,none", normalization=LikelihoodNormalization.RAW)
     normalized = LikelihoodMetric(name="acc_norm,none", normalization=LikelihoodNormalization.CHARACTERS)
     result = [
-        fewshot_choice_source(
-            "agieval_lsat_ar",
-            "agieval_lsat_ar",
-            HfSource(
-                "hails/agieval-lsat-ar",
-                "052cc636b612f5563329dd182fb6c2cad56681c8",
-                ("data/test-00000-of-00001.parquet",),
-                SourceFormat.PARQUET,
-            ),
-            230,
-            agieval_template(),
-            (raw, normalized),
-        ),
-        fewshot_choice_source(
-            "leaderboard_mmlu_pro",
-            "leaderboard_mmlu_pro",
-            HfSource("TIGER-Lab/MMLU-Pro", MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET),
-            12032,
-            mmlu_pro_likelihood_template(MMLU_VALIDATION_FILE),
-            (raw,),
-        ),
+        multiple_choice_evaluation(name='agieval_lsat_ar', benchmark='agieval_lsat_ar', source=HfSource('hails/agieval-lsat-ar', '052cc636b612f5563329dd182fb6c2cad56681c8', ('data/test-00000-of-00001.parquet',), SourceFormat.PARQUET), population=230, template=agieval_template(), metrics=(raw, normalized)),
+        multiple_choice_evaluation(name='leaderboard_mmlu_pro', benchmark='leaderboard_mmlu_pro', source=HfSource('TIGER-Lab/MMLU-Pro', MMLU_PRO_REVISION, (MMLU_TEST_FILE,), SourceFormat.PARQUET), population=12032, template=mmlu_pro_likelihood_template(MMLU_VALIDATION_FILE), metrics=(raw,)),
     ]
     for subject, population in (("diamond", 198), ("main", 448), ("extended", 546)):
         result.append(
-            fewshot_choice_source(
-                "leaderboard_gpqa-" + subject,
-                "leaderboard_gpqa",
-                HfSource("Idavidrein/gpqa", GPQA_REVISION, ("gpqa_" + subject + ".csv",), SourceFormat.CSV),
-                population,
-                gpqa_likelihood_template(),
-                (normalized,),
-                subject=subject,
-            )
+            multiple_choice_evaluation(name='leaderboard_gpqa-' + subject, benchmark='leaderboard_gpqa', source=HfSource('Idavidrein/gpqa', GPQA_REVISION, ('gpqa_' + subject + '.csv',), SourceFormat.CSV), population=population, template=gpqa_likelihood_template(), metrics=(normalized,), subject=subject)
         )
     for key in pinned_prompts():
         if not key.startswith(("bbh/", "bbh_cot/")):
@@ -97,36 +71,11 @@ def likelihood_sources() -> list[RlDataSource[EvalDataset]]:
         )
         if variant == "bbh":
             result.append(
-                fewshot_choice_source(
-                    "leaderboard_bbh-" + subject,
-                    "leaderboard_bbh",
-                    source,
-                    population,
-                    bbh_likelihood_template(subject),
-                    (normalized,),
-                    subject=subject,
-                )
+                multiple_choice_evaluation(name='leaderboard_bbh-' + subject, benchmark='leaderboard_bbh', source=source, population=population, template=bbh_likelihood_template(subject), metrics=(normalized,), subject=subject)
             )
             continue
         result.append(
-            fewshot_generation_source(
-                "bbh_cot_fewshot-" + subject,
-                "bbh_cot_fewshot",
-                source,
-                population,
-                bbh_cot_template(subject),
-                ("exact_match,get-answer",),
-                Sampling(
-                    temperature=0,
-                    top_p=None,
-                    top_k=None,
-                    max_tokens=1024,
-                    stop=("</s>", "Q", "\n\n"),
-                    chat_template_kwargs={},
-                ),
-                "bbh_cot",
-                BASIC_GRADER,
-            )
+            text_generation_evaluation(name='bbh_cot_fewshot-' + subject, benchmark='bbh_cot_fewshot', source=source, population=population, template=bbh_cot_template(subject), metrics=('exact_match,get-answer',), sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=1024, stop=('</s>', 'Q', '\n\n'), chat_template_kwargs={}), scorer='bbh_cot', grader=BASIC_GRADER)
         )
     return result
 
@@ -140,7 +89,7 @@ def choice_dataset(
     trials: int,
     temperature: float,
     inputs: dict[str, HfSource],
-) -> RlDataSource[EvalDataset]:
+) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name,
@@ -150,7 +99,7 @@ def choice_dataset(
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),
             count=rows,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="evalchemy-" + name,
                 source=source,
@@ -181,11 +130,11 @@ def choice_dataset(
             ),
             partial(reasoning_item, benchmark=benchmark),
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         choice_dataset(
             "gpqa-diamond",

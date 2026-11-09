@@ -49,7 +49,7 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.spec import ExactSpec
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.datasets.evalchemy.long_context import (
+from experiments.evaluation.benchmarks.long_context import (
     GRAPHWALKS_COHORT,
     GRAPHWALKS_CONTEXT_POLICY,
     MRCR_COHORT,

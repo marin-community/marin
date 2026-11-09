@@ -42,8 +42,9 @@ from taskcompendium.importers.evalchemy.scorers.long_context import (
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
+from experiments.evaluation.benchmarks.environments import BASIC_GRADER
+from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -88,7 +89,7 @@ GRAPHWALKS_CONTEXT_POLICY = ContextPolicy(
 )
 
 
-def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
+def mrcr_source(name: str, max_context: int) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name.lower(),
@@ -98,7 +99,7 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
             tags=("eval", "source:evalchemy", "benchmark", "long-context", "retrieval"),
             count=MRCR_SOURCE_POPULATION,
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="evalchemy-" + name.lower(),
                 source=HfSource("openai/mrcr", MRCR_REVISION, MRCR_FILES, SourceFormat.PARQUET, read=read_mrcr),
@@ -133,11 +134,11 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataset]:
             ),
             mrcr_item,
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
-def sources() -> list[RlDataSource[EvalDataset]]:
+def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         mrcr_source("MRCR", 73728),
         mrcr_source("MRCR-32k", 32704),
@@ -151,7 +152,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 tags=("eval", "source:evalchemy", "benchmark", "long-context", "graph"),
                 count=1150,
             ),
-            config=EvalDataset(
+            config=EvaluationCorpusRecipe(
                 CurationRecipe(
                     name="evalchemy-graphwalks",
                     source=HfSource("openai/graphwalks", GRAPHWALKS_REVISION, GRAPHWALKS_FILES, SourceFormat.PARQUET),
@@ -190,7 +191,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                 ),
                 graphwalks_item,
             ),
-            pipeline=curate,
+            pipeline=prepare_evaluation,
         ),
     ]
 

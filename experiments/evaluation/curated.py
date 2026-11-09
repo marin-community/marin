@@ -25,10 +25,10 @@ from rigging.secrets import is_secret_reference
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
-from experiments.post_training.task_curation.benchmarks import evaluation_benchmarks
+from experiments.evaluation.catalog import evaluation_benchmarks
+from experiments.evaluation.preparation import prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.evaluation import curate
 
 
 def pinned_model(model: ModelConfig) -> ModelConfig:
@@ -91,7 +91,7 @@ def corpus_steps(selection: ResolvedEvaluationSelection, runtime: CampaignRuntim
             source for source in sources if source.config is not None and source.config.partition in selection.partitions
         )
     options = PipelineOptions(SourceProcessingMode.QUICK, runtime)
-    return tuple(curate(source, options) for source in sources)
+    return tuple(prepare_evaluation(source, options) for source in sources)
 
 
 def requires_judge(selection: EvaluationSelection) -> bool:

@@ -27,7 +27,7 @@ from taskcompendium.evaluation.spec import ChatGeneration, EvaluationItem, TextG
 from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.assets.code_protocol import function_prompt, mbpp_prompt
-from taskcompendium.importers.evaluation_harness import FEWSHOT_SEED, parquet_documents
+from taskcompendium.importers.fewshot import FEWSHOT_SEED, parquet_documents
 from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow

@@ -20,10 +20,14 @@ remain separate work; this path produces no headline score or legacy
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
 
-`EvalDataset` in `experiments.post_training.task_curation.evaluation` binds a
-`CurationRecipe`, an `EvaluationProtocol`, and an item builder. Leaf declarations
-live in `datasets/evalchemy/`; the shared catalog is
-`experiments.post_training.task_curation.sources.all_sources()`.
+`EvaluationCorpusRecipe` in `experiments.evaluation.preparation` binds source
+acquisition, prompt compilation, an `EvaluationProtocol`, and an item builder.
+Benchmark data and evaluation choices live under `experiments/evaluation/benchmarks/`;
+`experiments.evaluation.catalog` assembles their supported configurations.
+Shot count and request format are evaluation settings. Preparation compiles their
+final prompts before publication, preserving source-order sampling and immutable
+TaskSpec identities. The shared curation inventory registers default evaluation
+recipes alongside training sources.
 
 Import `EvaluationProtocol`, `EvaluationItem`, `OperationKind`, and `SummaryKind`
 from `taskcompendium.evaluation.spec`. The protocol's `schema_version` is `3`,

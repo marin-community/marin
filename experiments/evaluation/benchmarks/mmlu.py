@@ -8,8 +8,9 @@ from dataclasses import replace
 from taskcompendium.evaluation.spec import LikelihoodNormalization
 from taskcompendium.importers.evaluation_harness import HarnessTemplate
 
-from experiments.post_training.task_curation.datasets.evalchemy.protocols import choice_source
-from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, ProtocolVariant
+from experiments.evaluation.prompt_compilation import lm_eval_multiple_choice
+from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
+from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
 
 MMLU_REVISION = "c30699e8356da336a370243923dbaf21066bb9fe"
@@ -75,19 +76,11 @@ MMLU_POPULATIONS = {
 }
 
 
-def sources(shots: int = 5) -> list[RlDataSource[EvalDataset]]:
+def sources(shots: int = 5) -> list[RlDataSource[EvaluationCorpusRecipe]]:
     raw = (LikelihoodNormalization.RAW,)
     result = []
     for subject, population in MMLU_POPULATIONS.items():
-        source = choice_source(
-            "mmlu-" + subject,
-            "cais/mmlu",
-            MMLU_REVISION,
-            subject + "/test-00000-of-00001.parquet",
-            population,
-            HarnessTemplate("mmlu", shots, subject, subject + "/dev-00000-of-00001.parquet"),
-            raw,
-        )
+        source = lm_eval_multiple_choice(name='mmlu-' + subject, repo='cais/mmlu', revision=MMLU_REVISION, file=subject + '/test-00000-of-00001.parquet', population=population, template=HarnessTemplate('mmlu', shots, subject, subject + '/dev-00000-of-00001.parquet'), normalizations=raw)
         dataset = source.config
         assert dataset is not None
         result.append(
@@ -107,7 +100,7 @@ def sources(shots: int = 5) -> list[RlDataSource[EvalDataset]]:
     return result
 
 
-def build(variant: ProtocolVariant) -> tuple[RlDataSource[EvalDataset], ...]:
+def build(variant: ProtocolVariant) -> tuple[RlDataSource[EvaluationCorpusRecipe], ...]:
     assert variant.num_fewshot is not None
     return tuple(sources(variant.num_fewshot))
 

@@ -23,8 +23,8 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
-from experiments.post_training.task_curation.datasets.evalchemy.simpleqa import simpleqa_source
-from experiments.post_training.task_curation.evaluation import curate
+from experiments.evaluation.benchmarks.simpleqa import simpleqa_source
+from experiments.evaluation.preparation import prepare_evaluation
 
 
 def write_simpleqa(file, rows):
@@ -69,7 +69,7 @@ def judged_corpus(tmp_path, monkeypatch):
             ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
             runtime.activate(context),
         ):
-            artifact = run(curate(source, options), max_concurrent=1)[0]
+            artifact = run(prepare_evaluation(source, options), max_concurrent=1)[0]
         yield reference, list(evaluation_cases(artifact.path))
     finally:
         client.shutdown()

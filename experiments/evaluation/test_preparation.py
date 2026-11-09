@@ -35,10 +35,10 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
-from experiments.post_training.task_curation.datasets.evalchemy.code import sources as python_sources
+from experiments.evaluation.benchmarks.code import sources as python_sources
 from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -66,12 +66,12 @@ def grouped_item(task):
     return chat_item(task).model_copy(update={"groups": {"panel": "changed"}})
 
 
-def fixture_source() -> RlDataSource[EvalDataset]:
+def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
             id="eval-identity", title="Identity fixture", origin="test", family="test", tags=("eval",), count=1
         ),
-        config=EvalDataset(
+        config=EvaluationCorpusRecipe(
             CurationRecipe(
                 name="eval-identity",
                 source=HfSource("test/identity", "0" * 40, ("rows.jsonl",), SourceFormat.JSONL),
@@ -92,7 +92,7 @@ def fixture_source() -> RlDataSource[EvalDataset]:
             ),
             chat_item,
         ),
-        pipeline=curate,
+        pipeline=prepare_evaluation,
     )
 
 
@@ -125,7 +125,7 @@ def test_evaluation_artifact_cache_distinguishes_source_preparation(local_graph)
     for prefix in ("First: ", "Second: "):
         prepared = replace(dataset.recipe.source, decode=partial(decode_prefix, prefix=prefix))
         configured = replace(source, config=replace(dataset, recipe=replace(dataset.recipe, source=prepared)))
-        artifact = run(curate(configured, options), max_concurrent=1)[0]
+        artifact = run(prepare_evaluation(configured, options), max_concurrent=1)[0]
         outputs.append(next(evaluation_cases(artifact.path)).task.context.events[0].content)
     assert outputs == ["First: Name a color", "Second: Name a color"]
 
@@ -171,7 +171,7 @@ def test_python_evaluation_artifact_cache_separates_operation_models_and_options
                 item_builder=partial(python_item, generation=operation),
             ),
         )
-        artifact = run(curate(configured, options), max_concurrent=1)[0]
+        artifact = run(prepare_evaluation(configured, options), max_concurrent=1)[0]
         published.append((artifact.path, next(evaluation_cases(artifact.path)).item.operation))
     assert len({path for path, _ in published}) == 3
     assert published[-1] == published[-2]
@@ -188,7 +188,7 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
     dataset = source.config
     assert dataset is not None
     source = replace(source, config=replace(dataset, recipe=replace(dataset.recipe, convert=convert_mutating_fixture)))
-    step = curate(source, options)
+    step = prepare_evaluation(source, options)
     with pytest.raises(RuntimeError):
         run(step, max_concurrent=1)
     assert not (Path(step.path()) / MANIFEST_FILENAME).exists()

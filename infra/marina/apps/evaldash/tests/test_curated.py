@@ -59,11 +59,11 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from zephyr.context import ZephyrContext
 
+from experiments.evaluation.benchmarks.math import math_dataset
 from experiments.evaluation.policy_finalization import PolicyJudge
+from experiments.evaluation.preparation import prepare_evaluation
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
-from experiments.post_training.task_curation.datasets.evalchemy.math import math_dataset
-from experiments.post_training.task_curation.evaluation import curate
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
     environment_artifact,
@@ -245,7 +245,7 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
                         path=environment_artifact(grader).path(), identity=identity_digest(grader)
                     )
                     write_artifact(built.result_payload(), built.path)
-                    publish = curate(declaration, options).lower().fn
+                    publish = prepare_evaluation(declaration, options).lower().fn
                     assert publish is not None
                     publish(output)
                 protocol, manifest = evaluation_protocol(output)
