@@ -681,13 +681,16 @@ zeroed. Those rows and the matching embedding rows then train at √32 times the
 store tokenizer, `s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18`, maps 128005 and
 128011 to `<tool_call>` and `</tool_call>`, so exports must ship it with EOS `[128001, 128009]`.
 
-Every rate and the router-bias mode are required flags.
+Every rate, the router-bias mode and the capacity factor are required flags.
 
 - The 10.05 recipe froze the router bias. It trained with expert axis 1, which has no capacity
   drops.
 - On one hero rack, `--router-bias frozen` drops 5.8–8.1% of expert assignments.
 - `--router-bias update` keeps quantile balancing on and drops about 3e-5. Over the first
   20 updates, its loss is higher.
+- `--capacity-factor` sets the routed expert capacity per shard; the hero trained at 1.5. A
+  frozen bias with a higher factor drops fewer assignments but uses more HBM. One rack peaks at
+  130.77 GiB at 1.5.
 
 `--eval-every` counts absolute steps. The trainer's first-step eval never fires on a restored run,
 so the first eval of a run that starts at step 393491 with `--eval-every 500` lands at step 393500.
@@ -699,7 +702,7 @@ python -m experiments.grug.moe_hero_ep.launch_hero_sft \
   --run-id hero-sft-smoke \
   --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
   --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
-  --dp-racks 1 --router-bias update --stop-after-steps 20 --eval-every 393511 \
+  --dp-racks 1 --router-bias update --capacity-factor 1.5 --stop-after-steps 20 --eval-every 393511 \
   --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
   --version dev
 ```

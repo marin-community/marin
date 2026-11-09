@@ -324,6 +324,7 @@ def build_sft_run(
     replay_fraction: float,
     dp_racks: int,
     router_bias_mode: RouterBiasMode,
+    capacity_factor: float,
     stop_after_steps: int | None = None,
     eval_every: int = 0,
     checkpoint_root: str | None = None,
@@ -335,13 +336,16 @@ def build_sft_run(
     ``stop_after_steps`` bounds a smoke test to that many updates of the full one-epoch schedule.
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
-    the trainer's first-step eval never fires on a restored run.
+    the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
+    expert capacity; with a frozen bias, SFT data overflows the hero's 1.5.
     """
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
-    model = with_transport_remat_mode(HERO_MODEL_CONFIG)
+    if capacity_factor <= 0:
+        raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
+    model = with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
     context_axis_size = HERO_CONTEXT_AXIS_SIZE
     expert_axis_size = hero_expert_axis_size(context_axis_size)
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
@@ -406,7 +410,8 @@ def build_sft_run(
     validation = validation_datasets() if eval_every > 0 else []
     length_statistics = harrier_length_statistics()
     logger.info(
-        "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates",
+        "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates, "
+        "router bias %s, capacity factor %g",
         run_id,
         plan.steps,
         plan.batch_size,
@@ -414,6 +419,8 @@ def build_sft_run(
         plan.block_size,
         plan.replay_fraction,
         plan.decay_steps,
+        router_bias_mode.value,
+        capacity_factor,
     )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
@@ -439,7 +446,17 @@ def build_sft_run(
                 save_code=False,
                 entity="marin-community",
                 project=SFT_WANDB_PROJECT,
-                tags=["grug", "moe", "hero", "sft", "full-ab-2026.09.29", f"racks-{dp_racks}", "gb200"],
+                tags=[
+                    "grug",
+                    "moe",
+                    "hero",
+                    "sft",
+                    "full-ab-2026.09.29",
+                    f"racks-{dp_racks}",
+                    f"router-bias-{router_bias_mode.value}",
+                    f"capacity-{capacity_factor:g}",
+                    "gb200",
+                ],
                 group="hero-sft",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -541,6 +558,13 @@ def _grad_norm(value: str) -> float | None:
     help="'frozen' keeps the restored bias (the 10.05 recipe); 'update' keeps quantile balancing on.",
 )
 @click.option(
+    "--capacity-factor",
+    type=click.FloatRange(min=0, min_open=True),
+    required=True,
+    help=f"Routed expert capacity per shard as a multiple of the even share; the hero trained at "
+    f"{HERO_MODEL_CONFIG.capacity_factor:g}. Higher values cut drops and use more HBM.",
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -564,6 +588,7 @@ def main(
     dp_racks: int,
     stop_after_steps: int | None,
     router_bias: str,
+    capacity_factor: float,
     eval_every: int,
     checkpoint_root: str | None,
     checkpoint_minutes: float,
@@ -578,6 +603,7 @@ def main(
         replay_fraction=replay_fraction,
         dp_racks=dp_racks,
         router_bias_mode=RouterBiasMode(router_bias),
+        capacity_factor=capacity_factor,
         stop_after_steps=stop_after_steps,
         eval_every=eval_every,
         checkpoint_root=checkpoint_root,
