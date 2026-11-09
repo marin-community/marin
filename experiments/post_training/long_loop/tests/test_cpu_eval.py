@@ -19,13 +19,24 @@ def run_cpu_eval(*, output: str):
     root.mkdir(parents=True, exist_ok=True)
     environment = dict(
         os.environ,
-        PYTHONPATH=f"{REPO}:{REPO}/vendor/skyrl:{REPO}/vendor/skyrl/skyrl-train",
+        PYTHONPATH=f"{REPO}:{REPO}/vendor/skyrl:{REPO}/vendor/skyrl/skyrl-train:{REPO}/vendor/skyrl/skyrl-gym",
         RAY_ENABLE_UV_RUN_RUNTIME_ENV="0",
     )
     with (root / "cpu-eval.log").open("w") as log:
         subprocess.run(
             [
-                str(REPO / "vendor/skyrl/.venv/bin/python"),
+                "uv",
+                "run",
+                "--project",
+                str(REPO / "vendor/skyrl"),
+                "--frozen",
+                "--extra",
+                "cpu",
+                "--no-group",
+                "dev",
+                "--with",
+                "pytest==8.4.2",
+                "python",
                 str(Path(__file__).with_name("cpu_eval_fixture.py")),
                 str(root),
             ],
