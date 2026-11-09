@@ -173,7 +173,6 @@ async def test_legacy_progress_resumes_nonterminal_stages_and_distinguishes_held
 
 
 async def test_conversation_logs_each_turn_once_and_replays_legacy_full_requests(tmp_path: Path) -> None:
-
     sink = JsonlSink(str(tmp_path / "conversation.jsonl"))
     log = EventLog(sink=sink)
     prefix = "long-system-prompt-" * 1000
@@ -209,3 +208,25 @@ async def test_nonfinite_event_values_roundtrip_and_replay(tmp_path: Path, numbe
     before = Path(sink.path).read_bytes()
     await sink.write(loaded[-1:])
     assert Path(sink.path).read_bytes() == before
+
+
+@pytest.mark.parametrize("agrees", [True, False])
+async def test_parts_overlapping_the_snapshot_must_repeat_it(tmp_path: Path, agrees: bool) -> None:
+    """A second writer numbered from 1 beside a published stream is reported as divergence, not spliced in."""
+    destination = tmp_path / "published"
+    (destination / "events.jsonl.parts").mkdir(parents=True)
+    first = JsonlSink(str(tmp_path / "first.jsonl"))
+    await EventLog(sink=first).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
+    (destination / "events.jsonl").write_bytes(Path(first.path).read_bytes())
+    writer = first if agrees else JsonlSink(str(tmp_path / "second.jsonl"))
+    log = EventLog(sink=writer, replay_from=await first.read() if agrees else ())
+    if not agrees:
+        await log.record(Note("fresh start"))
+    await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
+    (destination / "events.jsonl.parts" / "000000000002.jsonl").write_bytes(Path(writer.path).read_bytes())
+    published = JsonlSink(str(destination / "events.jsonl"))
+    if agrees:
+        assert [record.sequence for record in await published.read()] == [1, 2]
+    else:
+        with pytest.raises(LogFailure, match=r"diverged: 000000000002\.jsonl disagrees at sequence 1"):
+            published.read_bytes()

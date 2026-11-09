@@ -201,11 +201,18 @@ class JsonlSink(Sink):
             with fs.open(path, "rb") as source:
                 for line in source:
                     sequence = json.loads(line)["sequence"]
-                    if sequence > last:
-                        if sequence != last + 1:
-                            raise LogFailure("Log sequence is incomplete or out of order")
-                        lines.append(line)
-                        last = sequence
+                    if sequence <= last:
+                        # A batch overlapping the stream must repeat it byte for byte; a second writer that
+                        # started numbering from 1 beside this stream shows up here, not as a decode error.
+                        if sequence <= len(lines) and lines[sequence - 1].rstrip(b"\n") != line.rstrip(b"\n"):
+                            raise LogFailure(
+                                f"Event stream has diverged: {Path(path).name} disagrees at sequence {sequence}"
+                            )
+                        continue
+                    if sequence != last + 1:
+                        raise LogFailure("Log sequence is incomplete or out of order")
+                    lines.append(line)
+                    last = sequence
         if not lines:
             raise FileNotFoundError(self.path)
         return b"".join(lines)

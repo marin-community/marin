@@ -75,28 +75,38 @@ def inputs(source: str, ranks: tuple[int, ...] = ()) -> tuple[str, ...]:
     return paths
 
 
-def publish(workdir: Path, destination: str) -> None:
-    for name in ("events.jsonl", "workpiece.json", "status.json"):
+SNAPSHOT_FILES = ("events.jsonl", "workpiece.json", "status.json")
+"""Published in this order, so an interrupted publish leaves the stream without its status."""
+
+
+def publish(workdir: Path, destination: str, names: tuple[str, ...] = SNAPSHOT_FILES) -> None:
+    for name in names:
         with (workdir / name).open("rb") as source, open_url(prefix_join(destination, name), "wb") as target:
             target.write(source.read())
 
 
-def recover(workdir: Path, destination: str) -> Status | None:
-    """Read status last-written by publish before restoring its complete snapshot."""
+async def recover(workdir: Path, destination: str) -> Status | None:
+    """Restore the published snapshot; the event stream, not status.json, decides whether work exists.
+
+    Starting fresh whenever the status is missing would append a second stream numbered from 1 beside
+    the published one, and the next read would splice the two.
+    """
+    sink = JsonlSink(prefix_join(destination, "events.jsonl"))
     try:
-        with open_url(prefix_join(destination, "status.json"), "rb") as source:
-            status_bytes = source.read()
+        snapshot = {"events.jsonl": await asyncio.to_thread(sink.read_bytes)}
     except FileNotFoundError:
         return None
-    status = TypeAdapter(Status).validate_json(status_bytes)
-    snapshot = {"status.json": status_bytes}
-    snapshot["events.jsonl"] = JsonlSink(prefix_join(destination, "events.jsonl")).read_bytes()
-    for name in ("workpiece.json",):
-        with open_url(prefix_join(destination, name), "rb") as source:
-            snapshot[name] = source.read()
+    for name in SNAPSHOT_FILES[1:]:
+        try:
+            with open_url(prefix_join(destination, name), "rb") as source:
+                snapshot[name] = source.read()
+        except FileNotFoundError:
+            logging.warning("Published %s lacks %s; resuming from its event stream", destination, name)
     for name, data in snapshot.items():
         (workdir / name).write_bytes(data)
-    return status
+    if "status.json" in snapshot:
+        return TypeAdapter(Status).validate_json(snapshot["status.json"])
+    return fold(tuple(record.event for record in await sink.read()))
 
 
 def run_policy(path: str) -> tuple[Policy, Policy]:
@@ -127,16 +137,19 @@ async def one(args: argparse.Namespace) -> None:
     workdir = Path(args.work_dir) / identity
     workdir.mkdir(parents=True, exist_ok=True)
     destination = prefix_join(args.output, str(identity))
-    restored = recover(workdir, destination)
-    if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
-        logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
-        return
     sink = JsonlSink(str(workdir / "events.jsonl"))
-    previous = await sink.read() if Path(sink.path).exists() else ()
     wp = Workpiece(proposal.header.id, proposal)
-    checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
-    log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
+    log: EventLog | None = None
+    skipped = False
     try:
+        restored = await recover(workdir, destination)
+        if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
+            logging.info("SKIP %s: published terminal=%s", identity, restored.terminal)
+            skipped = True
+            return
+        previous = await sink.read() if Path(sink.path).exists() else ()
+        checkpoints = CheckpointSink(sink, destination, WORKPIECE.dump_json(wp))
+        log = EventLog(sink=checkpoints, replay_from=previous, replayable=replayable_grade)
         async with checkpoints.running():
             source = endpoint_source(
                 os.environ.get("GLM_BASE_URL"),
@@ -149,21 +162,27 @@ async def one(args: argparse.Namespace) -> None:
                 wp = await run_workpiece(proposal, config, resources, log, install=install)
     except* (Hold, Restart, Transient, LogFailure) as error:
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete(reasons(error))))
-        await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
+        if log is not None:
+            await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Forge workpiece %s held: %s", proposal.header.id, reasons(error))
     except* Exception as error:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
-        await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
+        if log is not None:
+            await log.record(StageCompleted(None, "", "bug", wp.round, Terminal.HELD))
         logging.exception("Forge workpiece %s failed", proposal.header.id)
         if len(error.exceptions) == 1:
             raise error.exceptions[0] from None
         raise
     finally:
-        (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
-        status = fold(tuple(record.event for record in log.records))
-        (workdir / "status.json").write_text(json.dumps(asdict(status)))
-        publish(workdir, destination)
+        if not skipped:
+            (workdir / "workpiece.json").write_bytes(WORKPIECE.dump_json(wp))
+            # A stream that could not be read is left as published, so its parts stay repairable.
+            status = (
+                fold(tuple(record.event for record in log.records)) if log is not None else Status(terminal=wp.terminal)
+            )
+            (workdir / "status.json").write_text(json.dumps(asdict(status)))
+            publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
 
 
 async def run(args: argparse.Namespace) -> None:

@@ -31,7 +31,7 @@ from forge.harness.protocol import Stopped, StopReason
 from forge.model.controls import CONTROL, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, ToolCall
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal
-from forge.model.review import Abandon, BandRules, Budget, Decision, Modify
+from forge.model.review import Abandon, BandRules, Budget, Decision, Incomplete, Modify
 from forge.model.stage import Stage
 from forge.model.workpiece import WORKPIECE, Conversation, Terminal, Workpiece
 from forge.policy import Policy, load_policy
@@ -471,3 +471,46 @@ async def test_environment_startup_transient_replays_stage_or_holds_without_bug(
     if failures == 3:
         assert "Transient: Environment startup did not resolve" in str(result.decisions[-1])
         assert "bug:" not in str(result.decisions[-1])
+
+
+async def test_recover_resumes_a_stream_published_without_status(tmp_path: Path) -> None:
+    """An interrupted publish leaves the stream without status.json; that is a resume, never a fresh start."""
+    destination, workdir = tmp_path / "published", tmp_path / "work"
+    workdir.mkdir()
+    assert await driver.recover(workdir, str(destination)) is None
+    destination.mkdir()
+    sink = JsonlSink(str(destination / "events.jsonl"))
+    await EventLog(sink=sink).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
+    restored = await driver.recover(workdir, str(destination))
+    assert restored is not None and restored.terminal is Terminal.HELD and not restored.finished
+    assert (workdir / "events.jsonl").read_bytes() == Path(sink.path).read_bytes()
+    assert not (workdir / "status.json").exists()
+
+
+async def test_driver_holds_an_undecodable_stream_without_touching_it(
+    driver_args: Namespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = Path(driver_args.output) / driver.proposal_key(driver_args.proposals)
+    (destination / "events.jsonl.parts").mkdir(parents=True)
+    first = JsonlSink(str(destination / "events.jsonl"))
+    await EventLog(sink=first).record(StageCompleted(Stage.AUTHOR, "", "Held", 0, Terminal.HELD))
+    second = JsonlSink(str(Path(driver_args.work_dir + "-other") / "events.jsonl"))
+    log = EventLog(sink=second)
+    await log.record(StageCompleted(Stage.AUTHOR, "", "draft"))
+    await log.record(StageCompleted(Stage.VALIDATE, "", "ready"))
+    (destination / "events.jsonl.parts" / "000000000002.jsonl").write_bytes(Path(second.path).read_bytes())
+    (destination / "status.json").write_text(json.dumps({"terminal": None}))
+    published = (destination / "events.jsonl").read_bytes()
+
+    @asynccontextmanager
+    async def unexpected(*_: object) -> AsyncIterator[None]:
+        pytest.fail("An undecodable stream must not start the runtime")
+        yield
+
+    monkeypatch.setattr(driver, "runtime", unexpected)
+    await driver.one(driver_args)
+    workpiece = WORKPIECE.validate_json((destination / "workpiece.json").read_bytes())
+    assert workpiece.terminal is Terminal.HELD
+    assert isinstance(decision := workpiece.decisions[-1], Incomplete) and "diverged" in decision.reasons[0]
+    assert json.loads((destination / "status.json").read_text())["terminal"] == "held"
+    assert (destination / "events.jsonl").read_bytes() == published
