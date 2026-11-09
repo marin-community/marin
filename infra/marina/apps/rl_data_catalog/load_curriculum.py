@@ -51,6 +51,35 @@ def ancestor_rows(nodes: list[dict]) -> Iterator[dict]:
             current = by_id[(row["subject_id"], current["parent_id"])]
 
 
+def reconcile_population_counts(
+    selected: dict[str, dict[str, Any]], full_counts: dict[str, Counter], task_count: int
+) -> None:
+    """Check coverage statistics against the release's matched sources and totals.
+
+    Declared inventory sources carry no embedded tasks and contribute no statistics;
+    they are exempt here because their count describes the pinned release, not a
+    curriculum population. The total still sums every statistics source, so a
+    statistics row appearing for a declared source fails the load.
+    """
+    for source, expected in selected.items():
+        if expected["basis"] != "matched":
+            continue
+        actual = full_counts[source]
+        if (
+            actual["denominator"] != expected["task_count"]
+            or actual["assigned"] + actual["subject_only"] + actual["out_of_scope"] != expected["ready_count"]
+            or actual["insufficient_context"] != expected["insufficient_context_count"]
+            or sum(
+                actual[metric]
+                for metric in ("assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
+            )
+            != actual["denominator"]
+        ):
+            raise ValueError(f"Coverage population counts differ from release: {source}")
+    if sum(counts["denominator"] for counts in full_counts.values()) != task_count:
+        raise ValueError("Coverage population counts differ from release")
+
+
 def release_tasks(paths: list[str]) -> Iterator[dict]:
     for path in paths:
         with StoragePath(path).open("rb") as stream:
@@ -202,21 +231,7 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
                         yield row.model_dump(mode="json")
 
     counts["statistics"] = insert("statistics", checked_statistics())
-    for source, expected in selected.items():
-        actual = full_counts[source]
-        if (
-            actual["denominator"] != expected["task_count"]
-            or actual["assigned"] + actual["subject_only"] + actual["out_of_scope"] != expected["ready_count"]
-            or actual["insufficient_context"] != expected["insufficient_context_count"]
-            or sum(
-                actual[metric]
-                for metric in ("assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
-            )
-            != actual["denominator"]
-        ):
-            raise ValueError(f"Coverage population counts differ from release: {source}")
-    if sum(source_counts["denominator"] for source_counts in full_counts.values()) != release.task_count:
-        raise ValueError("Coverage population counts differ from release")
+    reconcile_population_counts(selected, full_counts, release.task_count)
     execute(
         "UPDATE curriculum_current SET previous_load_id=load_id, load_id=:load_id WHERE name='latest'",
         {"load_id": load_id},
