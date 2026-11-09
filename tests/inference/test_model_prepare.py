@@ -29,17 +29,24 @@ DRAFT_REVISION = "b" * 40
 
 
 class FakePrepareJob:
-    def __init__(self, request, events: list[str], fail: bool):
+    """Resolves the cache entry when it runs, under the prefix of the cluster it runs on."""
+
+    def __init__(self, request, events: list[str], fail: bool, worker_prefix: str):
         self.job_id = f"/prepare/{request.name}"
-        self.marker = StoragePath(request.entrypoint.callable_entrypoint.args[0]) / DEFAULT_COMPLETE_MARKER
+        self.args = request.entrypoint.callable_entrypoint.args
         self.events = events
         self.fail = fail
+        self.worker_prefix = worker_prefix
 
     def status(self) -> JobStatus:
         if self.fail:
             return JobStatus.FAILED
-        self.marker.parent.mkdirs()
-        self.marker.write_text("{}")
+        repo, revision, ttl = self.args
+        with pytest.MonkeyPatch.context() as env:
+            env.setenv("MARIN_PREFIX", self.worker_prefix)
+            marker = _marker(repo, revision, ttl)
+        marker.parent.mkdirs()
+        marker.write_text("{}")
         return JobStatus.SUCCEEDED
 
     def terminate(self) -> None:
@@ -61,14 +68,16 @@ def _config(revision: str | None, speculative: SpeculativeServingConfig | None =
 def serving(monkeypatch, tmp_path):
     """Record prepare submissions and the config the accelerator job would receive."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
-    state = SimpleNamespace(events=[], requests=[], served=[], fail_prepare=False, fail_submit=False)
+    state = SimpleNamespace(
+        events=[], requests=[], served=[], fail_prepare=False, fail_submit=False, worker_prefix=str(tmp_path / "cache")
+    )
 
     def submit(request):
         state.events.append("prepare")
         state.requests.append(request)
         if state.fail_submit:
             raise RuntimeError("Iris submission failed")
-        return FakePrepareJob(request, state.events, state.fail_prepare)
+        return FakePrepareJob(request, state.events, state.fail_prepare, state.worker_prefix)
 
     @contextmanager
     def start_direct(config):
@@ -82,8 +91,8 @@ def serving(monkeypatch, tmp_path):
     return state
 
 
-def _marker(model: str, revision: str | None = None) -> StoragePath:
-    entry = model_cache_entry(model, 14, revision)
+def _marker(model: str, revision: str | None = None, ttl: int = 14) -> StoragePath:
+    entry = model_cache_entry(model, ttl, revision)
     assert entry is not None
     return StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
 
@@ -106,15 +115,18 @@ def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving):
     assert (StoragePath(resolved) / DEFAULT_COMPLETE_MARKER).exists()
 
 
-def test_warm_model_skips_the_prepare_job(serving):
-    marker = _marker("org/candidate", REVISION)
-    marker.parent.mkdirs()
-    marker.write_text("{}")
+def test_prepare_job_resolves_the_cache_where_the_worker_runs(serving, monkeypatch, tmp_path):
+    # The coordinator's storage prefix differs from the serving cluster's (cross-cluster serving).
+    serving.worker_prefix = str(tmp_path / "serving-cluster")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "coordinator-cluster"))
 
     with remote_inference(_config(REVISION)):
         pass
 
-    assert serving.events == ["gpu"]
+    (served,) = serving.served
+    monkeypatch.setenv("MARIN_PREFIX", serving.worker_prefix)
+    resolved = resolve_model_path(served.model.weights, served.iris.cache_ttl_days, served.model.revision)
+    assert (StoragePath(resolved) / DEFAULT_COMPLETE_MARKER).exists()
 
 
 def test_speculative_draft_model_is_mirrored_and_pinned(serving):

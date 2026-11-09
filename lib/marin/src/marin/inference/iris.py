@@ -28,7 +28,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
-from levanter.model_cache import DEFAULT_COMPLETE_MARKER, HfModelCacheEntry, cache_hf_model
+from levanter.model_cache import HfModelCacheEntry
 from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
@@ -63,7 +63,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
-from marin.inference.model_cache import model_cache_entry
+from marin.inference.model_cache import model_cache_entry, populate_model_cache
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -781,28 +781,23 @@ def _pinned_cache_entries(config: RemoteInferenceConfig) -> tuple[RemoteInferenc
 
 
 def _populate_model_cache(entries: list[HfModelCacheEntry], iris: IrisConfig) -> None:
-    """Run one CPU prepare job per uncached entry and wait until every marker is written."""
-    jobs: list[tuple[JobHandle, StoragePath]] = []
+    """Run one CPU prepare job per entry at the serving placement and wait for all of them.
+
+    The cache path depends on the storage prefix where the code runs, so the coordinator cannot check
+    it for a worker on another cluster. Each job resolves the path itself and returns at once when warm.
+    """
+    jobs: list[JobHandle] = []
     try:
         for entry in entries:
-            marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
-            if marker.exists():
-                logger.info("model cache hit: %s", entry.path)
-                continue
-            jobs.append((_submit_model_prepare_job(entry, iris), marker))
-        wait_all([job for job, _ in jobs], timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
-        for job, marker in jobs:
-            if not marker.exists():
-                raise RuntimeError(f"prepare job {job.job_id} did not write completion marker at {marker}")
+            jobs.append(_submit_model_prepare_job(entry, iris))
+        wait_all(jobs, timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
     except Exception as exc:
-        for job, _ in jobs:
+        for job in jobs:
             try:
                 job.terminate()
             except Exception:
                 logger.warning("could not terminate model preparation job %s", job.job_id, exc_info=True)
-        raise RemoteInferenceStartupError(
-            f"Model cache preparation failed: {exc}", jobs=tuple(job for job, _ in jobs)
-        ) from exc
+        raise RemoteInferenceStartupError(f"Model cache preparation failed: {exc}", jobs=tuple(jobs)) from exc
 
 
 def _submit_model_prepare_job(entry: HfModelCacheEntry, iris: IrisConfig) -> JobHandle:
@@ -811,7 +806,7 @@ def _submit_model_prepare_job(entry: HfModelCacheEntry, iris: IrisConfig) -> Job
         JobRequest(
             name=f"prepare-model-{uuid.uuid4().hex}",
             entrypoint=Entrypoint.from_callable(
-                cache_hf_model, args=(entry.path, entry.repo), kwargs={"revision": entry.revision}
+                populate_model_cache, args=(entry.repo, entry.revision, iris.cache_ttl_days)
             ),
             resources=ResourceConfig.with_cpu(
                 cpu=_MODEL_PREPARE_CPU,

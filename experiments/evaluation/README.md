@@ -9,8 +9,9 @@ the selected compute and storage. Daytona runs also need a credential; see
 [Harbor credentials](../../docs/tutorials/run-lm-evals.md#harbor-credentials).
 
 For Hugging Face checkpoints with caching enabled, `remote_inference` pins the
-resolved commit and checks the regional cache before starting a serving job. On a
-cache miss, it waits for a CPU mirror job with a four-hour execution deadline, so
+resolved commit and runs a CPU prepare job on the serving cluster before starting a
+serving job. The job resolves the cache path where the workers will run, returns at
+once on a hit, and otherwise mirrors the weights within a four-hour deadline, so
 accelerators are never reserved while weights download. The candidate and a
 hosted judge each prepare inside their own `remote_inference` call. A preparation
 failure marks pending evaluations as `infra_failed` and records the child job and
