@@ -1,0 +1,186 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bind the resolved run spec to the same graph for smoke and full runs."""
+
+import hashlib
+import json
+from dataclasses import replace
+
+import draccus
+from fray.types import ResourceConfig
+from marin.evaluation.model_config import ModelConfig
+from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.remote import remote
+from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecution, SkyRLRolePlan
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
+
+from experiments.post_training.long_loop.archive_stage import archive_selected_run
+from experiments.post_training.long_loop.endpoint_probe import probe
+from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
+from experiments.post_training.long_loop.rl import configured_rl_step
+from experiments.post_training.long_loop.runtime_timing import report_step, timed
+from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
+
+
+def verify_inputs(*, output: str, manifests: dict) -> None:
+    """Verify the bytes named by admission manifests before any training starts."""
+    verified = []
+    for name, manifest in manifests.items():
+        for entry in manifest["files"]:
+            fs, key = filesystem_for(entry["uri"])
+            with fs.open(key, "rb") as source:
+                actual = hashlib.file_digest(source, "sha256").hexdigest()
+            if actual != entry["sha256"]:
+                raise ValueError(f"Dataset {name} changed: {entry['uri']}")
+            verified.append({"dataset": name, **entry})
+    (StoragePath(output) / "verified.json").write_text(json.dumps(verified, indent=2))
+
+
+def build_spec_graph(resolved: dict, version: str) -> ArtifactStep:
+    if resolved["blockers"]:
+        raise ValueError("Run is not admitted: " + "; ".join(resolved["blockers"]))
+    datasets = resolved["datasets"]
+    name = resolved["name"]
+    execution = resolved["execution"]
+    resources = {key: draccus.decode(ResourceConfig, value) for key, value in execution.items() if key != "coordinator"}
+    verified = timed(
+        apply(
+            f"{name}/inputs",
+            remote(verify_inputs, resources=resources["inputs"]),
+            version=version,
+            output=OUT,
+            manifests=datasets,
+        )
+    )
+    base_manifest = resolved["initializer"]
+    base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
+    recipe = resolved["sft"]
+    fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=name)
+    trained = timed(
+        apply(
+            f"{name}/sft",
+            sft_run,
+            version=version,
+            output=OUT,
+            initializer=base,
+            recipe=recipe,
+            run_id=f"{name}-{version}",
+        )
+    )
+    trained = replace(trained, deps=(*trained.deps, verified))
+    tokenizer = resolved["tokenizer"]
+    exported = timed(
+        apply(
+            f"{name}/sft-handoff",
+            remote(export_sft, resources=resources["export"], env_vars={"JAX_PLATFORMS": "cpu"}),
+            version=version,
+            output=OUT,
+            trained=trained,
+            model=recipe["model"],
+            source_revision=resolved["marin_revision"],
+            tokenizer_uri=tokenizer["uri"],
+            context_limit=tokenizer["context_limit"],
+        )
+    )
+    endpoint = timed(
+        apply(
+            f"{name}/endpoint",
+            probe,
+            version=version,
+            output=OUT,
+            model_root=exported,
+            tokenizer_revision=tokenizer["revision"],
+            settings=resolved["endpoint"],
+        )
+    )
+    adopted = {
+        key: ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
+        for key in ("agentic", "nonagentic", "heldout")
+    }
+    rl = resolved["rl"]
+    rl_config = json.loads(json.dumps(rl["config"]))
+    routes = {source: route for route in ("agentic", "nonagentic") for source in datasets[route]["source_names"]}
+    if len(routes) != sum(len(datasets[route]["source_names"]) for route in ("agentic", "nonagentic")):
+        raise ValueError("Agentic and nonagentic source names overlap")
+    rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
+    learned = configured_rl_step(
+        version=version,
+        name=rl["name"],
+        model=ArtifactHfModel(
+            step=exported,
+            tokenizer_uri=tokenizer["repo"],
+            tokenizer_revision=tokenizer["revision"],
+            relative_path="hf",
+        ),
+        train_data=tuple(
+            ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in ("agentic", "nonagentic")
+        ),
+        validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
+        config=rl_config,
+        plan=draccus.decode(SkyRLRolePlan, rl["role_plan"]),
+        execution=draccus.decode(IrisSkyRLExecution, rl["execution"]),
+        retained=rl["retained"],
+        seed=rl["seed"],
+    )
+    learned = timed(replace(learned, deps=(*learned.deps, endpoint)))
+    evaluation = resolved["evaluation"]
+    data = datasets["evaluation"]
+    eval_inputs = timed(
+        apply(
+            f"{name}/eval-inputs",
+            remote(prepare_micro, resources=resources["eval_inputs"]),
+            version=version,
+            output=OUT,
+            dataset=data["repo"],
+            revision=data["revision"],
+            wheels_revision=data["wheels_revision"],
+            tasks_per_benchmark=evaluation["tasks_per_benchmark"],
+        )
+    )
+    eval_inputs = replace(eval_inputs, deps=(*eval_inputs.deps, learned))
+    evaluated = timed(
+        configured_evaluation_step(
+            version,
+            learned,
+            eval_inputs,
+            name=evaluation["name"],
+            config=evaluation["config"],
+            role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
+            execution=draccus.decode(IrisSkyRLExecution, evaluation["execution"]),
+            judge=draccus.decode(ModelConfig, evaluation["judge"]),
+            seed=evaluation["seed"],
+            expected_step=None,
+            gpu_variant=evaluation["gpu_variant"],
+            capability_origin=evaluation["capability_origin"],
+            context_proof=evaluation["context_proof"],
+            data_relative_path=evaluation["data_relative_path"],
+            judge_gpu_count=evaluation["judge_gpu_count"],
+        )
+    )
+    report = report_step(
+        version,
+        [verified, base, trained, exported, endpoint, learned, eval_inputs, evaluated],
+        expected_rollouts=evaluation["expected_rollouts"],
+        sft_geometry=(
+            f"Spec {resolved['resolved_sha256']}: {recipe['stop_after_steps']} SFT updates "
+            f"at {recipe['model']['max_seq_len']} positions."
+        ),
+    )
+    archived = apply(
+        f"{name}/archive",
+        remote(archive_selected_run, resources=resources["archive"]),
+        version=version,
+        output=OUT,
+        plan=resolved["archive"],
+        trained=learned,
+        completed_report=report,
+    )
+    return replace(
+        archived,
+        runtime_args={
+            **archived.runtime_args,
+            "skyrl_execution": draccus.decode(IrisSkyRLExecution, execution["coordinator"]),
+        },
+    )

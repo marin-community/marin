@@ -1,117 +1,55 @@
 # Long-loop prototype
 
-Snowball SFT → asynchronous RLOO-N (GS8) → Micro210. All stages use the
-Marin artifact runner and the `rl_build_options` submission path.
-
-The plumbing graph prepares the supported benchmark environments, imports the pinned
-pre-SFT model, runs 15 SFT updates, exports BF16 parameters with frozen router
-biases, checks the served tokenizer/thinking template and both EOS tokens, runs
-three RL updates, and evaluates one task on each of the 20 supported Micro210 paths.
-The final report rejects incomplete or unverified benchmark coverage. This is a
-runtime test, not a Micro210 score or a completed 36-hour experiment.
+Snowball SFT → asynchronous RLOO-N (GS8) → Micro210 → public HF checkpoint and
+provenance archive. The launcher takes one content-pinned run spec. Dataset
+manifests and stage configurations are explicit inputs, resolved relative to it.
 
 ```bash
-uv run python -m experiments.post_training.long_loop --version 2026.11.08 \
-  --source-revision "$(git rev-parse HEAD)"
+uv run python -m experiments.post_training.long_loop \
+  --spec experiments/post_training/long_loop/specs/round1.yaml \
+  --validation-output /tmp/long-loop/full --version 2026.11.10
 ```
 
-The default prints the graph. Add `--run --max-concurrent 1` to submit after
-validation. Each calendar version uses one named coordinator; repeating the
-command adopts that job instead of creating another coordinator. Failed stages
-are not automatically replayed. Reconcile a failed or ambiguous attempt before
-using a new version.
+Add `--smoke` to use the same inputs with the spec's scale overrides. Add
+`--run --max-concurrent 1` only for an admitted run. The resolved JSON records the
+spec digest, complete configs, dataset identities, scale changes and blockers.
+Strict SkyRL composition runs on the actual graph documents before allocation.
+The example is intentionally **not launchable yet**: the admitted agentic cohort,
+heldout/exclusion evidence and several runtime provenance bindings are pending.
+A printed blocked plan is not a successful dry-run or permission to launch.
 
-Peak stage requests are 8 H100 for the base import, 32 for SFT, 8 for the
-CPU export host, 8 for the endpoint probe, 40 for RL, and 16 for evaluation including
-the judge. Dependencies serialize these stages. Every GPU job uses RNO2A at
-**interactive** priority; the aggregate limit is **256 H100**. Priority changes require approval. Keep changes in the experiment worktree and
-merge current main regularly. This branch is published as a draft; it is not
-authorization to merge or launch the full experiment.
+The smoke keeps the full SFT weight schedule, 262k SFT packing, 102,400-token RL
+window, CP4, GS8 and 32 agentic / 32 non-agentic consumed groups per update.
+Only update counts and evaluation scale may change. The old plumbing smoke used
+32k SFT, the non-agentic quick-loop selection and short-context RL. It verified
+stage handoffs but did not qualify the intended training geometry or data mix.
+Those historical commands remain reproducible at their original Git pins;
+the current entrypoint requires `--spec`.
 
-Plumbing SFT geometry (32k/32 GPU), not target, uses the archived trainer, 256 sequences per update, and the
-initial phase of the 10-05 reproduction composition: 20.4734375% replay.
-The original 4,750-step learning-rate schedule and special-token treatment are
-preserved; this smoke stops at step 15 (~126M scheduled token positions).
-The mesh is replica1/data16/context2 with accumulation8. SFT preemption retries are zero.
-Each JAX rank preserves stdout/stderr under `IRIS_OUTPUT_DIR` for the attempt archive.
-262k/256-GPU SFT and attempt-scoped JAX bootstrap remain target-geometry qualifications.
-`runtime-origin.json` records the reused source bytes. The deleted native base
-import is reconstructed from HF revision `058ecaf27b9e4f37219df221a51e7d490d58ec3d`.
-The import must verify every one of the 502 tensor mappings.
+The `.11` full SFT attempt inherited the old smoke's fixed initial mixture weights.
+Its source components matched the reproduction, but it omitted the 250-step weight
+schedule. It failed after its first update in the checkpoint sampling helper and
+has not been restarted. The supplied SFT manifest restores all 19 schedule phases.
+50B denotes scheduled packed positions, not 50B distinct supervised tokens.
 
-RL uses the maintained quick-loop data selection `snowball-100k@2026.11.04`,
-64 groups per update, GS8, staleness 2, and 24,576/8,192 input/output geometry.
-It enables per-turn training, including earlier conversations after an agent
-reset. Regression tests cover their action masks, logprobs, behavior versions,
-router evidence, and malformed-reasoning penalties. The quick-loop defaults
-remain unchanged. Actual learner inputs are dumped for the smoke audit.
+All jobs remain on RNO2A at **interactive** priority, with at most **256 H100**.
+Missing inputs and failed qualification gates stop the run. A failed stage is not
+replayed automatically. Keep this PR draft; no merge approval is implied.
 
-Micro210 reuses the Mini runtime from branch commit
-`36ce62ecb793ef31def1b87ea7847e643e08691e` associated with issue #10933,
-adapted to Snowball and the pinned Micro210 dataset. The policy tokenizer is the
-original SFT tokenizer at `3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09`.
+## Historical plumbing evidence
 
-`runtime_timing.py` persists coordinator stage-wall JSONL even when a stage fails.
-These spans include queue and startup time. Native SFT/SkyRL/Iris telemetry is
-still required to separate queue, compilation, learner, rollout, sandbox, judge,
-and allocation-release measurements; stage-wall spans must not be reported as
-compute time. Full phase collection and the 102,400-token CP4 qualification are
-not yet complete. The full 50B round and its task budget remain unmeasured.
+The completed plumbing run verified 20 supported benchmark paths, including the
+BixBench repair. This was a runtime test, not a full Micro210 performance result.
 
-## Current evidence
+The historical Micro210 runtime originated from #10933. Exact source and dataset
+pins, consumed configs and retained traces are in the verified archive evidence.
+The selected plumbing model is public at
+[Snowball-LongLoop-Plumbing-Step3-2026.11.09-r1](https://huggingface.co/open-athena/Snowball-LongLoop-Plumbing-Step3-2026.11.09-r1),
+revision `638e48507118e60d09b64be50230f795a50deff9`.
 
-The plumbing smoke verified all 20 supported paths, including the BixBench-only
-repair. Nineteen results were preserved byte-for-byte from the preceding eval;
-the merge checks input-row hashes and model/runtime/verifier configuration.
-One sample per path establishes runtime coverage, not benchmark performance.
-
-The archive smoke is running as `/benfeuer/long-loop-archive-20261109-post1`.
-Target qualification is next, gated on archive verification and native timing
-coverage. The 50B SFT / 100k-context mixed RL / final evaluation target remains
-unmeasured; a full run requires separate approval.
-
-Campaign status and evidence are in
-`/Users/benfeuer/Documents/experiments/active/long-loop-prototype/`, especially
-`artifacts/plumbing-20261109-10/` and `artifacts/archive-smoke-20261109/`.
-The merged evaluation is at
-`s3://marin-us-east-02a/marin/long-loop/merged-micro-report/2026.11.09.10-post1`
-([Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Flong-loop%2Fmerged-micro-report%2F2026.11.09.10-post1)).
-Historical RL retention is biased, W&B native history is incomplete, and some
-allocation/phase timings are unavailable. The archive records these limitations.
-
-## Experiment-owned RL recipe
-
-`rl.py` owns role geometry and launch bindings; `rl-smoke.yaml` owns the local
-three-update recipe, copied from the quick-loop composition at main commit
-`1cf5c009d358261bd41f368bcd033197ecd731f0`. It no longer imports the quick-loop or
-async-RL recipe. Shared Marin/SkyRL execution remains reused. GS8, staleness2,
-per-turn training, thinking and dual EOS settings remain explicit.
-
-Training task sessions use `DAYTONA_RL_API_KEY`. Micro210 and its environment
-preflight use `DAYTONA_EVAL_API_KEY`. Both are dedicated organization credentials;
-never substitute `DAYTONA_API_KEY`. Inline evaluation through the training factory
-is disabled; evaluation is the separate Eval-org graph stage. A fresh live run
-still requires verified organization identity and an explicit Daytona target.
-
-The current reduced smoke excludes `tau3-pi` under [#11083](https://github.com/marin-community/marin/issues/11083): 20 benchmark paths, including six agentic environment paths. Reports retain the exclusion; this is not complete Micro210 coverage. Standalone preflight reserves nine H100s (one coordinator plus an eight-GPU host).
-
-### Continue after a post-export failure
-
-Use a fresh `--version` and `--reuse-sft-version <completed-version>` to reuse
-committed inputs, base weights, SFT, and the verified BF16 export. The launcher
-requires each original artifact record, preserves it in the new adoption record,
-and builds only the endpoint check, RL, and evaluation under the new version.
-This does not resume the SFT optimizer or replay training. The live endpoint check
-still compares exact token IDs and tests both EOS tokens before RL starts.
-
-To repair serialization while retaining the native checkpoint, add
-`--handoff reexport`. This adopts only the committed inputs, base, and native SFT
-artifacts, writes a separately timed export under the new version, and then
-continues through endpoint, RL, and evaluation. Both reused and new exports must
-contain all schema-2 per-expert tensors before serving starts.
-
-If the export was repaired under a separate version, combine
-`--reuse-sft-version <native-version>` with `--reuse-export-version <export-version>`.
-The launcher verifies both committed lineages without running either stage again.
-Endpoint and rollout serving share the release in `vllm-release.json`; launcher
-preflight requires its version and wheel URLs to match SkyRL dependency pins.
+Campaign status and evidence live in
+`/Users/benfeuer/Documents/experiments/active/long-loop-prototype/`:
+`STATUS.md`, `DESIGN.md`, `artifacts/archive-hf-smoke-20261109/`, and
+`artifacts/run-spec-20261109/`. The original copy-based archive job was cancelled;
+the replacement HF publication and evidence archive verified. Historical trace
+sampling and telemetry gaps remain documented there.

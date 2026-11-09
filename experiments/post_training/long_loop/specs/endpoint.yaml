@@ -1,0 +1,6 @@
+model_config: experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/laion-snowball-67b-a2b-relay-sft-acont-step999.yaml
+window: 102400
+tokenizer_repo: marin-community/marin-tokenizer-tools
+gpu_count: 8
+cluster_config: lib/iris/config/marin.yaml
+priority: interactive

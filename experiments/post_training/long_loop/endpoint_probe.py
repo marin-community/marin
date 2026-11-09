@@ -34,37 +34,48 @@ def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> l
     )
 
 
-def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
+def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: dict | None = None) -> None:
     validate_handoff(model_root)
-    check_context_limit(
-        "SFT endpoint", read_json(prefix_join(model_root, "hf/config.json"))["max_position_embeddings"], 24576
-    )
     root = find_project_root()
     assert root is not None, "Run from the Marin worktree"
-    model = load_model_config(
-        root / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
-        "laion-snowball-67b-a2b-relay-sft-acont-step999.yaml"
+    if settings is None:
+        settings = {
+            "model_config": (
+                "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
+                "laion-snowball-67b-a2b-relay-sft-acont-step999.yaml"
+            ),
+            "window": 24576,
+            "tokenizer_repo": TOKENIZER_REPO,
+            "gpu_count": 8,
+            "cluster_config": "lib/iris/config/marin.yaml",
+            "priority": "interactive",
+        }
+    window = settings["window"]
+    tokenizer_repo = settings["tokenizer_repo"]
+    check_context_limit(
+        "SFT endpoint", read_json(prefix_join(model_root, "hf/config.json"))["max_position_embeddings"], window
     )
+    model = load_model_config(root / settings["model_config"])
     model = replace(
         model,
         name="long-loop-sft-probe",
         location=prefix_join(model_root, "hf"),
         revision=None,
-        tokenizer=TOKENIZER_REPO,
+        tokenizer=tokenizer_repo,
         tokenizer_revision=tokenizer_revision,
-        serve=replace(model.serve, max_model_len=24576),
+        serve=replace(model.serve, max_model_len=window),
     )
-    origin = yaml.safe_load((root / "lib/iris/config/marin.yaml").read_text())["dashboard_url"]
+    origin = yaml.safe_load((root / settings["cluster_config"]).read_text())["dashboard_url"]
     inference = inference_config_for_model(
         model,
-        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=None),
+        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=settings["gpu_count"], target_cluster=None),
         env_vars={},
-        priority=priority_band_value("interactive"),
+        priority=priority_band_value(settings["priority"]),
         capability_origin=origin,
         api_model="long-loop-sft-probe",
     )
     inference = replace(inference, engine=replace(inference.engine, gpu_release=checked_serving_release()))
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_REPO, revision=tokenizer_revision)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, revision=tokenizer_revision)
     messages = [{"role": "user", "content": "Reply with the number 2."}]
     with remote_inference(inference) as served:
         endpoint = served.model.endpoint
@@ -117,7 +128,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str) -> None:
                     "long-loop-sft-probe",
                     models.json()["data"][0]["id"],
                     hashlib.sha256(
-                        Path(hf_hub_download(TOKENIZER_REPO, "tokenizer.json", revision=tokenizer_revision)).read_bytes()
+                        Path(hf_hub_download(tokenizer_repo, "tokenizer.json", revision=tokenizer_revision)).read_bytes()
                     ).hexdigest(),
                     tokenizer_hash,
                     rendered,

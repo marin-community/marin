@@ -74,13 +74,13 @@ def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None
     (StoragePath(output) / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     run_grug(config)
     final_step = config.stop_after_steps or config.trainer.trainer.num_train_steps
-    metadata = read_json(output + f"/checkpoints/step-{final_step}/metadata.json")
+    metadata = read_json(prefix_join(output, f"checkpoints/step-{final_step}/metadata.json"))
     if metadata.get("step") != final_step or metadata.get("is_temporary") is not False:
         raise ValueError(f"SFT did not commit permanent step {final_step}")
     (StoragePath(output) / "selected.json").write_text(
         json.dumps(
             {
-                "checkpoint": output + f"/checkpoints/step-{final_step}",
+                "checkpoint": prefix_join(output, f"checkpoints/step-{final_step}"),
                 "step": final_step,
                 "metadata_digest": digest(metadata),
             }
@@ -117,7 +117,15 @@ def validate_handoff(root: str) -> None:
                     raise ValueError(f"Invalid SFT export: schema-2 tensor missing: {name}")
 
 
-def export_sft(*, output: str, trained: str, model: dict, source_revision: str) -> None:
+def export_sft(
+    *,
+    output: str,
+    trained: str,
+    model: dict,
+    source_revision: str,
+    tokenizer_uri: str = TOKENIZER_URI,
+    context_limit: int = SNOWBALL_CONTEXT_LIMIT,
+) -> None:
     configure_coreweave_s3()
     selected = read_json(prefix_join(trained, "selected.json"))
     config = ExportConfig(
@@ -126,10 +134,10 @@ def export_sft(*, output: str, trained: str, model: dict, source_revision: str) 
         draccus.decode(GrugModelConfig, model),
         prefix_join(output, "hf"),
         source_revision,
-        max_position_embeddings=SNOWBALL_CONTEXT_LIMIT,
+        max_position_embeddings=context_limit,
     )
     export_weights(config, restore_frozen, weights_kind="snowball_sft_frozen_router")
-    fs, prefix = filesystem_for(TOKENIZER_URI)
+    fs, prefix = filesystem_for(tokenizer_uri)
     destination_fs, destination = filesystem_for(prefix_join(output, "hf"))
     for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
         content = fs.cat_file(prefix_join(prefix, name))

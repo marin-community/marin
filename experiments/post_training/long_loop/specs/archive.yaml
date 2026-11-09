@@ -1,0 +1,5 @@
+admission_pending:
+- Resolve run-derived evidence inventory before admitting the full graph
+hf_upload:
+  repo_id: open-athena/Snowball-LongLoop-Round1
+  private: false

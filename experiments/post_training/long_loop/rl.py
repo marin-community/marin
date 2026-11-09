@@ -59,49 +59,22 @@ def smoke_rl_step(
     selection: ArtifactStep[Artifact],
 ) -> ArtifactStep[SkyRLRun]:
     """Consume the preceding verified BF16 handoff, never a fixed released SFT model."""
-    return _rl_step(
-        version=version,
-        model=model,
-        selection=selection,
-        config=smoke_recipe(),
-        plan=SMOKE_PLAN,
-        name="long-loop-plumbing-rl",
-        retained=2,
-    )
-
-
-def _rl_step(
-    *,
-    version: str,
-    model: ArtifactHfModel,
-    selection: ArtifactStep[Artifact],
-    config: dict,
-    plan: SkyRLRolePlan,
-    name: str,
-    retained: int,
-) -> ArtifactStep[SkyRLRun]:
+    config = smoke_recipe()
     config["trainer"]["dump_training_order"] = True
     config["generator"]["trajectory_retention"] = trace_retention(
         f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/rl", version, fraction=0.1, phase="train"
     )
-    return skyrl_step(
-        SkyRLSpec(
-            name=user_owned_name(f"checkpoints/{name}"),
-            version=version,
-            config_yaml=yaml.safe_dump(config, sort_keys=False),
-            model=model,
-            train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
-            topology=SkyRLTopology(
-                num_nodes=plan.num_nodes,
-                gpus_per_node=plan.policy_num_gpus_per_node,
-                gpu_variant="H100",
-                role_plan=plan,
-            ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=retained),
-            seed=20261020,
-        ),
-        IrisSkyRLExecution(
+    return configured_rl_step(
+        version=version,
+        model=model,
+        train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
+        validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
+        config=config,
+        plan=SMOKE_PLAN,
+        name="long-loop-plumbing-rl",
+        retained=2,
+        seed=20261020,
+        execution=IrisSkyRLExecution(
             cluster="cw-rno2a",
             cluster_config="lib/iris/config/cw-rno2a.yaml",
             cpu=32,
@@ -112,7 +85,7 @@ def _rl_step(
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=36,
-            coordinator_name=f"{name.removesuffix('-rl')}-{version}",
+            coordinator_name=f"long-loop-plumbing-{version}",
             job_timeout_seconds=36 * 60 * 60,
             wandb_entity="marin-community",
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -124,6 +97,49 @@ def _rl_step(
                 "MARIN_PREFIX",
             ),
         ),
+    )
+
+
+def configured_rl_step(
+    *,
+    version: str,
+    model: ArtifactHfModel,
+    train_data: tuple[ArtifactDataSource, ...],
+    validation_data: tuple[ArtifactDataSource, ...],
+    config: dict,
+    plan: SkyRLRolePlan,
+    execution: IrisSkyRLExecution,
+    name: str,
+    retained: int,
+    seed: int,
+) -> ArtifactStep[SkyRLRun]:
+    """Bind an explicit recipe to admitted data; admission belongs to the run-spec stage.
+
+    Unlike the historical smoke wrapper, this binding supplies no data selection,
+    training geometry, credential configuration, or trace-retention defaults.
+    """
+    buffer = config.get("trainer", {}).get("rollout_buffer", {})
+    quotas = buffer.get("consumed_route_quotas", {})
+    if quotas and set(buffer.get("source_routes", {}).values()) != set(quotas):
+        raise ValueError("RL route admission is incomplete: supply verified source manifests and classifications")
+    return skyrl_step(
+        SkyRLSpec(
+            name=user_owned_name(f"checkpoints/{name}"),
+            version=version,
+            config_yaml=yaml.safe_dump(config, sort_keys=False),
+            model=model,
+            train_data=train_data,
+            validation_data=validation_data,
+            topology=SkyRLTopology(
+                num_nodes=plan.num_nodes,
+                gpus_per_node=plan.policy_num_gpus_per_node,
+                gpu_variant="H100",
+                role_plan=plan,
+            ),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=retained),
+            seed=seed,
+        ),
+        execution,
         export_hf=True,
     )
 

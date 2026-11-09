@@ -5,6 +5,7 @@
 
 import os
 import subprocess
+from copy import deepcopy
 from dataclasses import dataclass, replace
 
 import pyarrow as pa
@@ -13,7 +14,7 @@ import yaml
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from iris.rpc import job_pb2
-from marin.evaluation.model_config import load_model_config
+from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, artifact_identity
 from marin.execution.remote import remote
 from marin.rl.skyrl import (
@@ -22,6 +23,7 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     ResolvedModelLocator,
     SkyRLRetentionPolicy,
+    SkyRLRolePlan,
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
@@ -117,7 +119,7 @@ class TerminalPolicy:
                 tokenizer_uri="<terminal-tokenizer>",
                 tokenizer_revision="<terminal-tokenizer-revision>",
             )
-            validate_eval_policy(locator, prefix_join(self.step.path(), "exports/global_step_3/policy"))
+            validate_eval_policy(locator, prefix_join(self.step.path(), "terminal-export"))
             return locator
         result = ctx.resolved(self.step)
         if result.hf_model_uri is None or result.global_step is None:
@@ -166,19 +168,26 @@ def evaluation_step(
     config["generator"]["trajectory_retention"] = trace_retention(
         f"s3://marin-us-east-02a/marin/long-loop/traces/{version}/eval", version, fraction=1.0, phase="eval"
     )
-    step = skyrl_step(
-        SkyRLSpec(
-            name="long-loop/micro-smoke" if expected_step == 3 else "long-loop/micro-full",
-            version=version,
-            config_yaml=yaml.safe_dump(config),
-            model=TerminalPolicy(trained, expected_step),
-            train_data=(),
-            validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
-            topology=SkyRLTopology(num_nodes=replicas, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
-            seed=20261030,
-        ),
-        IrisSkyRLExecution(
+    root = find_project_root()
+    assert root is not None, "Run from the Marin worktree"
+    judge = load_model_config(
+        root / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/"
+        "olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-131k.yaml"
+    )
+    # Context bound from the exact judge revision's text_config, not its serving window.
+    if (judge.location, judge.revision) != ("MiniMaxAI/MiniMax-M3-MXFP8", "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba"):
+        raise ValueError("Revalidate the judge context bound when changing its pinned revision")
+    check_context_limit(judge.location, 1048576, judge.serve.max_model_len)
+    cluster = yaml.safe_load((root / IRIS_HUB_CLUSTER_CONFIG).read_text())
+
+    return configured_evaluation_step(
+        version,
+        trained,
+        data,
+        name="long-loop/micro-smoke" if expected_step == 3 else "long-loop/micro-full",
+        config=config,
+        role_plan=plan,
+        execution=IrisSkyRLExecution(
             cluster="cw-rno2a",
             cluster_config="lib/iris/config/cw-rno2a.yaml",
             cpu=32,
@@ -194,19 +203,69 @@ def evaluation_step(
             required_env_vars=("DAYTONA_EVAL_API_KEY", "DAYTONA_TARGET", "TOGETHER_API_KEY", "MARIN_PREFIX"),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
+        judge=judge,
+        judge_gpu_count=8,
+        seed=20261030,
+        expected_step=expected_step,
+        gpu_variant="H100",
+        capability_origin=cluster["dashboard_url"],
+        context_proof=context_evidence(),
+        data_relative_path="rollouts.parquet",
+    )
+
+
+def configured_evaluation_step(
+    version: str,
+    trained: ArtifactStep[SkyRLRun],
+    data: ArtifactStep,
+    *,
+    name: str,
+    config: dict,
+    role_plan: SkyRLRolePlan,
+    execution: IrisSkyRLExecution,
+    judge: ModelConfig,
+    judge_gpu_count: int,
+    seed: int,
+    expected_step: int | None,
+    gpu_variant: str,
+    capability_origin: str,
+    context_proof: dict,
+    data_relative_path: str,
+) -> ArtifactStep:
+    """Bind an explicit evaluation recipe to pinned data and the committed model."""
+    config = deepcopy(config)
+    materialized = deepcopy(config)
+    _materialize_role_plan_config(materialized, role_plan)
+    if materialized != config:
+        raise ValueError("Evaluation recipe and explicit role plan disagree")
+    retention = config["generator"]["trajectory_retention"]
+    if not (
+        retention["enabled"]
+        and retention["required"]
+        and retention["eval_sample_fraction"] == 1.0
+        and "eval" in retention["phases"]
+    ):
+        raise ValueError("Evaluation recipe must retain all evaluation traces")
+    step = skyrl_step(
+        SkyRLSpec(
+            name=name,
+            version=version,
+            config_yaml=yaml.safe_dump(config),
+            model=TerminalPolicy(trained, expected_step),
+            train_data=(),
+            validation_data=(ArtifactDataSource(data, relative_path=data_relative_path),),
+            topology=SkyRLTopology(
+                num_nodes=role_plan.num_nodes,
+                gpus_per_node=role_plan.policy_num_gpus_per_node,
+                gpu_variant=gpu_variant,
+                role_plan=role_plan,
+            ),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            seed=seed,
+        ),
+        execution,
         export_hf=False,
     )
-    root = find_project_root()
-    assert root is not None, "Run from the Marin worktree"
-    judge = load_model_config(
-        root / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/"
-        "olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-131k.yaml"
-    )
-    # Context bound from the exact judge revision's text_config, not its serving window.
-    if (judge.location, judge.revision) != ("MiniMaxAI/MiniMax-M3-MXFP8", "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba"):
-        raise ValueError("Revalidate the judge context bound when changing its pinned revision")
-    check_context_limit(judge.location, 1048576, judge.serve.max_model_len)
-    cluster = yaml.safe_load((root / IRIS_HUB_CLUSTER_CONFIG).read_text())
 
     def build_config(ctx: StepContext) -> JudgedEvaluation:
         run = step.build_config(ctx)
@@ -222,16 +281,16 @@ def evaluation_step(
             exact_config = read_json(prefix_join(model["uri"], "config.json"))
             validate_context_evidence(
                 exact_config,
-                config["generator"]["engine_init_kwargs"]["hf_overrides"],
+                config["generator"]["engine_init_kwargs"].get("hf_overrides", {}),
                 config["context_budget"]["request_window_tokens"],
-                context_evidence(),
+                context_proof,
             )
         if not ctx.is_fingerprint:
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
         if not ctx.is_fingerprint:
             manifest = read_json(prefix_join(ctx.artifact_path(data), "environment.json"))
             validate_environment_preflight(manifest, ctx.artifact_path(data))
-        return JudgedEvaluation(run, judge, cluster["dashboard_url"])
+        return JudgedEvaluation(run, judge, capability_origin, judge_gpu_count)
 
     return replace(step, run=run_judged, build_config=build_config)
 

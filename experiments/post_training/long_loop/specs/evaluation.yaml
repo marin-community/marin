@@ -1,0 +1,303 @@
+name: long-loop/micro-full
+config:
+  entrypoint: generate
+  config_groups:
+    terminal_bench_config: terminal_bench
+  context_budget:
+    request_window_tokens: 65536
+    max_new_tokens_per_turn: 16384
+    max_turns: 1024
+  environment:
+    task_sessions:
+      local: {}
+      remote_judge:
+        base_url: runtime://minimax-judge
+        api_key_env: JUDGE_API_KEY
+  trainer:
+    strategy: megatron
+    evaluation_runner: task
+    eval_interval: 1
+    eval_batch_size: 32
+    resume_mode: none
+    seed: 20261030
+    algorithm:
+      use_kl_loss: false
+    policy:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 1
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+    logger: console
+    placement:
+      colocate_all: true
+      colocate_policy_ref: true
+      policy_num_nodes: 16
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 16
+      ref_num_gpus_per_node: 8
+    train_batch_size: 1
+    policy_mini_batch_size: 1
+    micro_train_batch_size_per_gpu: 1
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    max_num_seqs: 8
+    engine_init_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: hermes
+      hf_overrides:
+        max_position_embeddings: 262144
+        max_seq_len: 262144
+    run_engines_locally: true
+    enable_http_endpoint: false
+    gpu_memory_utilization: 0.85
+    enforce_eager: false
+    chat_template:
+      source: name
+      name_or_path: null
+    chat_template_kwargs:
+      enable_thinking: true
+    sampling_params:
+      temperature: 0.6
+      top_p: 0.95
+      logprobs: 0
+      skip_special_tokens: false
+      stop_token_ids:
+      - 128001
+      - 128009
+    eval_sampling_params:
+      temperature: 0.6
+      top_p: 0.95
+      skip_special_tokens: false
+      stop_token_ids:
+      - 128001
+      - 128009
+    eval_n_samples_per_prompt: 1
+    num_inference_engines: 16
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 8
+    inference_engine_expert_parallel_size: 8
+    n_samples_per_prompt: 1
+    trajectory_retention:
+      enabled: true
+      output_path: s3://marin-us-east-02a/marin/long-loop/traces/2026.11.09/eval
+      run_id: 2026.11.09
+      phases:
+      - eval
+      sample_fraction: 1.0
+      eval_sample_fraction: 1.0
+      sample_count_per_step: 0
+      always_retain_failures: false
+      always_retain_non_terminating: false
+      always_retain_loops: false
+      reward_below: null
+      reward_above: null
+      max_bytes_per_step: null
+      max_bytes_per_run: null
+      required: true
+  terminal_bench:
+    harbor:
+      environment_type: daytona
+      daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      verifier_override_timeout_sec: 300
+      override_timeout_sec: 1800
+      eval_timeout_override_sec: 1800
+      trial_attempt_timeout_sec: 2460
+      n_concurrent_trials: 8
+      max_retries: 0
+    installed_agent:
+      agent:
+        name: pi
+        override_setup_timeout_sec: 360
+        kwargs:
+          version: 0.87.0
+          mcp_adapter_version: 7.0.0
+          thinking: high
+          thinking_format: chat-template
+          model_info:
+            max_input_tokens: 65536
+            max_output_tokens: 16384
+      setup_timeout: 360
+      run_timeout: 1800
+      cleanup_timeout: 60
+      service_startup_timeout: 60
+      service_shutdown_timeout: 60
+      judge_model: MiniMaxAI/MiniMax-M3-MXFP8
+      trial_reward_key: reward
+  trajectory_runner:
+    max_concurrent_tasks: 128
+  data:
+    kind: parquet
+    shuffle: false
+    train_data: []
+    val_data: []
+  extra_env:
+    OPENAI_BASE_URL: https://api.together.xyz/v1
+    TAU2_USER_MODEL: openai/openai/gpt-oss-120b
+    TAU2_NL_ASSERTIONS_MODEL: openai/openai/gpt-oss-120b
+    TAU2_USER_REASONING_EFFORT: low
+    JUDGE_BASE_URL: runtime://minimax-judge
+seed: 20261030
+gpu_variant: H100
+capability_origin: https://iris.oa.dev
+context_proof:
+  vllm: 0.0.0.dev20260929+marin.39e62869693c
+  config_sha256: 552ee1f97e9a17e74f4d892ca7fe7279dfa16083e0ba85c6fcd8e46dbf9b317b
+  cases:
+  - name: old
+    accepted: false
+    error: "1 validation error for ModelConfig\n  Value error, User-specified max_model_len\
+      \ (65536) is greater than the derived max_model_len (max_seq_len=32768.0 or\
+      \ model_max_length=None in model's config.json). To allow overriding this maximum,\
+      \ set the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN=1. VLLM_ALLOW_LONG_MAX_MODEL_LEN\
+      \ must be used with extreme caution. If the model uses relative position encoding\
+      \ (RoPE), positions exceeding derived_max_model_len lead to nan. If the model\
+      \ uses absolute position encoding, positions exceeding derived_max_model_len\
+      \ will cause a CUDA array out-of-bounds error. [type=value_error, input_value=ArgsKwargs((),\
+      \ {'model': ...n_embeddings': 262144}}), input_type=ArgsKwargs]\n    For further\
+      \ information visit https://errors.pydantic.dev/2.13/v/value_error"
+    config_digest: 88bfc4cd7d8ff43694470604d7fd7cfb54d16e4e5226bf4a66cb65c847c1dfc6
+    overrides:
+      max_position_embeddings: 262144
+    requested_window: 65536
+  - name: fixed
+    accepted: true
+    max_model_len: 65536
+    config_digest: 88bfc4cd7d8ff43694470604d7fd7cfb54d16e4e5226bf4a66cb65c847c1dfc6
+    overrides:
+      max_position_embeddings: 262144
+      max_seq_len: 262144
+    requested_window: 65536
+  - name: other-alias
+    accepted: false
+    error: "1 validation error for ModelConfig\n  Value error, User-specified max_model_len\
+      \ (65536) is greater than the derived max_model_len (n_positions=32768.0 or\
+      \ model_max_length=None in model's config.json). To allow overriding this maximum,\
+      \ set the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN=1. VLLM_ALLOW_LONG_MAX_MODEL_LEN\
+      \ must be used with extreme caution. If the model uses relative position encoding\
+      \ (RoPE), positions exceeding derived_max_model_len lead to nan. If the model\
+      \ uses absolute position encoding, positions exceeding derived_max_model_len\
+      \ will cause a CUDA array out-of-bounds error. [type=value_error, input_value=ArgsKwargs((),\
+      \ {'model': ... 'n_positions': 32768}}), input_type=ArgsKwargs]\n    For further\
+      \ information visit https://errors.pydantic.dev/2.13/v/value_error"
+    config_digest: 88bfc4cd7d8ff43694470604d7fd7cfb54d16e4e5226bf4a66cb65c847c1dfc6
+    overrides:
+      max_position_embeddings: 262144
+      max_seq_len: 262144
+      n_positions: 32768
+    requested_window: 65536
+  vllm_commit: 39e62869693c46402b1a95fde4fc55ca1aab9ae1
+  job: /benfeuer/long-loop-context-proof-2026.11.09.1
+  log_sha256: f4f68bcbb5f132f0f2b245a52951d31bdb9d61a11ac13f0661734f5fe666032d
+data_relative_path: rollouts.parquet
+judge_gpu_count: 8
+role_plan:
+  colocate_all: true
+  policy_num_nodes: 16
+  policy_num_gpus_per_node: 8
+  num_inference_engines: 16
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  train_batch_size: 1
+  policy_mini_batch_size: 1
+  micro_train_batch_size_per_gpu: 1
+  n_samples_per_prompt: 1
+  reference_num_nodes: null
+execution:
+  cluster: cw-rno2a
+  cluster_config: lib/iris/config/cw-rno2a.yaml
+  cpu: 32
+  memory: 512GB
+  disk: 256GB
+  priority: interactive
+  max_retries: 0
+  target_cluster: cw-rno2a
+  parent_cluster_config: lib/iris/config/marin.yaml
+  coordinator_timeout_hours: 36
+  coordinator_name: long-loop-plumbing-2026.11.09
+  coordinator_gpu: null
+  wandb_entity: null
+  job_timeout_seconds: 86400
+  required_env_vars:
+  - DAYTONA_EVAL_API_KEY
+  - DAYTONA_TARGET
+  - TOGETHER_API_KEY
+  - MARIN_PREFIX
+  container_profile: 4
+judge:
+  name: minimax-m3-mxfp8-olympiadbench-judge-131k
+  location: MiniMaxAI/MiniMax-M3-MXFP8
+  identity: null
+  revision: c5454eb03678d8710e54a4e0fc681b9f3b4a3dba
+  tokenizer: null
+  tokenizer_revision: null
+  apply_chat_template: true
+  resource_hint:
+    hbm_gb: null
+    gpu:
+      H100: 8
+    cpu: 64.0
+    memory: 512g
+    disk: 600g
+  serve:
+    backend: vllm
+    tensor_parallel_size: 8
+    data_parallel_size: null
+    pipeline_parallel_size: 1
+    instances: 1
+    gpu_memory_utilization: null
+    max_model_len: 131072
+    max_num_batched_tokens: 8192
+    max_num_seqs: 16
+    hf_overrides: null
+    limit_mm_per_prompt: '{"image":0,"video":0}'
+    tool_call_parser: null
+    reasoning_parser: minimax_m3
+    vllm_batch_invariant: null
+    vllm_use_flashinfer_sampler: null
+    runai_streamer_concurrency: null
+    runai_streamer_s3_request_timeout_ms: null
+    hf_hub_disable_xet: false
+    vllm_source: null
+    vllm_version: null
+    vllm_plugin_requirements: []
+    object_store_load_mode: stage_local
+    vllm_extra_args:
+    - --block-size
+    - '128'
+    - --language-model-only
+    - --enable-prefix-caching
+    speculative: null
+    chat_template: null
+    auto_overrides: true
+  generation:
+    max_gen_toks: null
+    extra_gen_kwargs: {}
+    chat_template_kwargs: {}
+    thinking_off_template_kwargs: {}
+  agent:
+    agent_kwargs: {}
+  evalchemy_num_concurrent: null
+tasks_per_benchmark: 10
+expected_source_rows: 200
+expected_expanded_attempt_count: null
+admission_pending:
+- Confirm expanded evaluation attempt count from the exact prepared200-row dataset,
+  including installed-agent expansion.
+- Regenerate exact pinned-vLLM context proof for the future selected RL export config;
+  included proof covers historical plumbing config only.
+supported_path_count: 20
+expected_rollouts: 200

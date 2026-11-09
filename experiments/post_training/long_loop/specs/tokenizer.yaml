@@ -1,0 +1,4 @@
+uri: s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18
+repo: marin-community/marin-tokenizer-tools
+revision: 3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09
+context_limit: 262144

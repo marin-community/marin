@@ -29,6 +29,7 @@ class JudgedEvaluation:
     skyrl: SkyRLRunConfig
     judge: ModelConfig
     capability_origin: str
+    judge_gpu_count: int = 8
 
 
 def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
@@ -53,7 +54,7 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     validation_fs.pipe_file(validation_key, json.dumps(validation, indent=2).encode())
     inference = inference_config_for_model(
         config.judge,
-        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=None),
+        AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=config.judge_gpu_count, target_cluster=None),
         env_vars={},
         priority=priority_band_value(launch["iris"]["priority"]),
         capability_origin=config.capability_origin,
@@ -65,7 +66,7 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
         log = EventLog(Path(directory) / "events.jsonl", launch["run"]["id"], "eval", attempt)
         try:
-            with log.span("judge_startup_including_queue", gpus=8):
+            with log.span("judge_startup_including_queue", gpus=config.judge_gpu_count):
                 judge = stack.enter_context(remote_inference(inference))
             fs.pipe_file(key, log.path.read_bytes())
             base_url = judge.model.endpoint.base_url

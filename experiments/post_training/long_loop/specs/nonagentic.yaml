@@ -1,0 +1,10 @@
+uri: s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
+data_file: train.parquet
+source_names: []
+files:
+- uri: s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04/train.parquet
+  sha256: d825279aa1fc48311f74bf489dc42175ad8fb91a0badb2cfa1a7070795f8dbd5
+- uri: s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04/task_manifest.parquet
+  sha256: fe3f9227cf587855e663c3c32e45fec1ee39cf1e267d4bba18ce704f6f93bd62
+admission_pending:
+- Confirm intended nonagentic cohort and enumerate source_names

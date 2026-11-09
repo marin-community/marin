@@ -1,0 +1,5 @@
+uri: s3://marin-us-east-02a/marin/long-loop/base/2026.11.08.8
+repo: open-athena/snowball-67b-a2b-base-262k-qk175-skew8
+revision: 058ecaf27b9e4f37219df221a51e7d490d58ec3d
+admission_pending:
+- Pin base artifact verification manifest SHA256
