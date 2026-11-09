@@ -248,3 +248,29 @@ def test_rebuild_joins_a_real_run_log_to_its_harbor_trial():
     assert (row["trial_name"], row["retry"], row["reward"], row["problems"]) == ("swesmith-00008__Gdi9WTi", 0, 0.0, [])
     assert [m["role"] for m in row["messages"]] == ["system", "user"] + ["assistant", "tool"] * 7 + ["assistant"]
     assert row["tokens"] == {"teacher": {"turns": 8, "prompt": 19713, "completion": 977, "reasoning": 101}}
+
+
+@pytest.mark.parametrize("failure", [503, "connection"])
+def test_backend_retries_keep_capability_urls_out_of_logs(tmp_path, monkeypatch, caplog, failure):
+    secret = "synthetic-capability-for-log-regression"
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        if len(attempts) == 1:
+            if failure == "connection":
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(failure)
+        return httpx.Response(200, json=reply("done"))
+
+    monkeypatch.setattr(trace_proxy, "RETRY_INTERVAL", 0)
+    teacher = backend(f"http://teacher/proxy/t/{secret}/serve/v1", retry_window=60)
+    log_path = tmp_path / "requests.jsonl"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = build_proxy(teacher, 100, RequestLog(log_path), None, client)
+    with caplog.at_level("WARNING", logger=trace_proxy.__name__):
+        response = post(TestClient(app), [{"role": "user", "content": "task"}])
+    assert response.status_code == 200 and len(attempts) == 2
+    assert any(record.name == trace_proxy.__name__ for record in caplog.records)
+    assert secret not in caplog.text
+    assert secret not in log_path.read_text()

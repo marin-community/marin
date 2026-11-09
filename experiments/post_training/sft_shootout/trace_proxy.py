@@ -176,11 +176,11 @@ def build_proxy(
                 )
                 if response.status_code not in GATEWAY_STATUSES or not retry:
                     return response, time.monotonic() - started
-                logger.warning("%s answered %d; retrying", backend.base_url, response.status_code)
+                logger.warning("Backend model %s answered %d; retrying", backend.model, response.status_code)
             except httpx.ConnectError:
                 if not retry:
                     raise
-                logger.warning("%s refused the connection; retrying", backend.base_url)
+                logger.warning("Backend model %s refused the connection; retrying", backend.model)
             await asyncio.sleep(RETRY_INTERVAL)
 
     def turn_record(author: Author, trigger: Trigger | None, response: httpx.Response, latency: float) -> dict:

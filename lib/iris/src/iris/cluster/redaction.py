@@ -12,6 +12,7 @@ Iris proxy capability tokens in free text.
 import base64
 import json
 import re
+from collections.abc import Iterator
 
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
@@ -125,9 +126,21 @@ def _is_capability_token(token: str) -> bool:
     return audience == PROXY_PLANE_AUDIENCE or (isinstance(audience, list) and PROXY_PLANE_AUDIENCE in audience)
 
 
+def _capability_matches(text: str) -> Iterator[re.Match[str]]:
+    position = 0
+    while match := _BROKEN_JWT_RE.search(text, position):
+        if _is_capability_token(match.group(0)):
+            yield match
+            position = match.end()
+        else:
+            # A shorter, unrelated JWT can consume the next token's header as part
+            # of its signature. Search inside rejected candidates for that token.
+            position = match.start() + 1
+
+
 def count_capability_tokens(text: str) -> int:
     """Count Iris proxy capability tokens in *text*, line breaks inside a token included."""
-    return sum(_is_capability_token(match.group(0)) for match in _BROKEN_JWT_RE.finditer(text))
+    return sum(1 for _ in _capability_matches(text))
 
 
 def scrub_capability_tokens(text: str) -> tuple[str, int]:
@@ -138,13 +151,12 @@ def scrub_capability_tokens(text: str) -> tuple[str, int]:
     it, so tokens split by whitespace or escaped line breaks are matched too. Callers should confirm
     that ``count_capability_tokens`` of the result is 0.
     """
+    parts = []
+    position = 0
     found = 0
-
-    def replace(match: re.Match[str]) -> str:
-        nonlocal found
-        if not _is_capability_token(match.group(0)):
-            return match.group(0)
+    for match in _capability_matches(text):
+        parts.extend((text[position : match.start()], REDACTED_VALUE))
+        position = match.end()
         found += 1
-        return REDACTED_VALUE
-
-    return _BROKEN_JWT_RE.sub(replace, text), found
+    parts.append(text[position:])
+    return "".join(parts), found

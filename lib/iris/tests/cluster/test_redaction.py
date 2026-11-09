@@ -209,3 +209,14 @@ def test_scrub_capability_tokens_keeps_the_text_after_a_token():
 def test_count_capability_tokens_accepts_a_list_audience():
     assert count_capability_tokens(_jwt({"aud": ["other", "iris-proxy"]})) == 1
     assert count_capability_tokens(_OTHER_JWT) == 0
+
+
+def test_scrub_capability_tokens_after_an_unrelated_shorter_jwt():
+    for separator in ("", "\n", "\\n", "\\\\n  "):
+        capability = _wrapped(_CAPABILITY, separator)
+        for before, after in ((_OTHER_JWT + " and ", " end"), ("start ", " and " + _OTHER_JWT)):
+            text = before + capability + after
+            assert count_capability_tokens(text) == 1
+            scrubbed, replaced = scrub_capability_tokens(text)
+            assert (scrubbed, replaced) == (before + REDACTED_VALUE + after, 1)
+            assert count_capability_tokens(scrubbed) == 0
