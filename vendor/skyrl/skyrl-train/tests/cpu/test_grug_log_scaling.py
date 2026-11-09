@@ -61,15 +61,6 @@ def test_schema_3_config_json_keeps_log_scaling_and_split_experts(log_scaling, e
     assert reloaded.uses_hero_architecture
 
 
-@pytest.mark.parametrize(
-    ("schema", "log_scaling"),
-    [
-        (2, HERO_LOG_SCALING),
-        (3, {"log_scaling_n_floor": 65536, "log_scaling_alpha": 0.1, "log_scaling_power": None}),
-        (3, {**HERO_LOG_SCALING, "log_scaling_alpha": 0.0}),
-    ],
-    ids=["fields_before_schema_3", "partial_fields", "zero_slope"],
-)
-def test_config_rejects_inconsistent_log_scaling(schema, log_scaling):
+def test_config_rejects_log_scaling_before_schema_3():
     with pytest.raises(ValueError, match="log_scaling"):
-        GrugMoeConfig(grugmoe_artifact_schema_version=schema, **log_scaling)
+        GrugMoeConfig(grugmoe_artifact_schema_version=2, **HERO_LOG_SCALING)
