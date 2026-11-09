@@ -8,6 +8,7 @@ import haliax as hax
 from haliax.nn.scan import ScanCheckpointPolicy
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 import pytest
 import optax
@@ -35,8 +36,12 @@ pytestmark = pytest.mark.tpu
 
 
 @pytest.mark.parametrize("kv_heads", [2, 4])
-def test_native_model_matches_named_hf_weights_loss_and_all_gradients(kv_heads):
-    _assert_named_native_loss_and_gradients(kv_heads, gradient_checkpointing=False)
+@pytest.mark.parametrize("compute_dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("upcast_attn", [False, True])
+def test_native_model_matches_named_hf_weights_loss_and_all_gradients(kv_heads, compute_dtype, upcast_attn):
+    _assert_named_native_loss_and_gradients(
+        kv_heads, gradient_checkpointing=False, compute_dtype=compute_dtype, upcast_attn=upcast_attn
+    )
 
 
 def test_native_gqa_checkpointed_scan_matches_named_loss_and_all_gradients():
@@ -174,7 +179,9 @@ def test_native_keyed_paged_prefill_and_next_decode_match_dense_and_preserve_cac
                     np.testing.assert_array_equal(cache.kv_pages.array[prefix_pages], previous)
 
 
-def _assert_named_native_loss_and_gradients(kv_heads, *, gradient_checkpointing):
+def _assert_named_native_loss_and_gradients(
+    kv_heads, *, gradient_checkpointing, compute_dtype=jnp.float32, upcast_attn=False
+):
     config = LlamaConfig(
         hidden_dim=16,
         intermediate_dim=24,
@@ -184,6 +191,7 @@ def _assert_named_native_loss_and_gradients(kv_heads, *, gradient_checkpointing)
         max_seq_len=8,
         attn_backend=AttentionBackend.VANILLA,
         gradient_checkpointing=gradient_checkpointing,
+        upcast_attn=upcast_attn,
     )
     native_config = NativeLlamaLmConfig(
         **{field.name: getattr(config, field.name) for field in dataclasses.fields(config)}
@@ -200,11 +208,16 @@ def _assert_named_native_loss_and_gradients(kv_heads, *, gradient_checkpointing)
         native = native_config.build(Vocab, key=jax.random.PRNGKey(1)).from_state_dict(source)
         for name, value in native.to_state_dict().items():
             np.testing.assert_array_equal(value, source[name].reshape(value.shape))
+        policy = jmp.Policy(param_dtype=jnp.float32, compute_dtype=compute_dtype, output_dtype=jnp.float32)
         losses = []
         gradients = []
         for model in (named, native):
             loss, gradient = eqx.filter_jit(
-                eqx.filter_value_and_grad(lambda m: m.compute_next_token_loss(example).scalar())
+                eqx.filter_value_and_grad(
+                    lambda m: policy.cast_to_compute(m).compute_next_token_loss(example).scalar()
+                ),
+                # Preserve the BF16 rounding stages that the training runtime requires.
+                compiler_options={"xla_allow_excess_precision": False},
             )(model)
             losses.append(loss)
             gradients.append(gradient.to_state_dict())
