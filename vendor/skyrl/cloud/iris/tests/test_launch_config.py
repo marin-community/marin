@@ -28,6 +28,7 @@ from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
 
 
@@ -74,6 +75,30 @@ def test_colocated_expert_block_accepts_only_the_four_gpu_verified_layout() -> N
     config.generator.inference_engine_data_parallel_size = 2
     with pytest.raises(ValueError, match="colocation requires"):
         validate_expert_block_transport(config)
+
+
+def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:
+    config = get_default_config()
+    config.trainer.placement.colocate_all = True
+    config.generator.weight_sync_transport = "expert_block"
+
+    with pytest.raises(ValueError, match="requires a training entrypoint"):
+        validate_rollout_launch(config, EntrypointOperation.GENERATE)
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["skyrl_train.entrypoints.main_generate", "skyrl_train.entrypoints.taskcompendium"],
+)
+def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: Path, entrypoint: str) -> None:
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(_raw_config()))
+    config = load_launch_config(path)
+    config.skyrl.generator.weight_sync_transport = "expert_block"
+    config.runtime.entrypoint = entrypoint
+
+    with pytest.raises(ValueError, match="requires the standard training entrypoint"):
+        validate_launch_config(config)
 
 
 def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:

@@ -602,7 +602,8 @@ def _validate_skyrl_recipe(
     ):
         plan = topology.role_plan
         supported = (
-            plan.policy_num_nodes == 1
+            _declared_config_value(config, "entrypoint") in ("standard", _MISSING_CONFIG_VALUE)
+            and plan.policy_num_nodes == 1
             and plan.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
             and plan.num_inference_engines == 1
             and plan.inference_engine_tensor_parallel_size == 1
@@ -626,7 +627,7 @@ def _validate_skyrl_recipe(
         )
         if not supported:
             raise ValueError(
-                "SkyRL colocated expert_block requires one four-GPU node, policy TP=PP=ETP=1 EP=4, "
+                "SkyRL colocated expert_block requires entrypoint=standard, one four-GPU node, policy TP=PP=ETP=1 EP=4, "
                 "one local vLLM TP=PP=1 DP=EP=4 TRITON engine, NCCL, verification, and no LoRA or eager mode"
             )
     forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")

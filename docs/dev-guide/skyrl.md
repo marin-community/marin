@@ -129,7 +129,7 @@ backend, NCCL weight sync, TP=1, and EP equal to DP. Megatron needs TP=ETP=1 and
 | Placement | Supported layout | Lifecycle |
 | --- | --- | --- |
 | Separate policy and inference GPUs | Local TP=1 vLLM, EP=DP; trainer and receiver parallel sizes may differ | Receivers stay awake; placement and transfer groups are checked at startup. |
-| Shared GPUs (`colocate_all=true`) | One four-GPU node; Megatron TP=PP=ETP=1, EP=4; one vLLM TP=PP=1, DP=EP=4 engine; no LoRA or eager mode | Level-2 sleep during training; receiver placement and Gloo transfer groups are rechecked and rebuilt after each weight wake. Verification is required before generation resumes. |
+| Shared GPUs (`colocate_all=true`) | Standard training entrypoint on one four-GPU node; Megatron TP=PP=ETP=1, EP=4; one vLLM TP=PP=1, DP=EP=4 engine; no LoRA or eager mode | Level-2 sleep during training; receiver placement and Gloo transfer groups are rechecked and rebuilt after each weight wake. Verification is required before generation resumes. |
 
 Colocated transfer groups use Gloo's CUDA broadcast support because the pinned NCCL
 2.29 runtime rejects two ranks on one physical GPU. [NCCL's shared-GPU rank mode](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-multi-rank-gpu-enable)
