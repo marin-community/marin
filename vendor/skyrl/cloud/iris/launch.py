@@ -123,7 +123,8 @@ def _prepare_model_caches(config: DictConfig) -> None:
     )
     caches = []
     for model in models:
-        separate_tokenizer = str(config.inputs.model.tokenizer_uri) != model.path
+        tokenizer_uri = str(config.inputs.model.tokenizer_uri or "")
+        separate_tokenizer = bool(tokenizer_uri and tokenizer_uri != model.path)
         policy_only = model.path == str(config.inputs.model.uri) and model not in teacher_models
         uri, manifest = ensure_hugging_face_model_cache(
             model.path,
