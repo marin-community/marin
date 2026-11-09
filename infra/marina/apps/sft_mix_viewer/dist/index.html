@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SFT Mix Viewer</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <h1>SFT Mix Viewer</h1>
+        <p id="summary">Loading…</p>
+      </div>
+      <div class="controls">
+        <button id="draw" type="button" title="Pick a source in proportion to its share of training positions, then one of its sampled documents">
+          Draw by mix share
+        </button>
+        <select id="kind" aria-label="Source kind">
+          <option value="all">SFT and replay</option>
+          <option value="sft">SFT only</option>
+          <option value="replay">Replay only</option>
+        </select>
+        <input id="filter" type="search" placeholder="Filter sources" aria-label="Filter sources" />
+      </div>
+    </header>
+    <main>
+      <nav id="sources" aria-label="Sources"></nav>
+      <section id="reader">
+        <div id="source-head"></div>
+        <div id="pager"></div>
+        <pre id="text"></pre>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

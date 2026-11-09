@@ -5,6 +5,8 @@ dist/
 !examples/problem-set-app/dist/**
 !apps/rl_data_catalog/dist/
 !apps/rl_data_catalog/dist/**
+!apps/sft_mix_viewer/dist/
+!apps/sft_mix_viewer/dist/**
 node_modules/
 .data/
 journeys-out/

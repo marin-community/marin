@@ -1,0 +1,5 @@
+applet_id = "378c3d80-275c-49f2-9913-0bd2c292c354"
+
+title = "SFT Mix Viewer"
+description = "Read sampled documents from the 10.05 Grug SFT mixture and its long-context pretraining replay. Browse by source or draw documents in proportion to mixture share."
+python_entrypoint = "server.app:create_api"
