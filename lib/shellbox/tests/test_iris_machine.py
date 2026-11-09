@@ -662,7 +662,9 @@ def test_reset_preserves_mounts_and_capture_files(tmp_path, monkeypatch):
             root, marker = str(tmp_path), "\0tmp_path\0"
             command = [
                 re.sub(
-                    r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)", lambda m: str(tmp_path / m[1]), part.replace(root, marker)
+                    r"/(tmp|workspace|tests|app)(?=/|[\s'\"]|$)",
+                    lambda m: str(tmp_path / m[1]),
+                    part.replace(root, marker),
                 ).replace(marker, root)
                 for part in request.command
             ]
