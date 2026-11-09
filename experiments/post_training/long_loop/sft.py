@@ -47,22 +47,29 @@ def import_base(*, output: str, model: dict, revision: str) -> None:
     convert(ImportConfig(BASE_MODEL, revision, draccus.decode(GrugModelConfig, model), output + "/native"))
 
 
-def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None:
-    configure_coreweave_s3()
-    verification = read_json(initializer + "/native/verification.json")
-    if not verification["exact_parity"] or len(verification["tensors"]) != 502:
-        raise ValueError("Base import did not verify all 502 tensors")
+def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str) -> GrugRunConfig:
+    """Build a fresh weights-only start; this entrypoint never implicitly resumes."""
     # A fresh decoded copy preserves the identity-bearing template supplied by the artifact.
     config = json.loads(json.dumps(recipe))
     config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
     trainer["id"] = run_id
     trainer["initialize_from"] = initializer + "/native/step-0"
-    trainer["load_checkpoint_path"] = [output + "/checkpoints"]
+    trainer["load_checkpoint"] = False
+    trainer["load_checkpoint_path"] = []
     trainer["checkpointer"]["base_path"] = output + "/checkpoints"
     trainer["checkpointer"]["temporary_base_path"] = output + "/temporary-checkpoints"
     trainer["tracker"].update(id=run_id, name=run_id)
-    run_grug(draccus.decode(GrugRunConfig, config))
+    return draccus.decode(GrugRunConfig, config)
+
+
+def sft_run(*, output: str, initializer: str, recipe: dict, run_id: str) -> None:
+    configure_coreweave_s3()
+    verification = read_json(initializer + "/native/verification.json")
+    if not verification["exact_parity"] or len(verification["tensors"]) != 502:
+        raise ValueError("Base import did not verify all 502 tensors")
+    config = fresh_sft_config(output=output, initializer=initializer, recipe=recipe, run_id=run_id)
+    run_grug(config)
     metadata = read_json(output + "/checkpoints/step-15/metadata.json")
     if metadata.get("step") != 15 or metadata.get("is_temporary") is not False:
         raise ValueError("SFT did not commit permanent step 15")

@@ -26,7 +26,7 @@ trainer:
   micro_forward_batch_size_per_gpu: 1
   eval_batch_size: 256
   eval_interval: 0
-  resume_mode: latest
+  resume_mode: none
   max_ckpts_to_keep: 2
   seed: 20261020
   logger: wandb

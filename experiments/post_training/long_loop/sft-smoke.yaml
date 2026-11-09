@@ -8108,7 +8108,7 @@ trainer:
     jax_config:
       jax_softmax_custom_jvp: true
       jax_threefry_partitionable: true
-    load_checkpoint: true
+    load_checkpoint: false
     load_checkpoint_path: []
     log_dir: logs
     log_jaxprs: true
