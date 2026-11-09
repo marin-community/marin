@@ -33,7 +33,7 @@ class Engine(Protocol):
 
 
 def interruption(error: RolloutInterrupted) -> DriverCancelled | Transient | Restart:
-    """Retry startup and confirmed pre-command websocket setup failures."""
+    """Classify rollout interruptions for cancellation, retry, or restart."""
     causes: list[str] = []
     seen = {id(error)}
     cause = error.__cause__
