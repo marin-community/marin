@@ -162,7 +162,7 @@ def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(facto
                 max_file_bytes=1024,
             )
             assert files == {name: b"answer\x00", "/app/submission/alias": b"answer\x00"}
-            with pytest.raises(RuntimeError, match="links"):
+            with pytest.raises(RuntimeError, match="contains a link"):
                 await download_files(
                     machine,
                     ("/app/submission/private",),
