@@ -327,14 +327,18 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
 @pytest.mark.parametrize("failure", ["shortfall", "evaluation-source", "development-image", "development-judge"])
 def test_selection_does_not_publish_an_incomplete_or_evaluation_training_pool(tmp_path, failure):
     settings = recipe(tmp_path).model_copy(update={"sources": {"fixture:first": "calendar"}})
-    source = admitted_source(
-        tmp_path / "source", [source_task("training-a")], "eval" if failure == "evaluation-source" else "train"
-    )
+    training = [source_task("training-a")]
     if failure.startswith("development-"):
-        task = source_task("development")
-        if failure == "development-judge":
-            task = task.model_copy(update={"grader": verifyit_package(JudgeSpec(references=("target",))).grader})
-        settings = settings.model_copy(update={"heldout": (task_file(tmp_path / "development.parquet", [task]),)})
+        training.append(source_task("training-b"))
+        heldout = [validation_task(row, {}) for row in heldout_rows()]
+        grader = (
+            verifyit_package(JudgeSpec(references=("target",))).grader
+            if failure == "development-judge"
+            else source_task("image").grader
+        )
+        heldout[0] = heldout[0].model_copy(update={"grader": grader})
+        settings = settings.model_copy(update={"heldout": (task_file(tmp_path / "development.parquet", heldout),)})
+    source = admitted_source(tmp_path / "source", training, "eval" if failure == "evaluation-source" else "train")
     step = task_selection_step({"fixture:first": source}, settings)
     with pytest.raises(RuntimeError):
         run(step)

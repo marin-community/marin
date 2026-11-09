@@ -222,7 +222,7 @@ uv run --package marin-core --extra cpu python -m experiments.post_training.task
 ```
 
 Each part declares a catalog source ID, converted population, format, family,
-AAII category, license and selection count. The corpus
+Artificial Analysis (AAII) category, license and selection count. The corpus
 pins its source roots and manifest hashes. Formats are `evaluation` for a
 verified Evalchemy corpus and `normalized` for evaluation-only curation output.
 Normalized populations count converted tasks; rejections stay in the source ledger.

@@ -62,6 +62,7 @@ FULL_VALIDATION_FILENAME = "full_validation.parquet"
 TASK_MANIFEST_FILENAME = "task_manifest.parquet"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_JSON_COLUMN = "task_json"
+LOWERED_TASK_SPEC_COLUMN = "lowered_task_spec"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False)])
 HELDOUT_SCHEMA_VERSION = "0.27"
 STRUCTURE_CLOSURE_DATASET = "structure-closure"
@@ -106,6 +107,9 @@ class GraderKind(StrEnum):
     IMAGE = "image"
     REMOTE_JUDGE = "remote_judge"
     IN_PROCESS = "in_process"
+
+
+LOCAL_GRADERS = (GraderKind.IN_PROCESS, GraderKind.PACKAGE)
 
 
 class PanelFormat(StrEnum):
@@ -254,14 +258,14 @@ def _grader_contract(task: TaskSpec) -> dict[str, Any]:
 
 def validation_task(row: dict[str, Any], grader_environments: Mapping[str, EnvironmentRequirements]) -> TaskSpec:
     """Import a historical task; an image-based script grader takes its admitted component's environment."""
-    raw = row["lowered_task_spec"]
+    raw = row[LOWERED_TASK_SPEC_COLUMN]
     document = json.loads(raw, object_pairs_hook=unique_object)
     original = document["task"]
     if original["schema_version"] != HELDOUT_SCHEMA_VERSION:
         raise ValueError("The pinned heldout TaskSpec version changed")
     if original["source"]["dataset"] == STRUCTURE_CLOSURE_DATASET:
         converted = structure_closure_task(
-            RawRow(original["id"], Source.model_validate(original["source"]), {"lowered_task_spec": raw})
+            RawRow(original["id"], Source.model_validate(original["source"]), {LOWERED_TASK_SPEC_COLUMN: raw})
         )
         if not isinstance(converted, NormalizedTask):
             raise ValueError(f"Native structure-closure import failed for {original['id']}: {converted}")
@@ -332,7 +336,7 @@ def _panel_source_tasks(
         raw = (row[TASK_JSON_COLUMN] for path in paths for row in _parquet_rows(path, TASK_JSON_COLUMN))
         tasks = (TaskSpec.model_validate_json(value) for value in raw if value is not None)
     elif source.format == PanelFormat.HISTORICAL:
-        tasks = (validation_task(row, grader_environments) for row in _parquet_rows(root, "lowered_task_spec"))
+        tasks = (validation_task(row, grader_environments) for row in _parquet_rows(root, LOWERED_TASK_SPEC_COLUMN))
     else:
         tasks = (TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN]) for row in _parquet_rows(root, TASK_SPEC_COLUMN))
     for task in tasks:
@@ -442,9 +446,9 @@ def write_training(
     the test panel's overlap keys, which add the whitespace-normalized final user statement.
     """
     excluded = (*heldout, *exclusions)
-    excluded_ids = {task.id for task in excluded}
+    excluded_ids = {task.id for task in heldout}
     excluded_public = {semantic_digest(task, False) for task in excluded}
-    excluded_contexts = {task.context.model_dump_json() for task in excluded}
+    excluded_contexts = {task.context.model_dump_json() for task in heldout}
     excluded_panel_keys = {key for task in exclusions for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
@@ -509,7 +513,7 @@ def prepare(config: SelectionConfig) -> None:
     """Publish selected training TaskSpecs and the fixed and complete heldout panels."""
     environments = _grader_environments(config.sources)
     heldout = tuple(task for source in config.heldout for task in _panel_source_tasks(source, environments))
-    if any(_grader_kind(task) not in (GraderKind.IN_PROCESS, GraderKind.PACKAGE) for task in heldout):
+    if any(_grader_kind(task) not in LOCAL_GRADERS for task in heldout):
         raise ValueError("Development panel requires local graders")
     selection = select_heldout(heldout, config.recipe)
     with TemporaryDirectory(prefix="task-selection-") as temporary:
@@ -561,9 +565,9 @@ def _pinned_inputs(name: str, sources: tuple[HeldoutSource, ...]) -> tuple[Artif
     )
 
 
-def _resolved[S: HeldoutSource | PanelMeasurement](
-    context: StepContext, sources: tuple[S, ...], steps: tuple[ArtifactStep, ...]
-) -> tuple[S, ...]:
+def _resolved(
+    context: StepContext, sources: tuple[HeldoutSource, ...], steps: tuple[ArtifactStep, ...]
+) -> tuple[HeldoutSource, ...]:
     return tuple(
         source.model_copy(update={"uri": context.artifact_path(step)})
         for source, step in zip(sources, steps, strict=True)
@@ -571,7 +575,7 @@ def _resolved[S: HeldoutSource | PanelMeasurement](
 
 
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
-    """Bind a terminal selection to admitted source artifacts and a pinned heldout input."""
+    """Bind admitted sources and fixed evaluation exclusions to a versioned training selection."""
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
@@ -665,7 +669,7 @@ def select_test_panel(
     excluded: Iterator[TaskSpec],
     rates: Mapping[str, PanelRate],
 ) -> PanelSelection:
-    """Select canonical tasks from source iterators; named-part order gives duplicates to the first part."""
+    """Select canonical tasks from source iterators, assigning duplicates to the first source."""
     excluded_keys = {key for task in excluded for key in _panel_keys(task).exclusion}
     selected: list[tuple[TaskSpec, PanelSource]] = []
     taken: set[tuple[str, str]] = set()
@@ -680,7 +684,7 @@ def select_test_panel(
                 counts["overlap"] += 1
             elif "eval" not in task.tags:
                 raise ValueError(f"Test panel source must reserve its tasks for evaluation: {task.id}")
-            elif _grader_kind(task) not in (GraderKind.IN_PROCESS, GraderKind.PACKAGE):
+            elif _grader_kind(task) not in LOCAL_GRADERS:
                 raise ValueError(f"Test panel requires a local grader: {task.id}")
             elif not taken.isdisjoint(keys.exact) or not seen.isdisjoint(keys.exact):
                 counts["duplicate"] += 1
@@ -747,18 +751,20 @@ def prepare_test_panel(config: PanelConfig) -> None:
 
 
 def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> ArtifactStep[Artifact]:
-    """Bind named recipe parts and training/development exclusions to their versioned source artifacts."""
+    """Bind panel sources and training/development exclusions to their versioned artifacts."""
     missing = {part.source_id for part in recipe.sources} - curated.keys()
     if missing:
         raise ValueError(f"Panel requires corpus sources: {', '.join(sorted(missing))}")
     inputs = {part.source_id: curated[part.source_id] for part in recipe.sources}
     excluded = (*recipe.training, recipe.development)
     exclusions = _pinned_inputs(f"{recipe.name}/exclude", excluded)
-    rate = recipe.pass_rates
-    measurement = (
+    measurement = recipe.pass_rates
+    measurement_step = (
         None
-        if rate is None
-        else ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{recipe.name}/pass-rates", rate.version, rate.uri)
+        if measurement is None
+        else ArtifactStep.adopt(
+            f"{SELECTION_INPUT_PREFIX}/{recipe.name}/pass-rates", measurement.version, measurement.uri
+        )
     )
 
     def build_config(context: StepContext) -> PanelConfig:
@@ -767,8 +773,8 @@ def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> Artifac
             "training": tuple(training),
             "development": development,
             "pass_rates": (
-                rate.model_copy(update={"uri": context.artifact_path(measurement)})
-                if rate is not None and measurement is not None
+                measurement.model_copy(update={"uri": context.artifact_path(measurement_step)})
+                if measurement is not None and measurement_step is not None
                 else None
             ),
         }
@@ -787,7 +793,7 @@ def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> Artifac
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
-        deps=(*dict.fromkeys(inputs.values()), *exclusions, *((measurement,) if measurement is not None else ())),
+        deps=(*inputs.values(), *exclusions, *((measurement_step,) if measurement_step is not None else ())),
         run=prepare_test_panel,
         build_config=build_config,
     )
