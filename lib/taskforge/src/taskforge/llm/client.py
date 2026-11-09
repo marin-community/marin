@@ -109,7 +109,7 @@ class Completion:
 class ModelRequestRejected(Exception):
     """The server rejected a request for a reason a retry cannot fix; ``attempts`` ends with that request."""
 
-    def __init__(self, status: int, body: str, attempts: Sequence[Attempt]):
+    def __init__(self, status: int, body: str, attempts: Sequence[Attempt]) -> None:
         super().__init__(f"model server rejected request with HTTP {status}: {body}")
         self.status = status
         self.body = body
@@ -119,14 +119,14 @@ class ModelRequestRejected(Exception):
 class ContextExhausted(ModelRequestRejected):
     """The prompt plus the requested output exceeds the model's context window."""
 
-    def __init__(self, body: str, attempts: Sequence[Attempt]):
+    def __init__(self, body: str, attempts: Sequence[Attempt]) -> None:
         super().__init__(400, body, attempts)
 
 
 class ModelUnavailable(Exception):
     """The retries or the infrastructure hold ran out; ``attempts`` holds every attempt made."""
 
-    def __init__(self, message: str, attempts: Sequence[Attempt]):
+    def __init__(self, message: str, attempts: Sequence[Attempt]) -> None:
         super().__init__(message)
         self.attempts = tuple(attempts)
 

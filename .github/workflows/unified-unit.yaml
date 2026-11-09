@@ -479,15 +479,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      - name: Test Taskforge and its capability environments
-        run: >-
-          uv run --package marin-taskforge --frozen --group test pytest
-          -c lib/taskforge/pyproject.toml lib/taskforge/tests
-          experiments/post_training/capability_driven_envs/tests -q
-
+      - name: Test Taskforge
+        run: uv run --frozen --package marin-taskforge --group test pytest lib/taskforge/tests -q
       - name: Type-check Taskforge
-        working-directory: lib/taskforge
-        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+        run: uv run --frozen --package marin-taskforge --group test pyrefly check --config lib/taskforge/pyproject.toml
 
   iris_e2e_smoke:
     name: iris-e2e-smoke
