@@ -319,6 +319,15 @@ def test_api_compare_spans_cohorts_when_all_cohorts_are_selected(client):
     assert versions >= {"2026.07.20", "2026.07.21"}
 
 
+def test_api_selects_unversioned_records_by_name(client):
+    assert "unversioned" in client.get("/meta").json()["versions"]
+
+    panel = client.get("/panel", params={"cohort": "unversioned"}).json()
+
+    assert {row["model"] for row in panel["rows"]} == {"llama3-8b"}
+    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} == {None}
+
+
 def test_api_compare_rejects_a_request_it_cannot_answer(client):
     assert client.get("/compare", params={"models": "snowball"}).status_code == 400
     assert client.get("/compare", params={"models": "a,b,c,d,e"}).status_code == 400

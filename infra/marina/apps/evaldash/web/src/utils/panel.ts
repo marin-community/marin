@@ -3,6 +3,9 @@ import { compareCells } from './ranking'
 
 export function cohortWarning(cohort: string, meta: Meta): string | null {
   if (cohort === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (cohort === 'unversioned') {
+    return 'Runs launched without a version label have no settings contract and may mix settings. Check run configurations before comparing scores.'
+  }
   if (!meta.verified_cohorts.includes(cohort)) {
     return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
   }

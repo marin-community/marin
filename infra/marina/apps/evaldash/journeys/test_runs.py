@@ -232,3 +232,12 @@ def test_models_from_different_cohorts_compare_behind_the_mixed_settings_warning
     journey.page.wait_for_url(re.compile(r"/compare\?.*cohort=all"))
     journey.sees("All cohorts may mix evaluation settings")
     expect(journey.page.get_by_role("button", name="Remove qwen3-8b", exact=True)).to_be_visible()
+
+
+def test_unversioned_runs_have_their_own_cohort_entry(journey: Journey) -> None:
+    journey.visit("/?cohort=unversioned")
+    cohort = journey.page.locator("label").filter(has_text="Cohort").locator("select")
+    expect(cohort).to_have_value("unversioned")
+    journey.sees("Runs launched without a version label")
+    expect(journey.page.locator("tr").filter(has_text="llama3-8b")).to_have_count(2)
+    expect(journey.page.locator("tr").filter(has_text="snowball")).to_have_count(0)
