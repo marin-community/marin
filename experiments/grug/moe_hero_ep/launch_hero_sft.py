@@ -5,8 +5,9 @@
 
 The recipe is the one behind ``open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05``: one packed epoch
 of 216 SFT stores, spread across complete mixture blocks, with long-context pretraining replay, a resumed
-optimizer, seven reseeded chat-token LM-head columns with a sqrt(32) learning-rate multiplier, and a
-frozen router bias. Replay comes from the hero's own 262K Harrier mix. Tracking: marin#8089.
+optimizer, and seven reseeded chat-token LM-head columns with a sqrt(32) learning-rate multiplier. 10.05 froze
+the router bias; the hero's capacity-limited expert parallelism makes that a launch choice. Replay comes from
+the hero's own 262K Harrier mix. Tracking: marin#8089.
 """
 
 import dataclasses
@@ -324,9 +325,9 @@ def build_sft_run(
     max_grad_norm: float | None,
     replay_fraction: float,
     dp_racks: int,
+    router_bias_mode: RouterBiasMode,
     stop_after_steps: int | None = None,
     eval_every: int = 0,
-    eval_at_first_step: bool = False,
     checkpoint_root: str | None = None,
     checkpoint_interval: timedelta = RESUME_SAVE_INTERVAL,
     version: str | None = None,
@@ -335,6 +336,8 @@ def build_sft_run(
 
     ``stop_after_steps`` bounds a smoke test to that many updates of the full one-epoch schedule.
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
+    ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
+    the trainer's first-step eval never fires on a restored run.
     """
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
@@ -389,7 +392,7 @@ def build_sft_run(
             gc_interval=100,
         ),
         data_start_step=start_step,
-        router_bias_mode=RouterBiasMode.FROZEN,
+        router_bias_mode=router_bias_mode,
         special_tokens=special_token_init(start_step),
     )
     train_resources = ResourceConfig.with_gpu(
@@ -402,7 +405,7 @@ def build_sft_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = validation_datasets() if eval_every > 0 or eval_at_first_step else []
+    validation = validation_datasets() if eval_every > 0 else []
     length_statistics = harrier_length_statistics()
     wandb_project = os.environ.get("WANDB_PROJECT") or SFT_WANDB_PROJECT
     logger.info(
@@ -481,13 +484,12 @@ def build_sft_run(
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=(
                 GrugEvalConfig(
-                    steps_per_eval=eval_every if eval_every > 0 else plan.steps,
+                    steps_per_eval=eval_every,
                     eval_batch_size=batch_axes,
                     eval_current=False,
                     eval_ema=False,
                     compute_bpb=True,
                     dropless_eval=True,
-                    eval_at_first_step=eval_at_first_step,
                 )
                 if validation
                 else None
@@ -535,8 +537,19 @@ def _grad_norm(value: str) -> float | None:
     default=None,
     help="Stop after this many updates of the one-epoch schedule (smoke tests). Unset runs the epoch.",
 )
-@click.option("--eval-every", type=click.IntRange(min=0), default=0, show_default=True)
-@click.option("--eval-at-first-step/--no-eval-at-first-step", default=False, show_default=True)
+@click.option(
+    "--router-bias",
+    type=click.Choice([mode.value for mode in RouterBiasMode]),
+    required=True,
+    help="'frozen' keeps the restored bias (the 10.05 recipe); 'update' keeps quantile balancing on.",
+)
+@click.option(
+    "--eval-every",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Dropless eval at every multiple of this absolute step; 0 disables evaluation.",
+)
 @click.option(
     "--checkpoint-root",
     default=None,
@@ -553,8 +566,8 @@ def main(
     replay_fraction: float,
     dp_racks: int,
     stop_after_steps: int | None,
+    router_bias: str,
     eval_every: int,
-    eval_at_first_step: bool,
     checkpoint_root: str | None,
     checkpoint_minutes: float,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -567,9 +580,9 @@ def main(
         max_grad_norm=_grad_norm(max_grad_norm),
         replay_fraction=replay_fraction,
         dp_racks=dp_racks,
+        router_bias_mode=RouterBiasMode(router_bias),
         stop_after_steps=stop_after_steps,
         eval_every=eval_every,
-        eval_at_first_step=eval_at_first_step,
         checkpoint_root=checkpoint_root,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
     )
