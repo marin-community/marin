@@ -205,7 +205,7 @@ def configuration(root):
 
 def verify_retention(root, cfg):
     records = []
-    for path in (root / "traces").rglob("*.zip"):
+    for path in Path(cfg.generator.trajectory_retention.output_path).rglob("*.zip"):
         assert "step=eval_only" in str(path)
         with zipfile.ZipFile(path) as archive:
             records.extend(
@@ -236,6 +236,8 @@ class LocalBackend:
 
     def launch(self, config_path):
         launch = OmegaConf.load(config_path)
+        self.cfg.generator.trajectory_retention = launch.skyrl.generator.trajectory_retention
+        assert self.cfg.generator.trajectory_retention.model_checkpoint_step == 3
         Path(launch.artifacts.resolved_config_uri).write_text(config_path.read_text())
         OmegaConf.save(self.cfg, self.root / "consumed-eval.yaml")
         ray.init(num_cpus=3, include_dashboard=False, log_to_driver=True)
@@ -261,6 +263,9 @@ def main(root):
     root.mkdir(parents=True, exist_ok=True)
     cfg = configuration(root)
     launch = _raw_config()
+    launch["skyrl"].setdefault("generator", {})["trajectory_retention"] = OmegaConf.to_container(
+        cfg.generator.trajectory_retention
+    )
     launch["run"]["export_hf"] = False
     launch["runtime"]["entrypoint"] = "skyrl_train.entrypoints.main_generate"
     launch["artifacts"] = {

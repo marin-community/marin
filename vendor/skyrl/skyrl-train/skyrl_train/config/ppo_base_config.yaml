@@ -544,6 +544,7 @@ generator:
     redact_fields: []
     model_path: ${trainer.policy.model.path}
     model_source_identity: ${trainer.policy.model.source_identity}
+    model_checkpoint_step: null
     resume_path: ${trainer.resume_path}
     inference_backend: ${generator.backend}
 
