@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
+from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
@@ -54,13 +55,9 @@ from taskforge.model.review import (
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
-from taskforge.resources.bundle import Resources
-from taskforge.resources.clock import Clock
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
-from taskforge.resources.ids import Ids
 from taskforge.resources.inference import ContextExceeded, FakeInference
-from taskforge.resources.rollouts import RolloutResource, SolverRollout
-from taskforge.resources.web import FakeWeb
+from taskforge.resources.rollouts import SolverRollout
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
 from taskforge.stages.exits import Decided, Triaged, TriageRejected, Validated
@@ -68,9 +65,7 @@ from taskforge.stages.review import review
 from taskforge.stages.rules import default_review
 from taskforge.stages.triage import triage
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
-from taskforge.wiring import build_config, install
-
-pytest_plugins = ("lib.taskforge.tests.test_proposal",)
+from taskforge.wiring import build_config
 
 
 @pytest.fixture
@@ -109,21 +104,6 @@ def adversary_config(harness: RecordingHarness) -> TaskforgeConfig:
         adversaries={"finder": harness},
         tools={"finder": {}},
     )
-
-
-def resources(ctx: Context, restart: int | None = None) -> Resources:
-    bundle = Resources(
-        Environments(),
-        FakeInference(()),
-        RolloutResource(SolverEngine(3, restart), solver_model, "solver"),
-        GradingResource(CandidateEngine(), "grader"),
-        Clock(),
-        Ids(),
-        {},
-        FakeWeb({}, {}),
-    )
-    install(ctx, bundle)
-    return bundle
 
 
 async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: Workpiece) -> None:

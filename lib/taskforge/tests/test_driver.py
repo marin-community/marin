@@ -22,8 +22,6 @@ from taskforge.policy import load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 
-pytest_plugins = ("lib.taskforge.tests.test_proposal",)
-
 
 @pytest.mark.parametrize("verification", list(Verification))
 def test_proposal_verification_policy_filters_before_execution(

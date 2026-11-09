@@ -5,7 +5,7 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from lib.taskforge.tests.test_stages import resources
+from lib.taskforge.tests.fake_resources import resources
 from rolloutengine.models import TraceMode
 from rolloutengine.test_support import arithmetic_task
 from rolloutengine.validation import InvalidTaskSpec

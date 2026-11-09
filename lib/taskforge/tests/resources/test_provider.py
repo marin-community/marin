@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from lib.taskforge.tests.resources.test_inference import Backend, provider_completion, request
+from lib.taskforge.tests.resources.inference_fakes import Backend, provider_completion, request
 
 from taskforge import wiring
 from taskforge.llm import glm_client

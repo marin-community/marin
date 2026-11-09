@@ -26,8 +26,6 @@ from taskforge.resources.env import CommandResult, RunCommand, WriteFile
 from taskforge.resources.inference import InferenceRequest
 from taskforge.resources.rollouts import SolverRollout
 
-pytest_plugins = ("lib.taskforge.tests.test_proposal",)
-
 
 @pytest.mark.parametrize(
     "reason,expected",

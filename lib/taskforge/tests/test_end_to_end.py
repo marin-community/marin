@@ -46,8 +46,6 @@ from taskforge.resources.verifier import RoundVerifier
 from taskforge.resources.web import FakeWeb
 from taskforge.wiring import build_config, install
 
-pytest_plugins = ("lib.taskforge.tests.test_proposal",)
-
 
 class RecordingEnv(FakeEnv):
     def __init__(self, commands: Mapping[str, FakeCommand], fail: bool) -> None:
