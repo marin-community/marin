@@ -376,6 +376,116 @@ If you're not using SLURM or TPUs, you can specify the cluster manually using th
 
 ## Optimizer
 
+### RandRAND
+
+`optimizer.type: randrand` selects paired Gram-EMA RandRAND for body matrices
+and AdamW for token embeddings, the output head, and normalization/bias vectors.
+It requires an untied LM head and FP32 master parameters. Computation may use
+BF16. Each Linear is treated as its full logical output-by-input matrix;
+attention heads are not optimized as separate matrices. Scanned layers have
+independent moments and Gram factors.
+
+```yaml
+optimizer:
+  type: randrand
+  learning_rate: 0.0045
+  matrix_betas: [0.95, 0.99]
+  weight_decay: 0.0303
+  embed_lr: 0.2
+  head_lr: 0.006
+  vector_lr: 0.03
+  warmup: 1000
+  lr_schedule: cosine
+  min_lr_ratio: 0.0
+  rank: 32
+  rank_sketch: 64
+  pair_k: 25
+  randrand_warmup: 100
+  basis_every: 10
+  basis_ema_beta: 0.95
+  boost_factor: 5.0
+  correction_scale: 0.5
+```
+
+These are the hybrid-normalized Qwen3 experiment defaults. Other architectures
+need their own tuning. Embedding, head, and vector routes each expose their own
+`*_lr`, `*_betas`, and `*_weight_decay`. Their default betas are `(0.9, 0.98)`
+and weight decay is zero. `matrix_eps` defaults to `1e-8`; auxiliary `adam_eps`
+defaults to `1e-15`. All vector parameters share `vector_lr`.
+
+RandRAND uses one Adam moment pair on the raw gradient. For its Adam direction
+`J`, the matrix direction is `boost_factor * (J - selected(J)) +
+correction_scale * selected(J)`. The selected pairs come from randomized bases
+of persistent left/right gradient Gram EMAs. With `randrand_warmup=100`, the
+first refresh precedes update 101 and uses gradients through update 100.
+Before the first refresh the matrix update is standard AdamW. After activation,
+matrix weight decay uses the boosted LR, matching the reference implementation.
+
+The optimizer performs clipping internally in three buckets: body matrices,
+embedding plus vectors, and head. `max_grad_norm` defaults to 1.0. Do not add
+another clipping or scheduling transform around it. Adam buffers retain named
+axes for parameter sharding; Gram factors and bases are replicated. Checkpoints
+include the explicit basis RNG state (`basis_seed=42`).
+
+#### Qwen3 130M evaluation recipes
+
+From the Marin repository root, `experiments.benchmarks.randrand_qwen3_130m`
+binds a model and optimizer recipe to existing benchmark caches. `--recipe` is
+required; selecting it changes the normalization and the corresponding tuned LRs
+together. The standard recipe follows the model geometry used in the completed
+[PR #6301 comparison](https://github.com/marin-community/marin/pull/6301);
+the hybrid recipe adds the attention/MLP output RMSNorms used by MuonH.
+Qwen3's query/key normalization is present in both recipes.
+
+| Recipe | Hybrid norm | Matrix LR | Embedding LR | Vector LR | Head LR | Local val at 4800 | Local val at 4959 |
+|---|---|---|---|---|---|---|---|
+| `pr6301` | Off | 0.006 | 0.6 | 0.006 | 0.006 | 3.29637961 | 3.29576360 |
+| `hybrid` | On | 0.0045 | 0.2 | 0.03 | 0.006 | 3.29596433 | 3.29544320 |
+
+The LRs are peak base rates, before the matrix complement's factor of 5.
+Local validation scores are cross-entropy in nats per token.
+The source local run IDs are `20261102_054449_558993` and
+`20261107_190126_612406`, respectively. All other optimizer settings are shared:
+matrix betas `(0.95, 0.99)` and WD `0.0303`; auxiliary betas `(0.9, 0.98)`
+and WD zero; the basis, boost, correction and schedule settings shown above.
+The additional hybrid-norm vectors use the same vector LR as all other vectors.
+These are the best observed single-seed local notebook results, not official
+Paloma BPB measurements or claims of an optimum.
+
+```bash
+uv run --package marin-levanter python -m experiments.benchmarks.randrand_qwen3_130m \
+  --recipe hybrid \
+  --train-cache /path/to/fineweb-edu-10B-cache \
+  --c4-cache /path/to/paloma-c4-en-cache \
+  --output-path /path/to/randrand-checkpoints \
+  --run-id randrand-hybrid-130m
+```
+
+This prints the resolved `TrainLmConfig` only. Add `--run` inside the allocated
+accelerator job to train. `--per-device-batch` controls microbatching while
+preserving the global batch of 128. The cache roots must contain `train/` and
+`validation/`, respectively: use the original FineWeb-Edu 10B training cache
+and full Paloma C4 English validation cache, tokenized with
+`marin-community/marin-tokenizer` (Paloma raw revision `65cd6fc`). No data is
+downloaded or retokenized by this entrypoint. `--optimizer-config PATH` accepts
+an explicit Levanter optimizer YAML to run a baseline on the same architecture.
+
+Both recipes train for 4,959 updates of 128 sequences of length 4,096,
+with FP32 parameters and BF16 computation, model seed 0, data seed 42,
+linear permutation shuffling, and EOS-separated attention. Evaluation uses
+all validation batches every 1,000 updates and at the end; `--eval-every 200`
+changes the interval. The final metric is `eval/paloma/c4_en/bpb`. Native
+checkpoints and `eval_metrics.jsonl` are written under the supplied output
+path/run ID. HF export is disabled because the hybrid model is not representable
+as standard Hugging Face Qwen3.
+
+The local notebooks use a different initialization, training sampler, seed and
+fixed 32-batch validation subset. Their loss numbers do not predict the official
+BPB. The recipes preserve benchmark geometry and evaluation intent on current
+Levanter, not bitwise equivalence to an old trainer revision. Evaluate a fresh
+baseline with the same recipe, caches and software revision, and report quality,
+throughput and peak memory. Full accelerator validation remains necessary.
+
 ### Standard Options
 
 All optimizers in Levanter are based on the [levanter.optim.OptimizerConfig][] dataclass. This class has the following fields,
