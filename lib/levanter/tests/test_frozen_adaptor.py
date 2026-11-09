@@ -22,6 +22,7 @@ from levanter.compat.hf_checkpoints import RepoRef, save_hf_checkpoint_callback
 from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.main.model_init import ModelInitContext, load_model_from_source
 from levanter.main.train_lm import (
     TrainLmConfig,
     _load_lm_model_from_configured_source,
@@ -223,6 +224,31 @@ def test_without_field_dtype_overrides_frozen_biases_round_to_compute_dtype(fp32
         expected_rounded = original_block.mlp.router_bias.astype(jnp.bfloat16).astype(jnp.float32)
         np.testing.assert_array_equal(block.mlp.router_bias, expected_rounded)
         assert not np.array_equal(block.mlp.router_bias, original_block.mlp.router_bias)
+
+
+@pytest.mark.parametrize("overridden", [True, False])
+def test_load_model_from_source_honours_field_dtype_overrides(fp32_snowball, overridden):
+    """The DPO load path keeps overridden biases at their stored float32 bits and rounds them otherwise."""
+    env = fp32_snowball
+    mp = env.trainer.mp if overridden else env.trainer_config.mp
+    loaded = load_model_from_source(
+        context=ModelInitContext(
+            model=env.lm_config.model,
+            converter=env.source_kwargs["converter"],
+            use_hf_model_config=False,
+        ),
+        Vocab=hax.Axis("vocab", 16),
+        model_key=jax.random.PRNGKey(0),
+        parameter_axis_mapping={},
+        mp=mp,
+        hf_ref=True,
+    )
+    for block, original_block in zip(loaded.transformer.blocks, env.model.transformer.blocks):
+        original = original_block.mlp.router_bias
+        expected = original if overridden else original.astype(jnp.bfloat16).astype(jnp.float32)
+        assert block.mlp.router_bias.dtype == jnp.float32
+        np.testing.assert_array_equal(block.mlp.router_bias, expected)
+        assert np.array_equal(block.mlp.router_bias, original) == overridden
 
 
 def test_fp32_frozen_biases_receive_gradients_but_stay_fixed(fp32_snowball):
