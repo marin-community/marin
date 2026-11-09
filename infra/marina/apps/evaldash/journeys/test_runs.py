@@ -5,7 +5,7 @@
 
 import re
 from typing import Any, cast
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote_plus
 
 import pytest
 from marina.journeys import Journey
@@ -51,12 +51,13 @@ def test_a_benchmark_family_variant_survives_a_shared_panel_url(journey: Journey
     journey.visit("/?cohort=2026.07.20")
     picker = journey.page.locator("select[title^='Which setting of this benchmark']").first
 
-    picker.select_option("gsm8k-0shot")
+    selected = "gsm8k [harness; 0-shot; completion]"
+    picker.select_option(selected)
     journey.page.wait_for_url(re.compile(r"[?&]benchmarks="))
 
-    assert "gsm8k-0shot" in unquote(journey.page.url)
+    assert selected in unquote_plus(journey.page.url)
     journey.page.reload(wait_until="domcontentloaded")
-    expect(picker).to_have_value("gsm8k-0shot")
+    expect(picker).to_have_value(selected)
 
 
 def test_panel_cohort_survives_reload_and_navigation_to_compare(journey: Journey) -> None:

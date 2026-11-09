@@ -354,6 +354,9 @@ def _missing_cells(
     records: list[EvalRunRecord],
     chosen: Mapping[str, Mapping[str, Measurement]],
     rejections: tuple[Rejection, ...],
+    measurements: Sequence[Measurement],
+    requested: tuple[str, ...] | None,
+    hidden: set[str],
 ) -> dict[str, dict[str, dict]]:
     """Why each ``(model, benchmark)`` without an admitted cell has none, keyed model then benchmark.
 
@@ -363,7 +366,7 @@ def _missing_cells(
     """
     reasons = {rejection.run_id: rejection.reason for rejection in rejections}
     columns: dict[str, list[str]] = {}
-    for measurement in dashboard_measurements(records):
+    for measurement in measurements:
         columns.setdefault(measurement.run_id, []).append(measurement.benchmark)
     missing: dict[str, dict[str, dict]] = {}
     for record in records:
@@ -374,6 +377,8 @@ def _missing_cells(
             else record.evaluation.name
         )
         for benchmark in columns.get(record.run_id, [name]):
+            if benchmark in hidden or (requested is not None and benchmark not in requested):
+                continue
             model = record.model.name
             if benchmark in chosen.get(model, {}):
                 continue
@@ -408,7 +413,11 @@ def build_panel(
     """
     eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
-    measurements = dashboard_measurements(eligible)
+    measurements = [
+        measurement
+        for measurement in dashboard_measurements(_panel_records(records))
+        if request.cohort_version is None or measurement.version == request.cohort_version
+    ]
     protocols = declared_protocols(measurements)
     # Family columns are resolved after selection, so apply completeness to the effective panel below.
     selection = select(
@@ -418,19 +427,13 @@ def build_panel(
         protocols,
     )
     requested = list(request.panel) if request.panel is not None else list(selection.benchmarks)
-    families = _family_columns(requested, declared_families(eligible), selection.cells)
+    families = _family_columns(requested, declared_families(_panel_records(records)), selection.cells)
     panel = [column.default for column in families]
     # Omit gap entries for sibling variants without a visible column; admitted cells remain in the payload.
     hidden = {name for column in families for name in column.variants if name != column.default}
 
-    on_panel = [
-        record
-        for record in eligible
-        if record.evaluation.name not in hidden
-        if request.panel is None or record.evaluation.name in request.panel
-        if matches_filters(record.model.name, metadata[record.run_id], request)
-    ]
-    missing = _missing_cells(on_panel, selection.cells, selection.rejections)
+    on_panel = [record for record in eligible if matches_filters(record.model.name, metadata[record.run_id], request)]
+    missing = _missing_cells(on_panel, selection.cells, selection.rejections, measurements, request.panel, hidden)
 
     protocol = AggregationProtocol(panel=tuple(panel), missing=aggregate_policy) if aggregate_policy else None
 
@@ -497,7 +500,11 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     """
     eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
-    measurements = dashboard_measurements(eligible)
+    measurements = [
+        measurement
+        for measurement in dashboard_measurements(_panel_records(records))
+        if request.cohort_version is None or measurement.version == request.cohort_version
+    ]
     selection = select(
         measurements,
         replace(request, completeness=Completeness.ANY),
@@ -628,10 +635,10 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
     return cohorts
 
 
-def _model_history(records: list[EvalRunRecord], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
+def _model_history(measurements: list[Measurement], protocols: Mapping[str, MetricProtocol]) -> dict[str, list[dict]]:
     """Per-eval score-over-time: every scored run for the model on each eval, oldest first."""
     history: dict[str, list[dict]] = {}
-    for measurement in dashboard_measurements(records):
+    for measurement in measurements:
         protocol = protocols.get(measurement.benchmark)
         if protocol is not None and not matches_protocol(measurement, protocol):
             continue
@@ -687,7 +694,8 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     does. ``history`` is the per-eval score-over-time across every scored run, and ``runs`` spans
     every run for the model (smoke included), newest first.
     """
-    protocols = declared_protocols(dashboard_measurements(_panel_records(records)))
+    measurements = dashboard_measurements(_panel_records(records))
+    protocols = declared_protocols(measurements)
     model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
@@ -700,7 +708,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
         "user": newest.user,
         "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
         "cohorts": _model_cohorts(eligible),
-        "history": _model_history(eligible, protocols),
+        "history": _model_history([item for item in measurements if item.model == model], protocols),
         "runs": _model_runs(model_records, protocols),
     }
 
