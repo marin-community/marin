@@ -424,8 +424,44 @@ def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) ->
     # Evaluation previously passed preflight, then failed in the GPU engine factory.
     spec = _spec()
     recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
-    with pytest.raises(ValueError, match="expert_block requires non-colocated"):
+    with pytest.raises(ValueError, match="colocated expert_block requires"):
         dataclasses.replace(spec, config_yaml=recipe)
+
+
+def test_expert_block_colocated_four_gpu_recipe_passes_preflight() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        inference_engine_expert_parallel_size=4,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+        }
+    }
+    recipe["generator"].update(
+        weight_sync_transport="expert_block",
+        weight_sync_backend="nccl",
+        expert_block_sync={"verify": True},
+        engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
+    )
+
+    spec = dataclasses.replace(
+        _spec(),
+        topology=dataclasses.replace(_spec().topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+    step = skyrl_step(spec, _execution())
+    launch = yaml.safe_load(
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).launch_config_yaml
+    )
+    assert launch["iris"]["allocation"]["num_nodes"] == 1
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 4
 
 
 def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:

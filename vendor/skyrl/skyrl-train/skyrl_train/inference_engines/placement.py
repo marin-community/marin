@@ -144,3 +144,30 @@ def colocated_engine_bundle_layout(
         for engine_index in range(num_inference_engines)
         for data_parallel_rank in range(data_parallel_size)
     ]
+
+
+def colocated_inference_bundle_nodes(
+    shared_pg: PlacementGroup,
+    engine_bundles: Sequence[Sequence[int]],
+    *,
+    num_inference_engines: int,
+    data_parallel_size: int,
+    pipeline_parallel_size: int,
+) -> list[list[str]]:
+    """Map each colocated worker to its bundle in the shared placement group."""
+    bundles = placement_group_table(shared_pg)["bundles_to_node_id"]
+    selected = [index for actor_bundles in engine_bundles for index in actor_bundles]
+    if len(selected) != len(bundles) or set(selected) != set(bundles):
+        raise ValueError("Colocated inference workers must cover distinct shared GPU bundles")
+    if len(engine_bundles) != num_inference_engines * data_parallel_size:
+        raise ValueError("Colocated inference actor count disagrees with shared GPU bundles")
+    if any(len(actor_bundles) != pipeline_parallel_size for actor_bundles in engine_bundles):
+        raise ValueError("Colocated inference pipeline stages disagree with shared GPU bundles")
+    return [
+        [
+            bundles[engine_bundles[replica * data_parallel_size + dp_rank][stage]]
+            for dp_rank in range(data_parallel_size)
+            for stage in range(pipeline_parallel_size)
+        ]
+        for replica in range(num_inference_engines)
+    ]

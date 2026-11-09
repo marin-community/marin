@@ -132,10 +132,11 @@ def plan_from_inventories(
 
 
 class ExpertBlockSync:
-    def __init__(self, *, policy_model, inference_engine_client, timeout_seconds: int):
+    def __init__(self, *, policy_model, inference_engine_client, timeout_seconds: int, colocated: bool = False):
         self.policy_model = policy_model
         self.client = inference_engine_client
         self.timeout_seconds = timeout_seconds
+        self.colocated = colocated
         self.store: RendezvousStore | None = None
         self.schedule: Schedule | None = None
         self.root_bytes: dict[int, int] = {}
@@ -156,8 +157,10 @@ class ExpertBlockSync:
         if any(engine.worker_placements is None for engine in engines):
             raise ValueError(
                 "Expert-block sync requires checked worker placements, which the engine factory records for "
-                "non-colocated TP=1 vLLM engines using expert-block transport"
+                "TP=1 vLLM engines using expert-block transport"
             )
+        if self.colocated:
+            await asyncio.gather(*(engine.recheck_worker_placements() for engine in engines))
         started = time.perf_counter()
         policy_rows, engine_rows = await asyncio.gather(
             self._policy("inventory"), self.client.expert_block_rpc("inventory")
@@ -171,6 +174,11 @@ class ExpertBlockSync:
                     f"An engine reported {len(rows)} workers but {len(engine.worker_placements)} were placed"
                 )
             receivers.extend(zip(rows, engine.worker_placements, strict=True))
+        if self.colocated:
+            policy_gpus = {(row["host"], row["gpu_uuid"]) for row in policy_rows}
+            receiver_gpus = {(placement.worker.host, placement.worker.gpu_uuid) for _, placement in receivers}
+            if len(policy_gpus) != len(policy_rows) or policy_gpus != receiver_gpus:
+                raise ValueError("Colocated trainer and inference workers do not share the same distinct GPUs")
         schedule, participants = plan_from_inventories(policy_rows, receivers)
         planned = time.perf_counter()
         self.store = RendezvousStore(f"expert-block-{id(self):x}", timeout_seconds=self.timeout_seconds)
@@ -186,6 +194,7 @@ class ExpertBlockSync:
         reported = sorted(row["participant"] for rows in bound for row in rows)
         expected = sorted(set(range(schedule.trainer_count)) | set(participants.values()))
         if reported != expected:
+            await self.close()
             raise RuntimeError(f"Bound participants {reported} differ from the planned {expected}")
         self.schedule = schedule
         self.root_bytes = Counter()
