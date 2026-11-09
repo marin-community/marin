@@ -1109,6 +1109,7 @@ project_grants:
   - principal: human-006
   - principal: human-026
   - principal: human-078
+  - principal: human-082
 - role: roles/compute.networkViewer
   members:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
@@ -1121,6 +1122,7 @@ project_grants:
   - principal: human-064
   - principal: human-012
   - principal: human-006
+  - principal: human-082
 - role: roles/compute.osLogin
   members:
   - serviceAccount:claude-tunix-agent@hai-gcp-models.iam.gserviceaccount.com
@@ -1188,6 +1190,7 @@ project_grants:
   - principal: human-012
   - principal: human-006
   - principal: human-055
+  - principal: human-082
 - role: roles/eventarc.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-eventarc.iam.gserviceaccount.com
@@ -1239,6 +1242,7 @@ project_grants:
   members:
   - principal: human-032
   - principal: human-064
+  - principal: human-082
 - role: roles/logging.admin
   members:
   - serviceAccount:github-actions-logging@hai-gcp-models.iam.gserviceaccount.com
