@@ -11,11 +11,12 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Permanent checkpoint 257553 was requested on hero-mfu30-step231k; it resumes at global_step 257553.
-# Parent W&B _step 257552 records global_step 257552.
+# The handoff averages hero-ctx65k-step372k's last 11 permanent checkpoints, 385500 through 390251, in hyperball space
+# with equal weights. Its optimizer state comes from step-390251, so it resumes at global_step 390251.
+# Parent W&B _step 390250 records global_step 390250.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-mfu30-step231k/2026.08.19.2/checkpoints/step-257553
-WANDB_FORK_FROM='hero-mfu30-step231k?_step=257552'
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ctx65k-merge-hb-avg11/checkpoints/step-390251
+WANDB_FORK_FROM='hero-ctx65k-step372k?_step=390250'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506

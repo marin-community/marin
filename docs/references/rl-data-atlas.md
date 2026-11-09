@@ -69,16 +69,24 @@ assessment page shows the curation associated with its selected grade.
 ## Browsing sources
 
 **By source** lists individual sources with their catalog, converted example
-count, training/evaluation use, current sampled quality and the curriculum domain
+count, training/evaluation use, current sampled quality, any independent QC the
+pinned release performed, and the curriculum domain
 with the most mapped examples. Search names, datasets or tags; filter by catalog,
 use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
-published curriculum release.
+published curriculum release. An inventory-only declaration without a conversion
+recipe can still carry a pinned row count; the curriculum release lists it with a
+*declared* basis, so its count shows without a placement area and the source is
+excluded from the processed-examples total.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
-completed assessment without enough conclusive judgments. Open a source for
+completed assessment without enough conclusive judgments. Curation never re-grades
+independent QC; the **Independent QC** column and the source details present the
+release's own admission evidence — verdict, method, reviewed count, admitted count
+where the release claims one, and a link to its pinned manifest — beside, and
+distinct from, the sampled quality. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
 within the domain. On small screens, the table keeps name, count and quality
@@ -86,21 +94,21 @@ visible; source details contain the remaining fields.
 
 ## Updating Atlas
 
-Source code lives in `infra/marina/applets/rl_data_catalog/`. Its migration
+Source code lives in `infra/marina/apps/rl_data_catalog/`. Its migration
 creates the SQL tables; it does not read object storage or run curation.
 Publish code when the schema or UI changes, then load data explicitly:
 
 ```bash
-uv run marina validate infra/marina/applets/rl_data_catalog
-uv run marina release-status infra/marina/applets/rl_data_catalog --json
-uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
-uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
+uv run marina validate infra/marina/apps/rl_data_catalog
+uv run marina release-status infra/marina/apps/rl_data_catalog --json
+uv run marina apps versions fb11c931-5861-4878-8bb5-a964d652b45f --json
+uv run marina release infra/marina/apps/rl_data_catalog --base-version CURRENT_VERSION
 
-uv run python infra/marina/applets/rl_data_catalog/load.py \
-  --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
+uv run python infra/marina/apps/rl_data_catalog/load.py \
+  --app-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-`applet.toml` declares the existing applet's UUID. Any authenticated internal
+`applet.toml` declares the existing app's UUID. Any authenticated internal
 Marina user can release an update. By default, source must be a clean
 checkout at the current remote main. A Marina image deployment does not publish Atlas. A
 default release records its source commit and subtree hash in the immutable package;
@@ -174,13 +182,13 @@ cloud reads, background refresh or inference. Request/response traces remain
 archival references in the assessment record.
 
 For a local preview, start disposable Marina and Postgres, then run the same
-loader against a local curation cache using the printed applet ID and origin:
+loader against a local curation cache using the printed app ID and origin:
 
 ```bash
-uv run marina release infra/marina/applets/rl_data_catalog --local --json
-uv run python infra/marina/applets/rl_data_catalog/load.py \
+uv run marina release infra/marina/apps/rl_data_catalog --local --json
+uv run python infra/marina/apps/rl_data_catalog/load.py \
   --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
-  --applet-id PRINTED_ID --url PRINTED_ORIGIN
+  --app-id PRINTED_ID --url PRINTED_ORIGIN
 ```
 
 Inspect the inventory, an assessment and its task evidence. Stop the local stack
@@ -228,19 +236,24 @@ Converted populations contain successfully converted TaskSpecs before admission.
 They retain training/evaluation intent. Selecting a source shows its full
 conversion ledger in **About counts and matching** when available. Sources
 outside the release remain in the source inventory, where **Not processed**
-filters them for inspection.
+filters them for inspection. An inventory-only declaration with a pinned row
+count joins the release on a *declared* basis: its Examples count shows without
+placement statistics, area or processed-total participation.
 
 Run the embedding graph through `--embed coverage`. The `publication` stage
 counts assignment outcomes by source, reconciles complete converted populations
-against source manifests, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
+against source manifests, folds in declared-only sources, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
 statistics, bounded example Parquet and `coverage.json` without rerunning
-embeddings or matching. Load both manifests:
+embeddings or matching. Re-running from a completed campaign's `corpus.json`
+merges the current dataset declarations over the recorded inventory, so added
+sources or count and independent-QC edits reach the release without re-curation.
+Load both manifests:
 
 ```bash
-uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
+uv run python -m infra.marina.apps.rl_data_catalog.load_curriculum \
   --release IMMUTABLE_RELEASE_ROOT/release.json \
   --coverage IMMUTABLE_COVERAGE_ROOT/coverage.json \
-  --applet-id APPLET_ID --url MARINA_ORIGIN
+  --app-id APP_ID --url MARINA_ORIGIN
 ```
 
 The loader reads statistics and sampled task files. It checks sample lineage,
@@ -248,7 +261,7 @@ training/evaluation use, curriculum references and sample counts. It reconciles
 statistics against complete-population totals in the task release manifest before atomically selecting
 the release. Byte-bounded SQL requests keep import work proportional to the
 compact export. Failed loads preserve the selected release; the current and
-previous releases are retained. Run one curriculum loader per applet at a time.
+previous releases are retained. Run one curriculum loader per app at a time.
 APIs read Postgres without cloud scans.
 
 Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the

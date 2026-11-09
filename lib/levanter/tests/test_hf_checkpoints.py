@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import safetensors
 import transformers
+from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
@@ -164,6 +165,64 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
         assert not (tmp_path / "weights.blob").exists()
 
 
+@pytest.mark.parametrize("save_tokenizer", [True, False])
+@pytest.mark.parametrize("reference_kind", ["local", "memory", "hub", "missing"])
+@pytest.mark.parametrize("override", [None, {"eos_token_id": [3, 5]}])
+def test_export_preserves_reference_generation_config(
+    tmp_path, local_gpt2_tokenizer_path, monkeypatch, reference_kind, override, save_tokenizer
+):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    original = {"eos_token_id": [1, 2], "temperature": 0.7, "do_sample": True}
+    reference = StoragePath(str(tmp_path / "reference"))
+    if reference_kind == "memory":
+        reference = StoragePath("memory://generation-reference") / uuid.uuid4().hex
+    if reference_kind != "missing":
+        (reference / "generation_config.json").write_bytes(json.dumps(original).encode())
+    else:
+        Path(str(reference)).mkdir()
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
+    if reference_kind == "hub":
+
+        def download(*, repo_id, filename, revision):
+            assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+            return str(reference / filename)
+
+        monkeypatch.setattr(hf_checkpoints, "hf_hub_download", download)
+        converter = replace(converter, reference_checkpoint=RepoRef("test/reference", "pinned-revision"))
+    output = tmp_path / "output"
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        converter.save_pretrained(
+            model, str(output), save_reference_code=False, generation_config=override, save_tokenizer=save_tokenizer
+        )
+    saved = output / "generation_config.json"
+    if reference_kind == "missing" and override is None:
+        assert not saved.exists()
+    else:
+        assert json.loads(saved.read_text()) == (original if override is None else override)
+
+
+def test_export_propagates_unavailable_hub_generation_config(tmp_path, local_gpt2_tokenizer_path, monkeypatch):
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = replace(
+        config.hf_checkpoint_converter(), reference_checkpoint=RepoRef("test/reference", "pinned-revision")
+    )
+
+    def unavailable_download(*, repo_id, filename, revision):
+        assert (repo_id, filename, revision) == ("test/reference", "generation_config.json", "pinned-revision")
+        raise LocalEntryNotFoundError("Hub unavailable and generation config is not cached")
+
+    monkeypatch.setattr(hf_checkpoints, "hf_hub_download", unavailable_download)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        with pytest.raises(LocalEntryNotFoundError):
+            converter.save_pretrained(model, str(tmp_path / "output"), save_reference_code=False)
+
+
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     config = Gpt2Config(
@@ -247,6 +306,85 @@ def test_hf_export_preserves_scalar_and_singleton_shapes_without_scratch(tmp_pat
             assert exported.shape == value.shape
             assert exported.dtype == value.dtype
             assert exported.tobytes() == jax.device_get(value).tobytes()
+
+
+def test_host_hf_export_matches_device_format_and_splits_experts(tmp_path):
+    bank = np.arange(24, dtype=np.float32).reshape(4, 3, 2).astype(jnp.bfloat16).swapaxes(-1, -2)
+    weights = {
+        "bank": bank,
+        "scalar": np.asarray(0.5, dtype=np.float32),
+        "singleton": np.asarray([0.25], dtype=np.float32),
+    }
+    shards = {
+        "model-00001-of-00002.safetensors": {
+            name: jax.ShapeDtypeStruct(value.shape, value.dtype)
+            for name, value in weights.items()
+            if name != "singleton"
+        },
+        "model-00002-of-00002.safetensors": {"singleton": jax.ShapeDtypeStruct((1,), weights["singleton"].dtype)},
+    }
+    tensor_names = {
+        "bank": tuple(f"expert.{i}.weight" for i in range(4)),
+        "scalar": ("scalar",),
+        "singleton": ("singleton",),
+    }
+    options = dict(export_host_budget_bytes=1024, max_concurrent_shards=2, tensor_names=tensor_names)
+    host_root = tmp_path / "host"
+    device_root = tmp_path / "device"
+    hf_export.save_host_hf_shards(shards, lambda keys: {key: weights[key] for key in keys}, str(host_root), **options)
+    with use_test_mesh():
+        device_weights = {name: jnp.asarray(value) for name, value in weights.items()}
+        hf_export.save_hf_shards(
+            shards, lambda keys: {key: device_weights[key] for key in keys}, str(device_root), **options
+        )
+    for filename in shards:
+        assert (host_root / filename).read_bytes() == (device_root / filename).read_bytes()
+    tensors = safetensors.numpy.load_file(host_root / "model-00001-of-00002.safetensors")
+    assert set(tensors) == {*(f"expert.{i}.weight" for i in range(4)), "scalar"}
+    for expert in range(4):
+        actual = tensors[f"expert.{expert}.weight"]
+        assert actual.shape == (2, 3)
+        assert actual.dtype == bank.dtype
+        assert actual.tobytes() == bank[expert].tobytes()
+    assert tensors["scalar"].shape == ()
+
+
+def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    values = np.arange(6, dtype=np.float32).reshape(2, 3)
+    np.save(source / "first.npy", values)
+    shards = {
+        f"model-{number:05d}-of-00002.safetensors": {name: jax.ShapeDtypeStruct(values.shape, values.dtype)}
+        for number, name in enumerate(("first", "second"), start=1)
+    }
+    destination = tmp_path / "export"
+    options = dict(
+        export_host_budget_bytes=4 * values.nbytes,
+        max_concurrent_shards=2,
+        resume=hf_export.HFShardResume(StoragePath(str(destination)), "host-resume-test"),
+    )
+
+    def load(keys):
+        return {key: np.load(source / f"{key}.npy") for key in keys}
+
+    with pytest.raises(FileNotFoundError):
+        hf_export.save_host_hf_shards(shards, load, str(destination), **options)
+    first = destination / "model-00001-of-00002.safetensors"
+    completed_bytes = first.read_bytes()
+    completed_mtime = first.stat().st_mtime_ns
+    (source / "first.npy").unlink()
+    np.save(source / "second.npy", values + 1)
+    records = hf_export.save_host_hf_shards(shards, load, str(destination), **options)
+    assert [record.filename for record in records] == list(shards)
+    assert first.read_bytes() == completed_bytes and first.stat().st_mtime_ns == completed_mtime
+    second = safetensors.numpy.load_file(destination / "model-00002-of-00002.safetensors")
+    np.testing.assert_array_equal(second["second"], values + 1)
+    damaged = completed_bytes[:-1] + bytes([completed_bytes[-1] ^ 1])
+    first.write_bytes(damaged)
+    with pytest.raises(ValueError, match="integrity"):
+        hf_export.save_host_hf_shards(shards, load, str(destination), **options)
+    assert first.read_bytes() == damaged
 
 
 def _export_on_cpu_rank(coordinator, destination, expected):

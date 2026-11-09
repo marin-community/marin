@@ -10,7 +10,6 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
-HARBOR_EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
@@ -246,3 +245,31 @@ class MachineFactory(Protocol):
         ...
 
     async def create(self, spec: MachineSpec) -> Machine: ...
+
+
+class ProcessSession(Protocol):
+    """A foreground process with persistent binary stdin and stdout.
+
+    One reader and one writer may run concurrently. ``stderr`` retains bounded
+    diagnostics and is drained independently. Close terminates the process.
+    """
+
+    @property
+    def stderr(self) -> bytes: ...
+
+    async def read(self, max_bytes: int = 65536) -> bytes: ...
+
+    async def write(self, data: bytes) -> None: ...
+
+    async def wait(self) -> int: ...
+
+    async def close(self) -> None: ...
+
+
+@runtime_checkable
+class ProcessMachine(Machine, Protocol):
+    """A machine supporting foreground processes with persistent pipes."""
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        """Start a process; stdin and timeout belong to the session, not Command."""
+        ...

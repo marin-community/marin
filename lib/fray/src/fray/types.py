@@ -177,6 +177,7 @@ GpuType = Literal[
     "A100-80G",
     "A10G",
     "B100",
+    "GB200",
     "H100",
     "H200",
     "L4",
@@ -720,6 +721,8 @@ class JobRequest:
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
         timeout: Backend-enforced execution deadline, if supported.
+        termination_grace: Time for graceful SIGTERM shutdown, if supported.
+        ports: Named listeners allocated per task by backends that support them.
     """
 
     name: str
@@ -733,6 +736,8 @@ class JobRequest:
     max_task_failures: int = 0
     priority: int = 0
     timeout: Duration | None = None
+    termination_grace: Duration | None = None
+    ports: tuple[str, ...] = ()
 
     def __post_init__(self):
         if " " in self.name:

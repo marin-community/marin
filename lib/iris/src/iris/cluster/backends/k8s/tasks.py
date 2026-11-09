@@ -42,7 +42,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -53,6 +53,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryResult,
     DeviceCapacity,
     DirectReconcileRequest,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
@@ -90,6 +91,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -146,6 +148,7 @@ from iris.cluster.stats.tables import (
     stats_timestamp,
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -189,6 +192,8 @@ _LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
+# Unique per attempt, even when a resubmitted job reuses the task ID and attempt number.
+_LABEL_ATTEMPT_UID = "iris.attempt_uid"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
@@ -562,6 +567,9 @@ class PodConfig:
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
+    # Enables EGRESS_POLICY_ALLOWLIST: the cluster's allowlist and whether it is
+    # the default. None rejects ALLOWLIST jobs.
+    egress_allowlist: EgressAllowlistConfig | None = None
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -856,6 +864,27 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the task pod joins its node's network, when the cluster enables host networking.
+
+    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
+    for cluster egress.
+    """
+    if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+        return False
+    return network is TaskNetwork.CLUSTER
+
+
+def _needs_infiniband(num_tasks: int, device: job_pb2.DeviceConfig) -> bool:
+    """Whether NCCL in a job needs its nodes' InfiniBand devices, which only host networking exposes."""
+    return num_tasks > 1 and get_gpu_count(device) > 0
+
+
+def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the pod gets a per-attempt Cilium policy for its job's own egress rules."""
+    return network is TaskNetwork.ALLOWLIST and bool(run_req.egress_allow)
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -874,12 +903,13 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
-    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
-    host_network = (
-        config.host_network
-        and isolation.network is TaskNetwork.CLUSTER
-        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
-    )
+    network = isolation.network
+    if network is TaskNetwork.ALLOWLIST and config.egress_allowlist is None:
+        # Without Cilium nothing enforces the allowlist, so a stored ALLOWLIST job runs on the cluster network.
+        network = TaskNetwork.CLUSTER
+    host_network = _uses_host_network(config, run_req, network)
+
+    termination_grace = resolve_termination_grace(Duration.from_ms(run_req.termination_grace.milliseconds))
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -894,6 +924,7 @@ def _build_pod_manifest(
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
+        termination_grace=termination_grace,
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     job_secrets = task_secret_values(run_req.environment)
@@ -985,7 +1016,9 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
-    if job_secrets:
+    if job_secrets or _needs_task_policy(run_req, network):
+        # The required volume also holds task startup until the pod's egress
+        # policy exists: the provider writes the Secret after the policy.
         for name in job_secrets:
             validate_secret_name(name)
         volumes.append(
@@ -1013,11 +1046,13 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
+    if run_req.attempt_uid:
+        labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
-    if isolation.network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = isolation.network.value
+    if network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1087,7 +1122,7 @@ def _build_pod_manifest(
     # pod share its network, so the task can use any route a sidecar has: a
     # finelog route exposes every job's logs, and the uploader needs the env
     # Secret's object-store keys and a route to the object store.
-    sidecars = isolation.network is TaskNetwork.CLUSTER
+    sidecars = isolation.network in (TaskNetwork.CLUSTER, TaskNetwork.ALLOWLIST)
     init_containers: list[dict] = []
     if sidecars:
         init_containers.append(
@@ -1175,6 +1210,9 @@ def _build_pod_manifest(
             (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
         )
         spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
+
+    termination_timeout_ms = (termination_grace + SHUTDOWN_MARGIN).to_ms()
+    spec["terminationGracePeriodSeconds"] = (termination_timeout_ms + 999) // 1000
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -2527,6 +2565,15 @@ class K8sTaskProvider:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
 
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        allowlist = self.pods.egress_allowlist
+        # Pod policy cannot restrict a host-network pod.
+        if allowlist is None or (
+            self.pods.host_network and _needs_infiniband(request.replicas, request.resources.device)
+        ):
+            return EgressAllowlistMode.UNAVAILABLE
+        return EgressAllowlistMode.DEFAULT if allowlist.default else EgressAllowlistMode.OPT_IN
+
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
@@ -2812,6 +2859,19 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        network = TaskNetwork(manifest["metadata"]["labels"].get(EGRESS_LABEL, TaskNetwork.CLUSTER.value))
+        task_policy = None
+        if _needs_task_policy(run_req, network):
+            # A stale policy can outlive its pod briefly; selecting on the attempt
+            # UID keeps it from granting its rules to a resubmitted job's pod.
+            assert run_req.attempt_uid, "a job's own egress rules need the attempt UID to select its pod"
+            task_policy = task_policy_manifest(
+                pod_name,
+                self.pods.namespace,
+                {_LABEL_ATTEMPT_UID: run_req.attempt_uid},
+                run_req.egress_allow,
+            )
+
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
             # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
@@ -2827,35 +2887,45 @@ class K8sTaskProvider:
 
         self.kubectl.apply_json(manifest)
         job_secrets = task_secret_values(run_req.environment)
-        if job_secrets:
-            # Create the Pod first so its UID can own the Secret even if dispatch
-            # is interrupted. The required volume holds task startup until apply.
-            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
-            if pod is None:
-                raise KubectlError(f"Pod {pod_name} disappeared before credential delivery")
-            self.kubectl.apply_json(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": {
-                        "name": _task_secret_name(pod_name),
-                        "namespace": self.pods.namespace,
-                        "ownerReferences": [
-                            {"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}
-                        ],
-                    },
-                    "type": "Opaque",
-                    "data": {
-                        name: base64.b64encode(value.encode()).decode()
-                        for name, value in secret_file_contents(job_secrets).items()
-                    },
-                }
-            )
+        if job_secrets or task_policy is not None:
+            self._apply_pod_owned_resources(pod_name, task_policy, job_secrets)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
+        )
+
+    def _apply_pod_owned_resources(self, pod_name: str, task_policy: dict | None, job_secrets: dict[str, str]) -> None:
+        """Apply the Pod's egress policy, if any, and then its Secret, both owned by the Pod.
+
+        Kubernetes deletes them with the Pod however it is removed. The Pod's
+        required Secret volume holds task startup until the Secret exists, and
+        the Secret comes last, so the task's first connections already see the
+        job's egress rules.
+        """
+        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+        if pod is None:
+            raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
+        owner = [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}]
+        if task_policy is not None:
+            task_policy["metadata"]["ownerReferences"] = owner
+            self.kubectl.apply_json(task_policy)
+        self.kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": _task_secret_name(pod_name),
+                    "namespace": self.pods.namespace,
+                    "ownerReferences": owner,
+                },
+                "type": "Opaque",
+                "data": {
+                    name: base64.b64encode(value.encode()).decode()
+                    for name, value in secret_file_contents(job_secrets).items()
+                },
+            }
         )
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
@@ -3117,7 +3187,8 @@ class K8sTaskProvider:
                     self._released_output_attempts.add(entry)
                 else:
                     logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
-            except KubectlError:
+            except Exception:
+                # Output release is best effort; a failed pod must not block the rest of this scan.
                 logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
 
         if time.monotonic() - started < policy.finalization_timeout.to_seconds():

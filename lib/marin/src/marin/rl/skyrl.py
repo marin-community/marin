@@ -20,7 +20,6 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
-from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
@@ -68,14 +67,16 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     pp = geometry.pipeline_model_parallel_size
     cp = geometry.context_parallel_size
     ep = geometry.expert_model_parallel_size
-    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
-    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
+    etp = geometry.expert_tensor_parallel_size
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}, ETP={etp}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep, etp)):
         raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
-    model_parallel = tp * pp * cp
-    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
+    # Megatron builds separate dense (TP, CP, DP, PP) and expert
+    # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
+    if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
 
 
@@ -140,7 +141,6 @@ class SkyRLTopology:
         positive_fields = (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
-            "num_inference_engines",
             "inference_engine_tensor_parallel_size",
             "inference_engine_pipeline_parallel_size",
             "inference_engine_data_parallel_size",
@@ -154,6 +154,10 @@ class SkyRLTopology:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
 
+        if plan.num_inference_engines < 0:
+            raise ValueError("SkyRL role plan num_inference_engines cannot be negative")
+        if plan.num_inference_engines == 0 and plan.colocate_all:
+            raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
@@ -215,8 +219,8 @@ class SkyRLTopology:
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
 
-    Every successful run produces one durable canonical export from its terminal
-    checkpoint.
+    When HF export is requested, a successful run produces a durable canonical
+    export from its terminal checkpoint.
     """
 
     resume_checkpoint_count: int = 2
@@ -604,6 +608,9 @@ def _validate_skyrl_recipe(
         for dimension in fields(MegatronGeometry):
             value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
             dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+        etp = _declared_config_value(config, f"trainer.{role}.megatron_config.expert_tensor_parallel_size")
+        if etp is _MISSING_CONFIG_VALUE or etp is None:
+            dimensions["expert_tensor_parallel_size"] = dimensions["tensor_model_parallel_size"]
         validate_megatron_geometry(
             MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
         )
@@ -799,9 +806,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
-    target_cluster = None if submit_through_ambient_controller else execution.target_cluster
-    parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
     launch = {
         "schema_version": 1,
         "run": {
@@ -834,8 +838,8 @@ def _launch_config_yaml(
             "priority": execution.priority,
             "max_retries": execution.max_retries,
             "timeout": execution.job_timeout_seconds,
-            "target_cluster": target_cluster,
-            "parent_cluster_config": parent_cluster_config,
+            "target_cluster": execution.target_cluster,
+            "parent_cluster_config": execution.parent_cluster_config,
         },
         "ray": {
             "spill_backend": "local",

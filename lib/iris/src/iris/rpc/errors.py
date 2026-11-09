@@ -115,10 +115,11 @@ def extract_error_details(error: ConnectError):
 
 def format_connect_error(error: ConnectError) -> str:
     """Format a ConnectError, including server traceback if available."""
+    message = f"{error.code.name}: {error.message}"
     details = extract_error_details(error)
     if details and details.traceback:
-        return f"{error}\n\nServer traceback:\n{details.traceback}"
-    return str(error)
+        return f"{message}\n\nServer traceback:\n{details.traceback}"
+    return message
 
 
 def is_retryable_error(exc: Exception) -> bool:

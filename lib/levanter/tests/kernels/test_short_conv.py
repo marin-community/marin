@@ -13,6 +13,7 @@ the reference or a traced kernel call.
 kernel follows; on TPU the multi-tap shapes disagree in the last bit or two.
 """
 
+import itertools
 import re
 import zlib
 
@@ -25,7 +26,8 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.triton.short_conv import api, short_conv, short_conv_reference, triton_gpu
 from levanter.kernels.triton.short_conv.reference import OOB_SEGMENT
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
+
 
 pytestmark = pytest.mark.skipif(
     jax.default_backend() == "tpu",
@@ -121,6 +123,16 @@ def _triton_programs(fn, *args) -> list[bytes]:
     return programs
 
 
+@pytest.fixture
+def isolated_triton_rounding_cache():
+    # Capability monkeypatches must retrace the staged kernel boundary in each
+    # case; production capability is fixed, but this suite simulates both paths.
+    api._triton_local_call.clear_cache()
+    yield
+    api._triton_local_call.clear_cache()
+
+
+@pytest.mark.usefixtures("isolated_triton_rounding_cache")
 @pytest.mark.parametrize("packed_bf16", [True, False], ids=["packed-bf16", "fp32-then-bf16"])
 @pytest.mark.parametrize("segments", ["unpacked", "packed", "short_runs", "padded"])
 @pytest.mark.parametrize(
@@ -192,6 +204,52 @@ def test_triton_implementation_fails_fast_when_unsupported():
     np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
 
 
+@pytest.mark.usefixtures("isolated_triton_rounding_cache")
+@pytest.mark.parametrize("dynamic_weight", [True, False], ids=["jit-weight-input", "weight-closure"])
+@pytest.mark.parametrize(
+    ("shape", "dtype", "segments", "packed_bf16"),
+    [
+        ((2, 200, 256), jnp.bfloat16, "packed", True),
+        ((1, 512, 64), jnp.bfloat16, "short_runs", False),
+        ((2, 256, 1536), jnp.float32, "unpacked", False),
+        ((2, 256, 64), jnp.bfloat16, "padded", True),
+    ],
+)
+def test_frozen_weight_vjp_has_only_activation_output_on_gpu(
+    shape, dtype, segments, packed_bf16, dynamic_weight, monkeypatch
+):
+    """The public AD path must eliminate inseparable frozen dW, preserving dX bits."""
+    _requires_gpu()
+    if packed_bf16 and not triton_gpu._packed_bf16_arithmetic():
+        pytest.skip("packed bf16 arithmetic needs SM90 or newer")
+    if not packed_bf16:
+        monkeypatch.setattr(triton_gpu, "_packed_bf16_arithmetic", lambda: False)
+    batch, seq_len, channels = shape
+    weight, x, _, cotangent = _inputs(batch, seq_len, channels, 4, seed=47, dtype=dtype, packed=False)
+    segment_ids = _triton_segment_ids(segments, batch, seq_len, np.random.default_rng(48))
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+
+    def loss(w, xx):
+        return jnp.sum(short_conv(w, xx, segment_ids, implementation="triton_gpu") * cotangent)
+
+    _, reference_vjp = jax.vjp(lambda xx: short_conv_reference(weight, xx, segment_ids), x)
+    want_dx = jax.jit(reference_vjp)(cotangent)[0]
+    with jax.set_mesh(mesh):
+        gradient = jax.grad(loss, argnums=1) if dynamic_weight else jax.grad(lambda xx: loss(weight, xx))
+        args = (weight, x) if dynamic_weight else (x,)
+        compiled = jax.jit(gradient).lower(*args).compile()
+        got_dx = compiled(*args)
+    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx))
+    # Check the executable ABI, not the kernel name: the old joint kernel
+    # returned (dX, dW) even when XLA dropped the dW tuple extraction.
+    calls = [line for line in compiled.as_text().splitlines() if 'custom_call_target="triton_kernel_call"' in line]
+    assert len(calls) == 1
+    result = calls[0].split(" = ", 1)[1].split(" custom-call(", 1)[0]
+    padded_seq = -(-seq_len // triton_gpu.SEQUENCE_MULTIPLE) * triton_gpu.SEQUENCE_MULTIPLE
+    dimensions = f"{batch},{padded_seq},{channels}"
+    assert re.fullmatch(rf"(?:bf16|f32)\[{dimensions}\](?:\{{[^}}]*\}})?", result)
+
+
 def _requires_gpu():
     if jax.default_backend() != "gpu":
         pytest.skip("requires the JAX GPU backend")
@@ -216,6 +274,7 @@ def test_float32_matches_the_reference_on_gpu():
 
     got, kernel_vjp = jax.vjp(jax.jit(kernel_fn), weight, x)
     got_dw, got_dx = kernel_vjp(cotangent)
+    weight_only = jax.jit(jax.grad(lambda w: jnp.sum(kernel_fn(w, x) * cotangent)))(weight)
     want, reference_vjp = jax.vjp(jax.jit(reference_fn), weight, x)
     _, want_dx = reference_vjp(cotangent)
 
@@ -228,6 +287,8 @@ def test_float32_matches_the_reference_on_gpu():
     bound = gamma * _dw_oracle(jnp.abs(x), segment_ids, jnp.abs(cotangent), 4)
     error = np.abs(np.asarray(jax.device_get(got_dw), np.float64) - oracle)
     assert np.all(error <= bound), f"dw error is up to {np.max(error / bound):.2f}x its bound"
+    weight_only_error = np.abs(np.asarray(jax.device_get(weight_only), np.float64) - oracle)
+    assert np.all(weight_only_error <= bound), "weight-only dW exceeds the FP32 accumulation bound"
 
 
 def test_default_implementation_on_gpu_is_the_kernel():
@@ -314,8 +375,8 @@ def test_context_parallel_path_keeps_the_channel_axis_gate(model_size, should_re
     """The halo path shards the sequence by design, but a genuinely sharded channel axis must
     still raise there, exactly as on the unsharded path, instead of being silently all-gathered."""
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, 1, 2, 1, model_size),
-        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_sizes=(1, 1, 1, 2, model_size),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(jax.sharding.AxisType.Explicit,) * 5,
     )
     weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
@@ -362,7 +423,7 @@ def test_context_axis_named_in_batch_axes_shards_only_the_sequence():
     """Grug's token axes list ``context`` next to the batch axes; it must not be spelled twice."""
     mesh = jax.sharding.AbstractMesh(
         axis_sizes=(2, 2, 2),
-        axis_names=("data", "context", "expert"),
+        axis_names=("data", "expert", "context"),
         axis_types=(jax.sharding.AxisType.Explicit,) * 3,
     )
     weight, x, segment_ids, _ = _inputs(4, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
@@ -388,126 +449,195 @@ def test_short_conv_rejects_mixed_dtypes():
         short_conv(weight, x)
 
 
-_HALO_SCRIPT = """
-import itertools
-
-import jax
-import jax.numpy as jnp
-import numpy as np
-from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-from levanter.kernels.triton.short_conv import short_conv, short_conv_reference
-
-BATCH, SEQ, CHANNELS = 2, 32, 8
-DEVICES = np.asarray(jax.devices())
-assert DEVICES.size == 8
-
-
-def bits(array):
-    array = np.asarray(array)
-    return array.view({2: np.uint16, 4: np.uint32}[array.dtype.itemsize])
-
-
-def inputs(width, packed, dtype):
-    rng = np.random.default_rng(width)
-    weight = jnp.asarray(rng.standard_normal((width, CHANNELS)) * 0.5, dtype)
-    x = jnp.asarray(rng.standard_normal((BATCH, SEQ, CHANNELS)), dtype)
-    cotangent = jnp.asarray(rng.standard_normal((BATCH, SEQ, CHANNELS)), dtype)
-    if not packed:
-        return weight, x, cotangent, None
-    # Short runs, and a document boundary inside the context=4 left halo.
-    seg = np.concatenate([np.zeros((BATCH, 5)), np.full((BATCH, 2), 7), np.full((BATCH, SEQ - 7), 9)], axis=1)
-    return weight, x, cotangent, jnp.asarray(seg, jnp.int32)
-
-
-def check(context, packed, width):
-    # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
-    # the mesh.
-    mesh = Mesh(
-        DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
-        ("data", "context", "spare"),
-        axis_types=(AxisType.Explicit,) * 3,
-    )
-    def conv(w, xx, seg):
-        return short_conv(w, xx, seg, implementation="reference", batch_axes=("data",))
-
-    def loss(w, xx, seg):
-        return jnp.sum(conv(w, xx, seg) * cotangent)
-
-    def reference_loss(w, xx, seg):
-        return jnp.sum(short_conv_reference(w, xx, seg) * cotangent)
-
-    for dtype in (jnp.bfloat16, jnp.float32):
-        weight, x, cotangent, segment_ids = inputs(width, packed, dtype)
-        with jax.set_mesh(mesh):
-            x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
-            seg_sharded = None
-            if segment_ids is not None:
-                seg_sharded = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
-
-            if width - 1 > SEQ // context:
-                try:
-                    conv(weight, x_sharded, seg_sharded)
-                except ValueError as error:
-                    assert "halo" in str(error), error
-                else:
-                    raise AssertionError("a halo longer than the local sequence must be rejected")
-                return
-
-            # The bf16 forward is bitwise. XLA:CPU contracts the fp32 reference into FMAs
-            # differently per fusion, and dx reassociates at shard boundaries in any dtype
-            # (see the `short_conv` docstring), so those are held to fp32 rounding instead.
-            got = jax.jit(conv)(weight, x_sharded, seg_sharded)
-            want = short_conv_reference(weight, x, segment_ids)
-            if dtype == jnp.bfloat16:
-                np.testing.assert_array_equal(bits(got), bits(want))
-            else:
-                np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6)
-                dw_want, dx_want = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))(weight, x, segment_ids)
-                dw_got, dx_got = jax.jit(jax.grad(loss, argnums=(0, 1)))(weight, x_sharded, seg_sharded)
-                np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
-                np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
-
-
-for case in itertools.product((2, 4), (True, False), (1, 4, 17)):
-    try:
-        check(*case)
-    except Exception as error:
-        raise AssertionError(f"context, packed, width = {case}") from error
-"""
-
-_AUTO_MESH_GATE_SCRIPT = """
-import jax
-import jax.numpy as jnp
-import numpy as np
-from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-from levanter.kernels.triton.short_conv import api, short_conv
-
-# The gate runs before the kernel call, so it can run on CPU with the dispatch forced to the kernel.
-api.triton_short_conv_available = lambda: True
-# A concrete array on an Auto-axis mesh shows its placement only on `array.sharding`; the
-# channel gate must still see it rather than reshard the axis away.
-mesh = Mesh(np.asarray(jax.devices()).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
-weight = jnp.ones((4, 128), jnp.bfloat16)
-x = jax.device_put(jnp.ones((2, 128, 128), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
-with jax.set_mesh(mesh):
-    try:
-        short_conv(weight, x, implementation="triton_gpu")
-    except ValueError as error:
-        assert "unsharded channel axis" in str(error), error
-    else:
-        raise AssertionError("a concrete channel-sharded array slipped past the gate")
-"""
-
-
+@pytest.mark.multidevice
 def test_context_parallel_halo_matches_the_unsharded_reference():
     """Check packed/unpacked values and gradients across context shards and halo sizes."""
-    run_on_cpu_devices(_HALO_SCRIPT, device_count=8)
+    with use_test_devices(8) as devices:
+        BATCH, SEQ, CHANNELS = 2, 32, 8
+        DEVICES = np.asarray(devices)
+
+        def bits(array):
+            array = np.asarray(array)
+            return array.view({2: np.uint16, 4: np.uint32}[array.dtype.itemsize])
+
+        def inputs(width, packed, dtype):
+            rng = np.random.default_rng(width)
+            weight = jnp.asarray(rng.standard_normal((width, CHANNELS)) * 0.5, dtype)
+            x = jnp.asarray(rng.standard_normal((BATCH, SEQ, CHANNELS)), dtype)
+            cotangent = jnp.asarray(rng.standard_normal((BATCH, SEQ, CHANNELS)), dtype)
+            if not packed:
+                return weight, x, cotangent, None
+            # Short runs, and a document boundary inside the context=4 left halo.
+            seg = np.concatenate([np.zeros((BATCH, 5)), np.full((BATCH, 2), 7), np.full((BATCH, SEQ - 7), 9)], axis=1)
+            return weight, x, cotangent, jnp.asarray(seg, jnp.int32)
+
+        def check(context, packed, width):
+            # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
+            # the mesh.
+            mesh = Mesh(
+                DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
+                ("data", "context", "spare"),
+                axis_types=(AxisType.Explicit,) * 3,
+            )
+
+            def conv(w, xx, seg):
+                return short_conv(w, xx, seg, implementation="reference", batch_axes=("data",))
+
+            def loss(w, xx, seg):
+                return jnp.sum(conv(w, xx, seg) * cotangent)
+
+            def reference_loss(w, xx, seg):
+                return jnp.sum(short_conv_reference(w, xx, seg) * cotangent)
+
+            for dtype in (jnp.bfloat16, jnp.float32):
+                weight, x, cotangent, segment_ids = inputs(width, packed, dtype)
+                with jax.set_mesh(mesh):
+                    x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+                    seg_sharded = None
+                    if segment_ids is not None:
+                        seg_sharded = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+
+                    if width - 1 > SEQ // context:
+                        try:
+                            conv(weight, x_sharded, seg_sharded)
+                        except ValueError as error:
+                            assert "halo" in str(error), error
+                        else:
+                            raise AssertionError("a halo longer than the local sequence must be rejected")
+                        return
+
+                    # The bf16 forward is bitwise. XLA:CPU contracts the fp32 reference into FMAs
+                    # differently per fusion, and dx reassociates at shard boundaries in any dtype
+                    # (see the `short_conv` docstring), so those are held to fp32 rounding instead.
+                    got = jax.jit(conv)(weight, x_sharded, seg_sharded)
+                    want = short_conv_reference(weight, x, segment_ids)
+                    if dtype == jnp.bfloat16:
+                        np.testing.assert_array_equal(bits(got), bits(want))
+                    else:
+                        np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6)
+                        dw_want, dx_want = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))(weight, x, segment_ids)
+                        dw_got, dx_got = jax.jit(jax.grad(loss, argnums=(0, 1)))(weight, x_sharded, seg_sharded)
+                        np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
+                        np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
+
+        for case in itertools.product((2, 4), (True, False), (1, 4, 17)):
+            try:
+                check(*case)
+            except Exception as error:
+                raise AssertionError(f"context, packed, width = {case}") from error
 
 
-def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
-    run_on_cpu_devices(_AUTO_MESH_GATE_SCRIPT, device_count=8)
+@pytest.mark.multidevice
+def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh(monkeypatch):
+    with use_test_devices(4) as devices:
+        # The gate runs before the kernel call, so it can run on CPU with the dispatch forced to the kernel.
+        monkeypatch.setattr(api, "triton_short_conv_available", lambda: True)
+        # A concrete array on an Auto-axis mesh shows its placement only on `array.sharding`; the
+        # channel gate must still see it rather than reshard the axis away.
+        mesh = Mesh(np.asarray(devices).reshape(2, 2), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
+        weight = jnp.ones((4, 128), jnp.bfloat16)
+        x = jax.device_put(jnp.ones((2, 128, 128), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
+        with jax.set_mesh(mesh):
+            try:
+                short_conv(weight, x, implementation="triton_gpu")
+            except ValueError as error:
+                assert "unsharded channel axis" in str(error), error
+            else:
+                raise AssertionError("a concrete channel-sharded array slipped past the gate")
+
+
+@pytest.mark.multidevice
+@pytest.mark.usefixtures("isolated_triton_rounding_cache")
+def test_triton_vjp_staging_preserves_sharded_forward_and_gradients(monkeypatch):
+    """Exercise the actual manual-axis trace with accelerator-boundary reference kernels."""
+    with use_test_devices(4) as devices:
+        # Substitute only the external accelerator kernels. The public dispatch, custom
+        # VJP, JIT staging, padding and real multi-device halo exchange remain unchanged.
+        monkeypatch.setattr(api, "triton_short_conv_available", lambda: True)
+        monkeypatch.setattr(
+            api, "short_conv_triton_fwd_local", lambda w, x, seg, **kwargs: short_conv_reference(w, x, seg)
+        )
+
+        def activation_backward(weight, segment_ids, dy, **kwargs):
+            return jax.grad(lambda x: jnp.sum(short_conv_reference(weight, x, segment_ids) * dy))(jnp.zeros_like(dy))
+
+        def reject_weight_backward(*args, **kwargs):
+            raise AssertionError("Frozen weights must not request the joint accelerator backward")
+
+        def joint_backward(weight, x, segment_ids, dy, **kwargs):
+            dw, dx = jax.grad(lambda w, xx: jnp.sum(short_conv_reference(w, xx, segment_ids) * dy), argnums=(0, 1))(
+                weight, x
+            )
+            return dx, dw[None]
+
+        monkeypatch.setattr(api, "short_conv_triton_dx_local", activation_backward)
+        monkeypatch.setattr(api, "short_conv_triton_bwd_local", reject_weight_backward)
+        rng = np.random.default_rng(123)
+        weight = jnp.asarray(rng.normal(size=(4, 64)), jnp.float32)
+        x = jnp.asarray(rng.normal(size=(2, 32, 64)), jnp.float32)
+        dy = jnp.asarray(rng.normal(size=x.shape), jnp.float32)
+        # A boundary inside the context=2 left halo leaves both live and masked taps.
+        segment_ids = jnp.asarray(np.tile([0] * 15 + [1] * 17, (2, 1)), jnp.int32)
+        mesh = Mesh(np.asarray(devices).reshape(2, 2), ("data", "context"), axis_types=(AxisType.Explicit,) * 2)
+        want = short_conv_reference(weight, x, segment_ids)
+        want_dw, want_dx = jax.grad(
+            lambda w, xx: jnp.sum(short_conv_reference(w, xx, segment_ids) * dy), argnums=(0, 1)
+        )(weight, x)
+        with jax.set_mesh(mesh):
+            sharded_x = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+            sharded_seg = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+
+            def forward(w, xx):
+                return short_conv(w, xx, sharded_seg, implementation="triton_gpu", batch_axes=("data",))
+
+            # Eager forward used to fail in ShardMapTrace before reaching the kernel.
+            for call in (forward, jax.jit(forward)):
+                np.testing.assert_allclose(call(weight, sharded_x), want, rtol=1e-5, atol=1e-5)
+            for call in (forward, jax.checkpoint(forward)):
+                grad = jax.grad(lambda w, xx: jnp.sum(call(w, xx) * dy), argnums=1)
+                for transform in (lambda f: f, jax.jit):
+                    activation_grad = transform(grad)
+                    # Reuse one compiled call with changed runtime weights, including
+                    # the first x-only trace while the joint accelerator kernel raises.
+                    for scale in (1.0, 0.5):
+                        np.testing.assert_allclose(
+                            activation_grad(weight * scale, sharded_x), want_dx * scale, rtol=1e-5, atol=1e-5
+                        )
+            monkeypatch.setattr(api, "short_conv_triton_bwd_local", joint_backward)
+            loss = lambda w, xx: jnp.sum(forward(w, xx) * dy)
+            for transform in (lambda f: f, jax.jit):
+                dw, dx = transform(jax.grad(loss, argnums=(0, 1)))(weight, sharded_x)
+                np.testing.assert_allclose(dw, want_dw, rtol=1e-5, atol=1e-5)
+                np.testing.assert_allclose(dx, want_dx, rtol=1e-5, atol=1e-5)
+                weight_only = transform(jax.grad(loss, argnums=0))(weight, sharded_x)
+                np.testing.assert_allclose(weight_only, want_dw, rtol=1e-5, atol=1e-5)
+
+            # One scan body uses the same staged signature with both frozen and trainable
+            # weights. Its residual structure must survive scan's transpose in both modes.
+            stacked_weights = jnp.stack((weight * 0.1, weight * 0.05))
+            frozen_weight = weight * 0.075
+            for rematerialize in (lambda f: f, jax.checkpoint):
+
+                def scanned_loss(weights, activation, call):
+                    def body(value, w):
+                        value = call(frozen_weight, value)
+                        return call(w, value), None
+
+                    result, _ = jax.lax.scan(rematerialize(body), activation, weights)
+                    return jnp.sum(result * dy)
+
+                def actual_loss(weights, activation):
+                    return scanned_loss(weights, activation, forward)
+
+                def reference_loss(weights, activation):
+                    return scanned_loss(
+                        weights, activation, lambda w, value: short_conv_reference(w, value, segment_ids)
+                    )
+
+                got_loss, got_dw = jax.jit(jax.value_and_grad(actual_loss))(stacked_weights, sharded_x)
+                want_loss, want_dw = jax.jit(jax.value_and_grad(reference_loss))(stacked_weights, x)
+                np.testing.assert_allclose(got_loss, want_loss, rtol=1e-5, atol=1e-5)
+                np.testing.assert_allclose(got_dw, want_dw, rtol=1e-5, atol=1e-5)
 
 
 def test_context_parallel_kernel_matches_reference_on_gpu():
@@ -534,5 +664,7 @@ def test_context_parallel_kernel_matches_reference_on_gpu():
 
         got = forward(weight, sharded_x)
         got_dw, got_dx = jax.grad(loss, argnums=(0, 1))(weight, sharded_x)
+        frozen_weight_dx = jax.grad(loss, argnums=1)(weight, sharded_x)
+    np.testing.assert_allclose(np.asarray(frozen_weight_dx), np.asarray(want_dx), rtol=1e-5, atol=1e-5)
     for actual, expected in ((got, want), (got_dw, want_dw), (got_dx, want_dx)):
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
