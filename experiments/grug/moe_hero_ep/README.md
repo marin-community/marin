@@ -680,14 +680,15 @@ the seven chat special-token columns of the LM head from single-token anchors.
 | `--max-grad-norm` | Global gradient-norm clip, or `none` |
 | `--replay-fraction` | Target replay share of each mixture block |
 | `--dp-racks` | Data-parallel racks, 16 sequences each |
-| `--router-bias` | `frozen` keeps the restored router bias; `update` keeps quantile balancing on |
+| `--router-bias` | `frozen` (default) keeps the restored router bias; `update` keeps quantile balancing on |
 | `--capacity-factor` | Routed expert capacity per shard; the hero trained at 1.5 |
 | `--stop-after-steps` | Stop after this many updates; unset runs the full epoch |
 | `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
 | `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
 
-Every option above except the last three is required. `GrugTrainerConfig` gains `router_bias_mode`
-and `special_tokens` (`SpecialTokenInit`); their defaults leave pretraining unchanged.
+Every option above except `--router-bias` and the last three is required. `GrugTrainerConfig`
+gains `router_bias_mode` and `special_tokens` (`SpecialTokenInit`); their defaults leave
+pretraining unchanged.
 
 Print the plan for a one-rack smoke test:
 
@@ -696,7 +697,7 @@ python -m experiments.grug.moe_hero_ep.launch_hero_sft \
   --run-id hero-sft-smoke \
   --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
   --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
-  --dp-racks 1 --router-bias update --capacity-factor 1.5 --stop-after-steps 20 --eval-every 393511 \
+  --dp-racks 1 --capacity-factor 1.5 --stop-after-steps 20 --eval-every 393511 \
   --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
   --version dev
 ```

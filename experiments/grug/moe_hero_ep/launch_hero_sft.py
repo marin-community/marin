@@ -546,7 +546,8 @@ def _grad_norm(value: str) -> float | None:
 @click.option(
     "--router-bias",
     type=click.Choice([mode.value for mode in RouterBiasMode]),
-    required=True,
+    default=RouterBiasMode.FROZEN.value,
+    show_default=True,
     help="'frozen' keeps the restored bias (the 10.05 recipe); 'update' keeps quantile balancing on.",
 )
 @click.option(
