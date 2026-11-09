@@ -248,7 +248,10 @@ def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_i
             response = client.get(url, params=params)
 
             assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
-            assert all(row["value"] == 0 for row in response.json()), rule["uid"]
+            if rule["uid"] == "b200-cluster-underutilized":
+                assert all(row["state"] == "no_ready_capacity" and row["value"] >= 10 for row in response.json())
+            else:
+                assert all(row["value"] == 0 for row in response.json()), rule["uid"]
 
 
 def test_alert_queries_select_exactly_one_numeric_column():

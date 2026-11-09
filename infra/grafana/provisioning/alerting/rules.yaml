@@ -341,6 +341,55 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
+  # Fewer than 10% of Ready GB200 GPUs are active (>10% device utilization)
+  # for 30 minutes. The bridge requires telemetry for at least 80% of Ready
+  # GPUs. Changing counts stay in the numeric value, not Grafana labels, so
+  # they do not restart the pending timer.
+  - orgId: 1
+    name: b200-capacity
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: b200-cluster-underutilized
+        title: B200ClusterUnderutilized
+        condition: C
+        for: 30m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $values.A.Value }}% of {{ $labels.ready_gpus }} Ready B200 GPUs active"
+          dashboard_url: "https://grafana.oa.dev/d/marin-accel?var-cluster={{ $labels.cluster }}"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: ready_gpus, text: ready_gpus, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [10] }
+
   # The marin datasource combines a query-path probe of the GCE hub with the
   # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
   # NotReady when /health misses its fifteen-second deadline; the hub reports its

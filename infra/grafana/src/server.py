@@ -34,6 +34,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/alerts/training_optimizer watched hero runs + optimizer-fault value(0|1)
     GET /finelog/marin/alerts/training_health    watched hero runs + degraded-signal value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
+    GET /finelog/marin/alerts/b200_utilization   Ready B200 capacity + GPU activity value(0|1)
     GET /iris/{cluster}/job_counts               root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/jobs?cluster=             recent jobs visible through one federation peer
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
@@ -94,6 +95,7 @@ from http import HTTPStatus
 import pyarrow as pa
 import uvicorn
 from accelerator_observability import accelerator_overview_dataset
+from b200_utilization_alert import MAX_TELEMETRY_NODES, b200_utilization_alert_rows, b200_utilization_query
 from cache import TtlCache
 from config import (
     BRIDGE_PORT,
@@ -1210,6 +1212,19 @@ def create_app(
             lambda now: zephyr_stall_alert_rows(pa.table({}), now),
         )
 
+    def finelog_alerts_b200_utilization(_: Request) -> JSONResponse:
+        clusters = tuple(cluster.name for cluster in K8S_CLUSTERS)
+
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            telemetry = finelog_sources[target.name].query(b200_utilization_query(now), max_rows=MAX_TELEMETRY_NODES)
+            return b200_utilization_alert_rows(k8s_fleet.nodes(), telemetry, clusters)
+
+        return finelog_alert_endpoint(
+            "b200_utilization",
+            project,
+            lambda _: b200_utilization_alert_rows(k8s_fleet.nodes(), pa.table({}), clusters),
+        )
+
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
             source = _iris_for(request.path_params["cluster"], iris_sources)
@@ -1458,6 +1473,7 @@ def create_app(
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/b200_utilization", finelog_alerts_b200_utilization),
             Route("/iris/{cluster}/job_counts", iris_job_counts),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
