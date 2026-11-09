@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
-from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import POLICIES, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -506,7 +506,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "models": all_models,
         "run_facets": run_facets,
         "metric_policy": PUBLICATION_METRIC_POLICY,
-        "default_cohort": SEPTEMBER_24_VERSION,
+        "default_cohort": ALL_COHORTS,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),

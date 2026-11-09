@@ -43,7 +43,7 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -71,6 +71,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import review, samples
 from .db_migrations import apply_migrations
 from .metrics import (
+    ALL_COHORTS,
     RUN_FACETS,
     build_comparison,
     build_meta,
@@ -1304,7 +1305,7 @@ def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort=params.get("cohort") or SEPTEMBER_24_VERSION,
+        cohort=params.get("cohort") or ALL_COHORTS,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),

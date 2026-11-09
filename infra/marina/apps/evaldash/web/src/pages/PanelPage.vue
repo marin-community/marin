@@ -518,7 +518,6 @@ function goToModel(model: string) {
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="">Default: {{ meta?.default_cohort ?? 'verified cohort' }}</option>
           <option value="all">Newest per benchmark (all cohorts)*</option>
           <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
             {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
