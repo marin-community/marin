@@ -48,12 +48,10 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
     return replace(model, revision=revision, tokenizer=tokenizer, tokenizer_revision=tokenizer_revision)
 
 
-def load_evaluations(path: Path, names: tuple[str, ...] = ()) -> tuple[EvaluationSelection, ...]:
+def load_evaluations(path: Path) -> tuple[EvaluationSelection, ...]:
     document = yaml.safe_load(path.read_text())
     entries = document["evaluations"]
-    return tuple(
-        EvaluationSelection.model_validate({"label": name, **entries[name]}) for name in names or tuple(entries)
-    )
+    return tuple(EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in entries.items())
 
 
 def resolve_selection(selection: EvaluationSelection, model_format: PromptFormat | None) -> ResolvedEvaluationSelection:

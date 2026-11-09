@@ -165,13 +165,13 @@ def cli() -> None:
     "--evals",
     "evals_arg",
     default=None,
-    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+    help="Suite or comma-separated eval keys; selects document entries with --evaluation-config. Defaults to smoke.",
 )
 @click.option(
     "--evaluation-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Benchmark protocol selection YAML or JSON. Repeatable and additive with --evals and --harbor-config.",
+    help="Benchmark selection document. Repeat to combine entries; --evals selects entries from the combined documents.",
 )
 @click.option(
     "--harbor-config",
@@ -282,11 +282,15 @@ def launch(
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
-    configured = [
-        entry
-        for path in evaluation_config
-        for entry in load_evaluations(path, tuple(evals_arg.split(",")) if evals_arg else ())
-    ]
+    configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
+    if evaluation_config and evals_arg:
+        names = {name.strip() for name in evals_arg.split(",") if name.strip()}
+        unknown = names - {entry.name for entry in configured}
+        if unknown:
+            raise click.BadParameter(
+                f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
+            )
+        configured = [entry for entry in configured if entry.name in names]
     harbor_definitions = [
         HarborDefinition(
             name=canonical_served_name(path.stem),
