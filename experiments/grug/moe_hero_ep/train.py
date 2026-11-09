@@ -1191,7 +1191,7 @@ def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...]
     return eqx.tree_at(lambda m: (m.token_embed, m.output_proj), updates, (token_embed, output_proj))
 
 
-def reinitialize_special_token_rows(
+def reseed_special_token_columns(
     state: GrugTrainState, special_tokens: SpecialTokenInit, *, offload_opt_state: bool
 ) -> GrugTrainState:
     """Copy each special token's LM-head column from its anchor and zero that column's optimizer moments."""
@@ -1336,7 +1336,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         special_tokens = config.trainer.special_tokens
         # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
         if special_tokens is not None and int(state.step) == special_tokens.start_step:
-            state = reinitialize_special_token_rows(
+            state = reseed_special_token_columns(
                 state, special_tokens, offload_opt_state=config.trainer.offload_opt_state
             )
             logger.info(

@@ -705,8 +705,8 @@ python -m experiments.grug.moe_hero_ep.launch_hero_sft \
 ```
 
 Submit it through the Marin Iris controller as with
-[Bounded diagnostics](#bounded-diagnostics). Give the job its own `IRIS_PORT_JAX`, and set
-`WANDB_PROJECT=marin_moe_sft`. A production run omits `--checkpoint-root` and
+[Bounded diagnostics](#bounded-diagnostics). Give the job its own `IRIS_PORT_JAX`. Runs
+report to W&B project `marin_moe_sft`, group `hero-sft`. A production run omits `--checkpoint-root` and
 `--stop-after-steps`. Its hourly resume checkpoint then goes to the hero's temporary prefix, and
 the final checkpoint goes to the run's durable output. Track the run on
 [#8089](https://github.com/marin-community/marin/issues/8089).

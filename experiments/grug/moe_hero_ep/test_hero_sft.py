@@ -29,7 +29,7 @@ from experiments.grug.moe_hero_ep.train import (
     SpecialTokenInit,
     _make_train_step,
     initial_state,
-    reinitialize_special_token_rows,
+    reseed_special_token_columns,
     scale_special_token_updates,
 )
 
@@ -162,7 +162,7 @@ def test_reseed_copies_anchor_columns_and_zeros_only_their_moments():
         state = state.__class__(**{**vars(state), "opt_state": trained_moments})
         before = np.asarray(state.params.output_proj)
         embed_before = np.asarray(state.params.token_embed)
-        reseeded = reinitialize_special_token_rows(state, special, offload_opt_state=False)
+        reseeded = reseed_special_token_columns(state, special, offload_opt_state=False)
 
     head = np.asarray(reseeded.params.output_proj)
     np.testing.assert_array_equal(head[:, [5, 7]], before[:, [1, 2]])

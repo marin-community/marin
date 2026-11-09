@@ -14,7 +14,6 @@ import dataclasses
 import json
 import logging
 import math
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -96,7 +95,6 @@ SFT_STORES_MANIFEST = Path(__file__).with_name("hero_sft_stores_2026_09_29.json"
 SFT_TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 # The 10.05 run's 64,000-sequence mixture blocks, rounded up to whole training steps.
 SFT_TARGET_BLOCK_SIZE = 64_000
-MIN_SAMPLES_PER_BLOCK = 1.000001
 SFT_COMPONENT_PREFIX = "sft/source/"
 SFT_POOLED_COMPONENT = "sft/pooled"
 REPLAY_COMPONENT_PREFIX = "replay/"
@@ -310,7 +308,7 @@ def checkpoint_step(checkpoint: str) -> int:
     if metadata.get("is_temporary"):
         raise ValueError(f"{checkpoint} is a temporary checkpoint")
     step = int(metadata["step"])
-    if not checkpoint.rstrip("/").endswith(f"step-{step}"):
+    if StoragePath(checkpoint).name != f"step-{step}":
         raise ValueError(f"{checkpoint} records step {step}")
     return step
 
@@ -407,7 +405,6 @@ def build_sft_run(
     version = resolve_version(name, version)
     validation = validation_datasets() if eval_every > 0 else []
     length_statistics = harrier_length_statistics()
-    wandb_project = os.environ.get("WANDB_PROJECT") or SFT_WANDB_PROJECT
     logger.info(
         "Hero SFT %s: %d updates of %d sequences, %d blocks of %d, replay %.4f, decay over the last %d updates",
         run_id,
@@ -441,7 +438,7 @@ def build_sft_run(
             tracker=WandbConfig(
                 save_code=False,
                 entity="marin-community",
-                project=wandb_project,
+                project=SFT_WANDB_PROJECT,
                 tags=["grug", "moe", "hero", "sft", "full-ab-2026.09.29", f"racks-{dp_racks}", "gb200"],
                 group="hero-sft",
                 name=run_id,
