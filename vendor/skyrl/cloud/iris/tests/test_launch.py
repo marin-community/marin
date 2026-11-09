@@ -17,6 +17,8 @@ from safetensors.numpy import save
 
 from cloud.iris import hf_model_cache
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
+from cloud.iris.task_runtime import prepare_draft_model
+from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, HuggingFaceSnapshotFile, load_model_manifest
 from cloud.iris.launch import ExportedPolicy, LaunchOutcome, LaunchState, execute_launch
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
@@ -368,3 +370,56 @@ def test_policy_without_a_separate_tokenizer_rejects_model_only_mirrors(tmp_path
         assert not backend.launched
     finally:
         set_job_info(previous)
+
+
+def test_hub_draft_is_mirrored_and_rewritten_before_gpu_submission(tmp_path, monkeypatch):
+    path = _config_path(tmp_path, submission="detach")
+    config = yaml.safe_load(path.read_text())
+    config["skyrl"]["trainer"]["placement"]["colocate_all"] = False
+    config["iris"]["allocation"]["num_nodes"] = 2
+    config["skyrl"]["generator"]["speculative_decoding"] = {
+        "model": {"source_uri": "hf://org/draft", "source_identity": "d" * 40},
+        "num_speculative_tokens": 3,
+        "method": "eagle3",
+    }
+    path.write_text(yaml.safe_dump(config))
+    snapshot = _hub_snapshot(tmp_path)
+    snapshot = HuggingFaceSnapshot(
+        snapshot.filesystem,
+        snapshot.root,
+        tuple(entry for entry in snapshot.files if not entry.path.startswith("tokenizer")),
+    )
+    opened = []
+
+    def open_snapshot(model_id, revision):
+        opened.append((model_id, revision))
+        return snapshot
+
+    monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)
+    monkeypatch.setattr(hf_model_cache, "marin_temp_bucket", lambda *_, **__: str(tmp_path / "draft"))
+    monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
+
+    class DraftBackend(RecordingBackend):
+        def launch(self, config_path):
+            resolved = yaml.safe_load(config_path.read_text())
+            draft = SpeculatorModelConfig.from_mapping(
+                resolved["skyrl"]["generator"]["speculative_decoding"]["model"], context="draft"
+            )
+            manifest = load_model_manifest(draft.source_uri)
+            assert manifest.tokenizer_mode == "policy"
+            assert draft.source_identity == manifest.identity
+            assert Path(draft.source_uri, "model.safetensors").is_file()
+            assert not Path(draft.source_uri, "tokenizer.json").exists()
+            assert resolved["inputs"]["hugging_face_models"][0]["uri"] == draft.source_uri
+            # Node preparation uses the resolved locator and never asks the Hub again.
+            assert prepare_draft_model(draft) == draft
+            return super().launch(config_path)
+
+    previous = get_job_info()
+    set_job_info(JobInfo(task_id=JobName.from_wire("/user/coordinator/0")))
+    try:
+        result = execute_launch(path, backend=DraftBackend())
+        assert result.state is LaunchState.SUBMITTED
+    finally:
+        set_job_info(previous)
+    assert opened == [("org/draft", "d" * 40)]

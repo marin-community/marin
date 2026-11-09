@@ -98,20 +98,28 @@ Iris task
 ```
 
 Before submitting the GPU job, the CPU launch process ensures a regional mirror
-for each Hub policy and `local_inference` teacher. The locked cache reuses a
+for each Hub policy, `local_inference` teacher, and Hub draft model. The locked cache reuses a
 completed mirror for the same model revision. Before submission, it refreshes every
 object older than 80% of the bucket's lifecycle TTL using a server-side copy. Weight
 shards are refreshed before metadata and the completion manifest. The resolved
 config records the mirror URI and manifest identity in `inputs.hugging_face_models`.
-Every GPU node copies these mirrors into its local Hugging Face cache before Ray
-starts; model staging has no direct-Hub fallback. External teacher endpoints and
+Every GPU node copies policy and teacher mirrors into its local Hugging Face cache before Ray
+starts; model staging has no direct-Hub fallback. Hub draft locators are rewritten to
+their bucket mirrors before submission, so draft preparation on GPU nodes also avoids the Hub. External teacher endpoints and
 local or object-store model inputs keep their existing loading paths.
 
 `artifacts.hugging_face_cache_ttl_days` controls the mirror retention period
-(default 14 days), including draft-model mirrors. A launch therefore has roughly
-three days (20% of the TTL) before its mirrors can expire with the default TTL. Relaunch through
-the CPU coordinator if a run or its node retries outlast that remaining lifetime;
-nodes report a missing or expired mirror instead of downloading from the Hub.
+(default 14 days), including draft-model mirrors. A `wait` coordinator checks its mirrors every 10% of the shortest actual lifecycle
+TTL among them and refreshes objects once they cross 80% of their TTL. The first
+check runs at submission. This interval is shorter than the minimum 20% lifetime
+left after a successful check, leaving time for storage retries. Renewal stops when the GPU job returns. Transient refresh failures are
+logged and retried with backoff while the coordinator stays alive.
+
+A `detach` launch has no running coordinator to renew its mirrors. Submission still refreshes objects older than 80% of their TTL, so the minimum
+remaining lifetime is roughly 2.8 days at the default 14-day TTL. Relaunch
+through the CPU coordinator if the detached run or its node retries outlast that
+remaining lifetime; nodes report a missing or expired mirror instead of downloading
+from the Hub.
 `prepare` only validates the config. Submitting Hub models requires Iris job context; run the
 [experiment entry point](#experiment-entry-point) with `--run` to start its CPU
 coordinator.

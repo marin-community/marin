@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -10,6 +12,7 @@ import json
 from pathlib import Path
 import posixpath
 import time
+from threading import Event, Thread
 from typing import Literal
 
 from fsspec.spec import AbstractFileSystem
@@ -19,6 +22,7 @@ from loguru import logger
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import ExponentialBackoff
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -29,6 +33,7 @@ from cloud.iris.artifacts import (
     read_json,
 )
 from marinskyrl.hf_model import (
+    HuggingFaceModelCache,
     TOKENIZER_CONFIG_NAME,
     TOKENIZER_JSON_NAME,
     hugging_face_hub_online,
@@ -554,6 +559,80 @@ def _refresh_model_files(model_uri: str, manifest: ModelManifest, *, before: dat
             )
 
 
+def _model_cache_ttl_days(model_uri: str, ttl_days: int) -> int:
+    return next(
+        (
+            int(part[4:-1])
+            for part in StoragePath(model_uri).segments
+            if part.startswith("ttl=") and part.endswith("d") and part[4:-1].isdigit()
+        ),
+        ttl_days,
+    )
+
+
+def _renew_model_cache(model: HuggingFaceModelCache, ttl_days: int, stop: Event) -> None:
+    lock = create_lock(f"{model.uri}.lock")
+    while not lock.try_acquire():
+        if stop.wait(_CACHE_POLL_INTERVAL):
+            return
+    try:
+        with lease_refresh(lock):
+            manifest = load_model_manifest(model.uri)
+            if manifest.identity != model.identity or manifest.model_id != model.model_id:
+                raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
+            before = datetime.now(UTC) - timedelta(
+                days=_model_cache_ttl_days(model.uri, ttl_days) * _REFRESH_AFTER_TTL_FRACTION
+            )
+            _refresh_model_files(model.uri, manifest, before=before)
+            StoragePath(join_resource_path(model.uri, MODEL_MANIFEST_FILENAME)).refresh_lifetime(before=before)
+    finally:
+        lock.release()
+
+
+@contextmanager
+def keep_hugging_face_model_caches_alive(models: Sequence[HuggingFaceModelCache], *, ttl_days: int) -> Iterator[None]:
+    """Renew CPU-made mirrors while a WAIT coordinator owns the GPU job."""
+    if not models:
+        yield
+        return
+    # Check halfway through the minimum remaining lifetime, leaving time for I/O
+    # and retries. The 80% object-age threshold still determines when bytes copy.
+    interval = (
+        min(_model_cache_ttl_days(model.uri, ttl_days) for model in models)
+        * (1 - _REFRESH_AFTER_TTL_FRACTION)
+        / 2
+        * 86400
+    )
+    stop = Event()
+    retry = ExponentialBackoff(initial=min(10.0, interval), maximum=interval)
+
+    def refresh() -> None:
+        delay = 0.0
+        while not stop.wait(delay):
+            failed = False
+            for model in models:
+                if stop.wait(0):
+                    return
+                try:
+                    _renew_model_cache(model, ttl_days, stop)
+                except Exception:
+                    failed = True
+                    logger.exception("Failed to renew Hugging Face mirror; will retry: {}", model.uri)
+            if failed:
+                delay = retry.next_interval()
+            else:
+                retry.reset()
+                delay = interval
+
+    thread = Thread(target=refresh, name="hugging-face-mirror-refresh", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+
+
 def ensure_hugging_face_model_cache(
     model_id: str,
     revision: str,
@@ -571,14 +650,7 @@ def ensure_hugging_face_model_cache(
         source_prefix=source_prefix,
     ).rstrip("/")
     # Use the actual lifecycle prefix because the bucket router can clamp the requested TTL.
-    effective_ttl = next(
-        (
-            int(part[4:-1])
-            for part in StoragePath(cache_uri).segments
-            if part.startswith("ttl=") and part.endswith("d") and part[4:-1].isdigit()
-        ),
-        ttl_days,
-    )
+    effective_ttl = _model_cache_ttl_days(cache_uri, ttl_days)
     refresh_before = datetime.now(UTC) - timedelta(days=effective_ttl * _REFRESH_AFTER_TTL_FRACTION)
     lock = create_lock(f"{cache_uri}.lock")
     while not lock.try_acquire():

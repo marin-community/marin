@@ -4,6 +4,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+from threading import Condition, Event
 
 import fsspec
 import huggingface_hub.constants
@@ -23,6 +24,7 @@ from cloud.iris.hf_model_cache import (
     stage_artifact_model_metadata,
     stage_model_metadata,
 )
+from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.model_manifest import ModelManifest, snapshot_model_manifest
 
 
@@ -501,3 +503,76 @@ def test_mirror_with_an_expired_weight_is_repaired_before_returning(tmp_path, mo
     assert repaired_manifest == manifest
     assert (cache / "model.safetensors").read_bytes() == weights
     assert len(opened) == 2
+
+
+class _RefreshClock:
+    """Advance the renewal timer without waiting days or changing the storage clock."""
+
+    def __init__(self):
+        self.condition = Condition()
+        self.waiting = Event()
+        self.stopped = False
+        self.ticks = 0
+        self.delays = []
+
+    def wait(self, delay):
+        with self.condition:
+            if delay == 0:
+                return self.stopped
+            self.delays.append(delay)
+            self.waiting.set()
+            if not self.condition.wait_for(lambda: self.stopped or self.ticks > 0, timeout=10):
+                raise TimeoutError("test did not advance the renewal clock")
+            if self.stopped:
+                return True
+            self.ticks -= 1
+            self.waiting.clear()
+            return False
+
+    def set(self):
+        with self.condition:
+            self.stopped = True
+            self.condition.notify_all()
+
+    def advance(self):
+        with self.condition:
+            self.waiting.clear()
+            self.ticks += 1
+            self.condition.notify_all()
+
+
+@pytest.mark.parametrize("fail_once", [False, True])
+def test_wait_mirrors_renew_repeatedly_and_retry_storage_errors(tmp_path, monkeypatch, fail_once):
+    cache, uri, manifest, weights, opened = _aging_model_cache(tmp_path, monkeypatch)
+    clock = _RefreshClock()
+    monkeypatch.setattr(hf_model_cache, "Event", lambda: clock)
+    refresh = StoragePath.refresh_lifetime
+    failed = []
+
+    def refresh_with_transient_failure(path, *, before):
+        if fail_once and path.name == "model.safetensors" and not failed:
+            failed.append(str(path))
+            raise OSError("temporary object-store error")
+        refresh(path, before=before)
+
+    monkeypatch.setattr(StoragePath, "refresh_lifetime", refresh_with_transient_failure)
+    locator = HuggingFaceModelCache("org/model", "a" * 40, uri, manifest.identity)
+    # Requested 100 days is clamped by the URI's ttl=14d prefix.
+    with hf_model_cache.keep_hugging_face_model_caches_alive([locator], ttl_days=100):
+        assert clock.waiting.wait(timeout=10)
+        if fail_once:
+            assert failed
+            clock.advance()
+            assert clock.waiting.wait(timeout=10)
+        cutoff = (datetime.now(UTC) - timedelta(days=7)).timestamp()
+        assert all(path.stat().st_mtime >= cutoff for path in cache.iterdir())
+        old = (datetime.now(UTC) - timedelta(days=13)).timestamp()
+        for path in cache.iterdir():
+            os.utime(path, (old, old))
+        clock.advance()
+        assert clock.waiting.wait(timeout=10)
+        assert all(path.stat().st_mtime >= cutoff for path in cache.iterdir())
+        assert clock.delays[-1] < timedelta(days=14 * 0.2).total_seconds()
+    assert clock.stopped
+    assert (cache / "model.safetensors").read_bytes() == weights
+    assert opened == [("org/model", "a" * 40)]

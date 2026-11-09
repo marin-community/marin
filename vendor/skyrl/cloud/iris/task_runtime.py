@@ -60,7 +60,6 @@ from cloud.iris.artifacts import (
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
-    ensure_hugging_face_model_cache,
     load_model_manifest,
     stage_artifact_model,
     stage_artifact_model_metadata,
@@ -456,13 +455,8 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
     return PreparedPolicyTokenizer(local_path)
 
 
-def prepare_draft_model(
-    model: SpeculatorModelConfig,
-    *,
-    cache_ttl_days: int,
-    cache_source_prefix: str,
-) -> SpeculatorModelConfig:
-    """Resolve a draft locator, mirroring a Hub revision once when needed."""
+def prepare_draft_model(model: SpeculatorModelConfig) -> SpeculatorModelConfig:
+    """Validate a CPU-resolved draft locator without contacting the Hub."""
     if model.source_kind is SpeculatorModelSourceKind.LOCAL:
         assert model.local_source_path is not None
         filesystem, root = fs_and_path(model.local_source_path)
@@ -470,26 +464,14 @@ def prepare_draft_model(
         validate_hf_model_weights(names, model.local_source_path)
         return model
     if model.source_kind is SpeculatorModelSourceKind.HUGGING_FACE:
-        if cache_ttl_days <= 0:
-            raise ValueError("--draft-model-cache-ttl-days must be positive for a Hugging Face draft model")
-        if not cache_source_prefix:
-            raise ValueError("--draft-model-cache-source-prefix is required for a Hugging Face draft model")
-        assert model.hugging_face_repo_id is not None
-        source_uri, manifest = ensure_hugging_face_model_cache(
-            model.hugging_face_repo_id,
-            model.source_identity,
-            ttl_days=cache_ttl_days,
-            source_prefix=cache_source_prefix,
-            tokenizer_mode="policy",
+        raise ValueError("Hub draft models must be pre-cached by the CPU launcher before GPU submission")
+    source_uri = model.source_uri
+    manifest = load_model_manifest(source_uri)
+    if model.source_identity.startswith("sha256:") and model.source_identity != manifest.identity:
+        raise ValueError(
+            f"Draft manifest identity mismatch: requested {model.source_identity}, "
+            f"found {manifest.identity} at {source_uri}"
         )
-    else:
-        source_uri = model.source_uri
-        manifest = load_model_manifest(source_uri)
-        if model.source_identity.startswith("sha256:") and model.source_identity != manifest.identity:
-            raise ValueError(
-                f"Draft manifest identity mismatch: requested {model.source_identity}, "
-                f"found {manifest.identity} at {source_uri}"
-            )
     return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
 
 
@@ -2098,8 +2080,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         policy_tokenizer_revision=str(model.tokenizer_revision),
         policy_chat_template=str(model.chat_template or ""),
         draft_model=draft_model,
-        draft_model_cache_ttl_days=int(config.artifacts.hugging_face_cache_ttl_days),
-        draft_model_cache_source_prefix=str(config.artifacts.checkpoint_root),
     )
 
 
@@ -2233,11 +2213,7 @@ def main() -> None:
     policy_tokenizer = prepare_policy_tokenizer(args)
     draft_model = args.draft_model
     if draft_model is not None:
-        draft_model = prepare_draft_model(
-            draft_model,
-            cache_ttl_days=args.draft_model_cache_ttl_days,
-            cache_source_prefix=args.draft_model_cache_source_prefix,
-        )
+        draft_model = prepare_draft_model(draft_model)
     # Force the policy chat template onto staged metadata or a local model on every
     # node before Ray; the training driver's tokenizer may load anywhere.
     if args.policy_chat_template:

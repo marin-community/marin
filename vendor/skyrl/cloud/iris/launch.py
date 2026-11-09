@@ -19,12 +19,13 @@ from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
-from cloud.iris.launch_config import SubmissionMode, hugging_face_models, load_launch_config
-from cloud.iris.hf_model_cache import ensure_hugging_face_model_cache
+from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
+from cloud.iris.hf_model_cache import ensure_hugging_face_model_cache, keep_hugging_face_model_caches_alive
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
+from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
@@ -109,7 +110,17 @@ def _prepare_config(config: DictConfig) -> DictConfig:
 
 def _prepare_model_caches(config: DictConfig) -> None:
     models = hugging_face_models(config)
-    if not models:
+    speculative = config.skyrl.get("generator", {}).get("speculative_decoding") or {}
+    draft_mapping = speculative.get("model") if config.run.mode != RunMode.CHECKPOINT_EXPORT else None
+    draft = (
+        SpeculatorModelConfig.from_mapping(
+            OmegaConf.to_container(draft_mapping, resolve=True), context="generator.speculative_decoding.model"
+        )
+        if draft_mapping
+        else None
+    )
+    hub_draft = draft is not None and draft.source_kind is SpeculatorModelSourceKind.HUGGING_FACE
+    if not models and not hub_draft:
         return
     if get_job_info() is None:
         raise RuntimeError(
@@ -134,6 +145,27 @@ def _prepare_model_caches(config: DictConfig) -> None:
             tokenizer_mode="policy" if policy_only and separate_tokenizer else "embedded",
         )
         caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity))
+    if hub_draft:
+        assert draft is not None and draft.hugging_face_repo_id is not None
+        cached = next(
+            (
+                model
+                for model in caches
+                if model.model_id == draft.hugging_face_repo_id and model.revision == draft.source_identity
+            ),
+            None,
+        )
+        if cached is None:
+            uri, manifest = ensure_hugging_face_model_cache(
+                draft.hugging_face_repo_id,
+                draft.source_identity,
+                ttl_days=int(config.artifacts.hugging_face_cache_ttl_days),
+                source_prefix=str(config.artifacts.checkpoint_root),
+                tokenizer_mode="policy",
+            )
+            cached = HuggingFaceModelCache(draft.hugging_face_repo_id, draft.source_identity, uri, manifest.identity)
+            caches.append(cached)
+        config.skyrl.generator.speculative_decoding.model = asdict(SpeculatorModelConfig(cached.uri, cached.identity))
     config.inputs.hugging_face_models = caches
 
 
@@ -219,7 +251,17 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         _prepare_model_caches(config)
         OmegaConf.save(config, resolved_file.name, resolve=False)
         try:
-            outcome = active_backend.launch(resolved_path)
+            caches = tuple(
+                HuggingFaceModelCache(**OmegaConf.to_container(model, resolve=True))
+                for model in config.inputs.hugging_face_models
+            )
+            keep_alive = (
+                keep_hugging_face_model_caches_alive(caches, ttl_days=int(config.artifacts.hugging_face_cache_ttl_days))
+                if config.run.submission == SubmissionMode.WAIT
+                else contextlib.nullcontext()
+            )
+            with keep_alive:
+                outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
             outcome = LaunchOutcome(job_id=str(error.job_id), job_state=error.status.state.value, exit_code=1)
 

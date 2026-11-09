@@ -121,25 +121,9 @@ def test_local_rollout_staging_preserves_checkpoint_bytes_and_source(tmp_path, m
     assert (local / "model.safetensors").read_bytes() == Path(policy_uri, "model.safetensors").read_bytes()
 
 
-def test_hugging_face_draft_mirror_uses_the_policy_tokenizer(tmp_path, monkeypatch) -> None:
-    revision = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
-    cache = tmp_path / "draft-cache"
-    monkeypatch.setattr(hf_model_cache, "marin_temp_bucket", lambda *_args, **_kwargs: str(cache))
-    monkeypatch.setattr(
-        hf_model_cache,
-        "_open_hugging_face_snapshot",
-        lambda _model_id, _revision: _memory_model_snapshot(f"draft-source/{tmp_path.name}"),
-    )
-
-    prepared = prepare_draft_model(
-        SpeculatorModelConfig(source_uri="hf://laion/draft", source_identity=revision),
-        cache_ttl_days=14,
-        cache_source_prefix="s3://region/run",
-    )
-
-    manifest = hf_model_cache.load_model_manifest(str(cache))
-    assert prepared == SpeculatorModelConfig(source_uri=str(cache), source_identity=manifest.identity)
-    assert manifest.tokenizer_mode == "policy"
+def test_node_rejects_a_hub_draft_that_the_cpu_did_not_mirror() -> None:
+    with pytest.raises(ValueError, match="pre-cached by the CPU launcher"):
+        prepare_draft_model(SpeculatorModelConfig(source_uri="hf://laion/draft", source_identity="a" * 40))
 
 
 def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monkeypatch) -> None:
