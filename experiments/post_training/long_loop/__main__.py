@@ -28,6 +28,16 @@ def plumbing_loop(version: str, source_revision: str, reuse_sft_version: str | N
     trained, exported = sft_steps(sft_version, source_revision, prerequisites=(inputs,))
     base = trained.deps[0]
     if reuse_sft_version:
+        hf_config = read_json(exported.path() + "/hf/config.json")
+        weight_map = read_json(exported.path() + "/hf/model.safetensors.index.json")["weight_map"]
+        if hf_config["grugmoe_artifact_schema_version"] != 2:
+            raise ValueError("Long-loop handoff requires split-expert schema 2")
+        for layer in range(hf_config["num_hidden_layers"]):
+            for expert in range(hf_config["num_experts"]):
+                for projection in ("gate_proj", "up_proj", "down_proj"):
+                    name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
+                    if name not in weight_map:
+                        raise ValueError(f"Cannot reuse SFT export: schema-2 tensor missing: {name}")
         pinned = []
         for step in (inputs, base, trained, exported):
             record = read_json(step.path() + "/.artifact.json")

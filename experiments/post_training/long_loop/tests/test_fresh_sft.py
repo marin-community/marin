@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 
 import equinox as eqx
@@ -11,9 +12,12 @@ import optax
 import yaml
 from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import save_checkpoint
+from safetensors.flax import load_file
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config
+from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
+from experiments.post_training.long_loop.sft_runtime.model import grugmoe_inference_state_dict
 from experiments.post_training.long_loop.sft_runtime.train import initial_state, initialize_snowball_sft
 
 
@@ -46,7 +50,7 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
     trainer = replace(config.trainer, special_token_ids=(30, 31), anchor_token_ids=(2, 3))
     mesh = Mesh(
         np.asarray(jax.devices("cpu")[:1]).reshape(1, 1, 1, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
+        ("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
     with jax.set_mesh(mesh):
@@ -80,3 +84,25 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
         for a, b in zip(jax.tree.leaves(actual.opt_state), jax.tree.leaves(fresh.opt_state), strict=True):
             np.testing.assert_array_equal(a, b)
         assert int(actual.step) == 0
+
+        # The serialized names must agree with schema 2 for each layer, including
+        # the second pipeline stage; otherwise Bridge silently skips the experts.
+        destination = tmp_path / "hf"
+        export_weights(
+            ExportConfig("in-memory-initialized-base", "test", model, str(destination), "a" * 40),
+            lambda checkpoint, metadata_digest, model_config, export_mesh: actual.params,
+            weights_kind="test_frozen_router",
+        )
+        assert json.loads((destination / "config.json").read_text())["grugmoe_artifact_schema_version"] == 2
+        index = json.loads((destination / "model.safetensors.index.json").read_text())["weight_map"]
+        tensors = {}
+        for shard in set(index.values()):
+            tensors.update(load_file(str(destination / shard)))
+        native = grugmoe_inference_state_dict(actual.params)
+        for layer in range(model.num_layers):
+            for projection in ("gate_proj", "up_proj", "down_proj"):
+                bank = f"model.layers.{layer}.mlp.experts.{projection}.weight"
+                assert bank not in index
+                for expert in range(model.num_experts):
+                    name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
+                    np.testing.assert_array_equal(tensors[name], native[bank][expert].astype("bfloat16"))

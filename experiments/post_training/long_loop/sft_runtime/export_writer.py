@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export one pinned native Hero checkpoint as BF16 stacked-expert HF weights."""
+"""Export one pinned native Hero checkpoint as BF16 split-expert HF weights."""
 
 import gc
 import re
@@ -18,6 +18,7 @@ from levanter.compat.hf_export import HFShardResume, run_on_export_writer, save_
 from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.grug.moe_hero_ep.ops.export_metadata import split_expert_names
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.sft_runtime.model import (
     GrugModelConfig,
@@ -28,7 +29,7 @@ from experiments.post_training.long_loop.sft_runtime.model import (
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 4
+EXPORT_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ def export_weights(
             export_host_budget_bytes=1,
             max_concurrent_shards=1,
             resume=HFShardResume(root, export_id),
+            tensor_names={name: split_expert_names(name, config.model.num_experts) for name in state_dict},
         )
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
         weight_map = {name: record.filename for record in records for name in record.tensor_names}
