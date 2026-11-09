@@ -18,28 +18,29 @@ from experiments.post_training.long_loop.endpoint_probe import endpoint_step
 from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
 from experiments.post_training.long_loop.rl import DEFAULT_SELECTION_URI, SELECTION_PREFIX, smoke_rl_step
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
-from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, read_json, sft_steps
+from experiments.post_training.long_loop.sft import (
+    TOKENIZER_REPO,
+    TOKENIZER_REVISION,
+    read_json,
+    sft_export_step,
+    sft_steps,
+    validate_handoff,
+)
 
 
-def plumbing_loop(version: str, source_revision: str, reuse_sft_version: str | None = None) -> ArtifactStep:
+def plumbing_loop(
+    version: str, source_revision: str, reuse_sft_version: str | None = None, handoff: str = "reuse"
+) -> ArtifactStep:
     """Sequence real artifact bindings, including the live SFT endpoint check."""
     sft_version = reuse_sft_version or version
     inputs = timed(micro_inputs(sft_version))
     trained, exported = sft_steps(sft_version, source_revision, prerequisites=(inputs,))
     base = trained.deps[0]
     if reuse_sft_version:
-        hf_config = read_json(exported.path() + "/hf/config.json")
-        weight_map = read_json(exported.path() + "/hf/model.safetensors.index.json")["weight_map"]
-        if hf_config["grugmoe_artifact_schema_version"] != 2:
-            raise ValueError("Long-loop handoff requires split-expert schema 2")
-        for layer in range(hf_config["num_hidden_layers"]):
-            for expert in range(hf_config["num_experts"]):
-                for projection in ("gate_proj", "up_proj", "down_proj"):
-                    name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
-                    if name not in weight_map:
-                        raise ValueError(f"Cannot reuse SFT export: schema-2 tensor missing: {name}")
+        if handoff == "reuse":
+            validate_handoff(exported.path())
         pinned = []
-        for step in (inputs, base, trained, exported):
+        for step in ((inputs, base, trained, exported) if handoff == "reuse" else (inputs, base, trained)):
             record = read_json(step.path() + "/.artifact.json")
             if record["name"] != step.name or record["version"] != reuse_sft_version:
                 raise ValueError(f"Committed artifact identity differs: {step.path()}")
@@ -52,7 +53,12 @@ def plumbing_loop(version: str, source_revision: str, reuse_sft_version: str | N
                     config={"original_record": record},
                 )
             )
-        inputs, base, trained, exported = pinned
+        inputs, base, trained = pinned[:3]
+        if handoff == "reuse":
+            exported = pinned[3]
+        else:
+            model = read_json(trained.path() + "/.artifact.json")["config"]["recipe"]["model"]
+            exported = sft_export_step(version, source_revision, trained, model)
     endpoint = timed(endpoint_step(version, exported))
     selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/snowball-100k", "2026.11.04", DEFAULT_SELECTION_URI)
     rl = smoke_rl_step(
@@ -74,15 +80,16 @@ def plumbing_loop(version: str, source_revision: str, reuse_sft_version: str | N
 @click.option("--stage", type=click.Choice(["inputs", "loop"]), default="loop", show_default=True)
 @click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
 @click.option("--reuse-sft-version", help="Reuse committed input, base, SFT and export artifacts from this version.")
+@click.option("--handoff", type=click.Choice(["reuse", "reexport"]), default="reuse", show_default=True)
 @rl_build_options
-def main(source_revision: str, stage: str, reuse_sft_version: str | None) -> ArtifactStep:
+def main(source_revision: str, stage: str, reuse_sft_version: str | None, handoff: str) -> ArtifactStep:
     if len(source_revision) != 40 or any(c not in "0123456789abcdef" for c in source_revision):
         raise click.BadParameter("Expected a full Git commit SHA", param_hint="--source-revision")
     if stage == "inputs" and reuse_sft_version:
         raise click.UsageError("--reuse-sft-version applies only to --stage loop")
     require_secret("HF_TOKEN")
     version = resolve_version("long-loop/micro-smoke", None)
-    loop = plumbing_loop(version, source_revision, reuse_sft_version)
+    loop = plumbing_loop(version, source_revision, reuse_sft_version, handoff)
     if stage == "loop":
         return loop
     inputs = next(step for step in graph_handles([loop]) if step.name == "long-loop/micro-inputs")

@@ -95,6 +95,20 @@ def restore_frozen(
     return jax.block_until_ready(state["params"])
 
 
+def validate_handoff(root: str) -> None:
+    """Reject schema declarations that would cause Bridge to omit expert weights."""
+    config = read_json(root + "/hf/config.json")
+    weight_map = read_json(root + "/hf/model.safetensors.index.json")["weight_map"]
+    if config["grugmoe_artifact_schema_version"] != 2:
+        raise ValueError("Long-loop handoff requires split-expert schema 2")
+    for layer in range(config["num_hidden_layers"]):
+        for expert in range(config["num_experts"]):
+            for projection in ("gate_proj", "up_proj", "down_proj"):
+                name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
+                if name not in weight_map:
+                    raise ValueError(f"Invalid SFT export: schema-2 tensor missing: {name}")
+
+
 def export_sft(*, output: str, trained: str, model: dict, source_revision: str) -> None:
     configure_coreweave_s3()
     selected = read_json(trained + "/selected.json")
@@ -127,6 +141,7 @@ def export_sft(*, output: str, trained: str, model: dict, source_revision: str) 
             actual = hashlib.file_digest(stream, "sha256").hexdigest()
         if actual != shard["sha256"]:
             raise ValueError(f"Export hash mismatch: {shard['filename']}")
+    validate_handoff(output)
 
 
 def sft_steps(
@@ -156,6 +171,13 @@ def sft_steps(
         run_id=f"long-loop-plumbing-sft-{version}",
     )
     trained = timed(trained)
+    return trained, sft_export_step(version, source_revision, trained, recipe["model"])
+
+
+def sft_export_step(
+    version: str, source_revision: str, trained: ArtifactStep, model: dict
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Export an existing committed native SFT checkpoint into a fresh handoff."""
     exported = apply(
         "long-loop/sft-handoff",
         remote(
@@ -168,7 +190,7 @@ def sft_steps(
         artifact_type=LevanterCheckpoint,
         output=OUT,
         trained=trained,
-        model=recipe["model"],
+        model=model,
         source_revision=source_revision,
     )
-    return trained, timed(exported)
+    return timed(exported)

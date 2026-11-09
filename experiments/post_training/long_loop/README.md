@@ -82,3 +82,9 @@ requires each original artifact record, preserves it in the new adoption record,
 and builds only the endpoint check, RL, and evaluation under the new version.
 This does not resume the SFT optimizer or replay training. The live endpoint check
 still compares exact token IDs and tests both EOS tokens before RL starts.
+
+To repair serialization while retaining the native checkpoint, add
+`--handoff reexport`. This adopts only the committed inputs, base, and native SFT
+artifacts, writes a separately timed export under the new version, and then
+continues through endpoint, RL, and evaluation. Both reused and new exports must
+contain all schema-2 per-expert tensors before serving starts.
