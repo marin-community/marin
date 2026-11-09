@@ -15,6 +15,7 @@ from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
 from harbor.host_capabilities import DaytonaConnection, HostCapabilities, task_model_environment
+from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
@@ -162,7 +163,7 @@ class InstalledAgentRuntime:
         if self.judge is not None and self.settings.judge_model is not None:
             kwargs.update(model_endpoint=self.judge.base_url, model_name=self.settings.judge_model)
             authentication[self.judge.base_url] = self.judge.api_key
-            protected = protected | frozenset((self.judge.api_key,))
+            protected = protected | protected_environment_values({"OPENAI_API_KEY": self.judge.api_key})
         host_capabilities = HostCapabilities(
             daytona=connection,
             model_authentication=authentication,

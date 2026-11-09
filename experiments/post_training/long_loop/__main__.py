@@ -19,6 +19,7 @@ from marin.rl.skyrl import ArtifactHfModel, SkyRLRun, SkyRLRunConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import require_secret
 
+from experiments.post_training.long_loop.bixbench import merged_report
 from experiments.post_training.long_loop.endpoint_probe import endpoint_step
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
@@ -123,6 +124,25 @@ def eval_continuation(version: str, rl_version: str, inputs_version: str) -> Art
     return report_step(version, [inputs, trained, evaluated])
 
 
+def bixbench_continuation(version: str, rl_version: str, inputs_version: str) -> ArtifactStep:
+    base = eval_continuation(version, rl_version, inputs_version)
+    graph = graph_handles([base])
+    trained = next(step for step in graph if step.artifact_type is SkyRLRun)
+    prefix = os.environ["MARIN_PREFIX"].rstrip("/")
+    subset_uri = prefix + "/long-loop/bix-inputs/" + version
+    record = read_json(subset_uri + "/.artifact.json")
+    subset = ArtifactStep.adopt("long-loop/reused-bix-inputs", version, subset_uri, config={"original_record": record})
+    evaluated = timed(smoke_evaluation(version, trained, subset))
+    original_uri = prefix + "/long-loop/micro-smoke/2026.11.09.9"
+    original = ArtifactStep.adopt(
+        "long-loop/reused-completed-eval",
+        version,
+        original_uri,
+        config={"original_record": read_json(original_uri + "/.artifact.json")},
+    )
+    return merged_report(version, original, evaluated)
+
+
 def validate_graph(terminal: ArtifactStep, directory: Path) -> None:
     configure_coreweave_s3()
     rows = []
@@ -147,7 +167,7 @@ def validate_graph(terminal: ArtifactStep, directory: Path) -> None:
 
 
 @click.command(help=__doc__)
-@click.option("--stage", type=click.Choice(["inputs", "loop", "eval"]), default="loop", show_default=True)
+@click.option("--stage", type=click.Choice(["inputs", "loop", "eval", "bixbench"]), default="loop", show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), default=Path("/tmp/long-loop-validation"))
 @click.option("--reuse-rl-version", help="Committed step-3 RL version for eval-only continuation.")
 @click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
@@ -174,10 +194,11 @@ def main(
         raise click.UsageError("--reuse-export-version requires --reuse-sft-version and --handoff reuse")
     require_secret("HF_TOKEN")
     version = resolve_version("long-loop/micro-smoke", None)
-    if stage == "eval":
+    if stage in ("eval", "bixbench"):
         if not reuse_rl_version or not reuse_sft_version:
             raise click.UsageError("Eval requires --reuse-rl-version and --reuse-sft-version for inputs")
-        terminal = eval_continuation(version, reuse_rl_version, reuse_sft_version)
+        builder = bixbench_continuation if stage == "bixbench" else eval_continuation
+        terminal = builder(version, reuse_rl_version, reuse_sft_version)
         validate_graph(terminal, validation_output / version)
         return terminal
     loop = plumbing_loop(version, source_revision, reuse_sft_version, handoff, reuse_export_version)
