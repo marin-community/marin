@@ -353,6 +353,9 @@ class TrainingInput(TypedDict, total=False):
     rewards: Optional[Float[torch.Tensor, "batch_size seq_len"]]
     rollout_logprobs: Optional[Float[torch.Tensor, "batch_size seq_len"]]
     correction_weights: Optional[Float[torch.Tensor, "batch_size seq_len"]]
+    score_topk_indices: Optional[Integer[torch.Tensor, "batch_size seq_len top_k"]]
+    score_old_logprobs: Optional[Float[torch.Tensor, "batch_size seq_len top_k"]]
+    score_behavior_logprobs: Optional[Float[torch.Tensor, "batch_size seq_len top_k"]]
     # Policy steps each response token is behind at consumption.
     rollout_staleness: Optional[Integer[torch.Tensor, "batch_size seq_len"]]
     teacher_action_log_probs: Optional[Float[torch.Tensor, "batch_size seq_len"]]
@@ -525,6 +528,9 @@ class TrainingBatchIterator(Iterator[Experience]):
             num_actions=batch.metadata["response_length"],
             rollout_logprobs=batch.get("rollout_logprobs"),
             correction_weights=batch.get("correction_weights"),
+            score_topk_indices=batch.get("score_topk_indices"),
+            score_old_logprobs=batch.get("score_old_logprobs"),
+            score_behavior_logprobs=batch.get("score_behavior_logprobs"),
             distillation=None
             if "ftpo_chosen_mask" in batch
             else distillation_input_from_tensors(
