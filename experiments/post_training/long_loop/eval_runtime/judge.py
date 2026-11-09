@@ -3,6 +3,7 @@
 
 """Bind a versioned co-hosted judge to an evaluation-only SkyRL launch."""
 
+import json
 import os
 import tempfile
 from contextlib import ExitStack
@@ -19,6 +20,7 @@ from marin.inference.iris import remote_inference
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.post_training.long_loop.launch_validation import validate_before_allocation
 from experiments.post_training.long_loop.timing import EventLog
 
 
@@ -43,7 +45,12 @@ def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
 
 
 def run_judged(config: JudgedEvaluation) -> SkyRLRun:
+    validation = validate_before_allocation(config.skyrl.launch_config_yaml)
     launch = yaml.safe_load(config.skyrl.launch_config_yaml)
+    validation_fs, validation_key = filesystem_for(
+        launch["artifacts"]["terminal_manifest_uri"].rsplit("/", 1)[0] + "/preallocation-validation.json"
+    )
+    validation_fs.pipe_file(validation_key, json.dumps(validation, indent=2).encode())
     inference = inference_config_for_model(
         config.judge,
         AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=None),

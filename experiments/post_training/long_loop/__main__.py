@@ -3,19 +3,26 @@
 
 """Build the Snowball plumbing SFT geometry (32k/32 GPU), not target, → GS8 RL → Micro210 loop."""
 
+import hashlib
+import json
+import os
 from dataclasses import replace
+from pathlib import Path
 
 import click
 from fray.types import GpuConfig
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.cli import graph_handles
 from marin.rl.cli import _skyrl_executions, rl_build_options
-from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLRun, SkyRLRunConfig
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.endpoint_probe import endpoint_step
+from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.evaluation import micro_inputs, smoke_evaluation
+from experiments.post_training.long_loop.launch_validation import validate_launch
 from experiments.post_training.long_loop.rl import DEFAULT_SELECTION_URI, SELECTION_PREFIX, smoke_rl_step
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
 from experiments.post_training.long_loop.serving import checked_serving_release
@@ -116,8 +123,32 @@ def eval_continuation(version: str, rl_version: str, inputs_version: str) -> Art
     return report_step(version, [inputs, trained, evaluated])
 
 
+def validate_graph(terminal: ArtifactStep, directory: Path) -> None:
+    configure_coreweave_s3()
+    rows = []
+    prefix = os.environ["MARIN_PREFIX"]
+    for step in graph_handles([terminal]):
+        if step.adopt_source:
+            rows.append({"stage": step.name, "status": "adopted", "source": step.adopt_source})
+            continue
+        config = materialized_config(step, prefix)
+        launch = config.skyrl if isinstance(config, JudgedEvaluation) else config
+        row = {"stage": step.name, "status": "constructed; not a SkyRL launch"}
+        if isinstance(launch, SkyRLRunConfig):
+            digest = hashlib.sha256(launch.launch_config_yaml.encode()).hexdigest()
+            row = {
+                "stage": step.name,
+                "status": "strictly composed",
+                **validate_launch(launch.launch_config_yaml, directory / digest),
+            }
+        rows.append(row)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "graph.json").write_text(json.dumps(rows, indent=2))
+
+
 @click.command(help=__doc__)
 @click.option("--stage", type=click.Choice(["inputs", "loop", "eval"]), default="loop", show_default=True)
+@click.option("--validation-output", type=click.Path(path_type=Path), default=Path("/tmp/long-loop-validation"))
 @click.option("--reuse-rl-version", help="Committed step-3 RL version for eval-only continuation.")
 @click.option("--source-revision", required=True, help="Immutable 40-character Marin worktree commit.")
 @click.option("--reuse-sft-version", help="Reuse committed input, base, SFT and export artifacts from this version.")
@@ -129,6 +160,7 @@ def eval_continuation(version: str, rl_version: str, inputs_version: str) -> Art
 def main(
     source_revision: str,
     stage: str,
+    validation_output: Path,
     reuse_sft_version: str | None,
     handoff: str,
     reuse_export_version: str | None,
@@ -145,9 +177,12 @@ def main(
     if stage == "eval":
         if not reuse_rl_version or not reuse_sft_version:
             raise click.UsageError("Eval requires --reuse-rl-version and --reuse-sft-version for inputs")
-        return eval_continuation(version, reuse_rl_version, reuse_sft_version)
+        terminal = eval_continuation(version, reuse_rl_version, reuse_sft_version)
+        validate_graph(terminal, validation_output / version)
+        return terminal
     loop = plumbing_loop(version, source_revision, reuse_sft_version, handoff, reuse_export_version)
     if stage == "loop":
+        validate_graph(loop, validation_output / version)
         return loop
     inputs = next(step for step in graph_handles([loop]) if step.name == "long-loop/micro-inputs")
     execution = replace(
@@ -155,7 +190,9 @@ def main(
         coordinator_name=f"long-loop-inputs-{version}",
         coordinator_gpu=GpuConfig(variant="H100", count=1),
     )
-    return replace(inputs, runtime_args={**inputs.runtime_args, "skyrl_execution": execution})
+    terminal = replace(inputs, runtime_args={**inputs.runtime_args, "skyrl_execution": execution})
+    validate_graph(terminal, validation_output / version)
+    return terminal
 
 
 if __name__ == "__main__":
