@@ -25,5 +25,8 @@ at least 2,048 full response tokens. This measurement reports `selected_tokens`,
 `finite_tokens`, `log_ratio_abs_mean` and `frac_outside_0_5_2` under each mismatch
 bucket. It is independent of the last-window correction.
 
+The ratio is learner probability divided by sampler probability.
+`frac_outside_0_5_2` counts finite ratios outside [0.5, 2].
+
 Finite statistics exclude missing or nonfinite probabilities. Check the selected
 and finite counts before comparing means; an empty bucket omits its mean.
