@@ -175,8 +175,8 @@ def _load_lm_model_from_configured_source(
 
 def main(config: TrainLmConfig):
     if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
-        if "router_bias" not in config.trainer.fp32_fields:
-            raise ValueError("FP32 router dot requires trainer.fp32_fields to include router_bias")
+        if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
+            raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
