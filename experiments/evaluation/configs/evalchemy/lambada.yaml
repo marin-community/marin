@@ -1,4 +1,0 @@
-name: lambada
-sources:
-- evalchemy-lambada_openai
-max_tokens: 256

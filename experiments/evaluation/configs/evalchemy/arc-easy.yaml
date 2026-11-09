@@ -1,5 +1,0 @@
-name: arc-easy
-num_fewshot: 0
-sources:
-- evalchemy-arc_easy
-max_tokens: 256

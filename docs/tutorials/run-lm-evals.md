@@ -57,38 +57,39 @@ reference-dependent output allowance of at least 8,192 tokens, so a blanket
 
 ## Launch file-backed evaluations
 
-A curated selection file names sources from the canonical curation catalog:
+A selection document names benchmark protocols and experiment overrides:
 
 ```yaml
-name: bounded-math
-sources: [evalchemy-math500]
-limit: 2
-max_tokens: 512
-seed: 0
+evaluations:
+  bounded-math:
+    benchmark: math500
+    run:
+      limit: 2
+      max_tokens: 512
+      seed: 0
+  gsm8k-zero:
+    benchmark: gsm8k
+    num_fewshot: 0
 ```
 
-Submit it with `--curated-config bounded-math.yaml`. Repeat this option to combine
-custom selections with `--evals` or `--harbor-config`. `chat_sources` can name an
-explicit alternative for models with `apply_chat_template: true`; each alternative
-must also be a published corpus recipe. Custom files do not accept evaluator
-plugins, runtime extras, or arbitrary task names.
+Submit both with `--evaluation-config evaluations.yaml`. Add `--evals bounded-math`
+to select one entry from that document. Repeat `--harbor-config` to add Harbor jobs.
+Ordinary benchmark defaults are available through `--evals math500,gsm8k` without
+a selection file. The repository's curated suite choices and run overrides live in
+`experiments/evaluation/configs/evalchemy.yaml`.
 
-Use the same source with `num_fewshot` to select an already-declared shot variant:
+Shot count configures the benchmark's protocol builder. Curation compiles the
+selected demonstrations before inference. `prompt_format: chat` or `completion`
+selects a supported request format; otherwise planning resolves it for the model
+and records the explicit choice. `protocol` selects a named benchmark-owned preset,
+such as GSM8K's `cot` protocol. Unsupported combinations fail before launch.
+MMLU owns its subject partitions; `partitions: [abstract_algebra]` selects one
+without naming a separate smoke dataset. Likelihood evaluations score supplied
+continuations and have no generation output budget.
 
-```yaml
-name: arc-easy-10shot
-sources: [evalchemy-arc_easy]
-num_fewshot: 10
-max_tokens: 256
-```
-
-The launcher resolves the shot count to a distinct curated corpus with compiled
-demonstrations. Unsupported counts fail before launch. Likelihood evaluations
-score supplied continuations and do not use the generation `max_tokens` budget.
-Built-in shot variants inherit their base menu's remaining settings.
-
-Judge selections record a `JudgeIdentity` in `judge`, a credential-free
-`judge_endpoint`, and ordered `judge_api_key` secret references. The standard
+Judge deployments belong under `run`: `judge` records a `JudgeIdentity`,
+`judge_endpoint` is a credential-free endpoint, and `judge_api_key` contains ordered
+secret references. The standard
 FinanceBench and OlympiadBench definitions use Together and record its model alias
 as provider-managed. A provider alias does not establish the exact weights served.
 Supply explicit judge deployment identities for reproducible private deployments.
@@ -109,7 +110,7 @@ Harbor execution is independent of curated TaskSpec evaluation.
 - `--records-prefix`: override the run-record destination.
 - `--no-wait`: return after submitting the orchestrator.
 
-Model `generation.max_gen_toks` and each selection's `max_tokens` cap protocol
+Model `generation.max_gen_toks` and each selection's `run.max_tokens` cap protocol
 budgets. Protocol context policies still determine eligibility. Model chat-template
 arguments provide defaults; benchmark arguments take precedence. A benchmark that
 turns thinking off can use the model's `thinking_off_template_kwargs` translation.
@@ -147,10 +148,12 @@ different protocols distinct in dashboard comparisons. See
 ## Use the shared launcher in a pipeline
 
 ```python
+from marin.evaluation.records import EvaluationSelection
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 
-step = eval_step(models()["qwen3-8b"], "smoke", version="dev", limit=2,
+step = eval_step(models()["qwen3-8b"], (EvaluationSelection(benchmark="gsm8k", num_fewshot=0),),
+                 version="dev", limit=2,
                  accelerator="H100x1", federated_cluster="cw-us-east-02a")
 ```
 

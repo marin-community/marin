@@ -1,6 +1,0 @@
-name: ifeval
-sources:
-- evalchemy-ifeval
-seed: 1234
-chat_sources:
-- evalchemy-ifeval-chat

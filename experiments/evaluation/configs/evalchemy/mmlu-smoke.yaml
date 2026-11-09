@@ -1,5 +1,0 @@
-name: mmlu-smoke
-sources:
-- evalchemy-mmlu-smoke
-limit: 64
-max_tokens: 256

@@ -13,10 +13,10 @@ from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import EvaluationSelection
 from marin.evaluation.runner import LaunchProvenance
 
 from eval_policy.launch import _harbor_config, launch_policy
-from experiments.evaluation.curated import CuratedDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
 
@@ -41,10 +41,8 @@ def test_september_16_mini_datasets_use_pinned_registry(tmp_path):
 def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch, version):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
+        evals=(EvaluationSelection(benchmark="math500"),),
         model=ModelConfig(name="test-model", location="org/test-model"),
-        evals=(),
-        curated_definitions=(CuratedDefinition(name="math500", sources=("evalchemy-math500",)),),
-        harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x8",
         limit=None,

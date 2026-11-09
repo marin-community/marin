@@ -24,7 +24,8 @@ from experiments.post_training.task_curation.datasets.evalchemy.environments imp
     IFBENCH_GRADER,
     IFEVAL_GRADER,
 )
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.datasets.evalchemy.harness import chat_source
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -51,6 +52,7 @@ def instruction_source(
     population: int,
     profile: InstructionProfile,
     max_tokens: int,
+    seed: int,
 ) -> RlDataSource[EvalDataset]:
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
@@ -87,7 +89,7 @@ def instruction_source(
                     stop=(),
                     chat_template_kwargs={} if profile is InstructionProfile.HARNESS else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=None),
+                trials=TrialPolicy(count=1, seed=seed),
                 metrics=tuple(
                     Metric(
                         name=name,
@@ -115,6 +117,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             541,
             InstructionProfile.HARNESS,
             1280,
+            1234,
         ),
         instruction_source(
             "ifbench",
@@ -125,5 +128,19 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             300,
             InstructionProfile.IFBENCH,
             1024,
+            42,
         ),
     ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks(
+        [
+            *sources(),
+            *[
+                chat_source(source, {})
+                for source in sources()
+                if source.config is not None and source.config.protocol.benchmark == "ifeval"
+            ],
+        ]
+    )

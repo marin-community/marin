@@ -8,7 +8,7 @@ from taskcompendium.importers.evalchemy.commonsense import commonsense_qa_templa
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.post_training.task_curation.datasets.evalchemy.protocols import fewshot_choice_source
-from experiments.post_training.task_curation.evaluation import EvalDataset
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import HfSource
 from experiments.post_training.task_curation.source import RlDataSource
 
@@ -56,3 +56,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             raw_accuracy,
         ),
     ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks(sources(), "likelihood")

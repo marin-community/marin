@@ -1,4 +1,0 @@
-name: openbookqa
-sources:
-- evalchemy-openbookqa
-max_tokens: 256

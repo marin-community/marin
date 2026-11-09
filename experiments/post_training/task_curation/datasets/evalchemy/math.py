@@ -13,7 +13,6 @@ from taskcompendium.importers.evalchemy.math import (
     boxed_math_task,
     convert_amc,
     convert_olympiad,
-    gsm8k_cot_template,
     minerva_template,
 )
 from taskcompendium.importers.evalchemy.scorers.math import CHAT_REQUEST_STOPS
@@ -22,7 +21,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import MATH_GRADER, MATH_JUDGE_GRADER
 from experiments.post_training.task_curation.datasets.evalchemy.protocols import fewshot_generation_source
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -36,31 +35,7 @@ MATH_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
 
 
 def fewshot_sources() -> list[RlDataSource[EvalDataset]]:
-    result = [
-        fewshot_generation_source(
-            "gsm8k_cot",
-            "gsm8k_cot",
-            HfSource(
-                "openai/gsm8k",
-                "740312add88f781978c0658806c59bc2815b9866",
-                ("main/test-00000-of-00001.parquet",),
-                SourceFormat.PARQUET,
-            ),
-            1319,
-            gsm8k_cot_template(),
-            ("exact_match,strict-match", "exact_match,flexible-extract"),
-            Sampling(
-                temperature=0,
-                top_p=None,
-                top_k=None,
-                max_tokens=None,
-                stop=("Q:", "</s>", "<|im_end|>"),
-                chat_template_kwargs={},
-            ),
-            "gsm8k_cot",
-            MATH_GRADER,
-        )
-    ]
+    result = []
     for subject, population in (
         ("algebra", 1187),
         ("counting_and_probability", 474),
@@ -277,3 +252,21 @@ def sources() -> list[RlDataSource[EvalDataset]]:
         ),
     )
     return [*base_sources(), aime, amc, olympiad_source(judged=False), olympiad_source(judged=True)]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    populations = sources()
+    return [
+        *fixed_benchmarks(
+            [
+                source
+                for source in populations
+                if source.config is not None and not source.config.protocol.benchmark.startswith("OlympiadBench")
+            ]
+        ),
+        *fixed_benchmarks([olympiad_source(judged=True)], "evalchemy", {"OlympiadBench": "olympiadbench"}),
+        *fixed_benchmarks(
+            [olympiad_source(judged=False)], "deterministic", {"OlympiadBenchDeterministic": "olympiadbench"}
+        ),
+        *fixed_benchmarks(fewshot_sources(), "cot", {"minerva_math": "hendrycks-math"}),
+    ]

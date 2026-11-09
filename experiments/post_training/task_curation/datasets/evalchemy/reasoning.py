@@ -36,7 +36,7 @@ from experiments.post_training.task_curation.datasets.evalchemy.protocols import
     fewshot_choice_source,
     fewshot_generation_source,
 )
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -172,7 +172,7 @@ def choice_dataset(
                     stop=(),
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=trials, seed=0 if temperature else None),
+                trials=TrialPolicy(count=trials, seed=42),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -213,5 +213,30 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     SourceFormat.PARQUET,
                 )
             },
+        ),
+    ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    fewshot = likelihood_sources()
+    return [
+        *fixed_benchmarks(sources(), names={"MMLUPro": "mmlu-pro", "GPQADiamond": "gpqa-diamond"}),
+        *fixed_benchmarks(
+            [
+                source
+                for source in fewshot
+                if source.config is not None and source.config.protocol.benchmark != "bbh_cot_fewshot"
+            ],
+            "likelihood",
+            {"leaderboard_mmlu_pro": "mmlu-pro", "leaderboard_gpqa": "gpqa", "leaderboard_bbh": "bbh"},
+        ),
+        *fixed_benchmarks(
+            [
+                source
+                for source in fewshot
+                if source.config is not None and source.config.protocol.benchmark == "bbh_cot_fewshot"
+            ],
+            "cot",
+            {"bbh_cot_fewshot": "bbh"},
         ),
     ]

@@ -4,14 +4,16 @@
 """Bind evaluation conversion and sidecar publication to the existing acquisition graph."""
 
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections import defaultdict
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from functools import partial
 
+from marin.evaluation.records import PromptFormat
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder
-from taskcompendium.evaluation.spec import EvaluationProtocol
+from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.fingerprints import callable_identity
@@ -42,7 +44,7 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource
 
-EVALUATION_PIPELINE_VERSION = "2026.11.07.1"
+EVALUATION_PIPELINE_VERSION = "2026.11.08.1"
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,8 @@ class EvalDataset:
     recipe: CurationRecipe
     protocol: EvaluationProtocol
     item_builder: ItemBuilder
-    fewshot_group: str | None = None
+    protocol_name: str = "evalchemy"
+    partition: str | None = None
 
     def __post_init__(self) -> None:
         for source in (self.recipe.source, *self.recipe.inputs.values()):
@@ -74,6 +77,45 @@ class EvalDataset:
     @property
     def files(self) -> tuple[str, ...]:
         return self.recipe.files
+
+
+@dataclass(frozen=True)
+class ProtocolVariant:
+    protocol: str
+    num_fewshot: int | None
+    prompt_format: PromptFormat | None
+
+
+@dataclass(frozen=True)
+class EvaluationBenchmark:
+    """A population and its supported, dataset-owned protocol builders."""
+
+    name: str
+    variants: tuple[ProtocolVariant, ...]
+    build: Callable[[ProtocolVariant], tuple[RlDataSource[EvalDataset], ...]]
+
+    def resolve(
+        self,
+        protocol: str | None = None,
+        num_fewshot: int | None = None,
+        prompt_format: PromptFormat | None = None,
+        *,
+        model_format: PromptFormat | None = None,
+    ) -> tuple[RlDataSource[EvalDataset], ...]:
+        protocol = protocol or self.variants[0].protocol
+        variants = [variant for variant in self.variants if variant.protocol == protocol]
+        if not variants:
+            raise ValueError(f"Unknown {self.name} protocol: {protocol}")
+        shots = num_fewshot if num_fewshot is not None else variants[0].num_fewshot
+        variants = [variant for variant in variants if variant.num_fewshot == shots]
+        if prompt_format is not None:
+            variants = [variant for variant in variants if variant.prompt_format == prompt_format]
+        elif model_format is not None:
+            matching = [variant for variant in variants if variant.prompt_format == model_format]
+            variants = matching or variants
+        if not variants:
+            raise ValueError(f"Unsupported {self.name} protocol: {protocol}, shots={shots}, format={prompt_format}")
+        return self.build(variants[0])
 
 
 @dataclass(frozen=True)
@@ -114,6 +156,7 @@ def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run
         run.output_path,
         source_overrides=input_file_overrides(options.inputs.files),
         curation_identity=canonical_sha256(identity),
+        protocol_name=dataset.protocol_name,
     )
     validated = False
     try:
@@ -167,6 +210,7 @@ def curate(source: RlDataSource[EvalDataset], options: PipelineOptions) -> Artif
         "convert": callable_identity(dataset.recipe.convert),
         "item_builder": callable_identity(dataset.item_builder),
         "protocol": dataset.protocol.model_dump(mode="json"),
+        "protocol_name": dataset.protocol_name,
         "input_overrides": input_overrides_identity(dataset.recipe, options.inputs),
     }
     return ArtifactStep(
@@ -181,3 +225,44 @@ def curate(source: RlDataSource[EvalDataset], options: PipelineOptions) -> Artif
             *((grader,) if grader is not None else ()),
         ),
     )
+
+
+def _compiled_variant(
+    variants: dict[ProtocolVariant, tuple[RlDataSource[EvalDataset], ...]],
+    variant: ProtocolVariant,
+) -> tuple[RlDataSource[EvalDataset], ...]:
+    return variants[variant]
+
+
+def fixed_benchmarks(
+    sources: list[RlDataSource[EvalDataset]],
+    protocol: str = "evalchemy",
+    names: dict[str, str] | None = None,
+) -> list[EvaluationBenchmark]:
+    """Expose already-fixed protocols, retaining dataset-owned partition membership."""
+    groups = defaultdict(lambda: defaultdict(list))
+    for source in sources:
+        dataset = source.config
+        assert dataset is not None
+        name = (names or {}).get(dataset.protocol.benchmark, dataset.protocol.benchmark.lower().replace("_", "-"))
+        form = {
+            OperationKind.CHAT_GENERATION: PromptFormat.CHAT,
+            OperationKind.TEXT_GENERATION: PromptFormat.COMPLETION,
+        }.get(dataset.protocol.operation)
+        variant = ProtocolVariant(protocol, dataset.protocol.num_fewshot, form)
+        groups[name][variant].append(
+            replace(
+                source,
+                config=replace(
+                    dataset,
+                    protocol=dataset.protocol.model_copy(update={"benchmark": name}),
+                    protocol_name=protocol,
+                ),
+            )
+        )
+    return [
+        EvaluationBenchmark(
+            name, tuple(variants), partial(_compiled_variant, {key: tuple(value) for key, value in variants.items()})
+        )
+        for name, variants in groups.items()
+    ]

@@ -29,7 +29,7 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import PYTHON_GRADER
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -73,7 +73,8 @@ def python_source(
                     stop=HUMANEVAL_REQUEST_STOPS if completion else (),
                     chat_template_kwargs={} if completion else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=0 if sampled else None),
+                trials=TrialPolicy(count=1, seed=42 if sampled else None),
+                num_fewshot=0 if completion else None,
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -165,4 +166,11 @@ def fewshot_sources() -> list[RlDataSource[EvalDataset]]:
                 ),
             ),
         )
+    ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return [
+        *fixed_benchmarks(sources()),
+        *fixed_benchmarks(fewshot_sources(), "evalchemy", {"humaneval-10shot": "humaneval"}),
     ]

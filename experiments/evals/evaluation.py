@@ -7,7 +7,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.records import EvaluationSelection
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -23,7 +24,7 @@ DEFAULT_ACCELERATOR = AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
 @dataclass(frozen=True)
 class EvalGroup:
     name: str
-    evals: tuple[str, ...]
+    evals: tuple[EvaluationSelection, ...]
     serve: ServeConfig = field(default_factory=ServeConfig)
     resource_hint: ResourceHint = field(default_factory=ResourceHint)
     accelerator: AcceleratorChoice = DEFAULT_ACCELERATOR
@@ -62,14 +63,31 @@ def eval_step(
             apply_chat_template=False,
             resource_hint=resource_hint,
             serve=group.serve,
-            generation=GenerationConfig(max_gen_toks=group.max_tokens),
         )
 
+    selections = group.evals
+    if group.max_tokens is not None:
+        selections = tuple(
+            selection.model_copy(
+                update={
+                    "run": selection.run.model_copy(
+                        update={
+                            "max_tokens": (
+                                min(group.max_tokens, selection.run.max_tokens)
+                                if selection.run.max_tokens is not None
+                                else group.max_tokens
+                            )
+                        }
+                    )
+                }
+            )
+            for selection in selections
+        )
     name = f"evaluation/curated/{model.name}/{group.name}"
     accelerator = group.accelerator
     step = launch_step(
         resolve_model(StepContext.for_fingerprint((), (model,))),
-        ",".join(group.evals),
+        selections,
         version=resolve_version(name, version),
         deps=(model,),
         resolve_model=resolve_model,

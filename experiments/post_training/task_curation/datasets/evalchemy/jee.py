@@ -18,7 +18,7 @@ from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.datasets.evalchemy.environments import BASIC_GRADER
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -68,3 +68,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
             pipeline=curate,
         )
     ]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks(sources())

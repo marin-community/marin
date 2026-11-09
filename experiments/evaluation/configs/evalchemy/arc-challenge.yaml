@@ -1,5 +1,0 @@
-name: arc-challenge
-num_fewshot: 25
-sources:
-- evalchemy-arc_challenge
-max_tokens: 256

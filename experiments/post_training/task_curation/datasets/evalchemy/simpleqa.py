@@ -17,7 +17,7 @@ from taskcompendium.importers.evalchemy.simpleqa import convert_simpleqa, read_s
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.evaluation import EvalDataset, EvaluationBenchmark, curate, fixed_benchmarks
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -77,3 +77,7 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvalDataset]:
 
 def sources() -> list[RlDataSource[EvalDataset]]:
     return [simpleqa_source(benchmark, mini=mini) for benchmark, mini in (("SimpleQA", False), ("SimpleQAMini", True))]
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks(sources())

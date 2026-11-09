@@ -1,5 +1,0 @@
-name: mrcr-65k
-sources:
-- evalchemy-mrcr-65k
-seed: 42
-max_tokens: 4096

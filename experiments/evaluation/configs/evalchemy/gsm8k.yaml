@@ -1,6 +1,0 @@
-name: gsm8k
-sources:
-- evalchemy-gsm8k
-family: gsm8k
-chat_sources:
-- evalchemy-gsm8k-chat

@@ -88,6 +88,7 @@ def publish_evaluation_corpus(
     *,
     source_overrides: Mapping[str, SourceFileOverride] | None = None,
     curation_identity: str | None = None,
+    protocol_name: str | None = None,
 ) -> EvaluationManifest:
     """Convert all selected rows and publish a manifest only after population and sidecar checks pass.
 
@@ -174,6 +175,7 @@ def publish_evaluation_corpus(
         protocol_hash=protocol.fingerprint,
         conversion_manifest_sha256=file_sha256(conversion_path),
         curation_identity=curation_identity,
+        protocol_name=protocol_name,
         rows=result.input_rows,
         shards=tuple(shards),
     )

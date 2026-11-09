@@ -14,13 +14,15 @@ from marin.evaluation.records import (
     EvalRunRecord,
     EvalTaskRef,
     MetricKind,
+    PromptFormat,
+    ResolvedEvaluationSelection,
 )
 from marin.rollouts.evaluation import RUN_OBJECT
 from marin.rollouts.evaluation_results import SCORED_OUTCOMES, evaluation_coverage, logical_samples, terminal_attempts
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 
-SUMMARY_REVISION = "2026.11.07.1"
+SUMMARY_REVISION = "2026.11.08.1"
 
 
 def _reduce(values: list[tuple[str, float, float]], kind: SummaryKind) -> tuple[float, float | None]:
@@ -159,11 +161,40 @@ def import_curated_record(record: EvalRunRecord) -> EvalRunRecord:
                 ),
             )
         )
+    selection = record.evaluation.curated.selection
+    if selection is not None and len(groups) != 1:
+        raise ValueError("A benchmark selection requires exactly one declared benchmark")
+    if len(groups) == 1:
+        benchmark = next(iter(groups))
+        datasets = groups[benchmark]
+        protocol = protocols[datasets[0]]
+        presets = {manifests[dataset].get("protocol_name") for dataset in datasets}
+        if len(presets) == 1 and None not in presets:
+            preset = next(iter(presets))
+            form = {"chat_generation": PromptFormat.CHAT, "text_generation": PromptFormat.COMPLETION}.get(
+                protocol.operation
+            )
+            published = ResolvedEvaluationSelection(
+                benchmark=benchmark, protocol=preset, num_fewshot=protocol.num_fewshot, prompt_format=form
+            )
+            if selection is not None and (
+                selection.benchmark,
+                selection.protocol,
+                selection.num_fewshot,
+                selection.prompt_format,
+            ) != (published.benchmark, published.protocol, published.num_fewshot, published.prompt_format):
+                raise ValueError("Recorded evaluation selection differs from the published corpus protocol")
+            selection = selection or published
     return record.model_copy(
         update={
             "metrics": metrics,
             "canonical_metrics": metrics,
             "coverage": coverage,
-            "evaluation": record.evaluation.model_copy(update={"tasks": tuple(tasks)}),
+            "evaluation": record.evaluation.model_copy(
+                update={
+                    "tasks": tuple(tasks),
+                    "curated": record.evaluation.curated.model_copy(update={"selection": selection}),
+                }
+            ),
         }
     )

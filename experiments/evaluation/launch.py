@@ -43,8 +43,10 @@ from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
+    EvaluationSelection,
     ModelConfigRef,
     ModelRef,
+    PromptFormat,
     RunStatus,
     list_records,
     scoring_settings,
@@ -73,10 +75,15 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
 from zephyr.context import ZephyrContext
 
-from experiments.evaluation.curated import corpus_steps, pinned_model
+from experiments.evaluation.curated import (
+    corpus_key,
+    corpus_steps,
+    executor_for,
+    pinned_model,
+    record_ref_for,
+    resolve_selection,
+)
 from experiments.evaluation.evals import (
-    EVALS,
-    CuratedDefinition,
     EvaluationDefinition,
     HarborDefinition,
     harbor_model_agent_kwargs,
@@ -141,9 +148,7 @@ class LaunchSpec:
     """One model, evaluation selection, execution target, and record destination."""
 
     model: ModelConfig
-    evals: tuple[str, ...]
-    curated_definitions: tuple[CuratedDefinition, ...]
-    harbor_definitions: tuple[HarborDefinition, ...]
+    evals: tuple[EvaluationDefinition, ...]
     platform: Platform
     accelerator: str | None
     limit: int | None
@@ -231,16 +236,7 @@ def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
 
 
 def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefinition], ...]:
-    registry_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (eval_key, EVALS[eval_key]) for eval_key in spec.evals
-    )
-    curated_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (definition.name, definition) for definition in spec.curated_definitions
-    )
-    harbor_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (definition.name, definition) for definition in spec.harbor_definitions
-    )
-    definitions = registry_definitions + curated_definitions + harbor_definitions
+    definitions = tuple((definition.name, definition) for definition in spec.evals)
     if not definitions:
         raise ValueError("at least one evaluation is required")
     names = [name for name, _ in definitions]
@@ -281,21 +277,26 @@ def _resolve_definitions(
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
-        if isinstance(definition, CuratedDefinition):
-            executor = definition.executor_for(model, limit, seed)
+        if isinstance(definition, EvaluationSelection):
+            protocol = resolve_selection(
+                definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+            )
+            executor = executor_for(definition, protocol, model, limit, seed)
             resolved.append(
                 (
                     name,
                     _ResolvedDefinition(
-                        record_ref=definition.record_ref_for(executor),
+                        record_ref=record_ref_for(definition, protocol, executor),
                         runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
                         cache_runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
                         executor=executor,
                         endpoint_route=EndpointRoute.DIRECT,
-                        secret_env={JUDGE_API_KEY: definition.judge_api_key} if definition.judge is not None else {},
+                        secret_env=(
+                            {JUDGE_API_KEY: definition.run.judge_api_key} if definition.run.judge is not None else {}
+                        ),
                         egress_allow=(
-                            (urlsplit(definition.judge_endpoint).hostname,)
-                            if definition.judge_endpoint is not None
+                            (urlsplit(definition.run.judge_endpoint).hostname,)
+                            if definition.run.judge_endpoint is not None
                             else ()
                         ),
                     ),
@@ -377,7 +378,7 @@ def build_evaluation_batch(
         raise ValueError("pipeline parallelism requires one serving instance")
     model = spec.model
     requested_definitions = _evaluation_definitions(spec)
-    has_curated_definitions = any(isinstance(definition, CuratedDefinition) for _, definition in requested_definitions)
+    has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
     if spec.version in RUNTIME_COMMITS and has_curated_definitions:
         raise ValueError(
             f"{spec.version} requires its historical Evalchemy checkout; curated runs need a new cohort label"
@@ -431,9 +432,7 @@ def build_evaluation_batch(
         if violations:
             raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
     if judge is not None and any(isinstance(definition.executor, DatasetEvaluator) for _, definition in definitions):
-        raise ValueError(
-            "--judge-model serves Harbor verifiers only; configure curated judges in their source selection"
-        )
+        raise ValueError("--judge-model serves Harbor verifiers only; configure judges in the evaluation run settings")
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
@@ -620,16 +619,17 @@ def _bind_corpora(executor: EvalExecutor, roots: dict[str, str]) -> EvalExecutor
 
 def evaluation_group_step(batch: EvaluationBatch, runtime: CampaignRuntime) -> StepSpec:
     """Bind complete corpus dependencies before the evaluation receives resolved roots."""
-    names = tuple(
-        dict.fromkeys(
-            name
-            for evaluation in batch.evaluations
-            if (source := _dataset_evaluator(evaluation.executor)) is not None
-            for name in source.datasets
-        )
-    )
-    dependencies = [step.lower() for step in corpus_steps(names, runtime)]
-    roots = {name: step.output_path for name, step in zip(names, dependencies, strict=True)}
+    dependencies_by_name = {}
+    for evaluation in batch.evaluations:
+        reference = evaluation.identity.eval_ref.curated
+        if reference is None:
+            continue
+        if reference.selection is None:
+            raise ValueError("New evaluation launches require an explicit benchmark selection")
+        for step in corpus_steps(reference.selection, runtime):
+            dependencies_by_name[corpus_key(step)] = step.lower()
+    dependencies = list(dependencies_by_name.values())
+    roots = {name: step.output_path for name, step in dependencies_by_name.items()}
     bound = replace(
         batch,
         evaluations=tuple(

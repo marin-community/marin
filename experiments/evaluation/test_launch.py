@@ -26,7 +26,8 @@ from marin.inference.iris import RemoteInferenceStartupError
 import experiments.evaluation.launch as launch_module
 import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
-from experiments.evaluation.curated import CuratedDefinition
+from experiments.evaluation.curated import load_evaluations
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 
@@ -202,13 +203,11 @@ def test_relaunch_changed_scoring_settings_use_distinct_steps(tmp_path, submitte
 @pytest.mark.parametrize("cache_key", [None, "pipeline-artifact"])
 def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache_key):
     config = tmp_path / "custom.yaml"
-    config.write_text("name: custom\nsources: [evalchemy-gsm8k]\n")
+    config.write_text("evaluations:\n  custom:\n    benchmark: gsm8k\n")
     model = models()["qwen3-8b"]
     spec = LaunchSpec(
+        evals=(load_evaluations(config)[0],),
         model=model,
-        evals=(),
-        curated_definitions=(CuratedDefinition.from_file(config),),
-        harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x1",
         limit=None,
@@ -239,10 +238,8 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
 
 def _pipeline_spec(tmp_path):
     return LaunchSpec(
+        evals=resolve_evaluations("gsm8k-smoke,arc-easy"),
         model=models()["qwen3-8b"],
-        evals=("gsm8k-smoke", "arc-easy"),
-        curated_definitions=(),
-        harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x1",
         limit=1,

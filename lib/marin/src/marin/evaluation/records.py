@@ -351,6 +351,63 @@ class JudgeIdentity(BaseModel):
     default_model: str | None = None
 
 
+class EvaluationOverrides(BaseModel):
+    """Run policy supplied by a suite or campaign."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    limit: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    judge_endpoint: str | None = None
+    judge_api_key: tuple[str, ...] = ()
+
+
+class PromptFormat(StrEnum):
+    COMPLETION = "completion"
+    CHAT = "chat"
+
+
+class ResolvedEvaluationSelection(BaseModel):
+    """The explicit protocol choice bound to published corpora."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    protocol: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+
+
+class EvaluationSelection(BaseModel):
+    """Select a benchmark protocol without exposing its compiled artifact names."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    label: str | None = None
+    protocol: str | None = None
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+    run: EvaluationOverrides = Field(default_factory=EvaluationOverrides)
+
+    @property
+    def name(self) -> str:
+        if self.label is not None:
+            return self.label
+        parts = [self.benchmark]
+        if self.protocol is not None:
+            parts.append(self.protocol)
+        if self.num_fewshot is not None:
+            parts.append(f"{self.num_fewshot}shot")
+        if self.prompt_format is not None:
+            parts.append(self.prompt_format)
+        return "-".join(parts)
+
+
 class CuratedSettings(BaseModel):
     """Recorded selection and execution settings shared by launch and dashboard readers."""
 
@@ -375,6 +432,7 @@ class CuratedRef(BaseModel):
 
     datasets: tuple[str, ...]
     settings: CuratedSettings
+    selection: ResolvedEvaluationSelection | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="before")
     @classmethod
