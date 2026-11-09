@@ -48,7 +48,8 @@ def default_review(workpiece: Workpiece, band: BandRules, budget: Budget) -> Dec
         cause = next((cause for cause in retryable if CAUSE_DECISIONS.get(cause) is Retry), None)
         if cause is not None and retries < budget.max_validation_retries:
             return Retry(cause, retries + 1)
-    # Mark's policy: one hardening attempt, then tagged acceptance; restore baseline on regression.
+    # A too-easy task gets one hardening round and is then accepted with `accepted_with: too_easy`.
+    # If the hardening moved it out of the too-easy band, the pre-hardening submission is restored.
     if isinstance(decision, Modify) and BandOutcome.TOO_EASY in band.accepted:
         if workpiece.too_easy_baseline is not None:
             revert = decision.placement is not BandOutcome.TOO_EASY

@@ -34,7 +34,8 @@ from taskforge.model.workpiece import Conversation
 from taskforge.resources.env import WriteFile
 from taskforge.resources.inference import ContextExceeded, InferenceClient, InferenceRequest, complete
 
-# Mark's policy: nudge until an explicit exit; repeated empty completions indicate provider failure.
+# A session ends only through an exit tool, so an empty completion gets a nudge. This many empty
+# completions in a row mean the provider is failing.
 MAX_EMPTY_COMPLETIONS = 3
 
 
