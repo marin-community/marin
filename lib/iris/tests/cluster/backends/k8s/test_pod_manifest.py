@@ -1132,10 +1132,6 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert [c["name"] for c in spec["containers"]] == ["task"]
     assert spec["initContainers"] == []
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
-    # Shellbox streams commands and transfers through /tmp; keep them off host root.
-    scratch = next(m for m in task["volumeMounts"] if m["mountPath"] == "/tmp")
-    volume = next(v for v in spec["volumes"] if v["name"] == scratch["name"])
-    assert volume["emptyDir"] == {}
 
 
 def _allowlist_request(

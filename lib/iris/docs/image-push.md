@@ -162,7 +162,7 @@ curl -s -H "Authorization: Bearer $TOK" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print([m.get('platform') for m in d.get('manifests',[])] or 'SINGLE-ARCH')"
 ```
 
-A `platform: unknown` entry is buildx provenance, not a real architecture. If `linux/arm64`
+A `platform: unknown` entry holds buildx provenance. If `linux/arm64`
 is missing, the tag itself is broken — rebuild and push a two-platform index before
 touching any node. Evicting first only re-pulls the same broken image.
 

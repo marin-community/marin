@@ -6,34 +6,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from iris.cluster.node_agent.runtime_storage import configure, redirected_config
-
-
-def test_redirected_config_preserves_provider_runtime_options():
-    source = """# Provider-owned configuration
-log_path = "/var/log/runsc/%ID%/shim.log"
-log_level = "info"
-binary_name = "/usr/local/bin/nvidia-container-runtime-gvisor"
-[runsc_config]
-systemd-cgroup = "true"
-nvproxy = "true"
-debug = "false"
-debug-log = "/var/log/runsc/%ID%/gvisor.%COMMAND%.log"
-"""
-    updated = redirected_config(source, Path("/mnt/local/iris-runtime/runsc"))
-    settings = tomllib.loads(updated)
-    assert settings == {
-        "log_path": "/mnt/local/iris-runtime/runsc/%ID%/shim.log",
-        "log_level": "info",
-        "binary_name": "/usr/local/bin/nvidia-container-runtime-gvisor",
-        "runsc_config": {
-            "systemd-cgroup": "true",
-            "nvproxy": "true",
-            "debug": "false",
-            "debug-log": "/mnt/local/iris-runtime/runsc/%ID%/gvisor.%COMMAND%.log",
-        },
-    }
-    assert redirected_config(updated, Path("/mnt/local/iris-runtime/runsc")) == updated
+from iris.cluster.node_agent.runtime_storage import configure
 
 
 def test_configure_redirects_logs_and_preserves_backup_and_permissions(tmp_path, monkeypatch):

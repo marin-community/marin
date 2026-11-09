@@ -1,7 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configure CoreWeave runtime logging before starting the node agent."""
+"""Move new CoreWeave shim and gVisor logs onto the host's NVMe disk.
+
+CoreWeave provides /etc/containerd/runsc.toml with log paths under /var/log/runsc.
+Abandoned runtime logs can fill the small RAM-backed root filesystem and prevent
+container startup and exec. The node-agent DaemonSet runs this module in an init
+container with the host config directory mounted at /host-containerd and the NVMe
+disk at /mnt/local, so replacement nodes receive the same log-path correction.
+
+Only the shim log_path and runsc debug-log destinations change. Setup preserves
+the provider's runtime options, backs up the original file on NVMe, and replaces
+it atomically. New shims read the updated config without a runtime restart;
+existing shims keep their previous log paths. Historical logs require separate
+cleanup.
+"""
 
 import hashlib
 import json
@@ -43,7 +56,7 @@ def configure(config_path: Path, nvme: Path) -> None:
         return
     if config_path.is_symlink() or not stat.S_ISREG(config_path.stat().st_mode):
         raise ValueError("runsc config must be a regular file")
-    # Compare two host mounts, not the init container's overlay filesystem.
+    # Both paths are host mounts; the init container's root is an overlay filesystem.
     if nvme.stat().st_dev == config_path.parent.stat().st_dev:
         raise ValueError("NVMe must be backed by a different filesystem from the host config directory")
     log_root = nvme / "iris-runtime/runsc"

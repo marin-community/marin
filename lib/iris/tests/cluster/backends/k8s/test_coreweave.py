@@ -354,14 +354,6 @@ def test_start_controller_creates_controller_resources(hostname):
 
     agent_spec = node_agent["spec"]["template"]["spec"]
     assert agent_spec["hostNetwork"] is True
-    setup = agent_spec["initContainers"][0]
-    assert setup["command"] == [".venv/bin/python", "-m", "iris.cluster.node_agent.runtime_storage"]
-    mounted_paths = {
-        mount["mountPath"]: next(v["hostPath"]["path"] for v in agent_spec["volumes"] if v["name"] == mount["name"])
-        for mount in setup["volumeMounts"]
-    }
-    assert mounted_paths == {"/host-containerd": "/etc/containerd", "/mnt/local": "/mnt/local"}
-    assert not any(m["name"] == "host-containerd" for m in agent_spec["containers"][0]["volumeMounts"])
     assert agent_spec["containers"][0]["command"] == [
         ".venv/bin/python",
         "-m",

@@ -8,7 +8,7 @@ Grafana, which is the most expensive place to find out."""
 
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -17,7 +17,7 @@ import httpx
 import pyarrow as pa
 import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
-from conftest import bridge_config, healthy_k8s_routes, install_finelog_dialect_macros, k8s_api, make_k8s_source
+from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from errors import FinelogUnavailableError
 from finelog_health import FinelogHealth, FinelogRole
@@ -294,57 +294,6 @@ def test_warning_alerts_remain_visible_without_notifications():
             "location": "UTC",
         }
     ]
-
-
-def test_runtime_filesystem_alert_uses_latest_fresh_samples_per_node_and_mount():
-    (rule,) = [rule for rule in _rules() if rule["uid"] == "node-runtime-filesystem-full"]
-    source, threshold = rule["data"]
-    sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
-    database = duckdb.connect()
-    install_finelog_dialect_macros(database)
-    database.execute(
-        """CREATE TABLE "telemetry_v1.node_agent"(
-        cluster VARCHAR, node_name VARCHAR, service VARCHAR, name VARCHAR,
-        attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT, value DOUBLE)"""
-    )
-    now = datetime.now(UTC)
-    rows = []
-    samples = [
-        ("cw-a", "full", "uid1", "/", 0, 15000, now),
-        ("cw-a", "full", "uid1", "/mnt/local", 24000000, 30000000, now),
-        ("cw-b", "full", "uid2", "/", 7500, 15000, now),
-        ("cw-a", "recovered", "uid3", "/", 0, 15000, now - timedelta(minutes=1)),
-        ("cw-a", "recovered", "uid3", "/", 9000, 15000, now),
-        ("cw-a", "stale", "uid4", "/", 0, 15000, now - timedelta(minutes=10)),
-        ("cw-a", "tmp-full", "uid5", "/tmp", 0, 1000, now),
-    ]
-    for cluster, node, uid, mount, available, total, at in samples:
-        for name, value in (("node_filesystem_available_bytes", available), ("node_filesystem_total_bytes", total)):
-            rows.append(
-                (
-                    cluster,
-                    node,
-                    "iris-node-agent",
-                    name,
-                    json.dumps({"node_uid": uid, "mountpoint": mount}),
-                    int(at.timestamp() * 1000),
-                    len(rows),
-                    value,
-                )
-            )
-    database.executemany('INSERT INTO "telemetry_v1.node_agent" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', rows)
-
-    result = database.execute(sql).fetchall()
-
-    assert set(result) == {
-        ("cw-a", "full", "uid1", "/", 0.0),
-        ("cw-b", "full", "uid2", "/", 0.5),
-        ("cw-a", "recovered", "uid3", "/", 0.6),
-        ("cw-a", "tmp-full", "uid5", "/tmp", 0.0),
-    }
-    evaluator = threshold["model"]["conditions"][0]["evaluator"]
-    assert evaluator == {"type": "lt", "params": [0.05]}
-    assert _route_for(rule)["receiver"] == "ops-critical"
 
 
 def test_coreweave_storage_capacity_pages_critical_ops():

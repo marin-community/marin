@@ -255,7 +255,7 @@ iris query 'SELECT state, count(*) FROM tasks GROUP BY state' -f csv
 
 - Active resource holders include ASSIGNED (9), BUILDING (2), and RUNNING (3).
 - `workers.committed_*` measures allocations; capacity is in `metadata_proto`.
-- `jobs.request_proto` is serialized protobuf, not SQL-readable job constraints.
+- Decode the serialized protobuf in `jobs.request_proto` to inspect job constraints.
 - Use [task states](docs/task-states.md) and [schema.py](src/iris/cluster/controller/schema.py)
   for state codes and columns.
 
@@ -272,7 +272,7 @@ SELECT name, consecutive_failures, quota_reason FROM scaling_groups
 WHERE consecutive_failures > 0 OR quota_reason != '';
 ```
 
-Audit events live in `process logs`, not controller SQL. Filter server-side
+Read audit events with `process logs`. Filter server-side
 with `--substring='event=worker_failed'` or an entity ID. `process logs` has no
 `--since` flag; a grep over the default tail can miss older evidence.
 
