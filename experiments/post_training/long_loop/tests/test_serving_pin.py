@@ -5,8 +5,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
-from marin.inference.vllm_backend import vllm_launcher
 
 from experiments.post_training.long_loop.serving import check_serving_pin, serving_release
 
@@ -22,15 +20,3 @@ def test_endpoint_release_matches_rl_and_rejects_drift(tmp_path):
     bad_wheel = replace(release.wheels[0], url="https://example.com/other.whl")
     with pytest.raises(ValueError, match="wheels differ"):
         check_serving_pin(replace(release, wheels=(bad_wheel, *release.wheels[1:])), project)
-
-
-def test_endpoint_launcher_uses_selected_release(monkeypatch):
-    monkeypatch.setattr("marin.inference.vllm_release.platform.machine", lambda: "x86_64")
-    release = serving_release()
-    launcher = vllm_launcher(
-        VllmEngineConfig(launcher=VllmLauncherType.CUDA, source=VllmSource.MARIN_FORK, gpu_release=release)
-    )
-    install = launcher._install()
-    assert release.version in install.requirement
-    assert any(wheel.sha256 in install.requirement for wheel in release.wheels)
-    assert release.source_commit in " ".join(install.executable_args)

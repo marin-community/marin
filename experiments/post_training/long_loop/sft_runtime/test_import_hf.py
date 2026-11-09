@@ -95,7 +95,12 @@ def test_hf_import_preserves_experts_through_native_restore(tmp_path):
         tensors.update(load_file(str(path)))
     for name, expected in source.items():
         exported_name = name.replace(".shared_expert.", ".shared_experts.0.")
-        np.testing.assert_array_equal(tensors[exported_name], expected)
+        if ".mlp.experts." in exported_name:
+            bank, projection = exported_name.split(".experts.")
+            actual = np.stack([tensors[f"{bank}.experts.{i}.{projection}"] for i in range(config.num_experts)])
+        else:
+            actual = tensors[exported_name]
+        np.testing.assert_array_equal(actual, expected)
 
 
 @pytest.mark.timeout(180)

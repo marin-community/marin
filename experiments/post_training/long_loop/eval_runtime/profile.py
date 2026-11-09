@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frozen inputs shared by Mini840 preparation, budgeting and execution."""
+"""Frozen inputs shared by Micro210 preparation, budgeting and execution."""
 
 DATASET = "open-athena/Marin-Micro-Eval-210"
 SOURCE_REVISION = "4564ed081c316bc3231ae5c3a53a46b39248c819"

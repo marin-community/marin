@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.filesystem.transfer import copy
 
 
@@ -55,7 +56,7 @@ def archive_object(item: ArchiveInput, root: str) -> ArchivedObject:
     name = PurePosixPath(item.name)
     if name.is_absolute() or ".." in name.parts or not name.parts:
         raise ValueError("Archive names must be relative and cannot traverse parents")
-    destination = root.rstrip("/") + "/objects/" + item.name
+    destination = prefix_join(root, "objects/" + item.name)
     size, checksum = digest(item.source)
     fs, key = filesystem_for(destination)
     if fs.exists(key):
@@ -104,9 +105,11 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
     disposable = {obj["source"]: obj for obj in inventory["disposable_files"]}
     if inventory["selected"] != selected or inventory["root"] != checkpoint_root:
         raise ValueError("Cleanup scope differs from sealed inventory")
-    prefix = checkpoint_root.rstrip("/") + "/"
-    keep = selected.rstrip("/") + "/"
-    if not keep.startswith(prefix) or keep == prefix:
+    root_path = StoragePath(checkpoint_root)
+    keep_path = StoragePath(selected)
+    if str(root_path) != checkpoint_root or str(keep_path) != selected:
+        raise ValueError("Checkpoint cleanup requires canonical storage paths")
+    if not keep_path.relative_to(root_path):
         raise ValueError("Selected checkpoint must be a child of this experiment's checkpoint root")
     if not selected_files:
         raise ValueError("Selected checkpoint inventory is empty")
@@ -117,14 +120,17 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
         raise ValueError("Selected checkpoint inventory does not cover its complete payload")
     for obj in selected_files:
         uri = obj["source"]
-        if not uri.startswith(keep) or uri not in archived:
+        if not StoragePath(uri).relative_to(keep_path) or uri not in archived:
             raise ValueError("Selected checkpoint is not completely archived")
         if (obj["size"], obj["sha256"]) != (archived[uri]["size"], archived[uri]["sha256"]):
             raise ValueError("Selected checkpoint differs from sealed inventory")
     planned = []
     for uri in candidates:
-        if ".." in PurePosixPath(uri).parts or not uri.startswith(prefix) or uri.startswith(keep) or uri == selected:
-            raise ValueError(f"Cleanup target is outside scope or selected: {uri}")
+        path = StoragePath(uri)
+        if str(path) != uri or ".." in path.segments or not path.relative_to(root_path):
+            raise ValueError(f"Cleanup target is outside scope: {uri}")
+        if path == keep_path or path.segments[: len(keep_path.segments)] == keep_path.segments:
+            raise ValueError(f"Cleanup target is selected: {uri}")
         if uri not in disposable:
             raise ValueError(f"Cleanup requires a sealed checkpoint inventory: {uri}")
         fs, key = filesystem_for(uri)

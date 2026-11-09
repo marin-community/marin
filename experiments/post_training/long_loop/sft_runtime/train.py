@@ -789,8 +789,7 @@ def _tree_to_memory_kind(tree, memory_kind: str):
         if not isinstance(leaf, jax.Array):
             return leaf
         sharding = jax.typeof(leaf).sharding
-        mesh = getattr(sharding, "mesh", None)
-        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+        if not isinstance(sharding, NamedSharding) or not sharding.mesh.axis_names:
             if jax.sharding.get_abstract_mesh().empty:
                 return leaf
             # Scalar optimizer metadata has no operand from which to inherit the active mesh.

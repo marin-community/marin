@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate released Mini840 rollouts through native Harbor environments without training."""
+"""Evaluate released Micro210 rollouts through native Harbor environments without training."""
 
 
 import click

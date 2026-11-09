@@ -10,6 +10,7 @@ from collections import defaultdict
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.evaluation.records import EvalRunRecord, TaskCoverage, write_record
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive import digest, write_once
 
@@ -17,7 +18,7 @@ from experiments.post_training.long_loop.archive import digest, write_once
 def publish_evaluation(*, source: str, record: EvalRunRecord, records_prefix: str) -> str:
     """Keep every native row, including failed trials; index scores only when verified."""
     fs, prefix = filesystem_for(source)
-    files = sorted(fs.glob(prefix.rstrip("/") + "/*.jsonl"))
+    files = sorted(fs.glob(prefix_join(prefix, "*.jsonl")))
     if not files:
         raise ValueError("No native evaluation files to archive")
     signature = hashlib.sha256(

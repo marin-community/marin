@@ -898,12 +898,7 @@ def _bincount_upper_quantile(
     target_rank: jax.Array | float,
     token_axes: tuple[str, ...],
 ) -> jax.Array:
-    """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
-
-    Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
-    (``expert*n_bins + bin``, clip-to-edge) builds the local per-expert histogram, one integer ``psum``
-    pools it globally, and beta is read from the top-cumulative counts, interpolated in the crossing bin.
-    """
+    """Estimate each expert's upper quantile over valid tokens across token axes."""
     bin_width = (hi - lo) / n_bins
     expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
     idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)

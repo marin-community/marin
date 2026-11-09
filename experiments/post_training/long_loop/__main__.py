@@ -17,6 +17,7 @@ from marin.experiment.cli import graph_handles
 from marin.rl.cli import _skyrl_executions, rl_build_options
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun, SkyRLRunConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.bixbench import merged_report
@@ -128,12 +129,12 @@ def bixbench_continuation(version: str, rl_version: str, inputs_version: str) ->
     base = eval_continuation(version, rl_version, inputs_version)
     graph = graph_handles([base])
     trained = next(step for step in graph if step.artifact_type is SkyRLRun)
-    prefix = os.environ["MARIN_PREFIX"].rstrip("/")
-    subset_uri = prefix + "/long-loop/bix-inputs/" + version
+    prefix = os.environ["MARIN_PREFIX"]
+    subset_uri = prefix_join(prefix, f"long-loop/bix-inputs/{version}")
     record = read_json(subset_uri + "/.artifact.json")
     subset = ArtifactStep.adopt("long-loop/reused-bix-inputs", version, subset_uri, config={"original_record": record})
     evaluated = timed(smoke_evaluation(version, trained, subset))
-    original_uri = prefix + "/long-loop/micro-smoke/2026.11.09.9"
+    original_uri = prefix_join(prefix, "long-loop/micro-smoke/2026.11.09.9")
     original = ArtifactStep.adopt(
         "long-loop/reused-completed-eval",
         version,

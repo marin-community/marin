@@ -18,7 +18,7 @@ from jaxtyping import PyTree
 from levanter.checkpoint import discover_checkpoint_candidates, save_checkpoint
 from levanter.eval import TaggedEvaluator, eval_model
 from levanter.tensorstore_serialization import TensorStoreWriteConfig
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 SELECTION_KIND = "snowball_sft_inline_loss_v1"
 CHECKPOINT_TIMEOUT = 30 * 60
@@ -64,7 +64,7 @@ class BestValidationCheckpoint:
             raise ValueError(f"Nonfinite checkpoint selection metric {self.metric}: {score}")
         if self.best is not None and score >= self.best.score:
             return None
-        destination = f"{self.path}/step-{step}-score-{struct.pack('!d', score).hex()}"
+        destination = prefix_join(self.path, f"step-{step}-score-{struct.pack('!d', score).hex()}")
         save_checkpoint(
             {"params": model},
             step,

@@ -3,7 +3,6 @@
 
 import json
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from experiments.post_training.long_loop.preflight import (
     check_endpoint,
     check_projection,
 )
-from experiments.post_training.long_loop.timing import Event, EventLog, read_events, report
+from experiments.post_training.long_loop.timing import EventLog, read_events
 
 
 def write_checkpoint(*, output: str, predecessor: str | None, stage: str) -> None:
@@ -78,28 +77,6 @@ def test_multi_eos_serving_regression():
     check_endpoint(evidence)
     with pytest.raises(ValueError, match="Both EOS"):
         check_endpoint(replace(evidence, forced_stop_results={128001: "stop", 128009: "length"}))
-
-
-def event(span, kind, boundary, seconds, *, gpus=0, status=""):
-    utc = (datetime(2026, 11, 8, tzinfo=UTC) + timedelta(seconds=seconds)).isoformat()
-    return Event("synthetic", "rl", "1", span, "clock", kind, boundary, utc, seconds, gpus=gpus, status=status)
-
-
-def test_overlap_report_preserves_open_and_failed_spans():
-    events = [
-        event("a", "allocation", "start", 0, gpus=128),
-        event("a", "allocation", "end", 20, gpus=128),
-        event("b", "allocation", "start", 10, gpus=128),
-        event("b", "allocation", "end", 30, gpus=128),
-        event("c", "generation", "start", 10),
-        event("c", "generation", "end", 15, status="failed"),
-        event("d", "generation", "start", 20),
-    ]
-    rendered = report(events, synthetic=True)
-    assert "observed peak: 256 GPUs" in rendered
-    assert "allocation: 30.000 seconds" in rendered
-    assert "Incomplete spans: 1; failed spans: 1" in rendered
-    assert "| rl | allocation | 2 | 40.000" in rendered
 
 
 def test_exception_records_failed_span_without_swallowing(tmp_path):

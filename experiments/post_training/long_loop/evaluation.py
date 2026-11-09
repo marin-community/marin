@@ -30,6 +30,7 @@ from marin.rl.skyrl import (
 )
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive_selection import trace_retention
 from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
@@ -199,7 +200,7 @@ def smoke_evaluation(version: str, trained: ArtifactStep[SkyRLRun], data: Artifa
         )
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         if not ctx.is_fingerprint:
-            exact_config = read_json(model["uri"].rstrip("/") + "/config.json")
+            exact_config = read_json(prefix_join(model["uri"], "config.json"))
             validate_context_evidence(
                 exact_config,
                 config["generator"]["engine_init_kwargs"]["hf_overrides"],
