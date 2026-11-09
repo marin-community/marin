@@ -370,7 +370,8 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 
 @pytest.mark.asyncio
-async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
+@pytest.mark.parametrize("wrong_path", [False, True])
+async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading(wrong_path):
     agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
         Command(
@@ -389,7 +390,15 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
     grader = ScriptGrader(
         argv=("sh", "-c", report),
         environment=GRADER_ENVIRONMENT,
-        collect=(VerifierCommand(argv=("sh", "-c", "printf collected > /app/collected.txt")),),
+        collect=(
+            VerifierCommand(
+                argv=(
+                    "sh",
+                    "-c",
+                    "ls /results > /lsroot.txt 2>&1" if wrong_path else "printf collected > /app/collected.txt",
+                )
+            ),
+        ),
         artifacts=(
             VerifierArtifact(source="/app/collected.txt", target="/grader/collected.txt", kind=ArtifactKind.FILE),
             VerifierArtifact(source="/app/out", target="/grader/out", kind=ArtifactKind.DIRECTORY),
@@ -408,6 +417,13 @@ jq -n --arg collected "$(cat /grader/collected.txt)" \
         task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
     )
 
+    if wrong_path:
+        # Pilot k2: optional /results probe fails despite valid solver outputs in /app.
+        assert result.failure is GradingFailure.GRADER_EXIT and result.diagnostics["exit_code"] == 2
+        assert result.diagnostics["stderr"] == ""
+        assert (await agent.run(Command(("cat", "/app/out/a.txt")))).stdout == b"a"
+        await agent.close()
+        return
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
     assert result.detail == {
         "collected": "collected",
@@ -456,13 +472,22 @@ DETAIL = {"cases": [{"passed": True}]}
     "reward,phase,exit_code,expected",
     [
         (ExitCodeReward(), "candidate", None, (Outcome.GRADED, 0.0, None)),
-        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
-        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "candidate", 1, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "candidate", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
+        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_TIMEOUT)),
         (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
         (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        # Pilot k2: authored collection exits are distinct from signal/unknown infrastructure failure.
+        (StdoutReward(), "collect", 2, (Outcome.INFRA_ERROR, None, GradingFailure.GRADER_EXIT)),
+        (StdoutReward(), "collect", 137, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", -9, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+        (StdoutReward(), "collect", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (StdoutReward(), "collect-unknown", None, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
     ],
 )
-async def test_test_command_timeout_is_candidate_failure_but_preparation_failure_is_infra(
+async def test_command_failure_classification_by_phase(
     monkeypatch,
     reward,
     phase,
@@ -472,11 +497,12 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     original_run = VerifyitImageMachine.run
     preparation = ("sh", "-c", "prepare-tests")
     candidate = ("candidate-tests",)
+    collecting = phase.startswith("collect")
 
     async def run(machine, command):
-        if command.argv == (candidate if phase == "candidate" else preparation):
-            reason = ExitReason.TIMED_OUT if exit_code is None else ExitReason.EXITED
-            return Result(exit_code, b"", b"command failure", False, False, reason)
+        if command.argv == (candidate if phase == "candidate" or collecting else preparation):
+            reason = ExitReason.TIMED_OUT if exit_code is None and phase != "collect-unknown" else ExitReason.EXITED
+            return Result(exit_code, b"command output", b"command failure", False, False, reason)
         if command.argv == preparation:
             return Result(0, b"", b"", False, False, ExitReason.EXITED)
         return await original_run(machine, command)
@@ -485,12 +511,23 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     grader = ScriptGrader(
         argv=candidate,
         reward=reward,
+        collect=(VerifierCommand(argv=candidate),) if collecting else (),
         environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("prepare-tests",)}),
     )
     task = arithmetic_task(grader)
-    result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
+    agent = await FixtureImageFactory().create(GRADER_MACHINE) if collecting else None
+    try:
+        result = await grade_in_sandbox(
+            task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
+        )
+    finally:
+        if agent is not None:
+            await agent.close()
     assert (result.status, result.reward, result.failure) == expected
     assert result.diagnostics["stderr"] == "command failure"
+    assert result.diagnostics["stdout"] == "command output"
+    if collecting:
+        assert result.diagnostics["exit_code"] == exit_code
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_RUNTIME_LABEL,
     IRIS_TASK_CONTAINER_NAME,
     IRIS_TASK_ID_ANNOTATION,
+    ExecStatusError,
     K8sResource,
     KubectlError,
     parse_k8s_cpu,
@@ -1435,7 +1436,7 @@ def _extract_exit_code(pod: dict) -> int | None:
     return None
 
 
-def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
+def _task_update_after_output_failure(entry: RunningTaskEntry, pod: dict, error: str) -> TaskUpdate:
     exit_code = _extract_exit_code(pod)
     terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
     terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
@@ -1445,7 +1446,7 @@ def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> Tas
         status_message="",
         output_archive=job_pb2.TaskOutputArchive(
             state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
-            error="deadline_exceeded",
+            error=error,
         ),
     )
 
@@ -3174,6 +3175,7 @@ class K8sTaskProvider:
             return None
 
         started = self._output_finalization_started.setdefault(entry, time.monotonic())
+        output_error = "deadline_exceeded"
         uploader_running = "running" in uploader.get("state", {})
         if uploader_running and entry not in self._released_output_attempts:
             try:
@@ -3187,17 +3189,22 @@ class K8sTaskProvider:
                     self._released_output_attempts.add(entry)
                 else:
                     logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
-            except Exception:
+            except Exception as error:
                 # Output release is best effort; a failed pod must not block the rest of this scan.
                 logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
+                if isinstance(error, ExecStatusError) and error.container_missing:
+                    output_error = "container_not_found"
 
-        if time.monotonic() - started < policy.finalization_timeout.to_seconds():
+        if output_error == "deadline_exceeded" and time.monotonic() - started < policy.finalization_timeout.to_seconds():
             return None
 
-        self.kubectl.delete(K8sResource.PODS, pod_name, force=True, wait=False)
+        try:
+            self.kubectl.delete(K8sResource.PODS, pod_name, force=True, wait=False)
+        except KubectlError:
+            logger.warning("Failed to delete finalized pod %s", pod_name, exc_info=True)
         self._output_finalization_started.pop(entry, None)
         self._released_output_attempts.discard(entry)
-        return _task_update_after_output_timeout(entry, pod)
+        return _task_update_after_output_failure(entry, pod, output_error)
 
     def _poll_pods(
         self,

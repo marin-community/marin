@@ -42,6 +42,8 @@ from rigging.timing import Deadline, ExponentialBackoff
 
 from iris.cluster.platforms.k8s.types import (
     ExecResult,
+    ExecSetupError,
+    ExecStatusError,
     K8sResource,
     KubectlError,
     KubectlLogLine,
@@ -741,11 +743,24 @@ class CloudK8sService:
                     kwargs["container"] = container
 
                 with self.create_api_client() as exec_api_client:
-                    resp = kubernetes.stream.stream(
-                        kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
-                        _preload_content=False,
-                        **kwargs,
-                    )
+                    try:
+                        resp = kubernetes.stream.stream(
+                            kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                            _preload_content=False,
+                            **kwargs,
+                        )
+                    except AttributeError as error:
+                        # kubernetes 36.0.3 decodes a None ApiException body when websocket
+                        # construction fails, hiding its reason before any command is sent.
+                        cause = error.__context__
+                        if (
+                            str(error) != "'NoneType' object has no attribute 'decode'"
+                            or not isinstance(cause, ApiException)
+                            or cause.status != 0
+                            or cause.body is not None
+                        ):
+                            raise
+                        raise ExecSetupError(f"Websocket setup failed (status 0): {cause.reason}") from cause
                     try:
                         resp.run_forever(timeout=effective_timeout)
                         stdout = resp.read_stdout(timeout=0) or ""
@@ -759,13 +774,10 @@ class CloudK8sService:
                             )
                         try:
                             returncode = resp.returncode
-                        except ValueError as exc:
-                            # kubernetes-client parses a failed exec's error-channel cause as an integer exit code.
-                            return ExecResult(
-                                returncode=1,
-                                stdout=stdout,
-                                stderr="\n".join(part for part in (stderr, str(exc)) if part),
-                            )
+                        except ValueError as error:
+                            raise ExecStatusError(
+                                str(error), container_missing="container not found" in str(error).lower()
+                            ) from error
                         return ExecResult(returncode=returncode, stdout=stdout, stderr=stderr)
                     finally:
                         resp.close()

@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tarfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -21,7 +22,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -112,13 +113,17 @@ def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, .
     return [StagedFile(path, data) for path, data in selected.items()]
 
 
-async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
+async def _run_checked(machine: Machine, command: Command, failure: str, *, authored: bool = False) -> None:
     result = await machine.run(command)
     if result.reason == ExitReason.TIMED_OUT:
         raise _StepFailed(_infra_error(f"{failure}: timed out", GradingFailure.TIMEOUT, _diagnostics(result)))
     if result.exit_code != 0:
         raise _StepFailed(
-            _infra_error(f"{failure}: exit={result.exit_code}", GradingFailure.EXECUTION, _diagnostics(result))
+            _infra_error(
+                f"{failure}: exit={result.exit_code}",
+                _grader_failure(result) if authored else GradingFailure.EXECUTION,
+                _diagnostics(result),
+            )
         )
 
 
@@ -263,6 +268,13 @@ def _diagnostics(result: Result) -> dict[str, Any]:
     }
 
 
+def _grader_failure(result: Result) -> GradingFailure:
+    """Only an ordinary nonzero grader exit establishes an authored process failure."""
+    if result.reason is ExitReason.EXITED and result.exit_code is not None and 0 < result.exit_code < 128:
+        return GradingFailure.GRADER_EXIT
+    return GradingFailure.EXECUTION
+
+
 def _infra_error(message: str, failure: GradingFailure, diagnostics: dict[str, Any]) -> GradeResult:
     return GradeResult(Outcome.INFRA_ERROR, None, message, diagnostics=diagnostics, failure=failure)
 
@@ -330,26 +342,40 @@ async def _script_reward(
     if isinstance(grader.reward, FileReward):
         paths = tuple(file.path for file in grader.reward.files)
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
-        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+        mkdir = "mkdir -p " + " ".join(f'"${{{index}}}"' for index in range(1, len(directories) + 1))
+        remove = "rm -f " + " ".join(
+            f'"${{{index}}}"' for index in range(len(directories) + 1, len(directories) + len(paths) + 1)
+        )
+        await _run_checked(
+            machine,
+            Command(
+                ("sh", "-c", mkdir + " && " + remove, "reward-files", *directories, *paths), timeout=preparation_timeout
+            ),
+            "Cannot prepare reward files",
+        )
+    started = time.monotonic()
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
-    diagnostics = _diagnostics(result)
+    diagnostics = {
+        **_diagnostics(result),
+        "grader_elapsed_seconds": time.monotonic() - started,
+        "grader_timeout_seconds": timeout,
+    }
     if isinstance(grader.reward, ExitCodeReward):
         passed = result.reason == ExitReason.EXITED and result.exit_code == 0
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Grader command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Grader command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if isinstance(grader.reward, FileReward):
         if result.exit_code != 0 and any(file.format is RewardFileFormat.VERDICT_JSON for file in grader.reward.files):
             return _infra_error(
-                f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+                f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
             )
         return await _file_reward(machine, grader.reward, timeout, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
-            f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+            f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
         )
     lines = [line.strip() for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
     try:
@@ -364,6 +390,7 @@ async def _script_reward(
 
 
 async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float) -> GradeResult:
+    started = time.monotonic()
     result = await machine.run(
         Command(
             (
@@ -380,13 +407,17 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
             output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES,
         )
     )
-    diagnostics = _diagnostics(result)
+    diagnostics = {
+        **_diagnostics(result),
+        "grader_elapsed_seconds": time.monotonic() - started,
+        "grader_timeout_seconds": timeout,
+    }
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Verifier command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Verifier command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
             f"Verifier command failed (exit_code={result.exit_code}): {diagnostics['stderr']}",
-            GradingFailure.EXECUTION,
+            _grader_failure(result),
             diagnostics,
         )
     with TemporaryDirectory(prefix="taskcompendium-verdict-") as directory:
@@ -558,6 +589,7 @@ async def _grade_staged(
                     user=ROOT,
                 ),
                 "Cannot collect grading inputs",
+                authored=True,
             )
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)
@@ -610,6 +642,8 @@ async def _grade_staged(
                     grading.limit,
                     preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
+                    combine_workspace=factory.backend is Backend.LOCAL
+                    or getattr(factory, "fixed_execution_user", False),
                 )
             finally:
                 await machine.close()
@@ -630,24 +664,30 @@ async def _grade_on(
     *,
     preparation_timeout: float | None,
     user: str | None,
+    combine_workspace: bool = False,
 ) -> GradeResult:
     await machine.upload(archive_path, STAGING_ARCHIVE)
+    # Docker/QEMU can use root for staging and a different execution user for workspace creation.
+    # Iris cannot switch users; local setup uses the host user, so those can batch all three steps.
+    script = 'tar -xf "$1" -C "$2" && rm -f "$1"'
+    if combine_workspace:
+        script += ' && mkdir -p "$3"'
     await _run_checked(
         machine,
-        Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=preparation_timeout, user=user),
-        "Could not unpack grading inputs",
+        Command(
+            ("sh", "-c", script, "grading-inputs", STAGING_ARCHIVE, "/", workspace),
+            cwd="/",
+            timeout=preparation_timeout,
+            user=user,
+        ),
+        "Could not prepare grading inputs",
     )
-    # The archive holds references and tests; protecting /tests does not protect a copy in /tmp.
-    await _run_checked(
-        machine,
-        Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=preparation_timeout, user=user),
-        "Could not remove the grading archive",
-    )
-    await _run_checked(
-        machine,
-        Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
-        "Could not initialize the grading workspace",
-    )
+    if not combine_workspace:
+        await _run_checked(
+            machine,
+            Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
+            "Could not initialize the grading workspace",
+        )
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
