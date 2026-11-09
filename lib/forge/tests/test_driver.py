@@ -20,6 +20,7 @@ from forge.driver import eligible, inputs, proposal_bucket, proposal_key
 from forge.model.proposal import Environment, TaskProposal, Verification
 from forge.policy import load_policy
 from forge.policy.defaults import DEFAULTS_DIR
+from forge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 
 pytest_plugins = ("lib.forge.tests.test_proposal",)
 
@@ -113,7 +114,7 @@ async def test_iris_runtime_on_linux_never_constructs_local_backend_or_probes_ho
         assert isinstance(factory, IrisMachineFactory)
         assert factory.controller_url == "http://controller"
         assert factory.cluster is None
-        assert factory.scheduling_timeout == 600
+        assert factory.scheduling_timeout == SANDBOX_SCHEDULING_TIMEOUT
 
 
 @pytest.mark.parametrize("pool", ["high", "bulk"])

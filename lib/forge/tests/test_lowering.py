@@ -42,7 +42,7 @@ from forge.lowering import (
 from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from forge.policy import GRADER_BASE_IMAGE, load_policy, resolution_lines
 from forge.resources.env import ReadFile
-from forge.resources.sandbox.factories import shellsim_factory
+from forge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, shellsim_factory
 from forge.wiring import submit_gate
 
 
@@ -120,7 +120,7 @@ def test_policy_memory_and_actual_grader_timeout_reach_both_machine_specs() -> N
     assert spec.task_machine is not None and spec.verifier_machine is not None
     assert spec.task_machine.memory_mb == spec.verifier_machine.memory_mb == memory_mb
     assert spec.task_machine.cpus == spec.verifier_machine.cpus == 1
-    assert spec.limits.verifier_timeout == 1500
+    assert spec.limits.verifier_timeout == SANDBOX_SCHEDULING_TIMEOUT + 900
 
 
 def test_shellsim_binding_omits_host_cpu_allocation() -> None:
