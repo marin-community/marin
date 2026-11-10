@@ -125,10 +125,14 @@ fn footer_int64_bounds(metadata: &ParquetMetaData, column: usize) -> Option<(i64
     Some(range.unwrap_or(NO_VALUES))
 }
 
-/// Whether `bounds` lacks any of the flagged `columns`, so the backfill still
-/// owes the segment a footer read.
-pub fn missing(bounds: &ColumnBounds, columns: &[String]) -> bool {
-    columns.iter().any(|column| !bounds.contains_key(column))
+/// The flagged `columns` that `bounds` has no entry for, which the backfill
+/// still owes the segment a footer read.
+pub fn missing_columns(bounds: &ColumnBounds, columns: &[String]) -> Vec<String> {
+    columns
+        .iter()
+        .filter(|column| !bounds.contains_key(*column))
+        .cloned()
+        .collect()
 }
 
 /// Encode `source` for `object_segments.source_json`, with `bounds` under an
@@ -277,10 +281,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_names_a_flagged_column_without_bounds() {
+    fn missing_columns_names_the_flagged_columns_without_bounds() {
         let bounds = ColumnBounds::from([("epoch_ms".to_string(), (1, 2))]);
-        assert!(!missing(&bounds, &columns(&["epoch_ms"])));
-        assert!(missing(&bounds, &columns(&["epoch_ms", "ts"])));
-        assert!(!missing(&ColumnBounds::new(), &[]));
+        assert!(missing_columns(&bounds, &columns(&["epoch_ms"])).is_empty());
+        assert_eq!(
+            missing_columns(&bounds, &columns(&["epoch_ms", "ts"])),
+            columns(&["ts"])
+        );
+        assert!(missing_columns(&ColumnBounds::new(), &[]).is_empty());
     }
 }

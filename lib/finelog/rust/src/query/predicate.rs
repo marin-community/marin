@@ -84,12 +84,12 @@ fn collect_int_ranges(expr: &Expr, ranges: &mut HashMap<String, InclusiveIntRang
         }
     }
     let Some(comparison) = int_comparison(expr) else {
-        if let Some((column, lower, upper)) = float_cast_range(expr) {
+        if let Some((column, widened)) = float_cast_range(expr) {
             let range = ranges.entry(column).or_default();
-            if let Some(lower) = lower {
+            if let Some(lower) = widened.lower {
                 tighten_lower(&mut range.lower, lower);
             }
-            if let Some(upper) = upper {
+            if let Some(upper) = widened.upper {
                 tighten_upper(&mut range.upper, upper);
             }
         }
@@ -162,7 +162,7 @@ const F64_EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
 /// its ceiling for an upper bound. That never excludes a matching row, so it is
 /// for segment pruning only, like the rest of [`int_column_ranges`]; exact
 /// planners keep using [`int_comparison`].
-fn float_cast_range(expr: &Expr) -> Option<(String, Option<i64>, Option<i64>)> {
+fn float_cast_range(expr: &Expr) -> Option<(String, InclusiveIntRange)> {
     let Expr::BinaryExpr(binary) = expr else {
         return None;
     };
@@ -196,12 +196,22 @@ fn float_cast_range(expr: &Expr) -> Option<(String, Option<i64>, Option<i64>)> {
     }
     let lower = value.floor() as i64;
     let upper = value.ceil() as i64;
-    match operator {
-        Operator::Eq => Some((column, Some(lower), Some(upper))),
-        Operator::Gt | Operator::GtEq => Some((column, Some(lower), None)),
-        Operator::Lt | Operator::LtEq => Some((column, None, Some(upper))),
-        _ => None,
-    }
+    let range = match operator {
+        Operator::Eq => InclusiveIntRange {
+            lower: Some(lower),
+            upper: Some(upper),
+        },
+        Operator::Gt | Operator::GtEq => InclusiveIntRange {
+            lower: Some(lower),
+            upper: None,
+        },
+        Operator::Lt | Operator::LtEq => InclusiveIntRange {
+            lower: None,
+            upper: Some(upper),
+        },
+        _ => return None,
+    };
+    Some((column, range))
 }
 
 fn float_cast_column(expr: &Expr) -> Option<String> {

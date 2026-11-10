@@ -40,7 +40,11 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
                     record.table_spec_version == active_version
                         && (row.min_key_value.is_none()
                             || row.max_key_value.is_none()
-                            || column_bounds::missing(&record.column_bounds, bounds_columns))
+                            || !column_bounds::missing_columns(
+                                &record.column_bounds,
+                                bounds_columns,
+                            )
+                            .is_empty())
                 })
         })
         .take(SEGMENT_BOUNDS_PER_TICK)
@@ -83,11 +87,7 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
             }
             recovered_key
         };
-        let missing_columns: Vec<String> = bounds_columns
-            .iter()
-            .filter(|column| !record.column_bounds.contains_key(*column))
-            .cloned()
-            .collect();
+        let missing_columns = column_bounds::missing_columns(&record.column_bounds, bounds_columns);
         let columns = column_bounds::from_parquet(input.metadata(), &missing_columns);
         if columns.len() < missing_columns.len() {
             tracing::warn!(
