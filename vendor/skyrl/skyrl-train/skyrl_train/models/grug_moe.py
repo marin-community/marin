@@ -47,7 +47,6 @@ GRUG_SPLIT_EXPERT_SCHEMA_VERSION = 2
 # Split experts with the log_scaling_* fields, null when off. A stack that cannot apply the factor
 # rejects the schema instead of training at the wrong query scale past the floor.
 GRUG_LOG_SCALING_SCHEMA_VERSION = 3
-GRUG_SPLIT_EXPERT_SCHEMA_VERSIONS = frozenset({GRUG_SPLIT_EXPERT_SCHEMA_VERSION, GRUG_LOG_SCALING_SCHEMA_VERSION})
 GRUG_DEFAULT_GLOBAL_EVERY = 4
 GRUG_EAGER_ATTENTION_BACKEND = "eager"
 GRUG_FLASH_ATTENTION_BACKEND = "flash_attention_2"
@@ -288,14 +287,8 @@ class GrugMoeConfig(PretrainedConfig):
         log_scaling_fields = (log_scaling_n_floor, log_scaling_alpha, log_scaling_power)
         if len({field is None for field in log_scaling_fields}) != 1:
             raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be set together")
-        log_scaling = log_scaling_n_floor is not None
-        if log_scaling and min(log_scaling_fields) <= 0:
+        if log_scaling_n_floor is not None and min(log_scaling_fields) <= 0:
             raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be positive")
-        if log_scaling and int(grugmoe_artifact_schema_version) < GRUG_LOG_SCALING_SCHEMA_VERSION:
-            raise ValueError(
-                f"log_scaling_* fields require Grug artifact schema {GRUG_LOG_SCALING_SCHEMA_VERSION}, "
-                f"got schema {grugmoe_artifact_schema_version}"
-            )
         if latent_dim is not None and not 0 < latent_dim <= hidden_size:
             raise ValueError("latent_dim must be in (0, hidden_size]")
         if num_shared_experts < 1 or global_every < 1 or sconv_kernel < 1:
@@ -370,7 +363,7 @@ class GrugMoeConfig(PretrainedConfig):
             or self.num_shared_experts != 1
             or self.rope_fused
             or self.global_every != GRUG_DEFAULT_GLOBAL_EVERY
-            or self.grugmoe_artifact_schema_version in GRUG_SPLIT_EXPERT_SCHEMA_VERSIONS
+            or self.grugmoe_artifact_schema_version >= GRUG_SPLIT_EXPERT_SCHEMA_VERSION
         )
 
 

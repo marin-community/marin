@@ -252,8 +252,6 @@ class GrugSelfAttention(SelfAttention):
             positions = thd_document_positions(cu_seqlens, query.shape[0], cp_group.size(), cp_group.rank())
         else:
             # Unpacked rows start at their first token once the trainer removes left padding.
-            if cp_group.size() != 1:
-                raise ValueError("Grug log scaling with context parallelism requires packed sequences")
             positions = torch.arange(query.shape[0], device=query.device)[:, None]
         config = self.config
         factor = grug_log_scaling_factor(

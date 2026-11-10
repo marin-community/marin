@@ -30,7 +30,7 @@ from skyrl_train.models.grug_megatron import GrugGPTModel, grug_block_spec
 from skyrl_train.models.grug_moe import (
     GRUG_DEFAULT_GLOBAL_EVERY,
     GRUG_MOE_MODEL_TYPE,
-    GRUG_SPLIT_EXPERT_SCHEMA_VERSIONS,
+    GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
     grug_long_layer_flags,
 )
 
@@ -150,7 +150,7 @@ def _routed_expert_mappings(schema_version: int) -> list[AutoMapping | GatedMLPM
     """Map individually saved or stacked HF experts to Megatron's per-expert weights."""
     megatron = "decoder.layers.*.mlp.experts"
     hf = "model.layers.*.mlp.experts"
-    if schema_version in GRUG_SPLIT_EXPERT_SCHEMA_VERSIONS:
+    if schema_version >= GRUG_SPLIT_EXPERT_SCHEMA_VERSION:
         hf += ".*"
         gate_up_mapping = GatedMLPMapping
         down_mapping = AutoMapping

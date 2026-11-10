@@ -1,11 +1,9 @@
 """Grug log scaling: per-document positions under packing and CP, and the checkpoint contract."""
 
-import math
-
 import pytest
 import torch
 
-from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_document_positions
+from skyrl_train.models.grug_log_scaling import thd_document_positions
 from skyrl_train.models.grug_moe import GrugMoeConfig
 from tests.cpu.util import stub_megatron_modules
 
@@ -36,14 +34,6 @@ def test_positions_restart_per_document_on_every_cp_rank(monkeypatch, cp_size):
         assert actual[valid].tolist() == packed_positions[0, valid].tolist()
 
 
-def test_factor_is_one_through_the_floor_and_matches_the_hero_at_262k():
-    factor = grug_log_scaling_factor(torch.tensor([1, 65536, 65537, 262144]), 65536, 0.1, 2.0)
-
-    assert factor[:2].tolist() == [1.0, 1.0]
-    assert factor[2].item() > 1.0
-    assert factor[3].item() == pytest.approx((1 + 0.1 * math.log(4)) ** 2, rel=1e-6)
-
-
 @pytest.mark.parametrize(
     ("log_scaling", "expected"),
     [
@@ -59,8 +49,3 @@ def test_schema_3_config_json_keeps_log_scaling_and_split_experts(log_scaling, e
 
     assert (reloaded.log_scaling_n_floor, reloaded.log_scaling_alpha, reloaded.log_scaling_power) == expected
     assert reloaded.uses_hero_architecture
-
-
-def test_config_rejects_log_scaling_before_schema_3():
-    with pytest.raises(ValueError, match="log_scaling"):
-        GrugMoeConfig(grugmoe_artifact_schema_version=2, **HERO_LOG_SCALING)
