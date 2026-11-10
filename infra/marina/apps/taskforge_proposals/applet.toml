@@ -1,0 +1,7 @@
+applet_id = "05b2dac2-284c-4029-a4c0-629f5b2c9b23"
+
+title = "Taskforge proposals · n=25"
+description = "Browse the ~50,000 task proposals of the Taskforge curriculum-v3 n=25 run: search and filter every slot, read each proposal with its preflight verdict and raw JSON, see each capability's plan, and explore statistics by kind, environment, domain and tokens."
+python_entrypoint = "server.app:create_api"
+build_command = "cd web && npm ci && npm run build"
+connect_src = []
