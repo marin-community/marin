@@ -591,7 +591,7 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
         cluster_config.reset_data_config_cache()
 
 
-def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -692,7 +692,7 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "IRIS_TASK_ID"):
         environment.pop(key, None)
-    script = """
+    script = r"""
 import json
 import sys
 from pathlib import Path
@@ -790,6 +790,14 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert read_skyrl_metrics(str(tmp_path)) == {3: {"step": 3, "loss": 0.25}}
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
+    (tmp_path / f"exports/attempts/{config.attempt_id}/receipt.json").unlink()
+    assert read_stored_skyrl_receipt(str(tmp_path)) is None
+    assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
+    (tmp_path / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": attempts["earlier-failed-attempt"].config}))
+    assert read_stored_skyrl_receipt(str(tmp_path)) == attempts["earlier-failed-attempt"]
+    (tmp_path / "resolved-launch.yaml").unlink()
+    assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
+    assert read_skyrl_launch_receipt(str(tmp_path)) is None
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
