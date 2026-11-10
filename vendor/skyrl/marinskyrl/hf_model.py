@@ -16,6 +16,9 @@ TOKENIZER_JSON_NAME = "tokenizer.json"
 _OFFLINE_ENVIRONMENT_VARIABLES = (HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV)
 
 
+MODEL_CACHE_SUFFIXES = (".safetensors", ".json", ".txt", ".model", ".py", ".jinja")
+
+
 @dataclass(frozen=True)
 class HuggingFaceModelCache:
     """Completed CPU mirror for a Hub model and its requested revision."""

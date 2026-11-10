@@ -17,10 +17,11 @@ from iris.client.client import JobFailedError
 from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
+from loguru import logger
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
-from cloud.iris.hf_model_cache import ensure_hugging_face_model_cache
+from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
 from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
@@ -137,13 +138,19 @@ def _prepare_model_caches(config: DictConfig) -> None:
         tokenizer_uri = str(config.inputs.model.tokenizer_uri or "")
         separate_tokenizer = bool(tokenizer_uri and tokenizer_uri != model.path)
         policy_only = model.path == str(config.inputs.model.uri) and model not in teacher_models
-        uri, manifest = ensure_hugging_face_model_cache(
-            model.path,
-            model.revision,
-            ttl_days=int(config.artifacts.draft_model_cache_ttl_days),
-            source_prefix=str(config.artifacts.checkpoint_root),
-            tokenizer_mode="policy" if policy_only and separate_tokenizer else "embedded",
-        )
+        try:
+            uri, manifest = ensure_hugging_face_model_cache(
+                model.path,
+                model.revision,
+                ttl_days=int(config.artifacts.draft_model_cache_ttl_days),
+                source_prefix=str(config.artifacts.checkpoint_root),
+                tokenizer_mode="policy" if policy_only and separate_tokenizer else "embedded",
+            )
+        except UnsupportedHuggingFaceSnapshot as error:
+            logger.warning(
+                "Cannot mirror {}@{}; retaining node-side Hub fallback: {}", model.path, model.revision, error
+            )
+            continue
         caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity))
     if hub_draft:
         assert draft is not None and draft.hugging_face_repo_id is not None

@@ -13,9 +13,10 @@ import pytest
 import yaml
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
+from omegaconf import OmegaConf
 from safetensors.numpy import save
 
-from cloud.iris import hf_model_cache
+from cloud.iris import hf_model_cache, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
@@ -423,3 +424,43 @@ def test_hub_draft_is_mirrored_and_rewritten_before_gpu_submission(tmp_path, mon
     finally:
         set_job_info(previous)
     assert opened == [("org/draft", "d" * 40)]
+
+
+def test_unsupported_policy_layout_retains_node_fallback(tmp_path, monkeypatch):
+    path = _hub_config_path(tmp_path)
+    snapshot = _hub_snapshot(tmp_path)
+    unsupported = HuggingFaceSnapshot(
+        snapshot.filesystem,
+        snapshot.root,
+        tuple(entry for entry in snapshot.files if not entry.path.endswith(".safetensors")),
+    )
+    monkeypatch.setattr(
+        hf_model_cache,
+        "_open_hugging_face_snapshot",
+        lambda model_id, _: unsupported if model_id == "org/policy" else snapshot,
+    )
+    monkeypatch.setattr(
+        hf_model_cache, "marin_temp_bucket", lambda _ttl, *, prefix, source_prefix: str(tmp_path / "mirrors" / prefix)
+    )
+    monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
+    backend = RecordingBackend()
+    previous = get_job_info()
+    set_job_info(JobInfo(task_id=JobName.from_wire("/user/coordinator/0")))
+    try:
+        result = execute_launch(path, backend=backend)
+        assert result.state is LaunchState.SUBMITTED
+    finally:
+        set_job_info(previous)
+    assert [model["model_id"] for model in backend.launched_config["inputs"]["hugging_face_models"]] == ["org/teacher"]
+    downloaded = []
+    node_snapshot = tmp_path / "fallback"
+    node_snapshot.mkdir()
+
+    def download(model_id, *, revision, allow_patterns):
+        downloaded.append((model_id, revision))
+        return node_snapshot
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    monkeypatch.setattr(task_runtime.huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "node-cache"))
+    task_runtime.stage_hugging_face_models(OmegaConf.create(backend.launched_config))
+    assert downloaded == [("org/policy", "a" * 40)]

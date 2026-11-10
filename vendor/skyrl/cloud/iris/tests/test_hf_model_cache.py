@@ -404,3 +404,45 @@ def test_policy_manifest_without_tokenizer_mode_remains_compatible(tmp_path: Pat
     value.pop("tokenizer_mode")
 
     assert ModelManifest.from_mapping(value, "memory://models/policy") == manifest
+
+
+@pytest.mark.parametrize("indexed", [False, True])
+def test_snapshot_mirrors_only_loadable_weights_and_never_opens_unused_copies(monkeypatch, indexed):
+    source = fsspec.filesystem("memory")
+    root = f"selected-layout/{indexed}"
+    files, weights = _model_snapshot(source, root)
+    shard = "model.safetensors"
+    extras = ("consolidated.safetensors", "original/model.safetensors", "pytorch_model.bin", "original/model.pth")
+    for name in extras:
+        files = (*files, _write_memory_file(source, root, name, b"unused weights must not be opened"))
+    if indexed:
+        shard = "model-00001-of-00001.safetensors"
+        index = json.dumps({"weight_map": {"weight": shard}}).encode()
+        files = (
+            *files,
+            _write_memory_file(source, root, shard, weights),
+            _write_memory_file(source, root, "model.safetensors.index.json", index),
+        )
+        extras = (*extras, "model.safetensors")
+    opened = []
+    original_open = source.open
+
+    def open_selected(path, mode="rb", **kwargs):
+        if path.startswith(root) and "r" in mode:
+            opened.append(path.removeprefix(root + "/"))
+        return original_open(path, mode, **kwargs)
+
+    monkeypatch.setattr(source, "open", open_selected)
+    destination = f"memory://selected-layout-mirror/{indexed}"
+    manifest = publish_hugging_face_snapshot(
+        _snapshot(source, root, files), destination, model_id="org/model", revision="a" * 40
+    )
+    paths = {entry.path for entry in manifest.files}
+    assert shard in paths
+    assert not paths.intersection(extras)
+    assert not set(opened).intersection(extras)
+    filesystem, prefix = fsspec.core.url_to_fs(destination)
+    with filesystem.open(f"{prefix}/{shard}", "rb") as handle:
+        assert handle.read() == weights
+    with filesystem.open(f"{prefix}/model.safetensors.index.json") as handle:
+        assert json.load(handle)["weight_map"] == {"weight": shard}
