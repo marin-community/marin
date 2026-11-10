@@ -8,6 +8,10 @@ query_index_cache_mb: 3072
 # 492G boot disk; leaves room for legacy-layout tables still on local parquet
 # (shrinks as they migrate) plus staging headroom.
 object_cache_gb: 250
+# Day-sized log scans (for example, a model-cache line across all jobs) need more
+# than the 10-second default. Two Query RPCs run at a time, so a slow query holds
+# a slot for up to this long.
+query_timeout_ms: 60000
 telemetry_migration_mode: normal
 deployment:
   gcp:

@@ -361,7 +361,7 @@ def _print_record(record: dict[str, object], *, indent: int | None = None) -> No
     type=float,
     default=DEFAULT_REQUEST_TIMEOUT,
     show_default=True,
-    help="Seconds to wait for the query result. The server applies its own 10s deadline.",
+    help="Seconds to wait for the query result. The server applies its own deadline (10s unless configured).",
 )
 def query_cmd(
     name: str,

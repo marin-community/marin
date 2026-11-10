@@ -141,6 +141,7 @@ def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
         query_metadata_cache_mb=cfg.query_metadata_cache_mb,
         query_index_cache_mb=cfg.query_index_cache_mb,
         object_cache_gb=cfg.object_cache_gb,
+        query_timeout_ms=cfg.query_timeout_ms,
         telemetry_migration_mode=cfg.telemetry_migration_mode.value,
     )
 

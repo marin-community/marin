@@ -36,6 +36,7 @@ def _args(cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME) ->
         ),
         query_index_cache_mb=512,
         object_cache_gb=200,
+        query_timeout_ms=60_000,
     )
     return FinelogServerArgs(
         config=config,
@@ -72,6 +73,7 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
         "FINELOG_INDEX_CACHE_MB",
         "FINELOG_OBJECT_CACHE_GB",
         "FINELOG_PORT",
+        "FINELOG_QUERY_TIMEOUT_MS",
         "FINELOG_REMOTE_DIR",
     }
     assert "gcp-secret://" not in str(resources.deployment)

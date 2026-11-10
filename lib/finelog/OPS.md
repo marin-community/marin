@@ -82,7 +82,9 @@ Legacy file replacement and table deletion still require that lock.
 Query and FetchLogs RPCs have a ten-second default budget covering admission,
 visibility waits, snapshot/provider setup, execution, and response encoding. A
 shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
-ceiling. Each object snapshot carries an absolute deadline derived from that
+ceiling; a deploy config sets it with `query_timeout_ms` (the `marin` hub uses
+60 seconds). Only two Query RPCs run at once, so a higher ceiling lets a slow
+query hold an admission slot longer. Each object snapshot carries an absolute deadline derived from that
 same snapshot's retention policy, starting before snapshot acquisition.
 Planning consumes this lifetime; a later policy change cannot extend the read.
 Query, FetchLogs, and local forwarding reads share this bound and guard their
@@ -452,9 +454,10 @@ local rebuild investigation. A time bound remains the fastest containment:
 telemetry namespaces are keyed on `timestamp_ms`, so bounded queries can prune
 before any secondary method runs.
 
-`finelog query` applies a client deadline just past the server's own 10s one.
-Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
-needs longer.
+`finelog query` waits 15 seconds by default, just past the server's 10-second
+default. Against a deployment with a higher `query_timeout_ms`, pass `--timeout`
+to wait for it. To raise the server ceiling, set `query_timeout_ms` in the
+deploy config and redeploy.
 
 Row groups are sized to hold a fixed number of *encoded* bytes, so a namespace of
 narrow rows gets far fewer of them than one of wide log lines. Encoded rather

@@ -260,6 +260,9 @@ class FinelogConfig:
     # Local object-cache capacity. Unset retains every cached object, which
     # fills the disk on a busy hub; set it on any server with a bounded disk.
     object_cache_gb: int | None = None
+    # Server ceiling for one Query or FetchLogs RPC, in milliseconds. Unset keeps
+    # the server's 10-second default. A table's `max_query_time_ms` still bounds reads.
+    query_timeout_ms: int | None = None
     telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
 
     def __post_init__(self) -> None:
@@ -269,6 +272,8 @@ class FinelogConfig:
             raise ValueError("query_index_cache_mb must be > 0")
         if self.object_cache_gb is not None and self.object_cache_gb <= 0:
             raise ValueError("object_cache_gb must be > 0")
+        if self.query_timeout_ms is not None and self.query_timeout_ms <= 0:
+            raise ValueError("query_timeout_ms must be > 0")
 
 
 def k8s_env_secret_name(config: FinelogConfig) -> str | None:
@@ -415,6 +420,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
             None if raw.get("query_metadata_cache_mb") is None else int(raw["query_metadata_cache_mb"])
         ),
         object_cache_gb=(None if raw.get("object_cache_gb") is None else int(raw["object_cache_gb"])),
+        query_timeout_ms=(None if raw.get("query_timeout_ms") is None else int(raw["query_timeout_ms"])),
         telemetry_migration_mode=TelemetryMigrationMode(raw.get("telemetry_migration_mode", "normal")),
     )
 
