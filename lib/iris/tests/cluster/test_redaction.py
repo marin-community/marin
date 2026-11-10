@@ -206,3 +206,9 @@ def test_script_redacts_sensitive_assignments_only():
     script = "export WANDB_API_KEY=made-up-key && export LOG_LEVEL=debug && uv sync"
 
     assert redact_script(script) == f"export WANDB_API_KEY={REDACTED_VALUE} && export LOG_LEVEL=debug && uv sync"
+
+
+def test_command_argv_redacts_assignments_inside_a_shell_string():
+    argv = ["bash", "-c", "export HF_TOKEN=made-up-token && python x.py"]
+
+    assert redact_command_argv(argv) == ["bash", "-c", f"export HF_TOKEN={REDACTED_VALUE} && python x.py"]

@@ -110,8 +110,9 @@ def redact_command_argv(argv: list[str]) -> list[str]:
     """Redact a user command for long-term storage.
 
     A value after a flag whose name looks sensitive (``--hf-token X``,
-    ``--api-key=X``) is replaced. Every other token passes through the shared
-    string redactor, which catches prefixed and high-entropy tokens. A secret
+    ``--api-key=X``) is replaced. Every other token passes through
+    :func:`redact_script`, which catches sensitive ``NAME=value`` assignments
+    (as in ``bash -c "export HF_TOKEN=..."``) and prefixed or high-entropy tokens. A secret
     passed as a plain positional argument or inside a URL with an ordinary
     shape is not caught.
     """
@@ -131,7 +132,7 @@ def redact_command_argv(argv: list[str]) -> list[str]:
                 out.append(token)
                 redact_next = True
             continue
-        out.append(redact_string(token))
+        out.append(redact_script(token))
     return out
 
 
