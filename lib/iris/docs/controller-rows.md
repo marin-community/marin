@@ -46,7 +46,35 @@ GROUP BY a.attempt_uid;
 ```
 
 `iris.job_config` has one row per job, written at submit, with the requested
-resources (`res_device_json` holds the accelerator type and count).
+resources. `res_device_json` is the raw device request. Three columns flatten
+it: `accelerator_kind` (`gpu` or `tpu`), `accelerator_type` (for example `H100`
+or `v5p-64`) and `accelerators_per_task`, counted as the scheduler counts it. A
+CPU-only job has NULL, NULL and 0; test `accelerator_kind IS NULL` for
+CPU-only, because a TPU request without a count also has 0. The count is per
+task; multiply by `iris.job.num_tasks` for the whole job. GPU-hours per root
+job over the last 7 days, from each attempt's final row. The config side has a
+longer window, because a config row is written at submit and a long job may
+have started weeks before its attempts finished:
+
+```sql
+SELECT a.root_job_id, c.accelerator_type,
+       sum(c.accelerators_per_task * (to_unixtime(a.finished_at) - to_unixtime(a.started_at))) / 3600.0 AS accelerator_hours
+FROM (
+  SELECT *, row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn
+  FROM "iris.task_attempt"
+  WHERE ts >= now() - INTERVAL '7 days'
+) a
+JOIN "iris.job_config" c
+  ON c.cluster = a.cluster AND c.root_job_id = a.root_job_id
+ AND c.root_submitted_at_ms = a.root_submitted_at_ms
+ AND c.job_id = a.job_id AND c.submitted_at_ms = a.submitted_at_ms
+WHERE a.rn = 1 AND a.started_at IS NOT NULL AND a.finished_at IS NOT NULL
+  AND c.accelerator_kind = 'gpu'
+  AND c.ts >= now() - INTERVAL '37 days'
+GROUP BY a.root_job_id, c.accelerator_type
+ORDER BY accelerator_hours DESC;
+```
+
 `iris.job.tags` is reserved for submit-time job tags as a JSON object
 (`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
 submit.

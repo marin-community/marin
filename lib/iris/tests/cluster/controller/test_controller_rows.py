@@ -327,3 +327,24 @@ def test_every_cluster_config_forwards_under_its_own_name_or_not_at_all(config_p
     # it) or writes straight to the hub with its own name.
     config = load_config(config_path)
     assert _finelog_forwarding_cluster(config) in (None, config.name)
+
+
+@pytest.mark.parametrize(
+    "device, expected",
+    [
+        (job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="H100", count=8)), ("gpu", "H100", 8)),
+        (job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-64", count=4)), ("tpu", "v5p-64", 4)),
+        (None, (None, None, 0)),
+    ],
+    ids=["gpu", "tpu", "cpu-only"],
+)
+def test_job_config_flattens_the_device_request(state, device, expected):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    if device is not None:
+        request.resources.device.CopyFrom(device)
+
+    submit_job(state, "train", request)
+
+    config = rows.job_configs[0]
+    assert (config.accelerator_kind, config.accelerator_type, config.accelerators_per_task) == expected

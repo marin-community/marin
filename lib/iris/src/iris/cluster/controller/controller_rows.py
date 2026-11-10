@@ -37,9 +37,11 @@ from rigging.timing import Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
 
+from iris.cluster.constraints import get_device_variant
+from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt, stats_timestamp
-from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
+from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -187,6 +189,18 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
             logger.exception("controller rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
 
 
+def _accelerator_columns(device_json: str | None) -> dict:
+    """``iris.job_config``'s flattened device columns, counted as the scheduler counts them."""
+    device = proto_from_json(device_json, job_pb2.DeviceConfig) if device_json else job_pb2.DeviceConfig()
+    if device.HasField("gpu"):
+        kind, count = "gpu", get_gpu_count(device)
+    elif device.HasField("tpu"):
+        kind, count = "tpu", get_tpu_count(device)
+    else:
+        kind, count = None, 0
+    return {"accelerator_kind": kind, "accelerator_type": get_device_variant(device), "accelerators_per_task": count}
+
+
 def _dt(value: Timestamp | None) -> datetime | None:
     return value.as_naive_utc() if value is not None else None
 
@@ -255,6 +269,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     res_memory_bytes=r.res_memory_bytes,
                     res_disk_bytes=r.res_disk_bytes,
                     res_device_json=r.res_device_json,
+                    **_accelerator_columns(r.res_device_json),
                     constraints_json=r.constraints_json,
                     has_coscheduling=bool(r.has_coscheduling),
                     priority_band=job_pb2.PriorityBand.Name(r.priority_band),

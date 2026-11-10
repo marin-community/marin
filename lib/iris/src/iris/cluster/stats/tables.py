@@ -291,6 +291,12 @@ class IrisJobConfig:
     res_memory_bytes: int
     res_disk_bytes: int
     res_device_json: str | None
+    # Flattened from res_device_json: "gpu" or "tpu", the variant (e.g. "H100",
+    # "v5p-64") and the count per task, which iris.job.num_tasks multiplies for the
+    # whole job. A CPU-only job has NULL, NULL and 0.
+    accelerator_kind: str | None
+    accelerator_type: str | None
+    accelerators_per_task: int
     constraints_json: str | None
     has_coscheduling: bool
     priority_band: str
