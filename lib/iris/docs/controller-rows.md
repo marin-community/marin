@@ -18,40 +18,51 @@ name. A controller whose Finelog does not forward sets `cluster` itself:
 on a regional store, filter on `cluster = ''`; on the hub, on the cluster
 name.
 
-They copy every column of those tables, with these exceptions. Treat the
-changed columns as redacted, never as the controller's own values:
+## Which columns are copied
+
+They copy a chosen set of columns, not a mirror. **The rule:** copy a column
+when the controller or a fixed vocabulary writes its value (ids, keys, states,
+enums, times, counts, resource numbers, policies, placement). Do not copy a
+column whose value is text the user wrote. The free-text `error` and
+`status_message` columns are the one exception, below. Rows are kept forever, so
+a column that fails the rule is left out, not redacted and kept.
+
+Not copied, all from `job_config`:
+
+| DB column | Why |
+| --- | --- |
+| `environment_json` | Environment variables and secrets |
+| `entrypoint_json`, `submit_argv_json` | Command lines and setup commands the user wrote |
+| `bundle_id`, `ports_json`, `egress_allow_json`, `coscheduling_group_by` | User-written ids, ports, hosts and labels |
+| `name` | Same as `iris.controller_db__jobs.name` |
+
+Copied columns that differ from the controller DB:
 
 | Column | Differs from the controller DB |
 | --- | --- |
 | `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
-| `iris.controller_db__job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, **names only** (below). Environment variables and secrets are not copied, neither names nor values |
-| `iris.controller_db__job_config.entrypoint_json` | The command and setup commands, **names only** (below). Workdir file contents are never stored |
-| `iris.controller_db__job_config.submit_argv_json` | The submitter's command line, **names only** (below) |
 | `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
 | `iris.controller_db__tasks.placement` | The DB's `tasks.cluster`, as for jobs |
 | `iris.controller_db__tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
 
-**Names only:** command lines and scripts keep only command words, flag names
-(`--lr`, `-e`, cut at `=` or after a short flag's letter) and assignment names
-(`NAME=`). A command word is the first token of a statement (the line, or after
-`&&`, `||`, `;`, `|` or `&`) that is neither a flag nor an assignment, and it is
-kept only if it looks like a program name (`python`, `./run.sh`) with no
-token-like string in it. So a short, plain-looking value written as the very
-first word of a statement is still kept; nothing else in a command is. Every value, positional argument and quoted string,
-including a whole `bash -c "..."` body and everything after `--`, is
-`<redacted>`. Backslash-continued lines are joined first, every line of a
-heredoc body is `<redacted>`, and a line that does not parse is `<unparsed>`. In
-`submit_argv_json`, the user command after the first `--` starts a new command
-word. So `python train.py --hf-token X --lr 3e-4` is stored as
-`python <redacted> --hf-token <redacted> --lr <redacted>`.
+**When the controller DB schema changes:**
+`test_every_controller_db_column_is_classified` in
+`tests/cluster/controller/test_controller_rows.py` lists every column of the four
+tables as COPIED (with its Finelog field) or EXCLUDED (with a reason), and fails
+on a column it does not list. A new DB column needs a one-line decision there by
+the rule above; copying it also adds a nullable field to the row dataclass. A
+dropped DB column that was copied moves to RETIRED: its Finelog field stays,
+becomes `| None = None`, and reads NULL from then on; add its name and the date
+to the list below. Finelog columns are never removed or renamed.
+
+Retired columns: none yet.
 
 **Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as
 a scheduler or Kueue message), stay readable, with token-like strings redacted. That redaction is
-best-effort, not names-only: an error can still echo a short value or URL from
-a command.
+best-effort: an error can still echo a short value or URL from a command.
 
-**The one place the copy is not every change:** an `iris.controller_db__tasks`
+**The one place a row is not written on every change:** an `iris.controller_db__tasks`
 row is written at submit and when the task's state, current attempt, current
 worker, error or exit code changes. A change to any other column alone
 (`status_message`, `container_id`, `current_worker_address`, `backend_id`)

@@ -286,8 +286,10 @@ class IrisJob:
 class IrisJobConfig:
     """A job's config, written once when the job is submitted.
 
-    Every controller ``job_config`` column is copied except the environment,
-    of which only the setup scripts are kept; command lines keep names only.
+    Copies the controller ``job_config`` columns whose values the controller or
+    a fixed vocabulary writes. Text the user wrote is not copied: the
+    environment, command lines, setup scripts, egress hosts, ports, bundle id and
+    coscheduling label. ``docs/controller-rows.md`` lists each excluded column.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -309,7 +311,6 @@ class IrisJobConfig:
     accelerators_per_task: int
     constraints_json: str | None
     has_coscheduling: bool
-    coscheduling_group_by: str
     priority_band: str
     preemption_policy: str
     existing_job_policy: str
@@ -320,20 +321,9 @@ class IrisJobConfig:
     scheduling_timeout_ms: int | None
     termination_grace_ms: int
     task_image: str
-    name: str
-    # The environment's setup scripts only, names only. Environment variables and
-    # secrets are not copied, neither names nor values.
-    setup_scripts_json: str
-    # The command and setup commands, names only; workdir file contents are not stored.
-    entrypoint_json: str
-    # The submitter's command line, names only.
-    submit_argv_json: str
-    bundle_id: str
-    ports_json: str
     fail_if_exists: bool
     container_profile: str
     egress_policy: str
-    egress_allow_json: str
     ts: datetime
 
 

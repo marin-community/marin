@@ -25,7 +25,6 @@ A failed snapshot or write is logged and drops that transaction's rows; it never
 rolls back the controller's own writes or stops its later post-commit hooks.
 """
 
-import json
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -42,7 +41,6 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import names_only_argv, names_only_script, names_only_submit_argv
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -227,22 +225,6 @@ def _dt_from_ms(epoch_ms: int | None) -> datetime | None:
     return Timestamp.from_ms(epoch_ms).as_naive_utc() if epoch_ms is not None else None
 
 
-def _setup_scripts_json(environment_json: str) -> str:
-    """The environment's setup scripts, names only. Environment variables and secrets are never copied."""
-    return json.dumps([names_only_script(script) for script in json.loads(environment_json).get("setup_scripts", [])])
-
-
-def _redacted_entrypoint_json(entrypoint_json: str) -> str:
-    entrypoint = json.loads(entrypoint_json)
-    # The controller DB already omits inline file contents; never let them reach Finelog.
-    entrypoint.pop("workdir_files", None)
-    entrypoint["setup_commands"] = [names_only_script(command) for command in entrypoint.get("setup_commands", [])]
-    run_command = entrypoint.get("run_command")
-    if run_command is not None:
-        run_command["argv"] = names_only_argv(run_command.get("argv", []))
-    return json.dumps(entrypoint)
-
-
 def _free_text(value: str | None) -> str | None:
     """Error and status text stay readable, with token-like strings redacted."""
     return redact_string(value) if value is not None else None
@@ -339,7 +321,6 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
                     accelerators_per_task=accelerator.per_task,
                     constraints_json=r.constraints_json,
                     has_coscheduling=bool(r.has_coscheduling),
-                    coscheduling_group_by=r.coscheduling_group_by,
                     priority_band=job_pb2.PriorityBand.Name(r.priority_band),
                     preemption_policy=job_pb2.JobPreemptionPolicy.Name(r.preemption_policy),
                     existing_job_policy=job_pb2.ExistingJobPolicy.Name(r.existing_job_policy),
@@ -350,16 +331,9 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
                     scheduling_timeout_ms=r.scheduling_timeout_ms,
                     termination_grace_ms=r.termination_grace_ms,
                     task_image=r.task_image,
-                    name=r.name,
-                    setup_scripts_json=_setup_scripts_json(r.environment_json),
-                    entrypoint_json=_redacted_entrypoint_json(r.entrypoint_json),
-                    submit_argv_json=json.dumps(names_only_submit_argv(list(r.submit_argv_json))),
-                    bundle_id=r.bundle_id,
-                    ports_json=json.dumps(list(r.ports_json)),
                     fail_if_exists=bool(r.fail_if_exists),
                     container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
                     egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
-                    egress_allow_json=json.dumps(list(r.egress_allow_json)),
                     ts=ts,
                 )
             )

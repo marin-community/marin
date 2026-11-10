@@ -3,7 +3,9 @@
 
 """The controller's durable job, job config, task and attempt rows in Finelog."""
 
-import json
+import dataclasses
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 from iris.cluster.config import load_config
 from iris.cluster.controller import controller_rows, ops, writes
 from iris.cluster.controller.controller_rows import ControllerRowTables
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.main import _finelog_forwarding_cluster
 from iris.cluster.controller.ops.task import Assignment
@@ -361,64 +364,179 @@ def test_job_config_flattens_the_device_request(state, device, expected):
     assert (config.accelerator_kind, config.accelerator_type, config.accelerators_per_task) == expected
 
 
-def test_job_config_stores_no_environment_and_redacts_command_lines(state):
+def test_job_config_stores_no_environment_command_lines_or_other_user_text(state):
     rows = _attach(state, "marin")
     request = make_job_request("train")
     fake = {name: f"made-up-{name.lower()}" for name in ("HF_TOKEN", "WANDB_API_KEY", "CW_KEY_ID", "CW_KEY_SECRET")}
     request.environment.secrets.update(fake)
     request.environment.env_vars.update({"SERVICE_URL": "made-up-env-value"})
-    request.environment.setup_scripts.append(
-        "export HF_TOKEN=made-up-script-token && pip install --index-url https://u:made-up-url-pw@pypi.example/simple x"
-    )
+    request.environment.setup_scripts.append("export HF_TOKEN=made-up-script-token && pip install made-up-package")
     request.entrypoint.setup_commands.append("huggingface-cli login --token made-up-login-token")
-    request.entrypoint.run_command.argv[:] = [
-        "python",
-        "train.py",
-        "--hf-token",
-        "made-up-cli-token",
-        "--gcp-key=AIzaSyMADEUPmadeupMADEUPmadeupMADEUP12",
-        "ya29.made-up-oauth",
-    ]
+    request.entrypoint.run_command.argv[:] = ["python", "made-up-script.py", "--hf-token", "made-up-cli-token"]
     request.submit_argv[:] = ["iris", "job", "run", "-e", "SERVICE_URL", "made-up-argv-value", "--", "python"]
 
     submit_job(state, "train", request)
 
-    config = rows.job_configs[0]
-    assert json.loads(config.setup_scripts_json) == [
-        "export HF_TOKEN= && pip <redacted> --index-url <redacted> <redacted>"
-    ]
-    assert json.loads(config.entrypoint_json)["run_command"]["argv"] == [
-        "python",
-        "<redacted>",
-        "--hf-token",
-        "<redacted>",
-        "--gcp-key",
-        "<redacted>",
-    ]
-    written = repr([*rows.jobs, *rows.job_configs, *rows.attempts])
+    written = repr([*rows.jobs, *rows.job_configs, *rows.tasks, *rows.attempts])
     for value in [
+        *fake,
         *fake.values(),
+        "SERVICE_URL",
         "made-up-env-value",
+        "made-up-script",
+        "made-up-package",
+        "made-up-login-token",
         "made-up-cli-token",
         "made-up-argv-value",
-        "made-up-script-token",
-        "made-up-url-pw",
-        "made-up-login-token",
-        "AIzaSyMADEUP",
-        "ya29.",
     ]:
         assert value not in written
-    for name in [*fake, "SERVICE_URL"]:
-        assert name not in config.entrypoint_json
 
 
-def test_entrypoint_rows_never_carry_inline_file_contents():
-    entrypoint = {"workdir_files": {"notes.txt": "bWFkZS11cA=="}, "run_command": {"argv": ["python", "t.py"]}}
+# Every column of the four controller DB tables, classified by the rule in
+# docs/controller-rows.md ("Which columns are copied"). COPIED maps a DB column to
+# its Finelog field; EXCLUDED gives the reason a column is not copied; RETIRED
+# holds DB columns that were copied and no longer exist, whose Finelog fields stay
+# and read NULL.
+_COLUMNS: dict[str, tuple[type, dict[str, str], dict[str, str], set[str]]] = {
+    "jobs": (
+        IrisJob,
+        {
+            "job_id": "job_id",
+            "user_id": "user_id",
+            "submitting_user": "submitting_user",
+            "parent_job_id": "parent_job_id",
+            "root_job_id": "root_job_id",
+            "depth": "depth",
+            "state": "state",
+            "submitted_at_ms": "submitted_at_ms",
+            "root_submitted_at_ms": "root_submitted_at_ms",
+            "started_at_ms": "started_at",
+            "finished_at_ms": "finished_at",
+            "scheduling_deadline_epoch_ms": "scheduling_deadline_at",
+            "error": "error",
+            "exit_code": "exit_code",
+            "num_tasks": "num_tasks",
+            "name": "name",
+            "backend_id": "backend_id",
+            "cluster": "placement",
+        },
+        {},
+        set(),
+    ),
+    "job_config": (
+        IrisJobConfig,
+        {
+            "job_id": "job_id",
+            "res_cpu_millicores": "res_cpu_millicores",
+            "res_memory_bytes": "res_memory_bytes",
+            "res_disk_bytes": "res_disk_bytes",
+            "res_device_json": "res_device_json",
+            "constraints_json": "constraints_json",
+            "has_coscheduling": "has_coscheduling",
+            "scheduling_timeout_ms": "scheduling_timeout_ms",
+            "max_task_failures": "max_task_failures",
+            "max_retries_failure": "max_retries_failure",
+            "max_retries_preemption": "max_retries_preemption",
+            "timeout_ms": "timeout_ms",
+            "termination_grace_ms": "termination_grace_ms",
+            "preemption_policy": "preemption_policy",
+            "existing_job_policy": "existing_job_policy",
+            "priority_band": "priority_band",
+            "task_image": "task_image",
+            "fail_if_exists": "fail_if_exists",
+            "container_profile": "container_profile",
+            "egress_policy": "egress_policy",
+        },
+        {
+            "name": "duplicate",
+            "environment_json": "secret",
+            "entrypoint_json": "user-text",
+            "submit_argv_json": "user-text",
+            "bundle_id": "user-text",
+            "ports_json": "user-text",
+            "egress_allow_json": "user-text",
+            "coscheduling_group_by": "user-text",
+        },
+        set(),
+    ),
+    "tasks": (
+        IrisJobTask,
+        {
+            "task_id": "task_id",
+            "job_id": "job_id",
+            "task_index": "task_index",
+            "state": "state",
+            "error": "error",
+            "exit_code": "exit_code",
+            "submitted_at_ms": "task_submitted_at",
+            "started_at_ms": "started_at",
+            "finished_at_ms": "finished_at",
+            "max_retries_failure": "max_retries_failure",
+            "max_retries_preemption": "max_retries_preemption",
+            "current_attempt_id": "current_attempt_id",
+            "priority_neg_depth": "priority_neg_depth",
+            "priority_root_submitted_ms": "priority_root_submitted_ms",
+            "priority_insertion": "priority_insertion",
+            "priority_band": "priority_band",
+            "container_id": "container_id",
+            "status_message": "status_message",
+            "current_worker_id": "current_worker_id",
+            "current_worker_address": "current_worker_address",
+            "backend_id": "backend_id",
+            "cluster": "placement",
+        },
+        {},
+        set(),
+    ),
+    "task_attempts": (
+        IrisTaskAttempt,
+        {
+            "task_id": "task_id",
+            "attempt_id": "attempt_id",
+            "worker_id": "worker_id",
+            "state": "state",
+            "created_at_ms": "created_at",
+            "started_at_ms": "started_at",
+            "finished_at_ms": "finished_at",
+            "exit_code": "exit_code",
+            "error": "error",
+            "attempt_uid": "attempt_uid",
+            "backend_id": "backend_id",
+            "pod_name": "pod_name",
+            "pod_uid": "pod_uid",
+            "node_name": "node_name",
+            "terminal_reason": "terminal_reason",
+        },
+        {},
+        set(),
+    ),
+}
+_THIS_TEST = "lib/iris/tests/cluster/controller/test_controller_rows.py"
+_RULE = 'lib/iris/docs/controller-rows.md, "Which columns are copied"'
 
-    stored = json.loads(controller_rows._redacted_entrypoint_json(json.dumps(entrypoint)))
 
-    assert "workdir_files" not in stored
-    assert stored["run_command"]["argv"] == ["python", "<redacted>"]
+@pytest.mark.parametrize("table", sorted(_COLUMNS))
+def test_every_controller_db_column_is_classified(tmp_path, table):
+    row_class, copied, excluded, retired = _COLUMNS[table]
+    ControllerDB(db_dir=tmp_path).close()
+    with closing(sqlite3.connect(tmp_path / ControllerDB.DB_FILENAME)) as conn:
+        db_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    unclassified = sorted(db_columns - copied.keys() - excluded.keys())
+    assert not unclassified, (
+        f"controller DB table {table!r} has unclassified column(s) {unclassified}: classify each as "
+        f"COPIED or EXCLUDED in {_THIS_TEST}; see {_RULE}"
+    )
+    gone = sorted((copied.keys() | excluded.keys()) - db_columns)
+    assert not gone, (
+        f"controller DB table {table!r} no longer has column(s) {gone}: drop an EXCLUDED one, and move a "
+        f"COPIED one to RETIRED with its field made `| None = None` and a doc line, in {_THIS_TEST}; see {_RULE}"
+    )
+    fields = {field.name: field for field in dataclasses.fields(row_class)}
+    assert set(copied.values()) <= fields.keys()
+    for column in retired:
+        assert column not in db_columns
+        assert fields[column].default is None, f"retired field {row_class.__name__}.{column} must default to None"
 
 
 def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
