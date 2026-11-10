@@ -40,6 +40,7 @@ from marin.external_dependencies import (
     VLLM_GPU_RELEASE,
     VllmGpuRelease,
 )
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import (
     STANDARD_VLLM_METRIC_FAMILIES,
     VLLM_DATA_PARALLEL_SIZE_FLAGS,
@@ -899,7 +900,7 @@ class VllmEnvironment:
                 self.router = self._router_context.enter_context(
                     vllm_router(
                         self.router_config,
-                        (self.worker_server_url.removesuffix("/v1"),),
+                        (self.worker_server_url.removesuffix(OPENAI_API_SUFFIX),),
                         data_parallel_size=self._router_data_parallel_size,
                         host=self.host,
                         port=self.router_port,
@@ -1252,7 +1253,7 @@ def _start_vllm_native_process(
             _launch_vllm_process(
                 command=command,
                 environment=native_env,
-                server_url=f"http://{host}:{port}/v1",
+                server_url=f"http://{host}:{port}{OPENAI_API_SUFFIX}",
                 port=port,
                 log_dir=log_dir,
                 compilation_cache=cache,

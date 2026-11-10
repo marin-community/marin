@@ -364,6 +364,15 @@ before applying these declarations. See [Loom's watch documentation](https://git
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
 the IaC fields. Custom script files must already exist on the Loom server.
 
+## Doc sessions
+
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
+record of the work is the branch artifact `doc`, with progress updates in the
+artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
+The profile sets `docArtifact: doc`. Loom's
+[session doc](https://github.com/marin-community/loom/blob/main/docs/artifacts.md#the-session-doc)
+describes the Doc tab, comments, and the message that a person's edit sends.
+
 ## claude.ai connector
 
 The `connector.enabled` setting serves Loom's claude.ai connector, a Streamable

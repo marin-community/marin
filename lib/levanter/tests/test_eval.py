@@ -16,6 +16,7 @@ from jax._src import config as jax_config
 
 from levanter.callbacks import ProgressEvent
 from levanter.data.dataset import ListAsyncDataset
+from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.text.examples import (
     GrugLmExample,
     LabeledLmExample,
@@ -31,6 +32,7 @@ from levanter.eval import (
     LossLabelSpec,
     TaggedEvaluator,
     cb_tagged_evaluate,
+    construct_log_dict,
 )
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
@@ -82,6 +84,38 @@ async def test_tagged_evaluator_shuffle_reorders_combined_dataset_and_preserves_
     for example, tags in shuffled:
         expected_tags = [1, 0] if example.item() < 100 else [0, 1]
         assert tags.tolist() == expected_tags
+
+
+def test_tagged_evaluator_excludes_unscored_tags_from_macros_and_logs():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    first = ListAsyncDataset([jnp.array([0, 0], dtype=jnp.int32)] * EvalBatch.size)
+    second = ListAsyncDataset([jnp.array([4, 4], dtype=jnp.int32)] * (2 * EvalBatch.size))
+    empty = ListAsyncDataset([])
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        return batch.astype(jnp.float32), jnp.ones_like(batch, dtype=jnp.float32), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[
+                (first, ["paloma/first"]),
+                (second, ["paloma/second"]),
+                (empty, ["paloma/empty"]),
+                (empty, ["other/empty"]),  # a parent with no scored child
+            ],
+            loss_fn=loss_fn,
+            tokenizer=PassthroughTokenizer(10),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        log_dict = construct_log_dict(evaluator, evaluator.evaluate(jnp.zeros(())), 0.0, prefix="eval")
+
+    # The unequal corpus sizes separate the macro, 2.0, from the micro, 8/3. Averaging in the empty tags would give 1.0.
+    assert log_dict["eval/macro_loss"] == pytest.approx(2.0)
+    assert log_dict["eval/macro_bpb"] == pytest.approx(2.0 / np.log(2))
+    assert "eval/paloma/first/loss" in log_dict
+    assert not [key for key in log_dict if "empty" in key or "eval/other" in key]
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

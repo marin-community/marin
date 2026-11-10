@@ -126,6 +126,13 @@ config:
       <<: *interactiveProfile
       description: Tasks handed off from claude.ai through the Loom connector
       instructionsFile: profiles/claude/AGENTS.md
+    doc:
+      <<: *interactiveProfile
+      description: Marin work recorded in a Loom doc that people edit and comment on
+      agent: claude
+      model: claude-opus-5-5
+      instructionsFile: profiles/doc/AGENTS.md
+      docArtifact: doc
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs

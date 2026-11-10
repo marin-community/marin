@@ -1,0 +1,145 @@
+name: "Marin - Canary - Snowball vLLM parity"
+
+on:
+  schedule:
+    - cron: '17 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: snowball-vllm-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  logprob-check:
+    name: Snowball parity (${{ matrix.arm }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: gpu
+            target_cluster: cw-us-east-02a
+            selector: vllm-gpu
+          - arm: tpu
+            target_cluster: ''
+            selector: vllm-tpu-v4-tp16
+    runs-on: ubuntu-latest
+    timeout-minutes: 230
+    outputs:
+      # Empty outputs are skipped by the runner; each leg publishes only its own keys.
+      gpu_result: ${{ matrix.arm == 'gpu' && job.status || '' }}
+      gpu_resource_exhausted: ${{ matrix.arm == 'gpu' && steps.wait.outputs.resource_exhausted || '' }}
+      tpu_result: ${{ matrix.arm == 'tpu' && job.status || '' }}
+      tpu_resource_exhausted: ${{ matrix.arm == 'tpu' && steps.wait.outputs.resource_exhausted || '' }}
+    env:
+      RUN_ID: snowball-vllm-${{ matrix.arm }}-${{ github.run_id }}-${{ github.run_attempt }}
+      TARGET_CLUSTER: ${{ matrix.target_cluster }}
+      SELECTOR: ${{ matrix.selector }}
+      IRIS_CONFIG: lib/iris/config/marin.yaml
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+      - name: Submit Snowball parity tests
+        id: submit
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          target_args=()
+          if [ -n "$TARGET_CLUSTER" ]; then
+            target_args=(--target-cluster "$TARGET_CLUSTER")
+          fi
+          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" job run --no-wait "${target_args[@]}" --no-preemptible --max-retries 0 --priority production \
+            --job-name "$RUN_ID" --timeout 12600 \
+            --include tests/__init__.py --include tests/conftest.py \
+            --include tests/cluster/__init__.py --include tests/cluster/conftest.py \
+            --include tests/cluster/vllm/__init__.py --include tests/cluster/vllm/conftest.py \
+            --include tests/cluster/vllm/test_snowball_backend_parity.py \
+            --cpu 2 --memory 8G --disk 32G --enable-extra-resources --extra cpu \
+            -e JAX_PLATFORMS cpu \
+            -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" -e HF_TOKEN "$HF_TOKEN" \
+            -- uv run --package marin-core --group test --extra cpu pytest \
+            tests/cluster/vllm/test_snowball_backend_parity.py \
+            -m cluster -o addopts= --import-mode=importlib -x -k "$SELECTOR")
+          test -n "$JOB_ID"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
+      - name: Wait for Snowball parity tests
+        id: wait
+        timeout-minutes: 210
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/ci/iris_monitor.py wait \
+            --job-id "${{ steps.submit.outputs.job_id }}" --iris-config "$IRIS_CONFIG" \
+            --child-wait-timeout 1500 --child-wait-timeout-policy shutdown \
+            --resource-exhaustion-policy shutdown --github-output
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
+        continue-on-error: true
+        run: |
+          uv run python scripts/ci/iris_monitor.py collect \
+            --job-id "${{ steps.submit.outputs.job_id }}" --iris-config "$IRIS_CONFIG" \
+            --output-dir parity-diagnostics --provider gcp \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --service-account iris-controller@hai-gcp-models.iam.gserviceaccount.com \
+            --ssh-key ~/.ssh/google_compute_engine
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: snowball-parity-diagnostics-${{ matrix.arm }}
+          path: parity-diagnostics/
+          if-no-files-found: ignore
+      - name: Mark resource exhaustion as failure
+        if: steps.wait.outputs.resource_exhausted == 'true'
+        run: |
+          echo "Snowball parity did not run because Iris could not admit capacity." >&2
+          exit 1
+
+  notify-slack:
+    needs: logprob-check
+    if: |
+      always() && github.event_name == 'schedule' &&
+      (needs.logprob-check.result == 'failure' || needs.logprob-check.result == 'cancelled') &&
+      !(
+        (needs.logprob-check.outputs.gpu_result == 'failure' || needs.logprob-check.outputs.tpu_result == 'failure') &&
+        (needs.logprob-check.outputs.gpu_result == 'success' ||
+          (needs.logprob-check.outputs.gpu_result == 'failure' && needs.logprob-check.outputs.gpu_resource_exhausted == 'true')) &&
+        (needs.logprob-check.outputs.tpu_result == 'success' ||
+          (needs.logprob-check.outputs.tpu_result == 'failure' && needs.logprob-check.outputs.tpu_resource_exhausted == 'true'))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: "Snowball vLLM parity failed. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

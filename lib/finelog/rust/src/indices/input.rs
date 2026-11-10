@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -25,6 +26,23 @@ pub(crate) struct ObjectInputs {
 }
 
 const INDEX_READ_BUDGET: Duration = Duration::from_millis(500);
+
+#[derive(Default)]
+pub(crate) struct IndexReadStats {
+    pub range_reads: AtomicU64,
+    pub range_bytes: AtomicU64,
+    pub cache_hits: AtomicU64,
+    pub unavailable: AtomicU64,
+    pub timed_out: AtomicU64,
+    pub corrupt: AtomicU64,
+    pub stale: AtomicU64,
+    pub missing_bundle: AtomicU64,
+}
+
+pub(crate) struct IndexReadScope {
+    pub deadline: tokio::time::Instant,
+    pub stats: Arc<IndexReadStats>,
+}
 
 impl ObjectInputs {
     pub fn new(
@@ -123,6 +141,53 @@ impl<'a> BundleInput<'a> {
         }
     }
 
+    /// Read an object-backed directory within the current file's optional budget.
+    pub(crate) async fn read_header_bytes(
+        &self,
+        scope: &IndexReadScope,
+    ) -> Result<(bytes::Bytes, u64), BundleReadError> {
+        let objects = self.objects.ok_or(Unavailable)?;
+        let reference = objects.references.get(self.path).ok_or(Unavailable)?;
+        let prefix = read_before(
+            objects.store.as_ref(),
+            reference,
+            0..format::FIXED_PREFIX_LEN as u64,
+            scope,
+        )
+        .await?;
+        let header_len = format::peek_header_len(&prefix).ok_or(Corrupt)?;
+        if header_len > format::MAX_HEADER_LEN || header_len as u64 > reference.version.byte_size {
+            return Err(Corrupt);
+        }
+        let bytes = read_before(
+            objects.store.as_ref(),
+            reference,
+            0..header_len as u64,
+            scope,
+        )
+        .await?;
+        Ok((bytes, reference.version.byte_size))
+    }
+
+    pub(crate) async fn read_section_bytes(
+        &self,
+        header: &BundleHeader,
+        id: &str,
+        scope: &IndexReadScope,
+    ) -> Result<bytes::Bytes, BundleReadError> {
+        let objects = self.objects.ok_or(Unavailable)?;
+        let reference = objects.references.get(self.path).ok_or(Unavailable)?;
+        let section = header.section(id).ok_or(Corrupt)?;
+        let bytes = read_before(
+            objects.store.as_ref(),
+            reference,
+            section.offset..section.offset.checked_add(section.len).ok_or(Corrupt)?,
+            scope,
+        )
+        .await?;
+        Ok(bytes)
+    }
+
     pub fn read_header(&self) -> Result<BundleHeader, BundleReadError> {
         let Some(objects) = self.objects else {
             return format::read_header(self.path).ok_or_else(|| {
@@ -177,5 +242,38 @@ impl<'a> BundleInput<'a> {
             return Err(Corrupt);
         }
         Ok(bytes.to_vec())
+    }
+}
+
+async fn read_before(
+    store: &dyn ObjectStore,
+    reference: &ObjectReference,
+    range: std::ops::Range<u64>,
+    scope: &IndexReadScope,
+) -> Result<bytes::Bytes, BundleReadError> {
+    if tokio::time::Instant::now() >= scope.deadline {
+        scope.stats.timed_out.fetch_add(1, Ordering::Relaxed);
+        return Err(Unavailable);
+    }
+    scope.stats.range_reads.fetch_add(1, Ordering::Relaxed);
+    scope
+        .stats
+        .range_bytes
+        .fetch_add(range.end - range.start, Ordering::Relaxed);
+    match tokio::time::timeout_at(scope.deadline, store.read_range(reference, range)).await {
+        Ok(Ok(Some(bytes))) => Ok(bytes),
+        Ok(Err(error)) => {
+            scope.stats.unavailable.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(%error, object = reference.id.as_str(), "index range unavailable; scan source");
+            Err(Unavailable)
+        }
+        Ok(Ok(None)) => {
+            scope.stats.unavailable.fetch_add(1, Ordering::Relaxed);
+            Err(Unavailable)
+        }
+        Err(_) => {
+            scope.stats.timed_out.fetch_add(1, Ordering::Relaxed);
+            Err(Unavailable)
+        }
     }
 }
