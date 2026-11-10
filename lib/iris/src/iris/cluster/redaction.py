@@ -166,28 +166,36 @@ def names_only_submit_argv(argv: list[str]) -> list[str]:
 def names_only_script(script: str) -> str:
     """Reduce a shell script or command string the same way, statement by statement.
 
-    Backslash-continued lines are joined first. Each line is tokenized with
-    :mod:`shlex`; a line that does not parse becomes ``<unparsed>``, and every
-    line of a heredoc body becomes ``<redacted>``.
+    Line endings are normalized and backslash-continued lines joined first. Each
+    statement is tokenized with :mod:`shlex`; a quoted string that spans lines is
+    read up to its closing quote and reduced as one statement, every line of a
+    heredoc body becomes ``<redacted>``, and a statement that never parses
+    becomes ``<unparsed>``.
     """
-    lines = []
+    normalized = script.replace("\r\n", "\n").replace("\r", "\n").replace("\\\n", " ")
+    out: list[str] = []
     heredoc_ends: list[tuple[str, bool]] = []
-    for line in script.replace("\\\n", " ").splitlines():
+    pending: str | None = None
+    for line in normalized.split("\n"):
         if heredoc_ends:
             delimiter, strip_tabs = heredoc_ends[0]
             if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                 heredoc_ends.pop(0)
-                lines.append(delimiter)
+                out.append(delimiter)
             else:
-                lines.append(NAMES_ONLY_REDACTED)
+                out.append(NAMES_ONLY_REDACTED)
             continue
-        heredoc_ends = [(match.group(3), match.group(1) == "-") for match in _HEREDOC_RE.finditer(line)]
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        statement = line if pending is None else f"{pending}\n{line}"
+        lexer = shlex.shlex(statement, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         try:
             tokens = list(lexer)
         except ValueError:
-            lines.append(NAMES_ONLY_UNPARSED)
+            pending = statement
             continue
-        lines.append(" ".join(_names_only(tokens)))
-    return "\n".join(lines)
+        pending = None
+        heredoc_ends = [(match.group(3), match.group(1) == "-") for match in _HEREDOC_RE.finditer(statement)]
+        out.append(" ".join(_names_only(tokens)))
+    if pending is not None:
+        out.append(NAMES_ONLY_UNPARSED)
+    return "\n".join(out)

@@ -36,7 +36,8 @@ changed columns as redacted, never as the controller's own values:
 (`NAME=`). A command word is the first token of a statement (the line, or after
 `&&`, `||`, `;`, `|` or `&`) that is neither a flag nor an assignment, and it is
 kept only if it looks like a program name (`python`, `./run.sh`) with no
-token-like string in it. Every value, positional argument and quoted string,
+token-like string in it. So a short, plain-looking value written as the very
+first word of a statement is still kept; nothing else in a command is. Every value, positional argument and quoted string,
 including a whole `bash -c "..."` body and everything after `--`, is
 `<redacted>`. Backslash-continued lines are joined first, every line of a
 heredoc body is `<redacted>`, and a line that does not parse is `<unparsed>`. In
@@ -121,8 +122,8 @@ ORDER BY accelerator_hours DESC;
 (`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
 submit.
 
-`error` is copied in full, as the controller DB stores it (like
-`iris.task_event.message`, it is not truncated).
+`error` is not truncated, but token-like strings in it are redacted (see
+**Free text** above).
 
 Rows are appended, never replaced: an entity has one row per state change.
 Its current state is its newest row, ordered by `ts DESC, seq DESC`. A row is

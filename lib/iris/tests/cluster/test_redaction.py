@@ -272,6 +272,8 @@ _SCRIPT_SHAPES = [
     "-p {s}",
     "huggingface-cli login -- {s}",
     "pip install --index-url {s} x",
+    "docker login \\\r\n  -p {s}\r\n",
+    'python -c "import os\n{s}\nprint(1)"',
 ]
 
 
@@ -279,3 +281,13 @@ _SCRIPT_SHAPES = [
 @pytest.mark.parametrize("shape", _SCRIPT_SHAPES)
 def test_no_value_survives_names_only_script_shapes(shape, secret):
     assert secret not in names_only_script(shape.format(s=secret))
+
+
+def test_names_only_script_joins_crlf_continuations():
+    assert names_only_script("docker login \\\r\n  -p made-up-crlf-secret\r\nuv sync") == f"docker {R} -p {R}\nuv {R}"
+
+
+def test_names_only_script_reads_a_multiline_quote_as_one_statement():
+    script = 'python -c "import os\nmade-up-midline-secret\nprint(1)" && uv sync\necho "never closed\nmade-up-tail'
+
+    assert names_only_script(script) == f"python -c {R} && uv {R}\n{NAMES_ONLY_UNPARSED}"
