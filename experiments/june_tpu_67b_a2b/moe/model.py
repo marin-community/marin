@@ -8,16 +8,17 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import functools
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
 from haliax.jax_utils import named_call
-from jax import random
+from jax import random, shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
@@ -42,6 +43,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
+from levanter.kernels.pallas.qk_norm_rope import qk_norm_rope, rope_tables
 from levanter.layers.stacked import ArrayStacked
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -54,6 +56,9 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+QkNormRope = Literal["xla", "pallas"]
+# The q/k head norm's epsilon (``rms_norm``'s default).
+_QK_NORM_EPS = 1e-6
 
 
 def _batch_spec() -> P:
@@ -143,6 +148,13 @@ class GrugModelConfig:
     them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
+    qk_norm_rope: QkNormRope = "xla"
+    """How the attention normalizes, rotates and scales q and k per head. "xla" runs ``rms_norm``, the half-RoPE
+    rotation and the ``qk_mult`` scale as separate ops, which XLA splits into several kernels per tensor and direction.
+    "pallas" computes all three in one Pallas-Triton kernel per direction, whose backward recomputes the norm's
+    statistic from the saved input (``levanter.kernels.pallas.qk_norm_rope``; GPU only, the Pallas interpreter on
+    CPU). It rounds where the separate ops do and differs from "xla" only in how the float32 statistic is summed
+    (about one bfloat16 ulp in a few elements)."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -164,6 +176,8 @@ class GrugModelConfig:
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         validate_moe_implementation(self.moe_implementation)
+        if self.qk_norm_rope not in get_args(QkNormRope):
+            raise ValueError(f"unknown qk_norm_rope {self.qk_norm_rope!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -219,6 +233,31 @@ def _apply_half_rope(
         return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(dtype)
 
     return _apply(q), _apply(k)
+
+
+def _pallas_qk_head_norm(
+    x: Float[Array, "B S H D"],
+    position_ids: Int[Array, "B S"] | None,
+    *,
+    rope: RotaryConfig,
+    apply_rope: bool,
+    scales: tuple[float, ...],
+) -> Float[Array, "B S H D"]:
+    """``rope(rms_norm(x)) * scales`` per head with the Pallas kernels, per device under a ``shard_map`` over the
+    batch and head shards."""
+    x_spec = P(_BATCH_AXES, None, "model", None)
+    if position_ids is None:
+        positions, positions_spec = jnp.arange(x.shape[1], dtype=jnp.float32)[None, :], P(None, None)
+    else:
+        positions, positions_spec = position_ids.astype(jnp.float32), P(_BATCH_AXES, None)
+
+    def local(x, positions):
+        cos, sin = rope_tables(positions, x.shape[-1] // 4, rope.theta)
+        return qk_norm_rope(x, cos, sin, eps=_QK_NORM_EPS, rope=apply_rope, scales=scales, impl="pallas")
+
+    x = reshard(x, x_spec)
+    positions = reshard(positions, positions_spec)
+    return shard_map(local, in_specs=(x_spec, positions_spec), out_specs=x_spec, check_vma=False)(x, positions)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -301,24 +340,31 @@ class CausalSelfAttention(eqx.Module):
             k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
 
-        q = rms_norm(q)
-        k = rms_norm(k)
         cfg = self.cfg
-        if not disable_rope:
-            # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
-            # Second half is rope-free on every layer.
-            half = head_dim // 2
-            q_rot, k_rot = _apply_half_rope(
-                q[..., :half],
-                k[..., :half],
-                seq_len=seq_len,
-                head_dim=half,
-                rope=cfg.rope,
-                position_ids=position_ids,
+        if cfg.qk_norm_rope == "pallas":
+            head_norm = functools.partial(
+                _pallas_qk_head_norm, position_ids=position_ids, rope=cfg.rope, apply_rope=not disable_rope
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * cfg.qk_mult * qk_mult_scale
+            q = head_norm(q, scales=(cfg.qk_mult, qk_mult_scale))
+            k = head_norm(k, scales=())
+        else:
+            q = rms_norm(q)
+            k = rms_norm(k)
+            if not disable_rope:
+                # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
+                # Second half is rope-free on every layer.
+                half = head_dim // 2
+                q_rot, k_rot = _apply_half_rope(
+                    q[..., :half],
+                    k[..., :half],
+                    seq_len=seq_len,
+                    head_dim=half,
+                    rope=cfg.rope,
+                    position_ids=position_ids,
+                )
+                q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+                k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            q = q * cfg.qk_mult * qk_mult_scale
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
@@ -841,6 +887,7 @@ __all__ = [
     "GrugModelConfig",
     "MoEMLP",
     "MoeActivation",
+    "QkNormRope",
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",

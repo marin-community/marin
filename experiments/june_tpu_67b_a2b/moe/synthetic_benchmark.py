@@ -47,7 +47,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, QkNormRope, RematMode
 from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
     GrugTrainerConfig,
@@ -143,6 +143,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
     parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
     parser.add_argument(
+        "--qk-norm-rope",
+        choices=get_args(QkNormRope),
+        default="xla",
+        help="How attention normalizes, rotates (half-RoPE) and scales q and k: separate ops (xla), or one "
+        "Pallas-Triton kernel per direction (pallas, GPU only) (GrugModelConfig.qk_norm_rope).",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -187,6 +194,7 @@ def main() -> None:
         attention_implementation=args.attention,
         moe_implementation=args.moe_impl,
         remat_mode=args.remat_mode,
+        qk_norm_rope=args.qk_norm_rope,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
     )
@@ -262,7 +270,7 @@ def main() -> None:
     logger.info(
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
         "expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s "
-        "watch_interval=%d flops_per_example=%.4e",
+        "qk_norm_rope=%s watch_interval=%d flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -282,6 +290,7 @@ def main() -> None:
         model.pooled_transport_capacity_factor,
         model.num_expert_waves,
         args.remat_mode,
+        model.qk_norm_rope,
         args.watch_interval,
         flops_per_example,
     )
