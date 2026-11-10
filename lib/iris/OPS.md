@@ -130,10 +130,11 @@ uv run python scripts/ops/old_iris_jobs.py --min-age-days 7 --cluster marin \
   --state /tmp/old-iris-jobs/state.json --message /tmp/old-iris-jobs/message.md
 ```
 
-The `marin` hub covers the jobs it federates. Add `--cluster <cw-cluster>` for
-jobs submitted directly to a CoreWeave controller; this needs CoreWeave
-kubeconfig access. The script lists only jobs that are not in the `--state`
-file, then replaces the file; remove it to list every old job again.
+The `marin` hub covers the jobs it federates. For jobs submitted directly to a
+CoreWeave controller, run it again with `--cluster <cw-cluster>` and a separate
+`--state` file; this needs CoreWeave kubeconfig access. The script lists only
+jobs that are not in the `--state` file, then replaces the file; remove it to
+list every old job again.
 
 ### Submitting a GPU gang from a workstation
 
