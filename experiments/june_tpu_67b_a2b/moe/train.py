@@ -239,6 +239,7 @@ def _compute_flops(
         num_experts_per_tok=model_config.num_experts_per_token,
         sliding_window=model_config.sliding_window,
         num_full_attention_layers=num_full_attention_layers,
+        head_dim=model_config.inferred_head_dim,
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
     attention = lm_attention_flops_per_token(
@@ -248,6 +249,7 @@ def _compute_flops(
         seq_len=model_config.max_seq_len,
         sliding_window=model_config.sliding_window,
         num_full_attention_layers=num_full_attention_layers,
+        head_dim=model_config.inferred_head_dim,
     )
 
     flops_summary: dict[str, float] = {
