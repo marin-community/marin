@@ -17,8 +17,6 @@ Before launching:
 - BixBench and BFCL standalone Pi policies need prepared Pi images. Changed benchmark
   policies need a new approved cohort version. See [verified cohorts](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
   Historical tasks that install Pi at runtime fail preflight.
-- Codex and Claude Code fail Marin preflight because the model relay does not support
-  their required protocols.
 - Use a new results root if the old root has no recorded evaluator identity.
 
 ## Run a benchmark
@@ -43,7 +41,7 @@ Use `--harbor-config` for a policy outside the catalog:
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 --dry-run
 ```
 
@@ -71,7 +69,7 @@ hash. To resume the AIME example:
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 --resume-results-path "$RESULTS_ROOT"
 ```
 
@@ -178,7 +176,7 @@ Compose tasks provide `environment/shellbox-images.json`:
 ```json
 {
   "main": {"image": "registry.example/main@sha256:<64-hex-digest>", "workdir": "/app"},
-  "tau3-runtime": {
+  "helper": {
     "image": "registry.example/runtime@sha256:<64-hex-digest>",
     "workdir": "/app",
     "agent_logs": "publish"
@@ -202,33 +200,9 @@ unless Compose overrides them. The evaluator does not build images or start nest
 A sidecar exit closes the whole local task, including the agent. Grading cannot continue
 inside that task.
 
-The prepared local path supports host-side agents, image-provided Pi and Pi/ACP, and Tau3's
-user relay. Other installed agents and arbitrary agent imports are rejected on this path.
-
-For a reviewed Tau3 task:
-
-```bash
-uv run python -m experiments.evaluation.images.tau3.build \
-  --task prepared-tasks/tau3-airline-0
-```
-
-The helper reuses the pinned Pi/ACP main image. It builds a runtime image with the task's
-server and `task_config.json`, then writes `shellbox-images.json`. Set
-`allow_internet = false` in `task.toml` and save the prepared snapshot as a Marin artifact.
-See the [image recipe](https://github.com/marin-community/marin/tree/main/experiments/evaluation/images/tau3)
-for registry setup.
-
-To check Tau3 grading, use a prepared task with a natural-language assertion and a policy
-that declares candidate and judge endpoints:
-
-```bash
-uv run --isolated --project vendor/harbor --frozen --extra runtime \
-  python vendor/harbor/tests/local_tau3_smoke.py local-tau3.json \
-  --api-key-env GLM_BULK_TOKEN
-```
-
-The smoke test requires a score and assertion results. A score of zero is valid.
-Infrastructure failures fail the test.
+The prepared local path accepts Pi, Mini-SWE-Agent, Codex, OpenCode,
+Terminus-2, and Terminus-Kira. Preflight rejects unsupported agents and
+simulated users before task allocation.
 
 Standalone Pi tasks, including single-container tasks, must declare a digest-pinned
 `main` image with Pi installed in `environment/shellbox-images.json`.
@@ -238,19 +212,8 @@ setup checks it against the installed binary. On local execution, the manifest s
 the image. A `docker_image` in `task.toml`, if present, must match. This requirement applies
 to the BixBench and BFCL Pi campaign policies and the one-task onboarding ablation.
 
-ACP Pi images need `node`, `pi`, `pi-acp`, and
-`/opt/harbor-acp-venv/bin/python` with `agent-client-protocol`. The companion pins are
-`@earendil-works/pi-coding-agent@0.80.5` and `pi-acp@0.0.33`. ACP bridges also need
-`acpx@0.12.0`. Tau3's simulated-user relay needs `mcp==1.25.0` under `python3`.
-
-For Tau3, supply `--judge-model`. That model serves the simulated user and verifier.
-The candidate keeps its own endpoint. The Pi/ACP candidate receives domain tools.
-The benchmark relay controls user turns and checks runtime status after each turn.
-Runtime MCP failures are infrastructure errors. Candidate process failures keep their
-agent classification.
-
 A sidecar declaring `agent_logs: "publish"` has its logs copied into the actor's agent-log
-directory after the agent phase, before verification. This supports Tau3's verifier.
+directory after the agent phase, before verification.
 There is no shared writable volume. Actor writes do not flow back to the sidecar.
 
 ### Local factory settings
@@ -319,14 +282,14 @@ the host. Candidate and judge credentials are separate.
 | Relay | Port | Access |
 | --- | --- | --- |
 | Candidate | 8788 | Installed candidate agents on local and Daytona backends. |
-| Judge | 8787 | Available during verification. Tau3 and Sotopia also use it during execution. |
+| Judge | 8787 | Available during verification, or during execution when `judge_access: runtime` is set. |
 
 Both relays support `POST /v1/chat/completions`, `POST /v1/responses` and `POST /tokenize`.
 Each relay calls one fixed upstream model. It rejects redirects, limits request and response
 sizes, and returns sanitized provider error codes. Responses supports non-streaming text,
 output limits and reasoning options. Tools, stored responses and stateful continuations are unsupported.
 Streaming chat is buffered: the guest receives SSE frames after the complete response
-arrives. Codex and Claude Code need routes or features outside this contract.
+arrives. Some Codex features need routes outside this contract.
 
 `judge_access: verifier` opens the judge relay only during grading. Before opening it,
 local execution stops remaining agent command groups. Ordinary grading preserves services
@@ -334,8 +297,8 @@ from successful commands. A grader needing both a live agent service and private
 access needs separate isolation. Daytona cannot confirm that every detached candidate
 process has stopped before grading.
 
-`judge_access: runtime` keeps the judge available during execution. Marin selects it for
-Tau3 and Sotopia. Direct callers must request it. Every peer sharing the task network can
+`judge_access: runtime` keeps the judge available during execution. Direct callers must
+request it. Every peer sharing the task network can
 reach that relay, including the candidate. Tool filtering does not provide network isolation.
 
 Local bubblewrap shares the worker's kernel. Use isolated workers. These contracts do not
@@ -351,8 +314,7 @@ A retry replaces its same-name registration. Saved job and trial JSON redacts th
 credential-bearing URLs. Resume supplies new URLs.
 
 `agents[0].model_name` stores the original model location with a `hosted_vllm/` prefix.
-`model_alias` routes requests to the served model. SOTOPIA uses
-the original location without that prefix for cohort matching. Moving an endpoint or
+`model_alias` routes requests to the served model. Moving an endpoint or
 changing its alias does not change the recorded model identity.
 
 ## Agent context limits
@@ -368,8 +330,7 @@ Terminus-2 receives the output limit as `llm_call_kwargs.max_tokens`. Lower expl
 limits win. Higher ones fail preflight. Mini-SWE 2.1.0 uses `/tokenize` to count the full
 rendered prompt, including tools, and leaves room for the reply within the total context.
 When context runs out, Mini-SWE stops and Harbor can grade the existing work.
-Installed harnesses must enforce their limits. Sotopia generation does not yet enforce
-`model_info` context limits.
+Installed harnesses must enforce their limits.
 
 For Terminus, use `llm_backend="openai"` and an OpenAI-compatible `api_base`. For proxies
 without `/tokenize`, set `tokenizer_encoding`, such as `cl100k_base`, when tiktoken cannot
@@ -377,10 +338,8 @@ identify the model. These are estimates. Exact counts require the serving tokeni
 Optional `input_cost_per_token` and `output_cost_per_token` are USD per token. Harbor does
 not look up limits or prices in a model registry.
 
-LiteLLM is excluded from workspace and standalone evaluation environments. Aider, SWE-agent,
-OpenHands and OpenHands SDK installation is blocked. Preinstalled Aider is also blocked.
-Copilot CLI is unsupported because it needs GitHub authentication without a guest relay.
-Use Mini-SWE, Terminus, or NeMo's OpenAI backend with a compatible endpoint.
+LiteLLM is excluded from workspace and standalone evaluation environments. Use one of
+the six supported agents named in the vendored runtime README.
 
 ## Results
 
@@ -398,10 +357,6 @@ An incomplete selected attempt prevents sealing, which marks the archive complet
 A later successful retry can complete the run. Resume can recover matching finalized
 Harbor files and rebuild derived tables. It keeps the original artifacts from every
 attempt. Only selected final attempts contribute normalized rows.
-
-Tau3 ACP trials keep raw ACPX exports at `agent/bridge-trajectory.json`. They do not
-produce ATIF `agent/trajectory.json`, derived steps or rollouts. Their scored samples record
-that expected absence explicitly.
 
 ### Trial error taxonomy
 

@@ -49,8 +49,11 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Inference export
 
-Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Neither exporter accepts a model with log scaling,
-so the current run's 262K checkpoints cannot be exported yet. The device
+Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Every export writes
+`grugmoe_artifact_schema_version` 3 with `log_scaling_n_floor`, `log_scaling_alpha` and `log_scaling_power` in
+`config.json`, null when log scaling is off. Serving and training stacks that predate schema 3, including the pinned
+Marin vLLM wheel and SkyRL, reject these exports rather than apply only the fixed per-layer scale. Exports written
+before schema 3 keep their schema-2 configuration. The device
 exporter below remains a byte-parity reference and supports checkpoint layouts
 handled by the native loader, including flat checkpoints.
 
@@ -212,8 +215,8 @@ The current run is `hero-lce-log65536sq-step390k`. It trained the 262K extension
 `s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491`, the starting point
 for downstream training. The comparison against a global 1.84 arm is in the
 [#8435 result](https://github.com/marin-community/marin/issues/8435#issuecomment-6748198431) and
-[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Inference export and the Hugging Face
-upload refuse log scaling, so they cannot convert this run's checkpoints yet.
+[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Its exports carry log scaling in
+`config.json` (see [Inference export](#inference-export)); serving them needs a vLLM Grug model that applies it.
 
 Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
 for preflight, the 200-step trial, and rollback. `current_run.py` records the
@@ -299,8 +302,8 @@ only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-sca
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
 keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
 the floor are unchanged. At the end of a 262K document, a floor of 65536 gives `1 + 1.386 * log_scaling_alpha` and a floor of 128000
-gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
-Hero exports and upload, refuses log scaling instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
+gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. `to_hf_config` writes the three fields with artifact schema 3, so a serving or training stack that applies only a
+fixed scale per layer rejects the export instead of running the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
@@ -664,6 +667,89 @@ python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
 
 Submit a rung through the Marin Iris controller as with the launchers above, swapping the module and
 passing `--size`. Runs report to W&B group `moe-hero-ep-scaling-ladder`.
+
+### Full-model SFT
+
+`launch_hero_sft.py` continues a hero checkpoint on the SFT recipe of
+`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05`. It reads the CoreWeave copies of the SFT
+stores listed in `hero_sft_stores_2026_09_29.json`, with replay from the hero's 262K Harrier mix,
+one epoch per store. The run resumes the checkpoint's optimizer state. At the start step, it reseeds
+the seven chat special-token columns of the LM head from single-token anchors.
+
+| Option | Meaning |
+| --- | --- |
+| `--initialize-from-checkpoint` | Complete checkpoint to continue; its `metadata.json` step is the start step |
+| `--muon-lr`, `--adam-lr` | Peak MuonH/AdamH and Adam rates: constant, then linear decay to 0.1× over the final 10% |
+| `--max-grad-norm` | Global gradient-norm clip, or `none` |
+| `--replay-fraction` | Target replay share of each mixture block |
+| `--dp-racks` | Data-parallel racks, 16 sequences each |
+| `--router-bias` | `frozen` (default) keeps the restored router bias; `update` keeps quantile balancing on |
+| `--capacity-factor` | Routed expert capacity per shard; 1.625 (default) is the highest that fits in HBM, and the hero trained at 1.5 |
+| `--stop-after-steps` | Stop after this many updates; unset runs the full epoch |
+| `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
+| `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
+| `--expert-placement` | Expert placement JSON that renumbers the start checkpoint's routed experts |
+
+Every option above except `--router-bias`, `--capacity-factor` and the last four is required. `GrugTrainerConfig`
+gains `router_bias_mode`, `special_tokens` (`SpecialTokenInit`), and `expert_placement` (`ExpertPlacement`);
+their defaults leave pretraining unchanged.
+
+#### Expert placement
+
+The ragged expert-parallel transport drops a routed assignment when the capacity block that holds its expert
+is full. A capacity block is a contiguous run of global expert ids within one expert shard: 12 experts at
+EP16. With a frozen router bias, SFT data loads a few experts at 15-35 times the mean, so the blocks holding
+them overflow. At capacity factor 1.5 the one-rack smoke `hero-sft-smoke-v2` dropped 5.0% of assignments.
+
+An expert placement renumbers each layer's experts so every block carries a similar load. It moves the router
+columns, router bias, QB betas, expert weights, and their optimizer moments together, so the model computes the
+same function. The trainer applies it once, when it restores the placement's source checkpoint. Each checkpoint
+the run saves records the placement in its `metadata.json`, under `expert_placement`, and a restart from one is
+not placed again. The trainer refuses to restore a checkpoint whose recorded placement is not the run's, and a
+checkpoint without a record that is not the source. A placement fits one mesh: the trainer refuses it unless the
+expert axis and block width match.
+
+`expert_placement.py` builds a placement from a run's per-expert routing histograms. It assigns experts by
+greedy longest-processing-time: heaviest first, each into the lightest block with a free slot. Build one from a
+frozen-bias run that starts from the same checkpoint. A placed run logs its histograms by placed expert id, so
+the builder reads the run's placement from its W&B config and maps the loads back to the source order:
+
+```bash
+python -m experiments.grug.moe_hero_ep.expert_placement \
+  --wandb-run marin-community/marin_moe_sft/hero-sft-smoke-v2 --first-step 393491 --last-step 393515 \
+  --num-layers 48 --expert-axis-size 16 \
+  --source-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --out experiments/grug/moe_hero_ep/hero_sft_expert_placement_step393491.json
+```
+
+`hero_sft_expert_placement_step393491.json` is that placement, built from all 25 steps of v2. Held-out
+scoring on v2 shows how many steps a placement needs: built from 5 steps, a placement drops 0.71% of
+assignments on v2's last 8 steps at capacity factor 1.5 (0.10% at 2.0). The per-step oracle drops 0.47%, and
+one step's placement drops 0.94%. On Snowball 10.05's full 4,750-step frozen-bias SFT, a placement built from
+the first steps stays within 0.5 points of the per-step oracle through the end of the epoch.
+
+A placed run writes its checkpoints under `expert-placement-<fingerprint>/` below its output path or
+`--checkpoint-root`, and carries the W&B tag `expert-placement-<fingerprint>`. A relaunch with another
+placement, or none, starts again from the source checkpoint instead of resuming checkpoints whose experts are
+in a different order. Tools that pair experts across checkpoints, such as weight merging against the
+pretraining checkpoint, must first apply `ExpertPlacement.inverse()` to the placement that
+`ExpertPlacement.recorded_in(metadata)` reads from the checkpoint. A Hugging Face export does not carry that
+metadata.
+
+Print the plan for a one-rack smoke test:
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_hero_sft \
+  --run-id hero-sft-smoke \
+  --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
+  --dp-racks 1 --stop-after-steps 20 --eval-every 393511 \
+  --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
+  --version dev
+```
+
+Submit it through the Marin Iris controller as with
+[Bounded diagnostics](#bounded-diagnostics). Runs report to W&B project `marin_moe_sft`.
 
 ## Result Record
 
