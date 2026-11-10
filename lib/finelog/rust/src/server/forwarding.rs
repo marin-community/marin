@@ -1,8 +1,8 @@
 // Copyright The Marin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native cross-cluster forwarding: replicate this store's locally-written rows,
-//! table by table, into a shared hub finelog.
+//! Native cross-cluster forwarding: replicate every row this store holds, table by
+//! table, into a shared hub finelog.
 //!
 //! A federated cluster keeps its own finelog and also ships every table it holds —
 //! the `log` namespace and the `iris.*` stats tables alike — to one global store, so
@@ -564,19 +564,11 @@ where
         };
         let turn_started = Instant::now();
         self.observe_lag(name, cursor, persisted);
-        // The forwarder stamps this column with its own cluster on the way out and
-        // forwards only rows that do not already carry a foreign origin, so a hub's
-        // own relayed rows never loop back. A registered table always has it (added
-        // implicitly at registration); a legacy namespace adopted from disk before
-        // the column existed does not, and forwards unstamped until it is
-        // re-registered.
-        let has_origin = schema.column(IMPLICIT_CLUSTER_COLUMN).is_some();
-
         if cursor >= persisted || *stop.borrow() {
             return ForwardTurn::Wait;
         }
         let read_started = Instant::now();
-        let batch = match self.read_batch(name, cursor, persisted, has_origin).await {
+        let batch = match self.read_batch(name, cursor, persisted).await {
             Ok(batch) => batch,
             Err(e) => {
                 tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: read failed; retrying next tick");
@@ -617,8 +609,8 @@ where
             }
         }
         let Some((ship, seqs)) = batch.rows else {
-            // Every row up to `scanned_through` was filtered out by the scan (rows already
-            // carrying a foreign origin cluster). Advance the cursor to `scanned_through`,
+            // The window up to `scanned_through` holds no rows (a gap in the seq space).
+            // Advance the cursor to `scanned_through`,
             // or the loop rereads them forever. Safe against a concurrent writer:
             // `scanned_through` is a captured bound, and later rows arrive with a later
             // watermark.
@@ -739,8 +731,8 @@ where
             );
         }
         // Fewer than LIMIT matching rows means the scan examined the complete bounded
-        // sequence window. Advance over any trailing foreign-origin rows after every
-        // outbound chunk is settled; doing this earlier could skip a failed chunk.
+        // sequence window. Advance over any trailing gap after every outbound chunk
+        // is settled; doing this earlier could skip a failed chunk.
         if batch.complete_window && cursor < batch.scanned_through {
             cursor = batch.scanned_through;
         }
@@ -951,7 +943,6 @@ where
         name: &str,
         cursor: i64,
         persisted: i64,
-        has_origin: bool,
     ) -> Result<Batch, StatsError> {
         let read_started = Instant::now();
         // One guard across both the snapshot and the scan: eviction takes the write side
@@ -990,12 +981,6 @@ where
         let table = quote_ident(name);
         let mut sql =
             format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {scanned_through}");
-        if has_origin {
-            // Only rows this store's own writers produced. A row that already carries an
-            // origin cluster arrived here by forwarding, and re-forwarding it would loop.
-            // Segments predating the column store NULL, which is a local row.
-            sql.push_str(" AND (cluster IS NULL OR cluster = '')");
-        }
         let batch_rows = if name == LOG_NAMESPACE_NAME {
             FORWARD_LOG_BATCH_ROWS
         } else {

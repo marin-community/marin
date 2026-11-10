@@ -1431,9 +1431,9 @@ fn validate_and_align_batch_with_policy(
 /// the implicit `cluster` column forwards its rows unstamped (the forwarder only
 /// stamps when its local schema carries the column). Overwriting — rather than
 /// filling blanks or rejecting a mismatch — is both simpler and safer: the
-/// forwarder only ever ships local (null/empty-cluster) rows, so the batch's
-/// cluster carries nothing to preserve, and a JWT writer can then only ever
-/// attribute rows to its own cluster.
+/// forwarder already stamps every row it ships with its own cluster, so the
+/// batch's cluster carries nothing to preserve, and a JWT writer can then only
+/// ever attribute rows to its own cluster.
 pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {
     let Some(i) = aligned
         .fields

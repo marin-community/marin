@@ -60,10 +60,11 @@ durable per-`(target, namespace)` cursor
 `WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
 forwarded from the legacy `telemetry_v1` root can route to service-specific namespaces;
 the hub registers each missing destination with its canonical server-owned schema and
-managed storage policy before appending the routed rows. Rows of a table with a
-`cluster` column are stamped with the origin and skipped if they
-already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
-durable, so a restart resumes rather than replays.
+managed storage policy before appending the routed rows. Every row is forwarded. In a
+table with a `cluster` column, each row is stamped with the sender's `forwarding.cluster`
+on the way out, whatever it carried. A server that receives relayed rows (a `jwt` layer,
+like the hub) must not also forward, or it sends them on again. The cursor is durable,
+so a restart resumes rather than replays.
 
 `telemetry_v1.*` and `levanter.metrics` are server-owned at both ends of federation. A JWT sender's
 `RegisterTable` cannot evolve an existing hub telemetry or metric schema or its physical layout.

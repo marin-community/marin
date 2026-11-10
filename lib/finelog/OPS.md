@@ -551,6 +551,10 @@ that pairing is what authenticates the sender, and a wrong key is a 401 on every
 push. `forwarding.cluster` is the origin name the sender stamps on every forwarded
 row; keep it equal to the hub key entry's `cluster` label so reads line up.
 
+A sender forwards every row it holds, including rows a local writer already labeled
+with a cluster name. Never add `forwarding:` to a server that receives relayed rows
+(one with a `jwt` layer, like `marin`): it would send those rows on again.
+
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
 then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
 on the operator's machine and updates the pod's `<name>-env` Secret, so whoever
@@ -709,9 +713,8 @@ bytes. `push_ms` includes RPC compression, transport, retries, and the hub's
 durable acknowledgement; it is not hub CPU time. Durations are wall time and can
 include scheduling delays while another namespace encodes. Match the namespace
 and `previous_cursor` to `slow namespace turn completed` for settlement and total
-duration. Its final cursor can also cover trailing foreign-origin rows skipped
-after the batch timing line. A cold-read explanation requires a large `read_ms`;
-total turn time alone cannot establish it.
+duration. A cold-read explanation requires a large `read_ms`; total turn time
+alone cannot establish it.
 
 The forwarding cursor and fully covered object-segment removals share one
 catalog transaction and one HEAD publication. Covered segments stop appearing
@@ -729,10 +732,10 @@ selected-chain size, pending and deleted releases, deleted catalog keys, orphan
 counts, and milliseconds for each stage. `historical_nodes_opened` must remain
 zero.
 
-Sequence positions measure cursor distance, not decoded row count. Gaps and rows
-filtered because they already carry a foreign origin can make both `skipped_seqs` and
-`forwarding_seq_positions` an upper bound on affected rows. Telemetry values are
-five-minute deltas; an unreported partial interval is lost if the sender restarts.
+Sequence positions measure cursor distance, not decoded row count. Gaps can make
+both `skipped_seqs` and `forwarding_seq_positions` an upper bound on affected rows.
+Telemetry values are five-minute deltas; an unreported partial interval is lost if the
+sender restarts.
 
 Each regional sender writes five-minute delta counters to `telemetry_v1.finelog`; the
 same forwarder copies them to the hub on a later successful sweep. Query dropped

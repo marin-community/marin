@@ -861,14 +861,23 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
     fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
-    let entries = client(fx.target_addr)
+    assert_eq!(
+        hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await,
+        1,
+        "the row is readable only if `cluster` was stamped"
+    );
+}
+
+/// How many log rows the hub returns for a read scoped to `cluster`.
+async fn hub_log_count_for_cluster(fx: &Fixture, cluster: &str) -> usize {
+    client(fx.target_addr)
         .fetch_logs(
             FetchLogsRequest {
                 ..Default::default()
             }
             .with_source("/")
             .with_match_scope(MatchScope::MATCH_SCOPE_PREFIX)
-            .with_cluster(SOURCE_CLUSTER),
+            .with_cluster(cluster),
         )
         .await
         .unwrap()
@@ -876,11 +885,7 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
         .to_owned_message()
         .unwrap()
         .entries
-        .len();
-    assert_eq!(
-        entries, 1,
-        "the row is readable only if `cluster` was stamped"
-    );
+        .len()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1178,30 +1183,76 @@ async fn seeding_at_the_tip_ships_new_rows_and_never_backfills() {
     wait_for_hub_log_rows(&fx, &[("/user/job/t", "after")]).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
-    // A row that arrived by forwarding already names an origin. Relaying it onward would
-    // loop, so only rows this store's own writers produced are eligible.
-    let fx = Fixture::new("loop").await;
-
-    fx.source_client
+/// Write one log row under `key` that its writer has already labeled with `cluster`.
+async fn push_named(
+    client: &LogServiceClient<TestTransport>,
+    key: &str,
+    line: &str,
+    cluster: &str,
+) {
+    client
         .push_logs(
             PushLogsRequest {
-                entries: vec![LogEntry::default().with_data("relayed")],
+                entries: vec![LogEntry::default().with_data(line)],
                 ..Default::default()
             }
-            .with_key("/user/job/t")
-            .with_cluster("some-other-cluster"),
+            .with_key(key)
+            .with_cluster(cluster),
         )
         .await
         .unwrap();
-    push(&fx.source_client, "/user/job/t", &["local"]).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_named_with_its_own_cluster_is_forwarded_and_keeps_the_name() {
+    // A server may stamp its own rows with its cluster name. The forwarder sends those
+    // rows like any other, so a named row reaches the hub under the same name.
+    let fx = Fixture::new("named").await;
+
+    push_named(&fx.source_client, "/user/job/t", "named", SOURCE_CLUSTER).await;
+    push(&fx.source_client, "/user/job/t", &["unnamed"]).await;
     fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
     assert_eq!(
         fx.hub_log_rows().await,
-        vec![("/user/job/t".to_string(), "local".to_string())]
+        vec![
+            ("/user/job/t".to_string(), "named".to_string()),
+            ("/user/job/t".to_string(), "unnamed".to_string()),
+        ]
+    );
+    assert_eq!(hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_named_for_another_cluster_is_forwarded_under_the_senders_name() {
+    // The forwarder sends every row and stamps each with its own cluster on the way out,
+    // so a row a local writer labeled for some other cluster still reaches the hub,
+    // attributed to the server that sent it.
+    let fx = Fixture::new("relabel").await;
+
+    push_named(
+        &fx.source_client,
+        "/user/job/t",
+        "labeled",
+        "some-other-cluster",
+    )
+    .await;
+    push(&fx.source_client, "/user/job/t", &["unnamed"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    assert_eq!(
+        fx.hub_log_rows().await,
+        vec![
+            ("/user/job/t".to_string(), "labeled".to_string()),
+            ("/user/job/t".to_string(), "unnamed".to_string()),
+        ]
+    );
+    assert_eq!(hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await, 2);
+    assert_eq!(
+        hub_log_count_for_cluster(&fx, "some-other-cluster").await,
+        0
     );
 }
 
