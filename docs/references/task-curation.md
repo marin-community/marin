@@ -264,8 +264,9 @@ counts and record the gap. Qualification is a separate evaluation with at least
 
 `recipes/snowball-100k.json` selects 100,000 tasks with local graders. Training
 excludes both its `heldout` development input and the independent test panel
-listed in `exclusions`. Exclusions match task IDs, public semantics, complete
-conversations and whitespace-normalized final user statements.
+listed in `exclusions`. Both match task IDs, complete conversations and
+whitespace-normalized final user statements. The build refuses training tasks
+that require a container image or a judge service before publishing any files.
 
 The checked-in recipe names version `2026.11.10.1`, which is not yet published;
 build it before training on it. The published `snowball-100k@2026.11.04.1`
