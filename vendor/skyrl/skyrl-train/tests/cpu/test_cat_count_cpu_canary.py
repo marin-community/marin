@@ -232,7 +232,7 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     assert any(row["policy/ppo_clip_ratio"] > 0 for row in training)
     assert all("environment/exact" in row for row in training)
     assert any("environment/exact_n20" in row for row in training)
-    assert all(sum(row[f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 32 for row in training)
+    assert all(sum(row[f"generate/outcome/{outcome.value}"] for outcome in Outcome) == 32 for row in training)
     checkpoint = torch.load(root / f"ckpts/global_step_{FAST_STEPS}/policy/rank_0.pt", weights_only=False)
     optimizer_steps = [state["step"].item() for state in checkpoint["optimizer"]["state"].values()]
     assert optimizer_steps and set(optimizer_steps) == {2 * FAST_STEPS}
