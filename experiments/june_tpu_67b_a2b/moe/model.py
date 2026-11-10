@@ -45,7 +45,13 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
 from levanter.kernels.pallas.add_rms_norm import AddRmsNormImpl, add_rms_norm_bwd, add_rms_norm_fwd
-from levanter.kernels.pallas.gated_norm import GatedNormImpl, gated_norm_gate_bwd, gated_norm_gate_fwd, gated_norm_silu
+from levanter.kernels.pallas.gated_norm import (
+    GatedNormImpl,
+    gated_norm_gate_bwd,
+    gated_norm_gate_fwd,
+    gated_norm_silu,
+    pallas_gated_norm_supported,
+)
 from levanter.layers.stacked import ArrayStacked
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -207,6 +213,8 @@ class GrugModelConfig:
         validate_moe_implementation(self.moe_implementation)
         if self.gated_norm_impl == "pallas" and self.fused_norm_impl == "off":
             raise ValueError('gated_norm_impl="pallas" needs fused_norm_impl "xla" or "pallas"')
+        if self.gated_norm_impl == "pallas" and not pallas_gated_norm_supported(self.hidden_dim, _GATED_NORM_RANK):
+            raise ValueError(f'gated_norm_impl="pallas" needs hidden_dim a multiple of 128, got {self.hidden_dim}')
 
     @property
     def inferred_head_dim(self) -> int:
