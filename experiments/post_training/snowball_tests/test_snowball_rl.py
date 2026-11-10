@@ -219,7 +219,7 @@ print(json.dumps([{
             presets.PRESETS["learning-medium"],
             settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
         )
-    summary = Path(selection.path()) / "summary.json"
+    summary = Path(presets.default_selection().path()) / "summary.json"
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
     summary.write_text(json.dumps(content))
@@ -229,7 +229,7 @@ print(json.dumps([{
 
 @pytest.mark.timeout(180)
 def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
-    summary = (Path(selection.path()) / "summary.json").read_text()
+    summary = (Path(presets.default_selection().path()) / "summary.json").read_text()
     panel_name = presets.DEFAULT_TEST_PANEL_NAME
     panel_version = presets.DEFAULT_TEST_PANEL_VERSION
     panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
@@ -240,11 +240,11 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
         "2026.11.06.1": {
-            "speed-short": "3c26e593",
-            "data-short": "f47923c5",
-            "speed-medium": "e268a2c8",
-            "learning-medium": "934e55eb",
-            "speed-long": "5b99bc3f",
+            "speed-short": ("3c26e593", "4983e280"),
+            "data-short": ("f47923c5", "b8748fb5"),
+            "speed-medium": ("e268a2c8", "f3822837"),
+            "learning-medium": ("934e55eb", "4bdf2d67"),
+            "speed-long": ("5b99bc3f", "fa196cc1"),
         }
     }[presets.PRESET_REVISION]
     paths = []
@@ -262,18 +262,21 @@ from cloud.iris.launch_config import load_launch_config
 os.environ["HOME"] = "/snowball-pin-home"
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
-     "allocation": OmegaConf.to_container(config.iris.allocation, resolve=True)}
-    for config in configs
+    OmegaConf.to_container(config, resolve=True) for config in configs
 ], sort_keys=True))
 """,
         paths,
     )
     actual = {
-        name: fingerprint_hash(json.dumps({key: config[key] for key in ("skyrl", "allocation")}, sort_keys=True))
+        name: (
+            fingerprint_hash(
+                json.dumps({"skyrl": config["skyrl"], "allocation": config["iris"]["allocation"]}, sort_keys=True)
+            ),
+            fingerprint_hash(json.dumps(config, sort_keys=True)),
+        )
         for name, config in zip(expected, configs, strict=True)
     }
-    assert actual == expected, "Native config changed: bump PRESET_REVISION and recollect controls."
+    assert actual == expected, "Fingerprint envelope changed: bump PRESET_REVISION and recollect controls."
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -337,5 +340,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary = json.loads(summary_path.read_text())
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
-    with pytest.raises(click.BadParameter, match="full test panel"):
-        snowball.build_run(data, tasks=selection)
+    for tasks in (presets.default_selection(), selection):
+        with pytest.raises(click.BadParameter, match="full test panel"):
+            snowball.build_run(data, tasks=tasks)

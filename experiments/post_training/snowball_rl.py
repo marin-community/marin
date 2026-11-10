@@ -836,9 +836,9 @@ def _run_command(function: Callable) -> click.Command:
     "--tasks",
     "tasks_name",
     metavar="NAME@VERSION",
-    help="Curated task selection at an immutable version. Required by data presets, whose selection "
-    "must hold out the same panel as the default; train-long defaults "
-    "to the pinned snowball-100k.",
+    help="Curated task selection at an immutable version, recording the full test panel in recipe.exclusions. "
+    "Required by data presets, whose selection must hold out the same panel as the default; "
+    "train-long defaults to the pinned snowball-100k.",
 )
 @click.option(
     "--init",
