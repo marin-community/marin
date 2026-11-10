@@ -78,6 +78,8 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     sampling=Sampling(
                         temperature=0.7,
                         top_p=0.95,
+                        top_k=None,
+                        stop=(),
                         max_tokens=MAX_TOKENS,
                         chat_template_kwargs={"enable_thinking": True},
                     ),
