@@ -109,6 +109,7 @@ jobs:
             --job-id "${{ steps.submit.outputs.job_id }}" --iris-config "$IRIS_CONFIG" \
             --output-dir parity-diagnostics --provider gcp \
             --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --controller-label iris-marin-controller \
             --service-account iris-controller@hai-gcp-models.iam.gserviceaccount.com \
             --ssh-key ~/.ssh/google_compute_engine
       - name: Upload diagnostics

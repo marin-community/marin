@@ -116,6 +116,7 @@ auth:
   allowed_submitters:
     - principal:human-080
     - "*@openathena.ai"
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
