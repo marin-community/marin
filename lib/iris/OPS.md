@@ -1,214 +1,104 @@
 # Iris Operations
 
-All subcommands have `--help`. Use it.
+Use `iris <command> --help` for flags. Examples omit the connection selector:
+prefer `--cluster=NAME`, use `--config=PATH` for an exact config, or
+`--controller-url=URL` for an explicit endpoint. `iris cluster list` lists names.
+Cluster coordinates and storage paths come from [config/](config/README.md).
 
-Connection selectors:
+Start read-only. Cluster/controller restarts, workload changes, node reboots,
+and direct Kubernetes mutations require authorization for the target. Never
+modify the controller database to repair state. Avoid `kubectl describe pod`
+on task Pods: it can print credentials in environment values.
 
-- `--cluster=NAME` (preferred for known clusters): resolves a named config.
-- `--config=PATH`: pins an exact YAML config file.
-- `--controller-url=URL`: connects to an explicit URL.
+This file is an entry point and command reference. Keep incident measurements,
+host identities, and chronology in [Echo](https://marina.oa.dev/echo/); use
+[use-echo](../../.agents/skills/use-echo/SKILL.md) to find or update a record.
 
-How the controller is reached depends on the cluster. **IAP-fronted clusters
-(marin, marin-dev) are reached directly over their IAP HTTPS URL — there is no
-SSH tunnel**; `require_controller_url` returns the IAP URL and every request is
-authenticated at the edge (see [Authentication](#authentication-headless--ci) and
-`docs/iap-gclb.md`). Non-IAP clusters open an SSH tunnel to the controller VM
-automatically.
-
-Use `iris cluster list` to see named clusters. Use `--config` when you mean a custom or pinned file path.
+| Topic | Reference |
+| --- | --- |
+| Controller deployment gates | [Controller rollout](../../.agents/skills/use-iris/references/controller-rollout.md) |
+| CoreWeave access, storage, networking, node recovery | [CoreWeave](docs/coreweave.md) |
+| GCE ingress and authentication | [IAP and GCLB](docs/iap-gclb.md) |
+| Credentials delivered to tasks | [Secret delivery](docs/secrets.md) |
+| Sandbox isolation and egress | [Container profiles](docs/container-profiles.md) |
+| Federation and shared budgets | [Federation](docs/federation.md) |
+| Task results and retries | [Task states](docs/task-states.md), [output archives](docs/task-outputs.md) |
+| Logs, telemetry, SQL semantics | [Finelog operations](../finelog/OPS.md), [query-finelog](../../.agents/skills/query-finelog/SKILL.md) |
 
 ## Authentication (headless / CI)
 
-For an IAP-fronted cluster the CLI authenticates every request at the IAP edge;
-the controller mints no token. Two ways to get an edge token:
+IAP-fronted clusters use their HTTPS endpoint directly; other GCE clusters open
+an SSH tunnel automatically. CoreWeave uses a context-bound Kubernetes port-forward.
 
-- **Interactive** — `iris --cluster=NAME login` runs the desktop OAuth browser
-  flow and caches a refresh token. Needs a browser; not usable headless.
-- **Headless / CI / agent** — do **not** run `iris login` (it needs a browser).
-  Instead give the process credentials for an *IAP-allowlisted service account*.
-  The keyless way is to point your ADC at one by impersonation — no browser, no
-  key file; iris reads it through the standard resolver with no flag or env:
+Interactive callers use `iris --cluster=NAME login`. Headless callers use ADC
+for an IAP-allowlisted service account; do not start a browser login. An
+authorized caller can impersonate the account:
 
-  ```bash
-  gcloud auth application-default login \
-    --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
-  iris --cluster=marin-dev cluster status
-  ```
+```bash
+gcloud auth application-default login --impersonate-service-account=<service-account>
+iris --cluster=NAME cluster status
+```
 
-  Needs `roles/iam.serviceAccountTokenCreator` on the SA (to impersonate) and
-  `roles/iap.httpsResourceAccessor` on the cluster backend for that SA (the IAP
-  allowlist — the impersonated SA email is the identity IAP authorizes). On a GCE
-  VM whose service account is already allowlisted none of this is needed: ambient
-  metadata credentials are used automatically.
-
-See `docs/iap-gclb.md` ("The three caller paths") for the audience-vs-identity
-model behind this.
+Impersonation needs `roles/iam.serviceAccountTokenCreator`; the account needs
+`roles/iap.httpsResourceAccessor` on the backend. Allowlisted GCE service
+accounts use ambient metadata credentials. See [IAP access control](docs/iap-gclb.md#controller-access-control).
 
 ## Cluster Lifecycle
 
 ```bash
-iris cluster start|stop|restart|status
-iris cluster dashboard              # open tunnel, print URL, block
-iris cluster dashboard-proxy        # local proxy to remote controller (no tunnel needed)
+iris cluster status
+iris cluster dashboard                # print URL and keep the connection open
+iris cluster dashboard-proxy          # local proxy
 ```
 
 ### Controller Restart
 
-For a rollout across more than one cluster, use the `use-iris` skill.
-It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
-human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
-the credential preflight, the before/after snapshots, the 5-minute watch, and a
-one-job smoke test.
-
-`iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
-`iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
-
-Run controller lifecycle commands with the `controller` extra, which supplies
-the Kubernetes client used by CoreWeave prerequisite checks:
+Follow the [rollout procedure](../../.agents/skills/use-iris/references/controller-rollout.md).
+A controller restart deploys the current working tree, including uncommitted
+files, and leaves workers running. A full `iris cluster restart` destroys
+workers and jobs; never run it without express approval.
 
 ```bash
 uv run --package marin-iris --extra controller iris \
   --cluster=<name> cluster controller restart
 ```
 
-The base `uv run iris` environment omits this dependency and can report every
-CoreWeave prerequisite as missing even when the objects exist.
+Use the `controller` extra for Kubernetes preflight dependencies. Verify the
+deployed tree/image hash and health against the baseline. Keep multi-architecture
+task images for mixed fleets; see [image deployment](docs/image-push.md).
+Preflight resolves controller secrets and principal references before changing
+the deployment; see [cluster configuration](config/README.md).
 
-Tracked configs may use `principal:` references in role, admission, and budget
-policy. The `marin` Pulumi stack publishes their private directory from
-`iam_data.yaml`; apply the reviewed IAM stack before deploying those configs.
-Start and restart read the directory during preflight, before building images
-or stopping a controller. Controllers resolve identities at startup before
-checkpoint or database changes. GCP loads the Secret Manager reference at
-runtime; CoreWeave projects the directory through the controller-only
-`iris-controller-secrets` read-only volume. ConfigMaps and bootstrap configs retain IDs.
-Ordinary clients use the tracked config and do not read the directory.
-See [cluster configs](config/README.md).
-
-Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
-
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through the controller-only `iris-controller-secrets` volume. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
-
-`iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
-
-If checkpoint times out, inspect controller logs for completed uploads and
-thread stacks for ongoing SQLite copies before retrying. The RPC
-timeout does not cancel the server-side copy, so retries can leave concurrent
-backups running. SQLite backups pin a read snapshot across page batches to
-avoid restarting under concurrent writes. Without that snapshot, sustained
-writes can prevent the copy from finishing. The read snapshot permits
-writes but delays WAL reclamation until the copy completes.
-
-`iris cluster controller restart --skip-checkpoint` bypasses the pre-restart
-backup. It can lose recent state if startup restores an older checkpoint.
-CoreWeave controllers using node-local storage can move nodes on restart; see
-[controller storage and placement](docs/coreweave.md#controller-state) before
-relying on the local DB.
-
-**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
-
-Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
-
-```bash
-uv run --package marin-iris --extra controller iris \
-  --config path/to/dev.yaml cluster controller restart \
-  --image-platform linux/amd64
-```
-
-Pass `--cargo-profile release` for an LTO build. Keep the default task image platforms when the deployed cluster includes arm64 nodes.
-
-**Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
-
-**A failed SSH leg aborts the restart safely.** On a GCE cluster the restart drives the VM over `gcloud compute ssh --tunnel-through-iap`; if that SSH fails (it retries 3×), the CLI prints `Rollback restart failed: Command failed after 3 attempts: SSH exit code 255` and exits — but the running controller was never touched. Confirm with `iris cluster status`: the old version still healthy means nothing deployed and nothing needs rolling back; fix SSH and retry the restart.
-
-**GCE controller SSH auth is per-username, and agent/headless sessions may lack it.** `gcloud compute ssh` connects as your *local OS username*; `Permission denied (publickey)` right after the IAP tunnel opens means the VM refused that username+key pair, not that the tunnel failed. The controller VM does not necessarily honor every key visible in project/instance `ssh-keys` metadata for your username, so a key that "should" work from metadata inspection can still be refused — and adding new keys (metadata or OS Login) from an unattended session is exactly the kind of credential change an operator should approve first. If the restart's SSH leg is refused from your session, run the restart from a session that already has working SSH to the VM rather than minting access. Note this only gates GCE clusters (`marin`, `marin-dev`); CoreWeave controller restarts go through the Kubernetes API (kubeconfig at `~/.kube/coreweave-iris`, context pinned per cluster config) and need no SSH.
+If checkpointing times out, inspect logs and thread stacks before retrying:
+an RPC timeout does not cancel the server-side backup. `--skip-checkpoint`
+risks losing newer state on restore. `controller serve --dry-run` starts a
+local inspection server; it is not a deployment validation command.
 
 ### Rolling back a controller deploy (migration-aware)
 
-**Roll back the last deploy.** `iris cluster controller restart --rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
-
-```bash
-uv run --package marin-iris --extra controller iris \
-  --cluster=marin cluster controller restart --rollback
-```
-
-**Why it restores a checkpoint, not just the old image.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. So a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does both from the record: it writes `rollback_requested` and restarts the previous image; on boot the controller restores that checkpoint over its migrated local DB, then marks the record `rolled_back`. That consume-once step is a one-shot — a later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
-
-For a wedged/unreachable controller, or a deploy with no prior rollout record, use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
+With rollback authorization, `cluster controller restart --rollback` uses the
+rollout record to restore both the previous image and its pre-deploy checkpoint.
+An image-only rollback can leave an incompatible migrated schema. Jobs created
+after the checkpoint are lost. See the [rollout procedure](../../.agents/skills/use-iris/references/controller-rollout.md).
 
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 
-**When.** The controller is wedged by a bloated local DB — typically a controller-VM OOM after a large job backlog: RPCs hang and the healthcheck times out. A plain restart does **not** help: startup reuses the local DB whenever it is present (`download_checkpoint_to_local` only runs when the db dir is absent — see `controller/main.py`), so `docker restart` / `gcloud compute reset` just reload the same bloated DB and re-wedge.
-
-The fix is to roll the local DB back to a pre-spike checkpoint by hand. Run the steps below on the controller VM. **Do this only when the user has asked you to recover a wedged controller.**
-
-Definitions used below — read them from the cluster config (`config/marin.yaml`):
-
-- `STATE_DIR` — controller local state dir, default `/var/cache/iris/controller` (override: `storage.local_state_dir`). The DB lives in `$STATE_DIR/db`.
-- `REMOTE` — `storage.remote_state_dir` (e.g. `gs://marin-us-central2/iris/state`). Checkpoints live at `$REMOTE/controller-state/<epoch_ms>/{controller.sqlite3.zst,auth.sqlite3.zst}`.
-
-```bash
-# 0. SSH to the controller VM (the GCE instance labelled iris-<prefix>-controller=true),
-#    then set STATE_DIR/REMOTE from the cluster config so the commands below resolve.
-gcloud compute ssh iris-controller-marin --zone <zone> --tunnel-through-iap
-export STATE_DIR=/var/cache/iris/controller
-export REMOTE=gs://<bucket>/iris/state
-
-# 1. Pick a pre-spike checkpoint. The DB size is a good proxy for backlog/health:
-#    a checkpoint much larger than its neighbours was already bloated — pick an
-#    earlier, smaller one. Each subdir is named with its epoch_ms.
-gcloud storage ls --long --readable-sizes "$REMOTE/controller-state/**/controller.sqlite3.zst"
-
-# 2. Stop the controller (frees the RAM the bloated DB is consuming).
-sudo docker stop iris-controller
-
-# 3. Move the bloated DB ASIDE — never delete it. Startup reloads $STATE_DIR/db
-#    if present, so this is what forces a fresh restore; keeping it makes the
-#    rollback reversible.
-sudo mv "$STATE_DIR/db" "$STATE_DIR/db.bloated.bak.$(date +%s)"
-
-# 4. Restore the chosen checkpoint into $STATE_DIR/db using the controller image's
-#    own download_checkpoint_to_local (handles the GCS pull, zstd decompress, and
-#    the paired auth DB). Run it in a one-shot container so it reuses the VM's
-#    ambient GCS credentials. Substitute <epoch_ms> from step 1.
-IMAGE="$(sudo docker inspect --format='{{.Config.Image}}' iris-controller)"
-sudo docker run --rm --network=host -v /var/cache/iris:/var/cache/iris "$IMAGE" \
-    .venv/bin/python -c "from pathlib import Path; \
-from iris.cluster.controller.checkpoint import download_checkpoint_to_local as restore; \
-ok = restore('$REMOTE', Path('$STATE_DIR/db'), checkpoint_dir='$REMOTE/controller-state/<epoch_ms>'); \
-raise SystemExit(0 if ok else 1)"
-
-# 5. Confirm the restore actually produced a DB BEFORE starting (if it didn't, the
-#    controller would reload the latest — often still-bloated — checkpoint on start).
-test -f "$STATE_DIR/db/controller.sqlite3" || echo "RESTORE FAILED — do not start; move the backup back"
-
-# 6. Start and verify it serves.
-sudo docker start iris-controller
-curl -sf http://localhost:10000/health && echo " controller healthy"
-```
-
-**Rollback cost.** Jobs and state created *after* the chosen checkpoint are dropped. Workers on separate VMs and other infrastructure are unaffected — they re-register with the recovered controller.
-
-**If it goes wrong.** The previous DB is preserved at `$STATE_DIR/db.bloated.bak.<ts>`. To undo the rollback, `docker stop`, `rm -rf $STATE_DIR/db`, `mv` the backup back, and `docker start`.
+An unreachable controller may need [manual checkpoint recovery](docs/controller-recovery.md).
+Restarting alone reuses the local database. Preserve the existing database and
+obtain recovery authorization before restoring older state. For Kubernetes,
+check [controller storage and placement](docs/coreweave.md#controller-state).
 
 ## Job Management
 
 ```bash
-iris job run -- python train.py           # submit + stream logs
-iris job list --state running             # filter by state
-iris job logs /user/job-name -f           # follow job + child logs
-iris job cancel /user/job-name            # exact job name + its children
-iris job complete /user/job-name          # mark unfinished descendants successful, then stop them
-iris job cancel --prefix /user/job-prefix # all jobs with this ID prefix
-iris job describe /user/job-name          # per-task state, exit, duration, peak memory
+iris job run -- python train.py
+iris job list --state running
+iris job describe /user/job
+iris job logs /user/job -f
+iris job cancel /user/job              # exact job and children
+iris job cancel --prefix /user/prefix
+iris job complete /user/job            # records unfinished descendants as successful
 ```
-
-Kubernetes controllers reject `EXISTING_JOB_POLICY_RECREATE` while the existing
-job is active. Cancel it, verify that all pods for its job ID have disappeared
-in Kubernetes, then submit the replacement. A terminal Iris job state alone does
-not confirm pod deletion. See [the RECREATE incident](https://github.com/marin-community/marin/issues/10712).
-
-The workload command hierarchy is:
 
 | Resource | Inspection | Actions |
 | --- | --- | --- |
@@ -216,898 +106,353 @@ The workload command hierarchy is:
 | Task | `list`, `describe`, `events`, `logs`, `wait` | `exec`, `profile`, `preempt`, `fail` |
 | Attempt | `describe`, `events`, `logs`, `wait` | `profile`, `preempt`, `fail` |
 
-All three workload `logs` commands accept the same filters and `--follow`. Use
-`job logs` for the aggregate, `task logs` across a Task's Attempts, and
-`attempt logs` for one numbered Attempt. `process logs` is reserved for
-controller, worker, and task-runtime diagnostics.
+Task actions target the current attempt. Attempt actions require
+`/user/job/task:attempt` and reject stale attempts. Workload logs share filters;
+`process logs` is for controller, worker, and runtime diagnostics.
 
-Task actions without an attempt suffix target the current attempt. Attempt actions
-require `/user/job/task:attempt` and are accepted only while that attempt is still
-current. `exec` remains a Task action because its request identifies a Task rather
-than a numbered Attempt.
-
-`job logs` returns the last 1000 lines by default. A multi-rank gang emits that
-many in seconds, so a grep for anything earlier in the run comes back empty:
+Logs default to the last 1,000 lines. Search older output server-side:
 
 ```bash
-iris job logs /user/job/child --max-lines 400000 --no-tail --substring "Saving checkpoint"
+iris job logs /user/job --max-lines 400000 --no-tail --substring 'Saving checkpoint'
 ```
+
+Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
+and verify its Pods are gone before submitting the replacement; a terminal job
+state alone does not prove process death.
 
 ### Submitting a GPU gang from a workstation
 
-`--cluster cw-*` connects the CLI to that cluster's controller, which needs a
-`kubectl port-forward` the read-only CoreWeave token cannot open. It fails after
-a 90s timeout, while plain `kubectl get` works. Submit through the hub, which
-federates the job to the peer:
+Submit through the federation hub if your CoreWeave token cannot port-forward:
 
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
-  --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
-  --job-name my-run-coord \
-  -e IRIS_PORT_JAX 32731 \
-  -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
+iris --cluster=marin job run --no-wait --target-cluster=<cw-cluster> \
+  --cpu 2 --memory 2GB --disk 32GB --timeout 7200 --job-name my-coordinator \
+  -e IRIS_PORT_JAX 32731 -- python -m experiments.<launcher>
 ```
 
-- **The GPU gang is not this job.** The submitted job is a small CPU coordinator
-  that runs an experiment launcher; the launcher dispatches the accelerator gang
-  via Fray as a child job at `<coord-job-id>/<gang-name>`. Pass `--cpu`/`--memory`
-  for the coordinator alone and let the launcher size the gang.
-- **The working tree ships with the job.** `job run` bundles the current
-  workspace, so uncommitted and branch-only code runs as-is. The submit log
-  prints the bundle size.
-- **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
-  registers it for the JAX coordinator, and the default is shared cluster-wide.
-- **Application credentials use files.** The submitting client includes available
-  HF/W&B/CoreWeave credentials and its current secret bundle by default. CoreWeave
-  tasks require the submitter's storage keys; operator keys stay on infrastructure Pods. `defaults.task_env` carries
-  nonsecret settings such as `MARIN_PREFIX` and storage endpoints. See
-  [secret delivery](docs/secrets.md).
-- **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
-  gang all at once, so a busy cluster holds all of it. Same-band jobs queue
-  behind each other; they do not preempt.
-- **`--timeout` covers the queue wait, and killing the coordinator kills the
-  gang.** A contested fleet can hold a gang for hours before admitting it; when
-  the coordinator's deadline passes, its children are torn down mid-run (the
-  tasks report `killed` with a preemption each). Size the timeout for wait plus
-  run.
-
-Reading a job's output needs a CoreWeave object-storage key exported as
-`CW_KEY_ID`/`CW_KEY_SECRET`; without one, `s3://marin-us-east-02a` raises
-`NoCredentialsError`. `fsutil buckets` reports which backends are reachable, and
-[`fsutil`](../../docs/references/fsutil.md) reads them:
-
-```bash
-uv run fsutil ls -l s3://marin-us-east-02a/tmp/my-run/step-1
-```
-
-For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
+Size this CPU coordinator separately from the accelerator child jobs launched
+through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
+includes queueing, and stopping the coordinator stops its children.
+`SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
 ### `job run` gotchas
 
-- **Environment values must be explicit.** The submitter's shell environment is
-  not copied wholesale. HF/W&B/CoreWeave defaults use secret files automatically; pass other
-  credentials with `--secret NAME SOURCE`. `-e NAME VALUE` delivers an environment
-  value, including an explicit credential override.
-- **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
-- **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
-- **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
-- **A job that dies in BUILDING with a `uv sync` error is failing setup before your command starts.** The default is `uv sync --all-packages --no-dev`. Scope it with CLI `--sync-package <member>` or SDK `EnvironmentSpec(sync_packages=[...])`; skip setup entirely with CLI `--no-sync` or SDK `EnvironmentSpec(setup_scripts=[])` for a bring-your-own image. The build log labels each step (`[iris setup] step N/M`) so you can tell which script failed. See "Task Setup" in `AGENTS.md`.
-- **Docker task setup uses the larger of one core and the task's CPU request.** The run container uses the task's CPU request. Reserved and preemptible workers enforce these values as CPU quotas; on-demand workers use them as relative CPU shares.
-- **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
-- **`--reserve`** is a hard zone constraint: it confines the job to a zone where the named accelerator has actually been obtained (empirically — a live, non-erroring slice in the region), and the job waits if none exists yet (an availability probe meanwhile scales the accelerator up). It does not hold capacity and does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
-- **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
+- The current working tree is bundled, including uncommitted code.
+- Use `--memory`, not `--ram`; quote both values in `-e KEY "VALUE"`.
+- `--gpu` requests hardware; `--extra gpu` selects Python dependencies.
+- Select accelerators with `--gpu`/`--tpu`; use region/zone only for placement.
+  `--reserve` constrains placement to obtained capacity; it does not attach devices.
+- A `uv sync` failure in BUILDING is setup failure. Use `--sync-package` to scope
+  setup or `--no-sync` for a prepared image; see [Task Setup](AGENTS.md#task-setup).
+- Supply credentials through [secret delivery](docs/secrets.md). CoreWeave tasks
+  need the submitter's storage keys; operator keys stay on infrastructure Pods.
+- `executor_main` coordinators must remain CPU-only so they do not hold the
+  accelerator capacity their children need. Memory at or above 4 GB needs
+  `--enable-extra-resources`.
 
 ## Task Operations
 
 ```bash
-iris task describe /user/job/0                 # state, attempts, backend object, root cause
-iris task events /user/job/0                   # retained backend + controller action timeline
-iris task events /user/job/0:2                 # one attempt only
-iris task exec /user/job/0 -- bash             # shell into running container
-iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
+iris task describe /user/job/0
+iris task events /user/job/0
+iris attempt events /user/job/0:2
+iris task exec /user/job/0 --timeout 300 -- python -c 'import jax; print(jax.devices())'
 ```
 
-`task events` is the first stop when a pod or Kubernetes Event has already been
-garbage-collected. It queries `iris.task_event` across every retained attempt in
-the task's current job incarnation in one call and shows both backend
-observations (`k8s/kueue`, `k8s/container`) and controller decisions
-(`iris/controller`) in chronological order. Events are retained for up to 30
-days. Kubernetes `DisruptionTarget` conditions are recorded as
-`k8s/disruption` events with the pod and node identity plus a snapshot of the
-node's taints, conditions, hardware/topology labels, and CoreWeave health
-annotations.
-
-For an evaluator that retries after a `Completed` container event and a later
-`PodDeleted` worker-failure verdict, inspect its durable result archive before
-rerunning or accepting the retry. The evaluator may already have written a
-complete, sealed result even though its parent lacks a canonical record. See
-[Auditing an Evalchemy run](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears)
-for the archive checks. The Iris verdict alone does not establish whether the
-application result is complete.
-
-Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
-
-The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:
-
-```bash
-iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
-iris task exec /user/job/0 -- cat /tmp/out.log   # check later
-```
+Events retain backend observations and controller decisions across attempts for
+up to 30 days, including deleted Pods. Inspect output archives before repeating
+a workload whose runtime verdict disagrees with its application result; see
+[evaluation audit](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears).
+Exec buffers output, is non-interactive, and defaults to a 60-second timeout.
 
 ### Task with no logs or W&B progress
 
-Determine whether the task is pending, building, running, or terminal before treating
-missing logs or W&B metrics as a training stall:
-
-```bash
-iris task describe /user/job/0
-iris task events /user/job/0
-iris job logs /user/job
-```
-
-A task without a running container cannot produce task-local logs or W&B updates. For a
-running task, compare the current attempt and exit reason with driver/container logs and
-the resource request. A live process can still be compiling or blocked by host/device
-memory before its first optimizer update.
-
-Keep inspection read-only. Record the state, attempt, exit reason, and resource request
-before restarting or signalling anything.
+Check `task describe`, `task events`, and `job logs` first. PENDING and BUILDING
+tasks may have no training process; a RUNNING process may still be compiling or
+blocked on memory. Record the attempt, exit reason, and resource request before
+changing anything.
 
 ### Log filtering
 
-The Iris dashboard's full-log filter accepts a regular expression. For example,
-`rank0.*train/loss` matches log contents; an invalid expression such as an unbalanced
-`[` is rejected. Fix the expression instead of treating an empty result as evidence that
-the task produced no matching logs.
-
-The dashboard's find box searches only the lines loaded in the browser. Use the
-full-log filter when the target may be outside that segment; use find for visible lines.
+The dashboard full-log filter accepts regex and searches beyond loaded lines.
+The find box searches only browser-loaded lines. Fix invalid regex before
+interpreting empty results.
 
 ### Acting on a wedged Task or Attempt
 
-When a scheduling bug or stuck node strands a task on a machine, force its
-current attempt terminal without touching the rest of the job:
+With workload authorization:
 
 ```bash
-iris task preempt /user/job/0                   # current attempt; reschedules if budget remains
-iris task fail /user/job/0                      # current attempt; no retry
-iris attempt preempt /user/job/0:3              # accepted only if attempt 3 is still current
-iris attempt fail /user/job/0:3 --reason "bad output"
+iris task preempt /user/job/0           # retries within preemption budget
+iris task fail /user/job/0             # terminal, no retry
+iris attempt preempt /user/job/0:3      # only if attempt 3 remains current
 ```
 
-The action is queued on the controller and applied on the next control tick
-through the same finalization path the scheduler's preemptions use, so it shares
-one write transaction with the scheduler instead of racing it. Only tasks
-running on a worker (ASSIGNED / BUILDING / RUNNING) can be changed; pending or
-already-terminal tasks are rejected with a reason. `preempted` charges the
-preemption budget; `failed` is terminal with no retry.
-
-For federated jobs, the parent forwards task and attempt actions to the
-execution peer. The peer validates the current attempt and queues the action;
-a stale parent mirror does not determine which attempt is stopped. A successful
-reply means the action was queued. Check task status to confirm it took effect.
-
-Use `job complete` only when the workload should be recorded as successful. It
-marks the Job and every unfinished Task and Attempt `SUCCEEDED`, then stops
-their runtimes. `job cancel` records the Job as `KILLED` instead.
-
-`task preempt`, `task fail`, and `job cancel` also read IDs from **stdin**
-(`--stdin`, or a literal `-` target) and take `--dry-run`. This is the
-query→act bridge: select the
-targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
+Actions apply on the next control tick and accept ASSIGNED, BUILDING, or RUNNING
+tasks. A successful RPC means queued; confirm the resulting state. Federation
+forwards the action to the execution peer. `job complete` records success;
+`job cancel` records KILLED. See [bulk actions](#bulk-actions-query--act).
 
 ### Recovering a stuck terminating Kubernetes pod
 
-Use the `use-iris` skill when a CoreWeave pod remains after its Kubernetes
-deletion deadline. The Grafana
-**K8s control plane** dashboard classifies overdue pods; its alert fires only for
-node-bound, nonterminal GPU pods without finalizers.
-
-The recovery order is safety-critical: record the node's existing cordon state,
-cordon it, quiesce the exact Iris attempt and every sibling workload, then use a
-CoreWeave force reboot if targeted graceful deletion still cannot stop the pod.
-Never force-delete the pod object while the old process may still be running.
-Kubernetes does not wait for kubelet confirmation, so replacement work can start
-while the old process still owns the GPU. Force-delete a stale object only after
-CoreWeave confirms the reboot completed (or process death is otherwise proven).
+Follow [stuck-pod recovery](../../.agents/skills/use-iris/references/stuck-pod.md).
+Never force-delete the API object before process death is proven: a replacement
+may otherwise run while the old process still owns the GPU. Preserve the node's
+pre-existing cordon and quiesce sibling workloads before a reboot.
 
 ## Process Inspection & Profiling
 
-If controller RPCs time out while `/health` succeeds, inspect the RPC worker
-threads. Bundle uploads and waits for the same bundle's lock can exhaust that pool
-without stopping the control loop. When RPC profiling is unavailable on CoreWeave,
-use the configured Kubernetes context to run `py-spy dump --pid 1` in the controller
-pod. Repeated `BundleStore.write` stacks in S3 I/O or `_content_lock` identify this
-failure. Launch payload persistence has a 30-second deadline covering the lock
-wait, object existence check, and upload. A failed upload returns an `unavailable`
-job-creation error without inserting the new job; clients can retry after storage
-recovers.
-
 ```bash
-iris process status                         # controller resource usage
-iris process status -t /system/worker/<id>  # worker process status
-iris process logs -f                        # follow controller logs
-iris process logs --level WARNING           # filter by level
-iris process profile threads                # thread dump (prints to stdout)
-iris process profile cpu -d 10              # 10s CPU profile (writes .speedscope.json)
-iris process profile mem                    # memory flamegraph (writes .html)
-iris process profile cpu -t /user/job/0     # profile a running task container
+iris process status
+iris process logs --level WARNING --substring '<entity-or-error>' --max-lines 200
+iris process profile threads
+iris process profile cpu -d 10
+iris process profile mem
+iris process profile threads -t /user/job/0
 ```
 
-**Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
+Prefer RPC profiling over SSH. If RPCs hang while `/health` works, inspect
+controller thread stacks through the configured Kubernetes context. Repeated
+`BundleStore.write` or `_content_lock` stacks suggest upload/lock contention.
 
-Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
-
-GPU environments set `NCCL_RAS_ENABLE=1` and `NCCL_DEBUG=WARN` by default, with no subsystem filter. The default timestamp is `[%F %T.%3f]`. Set `NCCL_DEBUG=INFO` and a focused `NCCL_DEBUG_SUBSYS` only for diagnostic jobs; the CoreWeave GPU smoke config and supervised wedge repro do this explicitly. Do not use `TRACE` or `CALL` for normal runs.
-
-GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every ten minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
-
-For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
+For GPU hangs, compare JAX compile fingerprints and collect native thread
+profiles for divergence inside XLA. Keep normal NCCL logging at WARN; enable
+INFO with a focused subsystem only for diagnostic jobs. See the
+[training-stall contract](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots)
+for persisted communicator snapshots. A bounded, read-only check from a RUNNING
+task is:
 
 ```bash
-iris --cluster=<cluster> task exec <task-id> --timeout 15 -- \
+iris task exec /user/job/0 --timeout 15 -- \
   python -m rigging.telemetry.probes.nccl_client --timeout 8
 ```
-
-The command sends one status request, does not retry or write inside the task, and limits both socket time and response size. Exit code 3 means the task-local listener was unavailable. Do not restart, signal, or otherwise modify the task to make this check succeed.
 
 ## Scheduler & Autoscaler
 
 ```bash
-iris rpc controller get-scheduler-state        # pending queue, resource constraints, priority bands
-iris rpc controller get-autoscaler-status       # per-group demand, backoff, failures, quota
-iris rpc controller get-provider-status         # scheduling events, cluster capacity
-iris cluster vm status                          # scale groups with slice counts
+iris rpc controller get-scheduler-state
+iris rpc controller get-autoscaler-status
+iris rpc controller get-provider-status
+iris cluster vm status
 ```
 
-Priority bands: `PRIORITY_BAND_SYSTEM` (admin-only Iris, Finelog, and hero work), `PRIORITY_BAND_PRODUCTION` (admin-only critical work), `PRIORITY_BAND_INTERACTIVE` (default), and `PRIORITY_BAND_BATCH` (opportunistic). CLI SYSTEM submissions require `--system-reason` containing `hero`, `finelog`, or `iris`. See [`docs/priority-bands.md`](docs/priority-bands.md).
-
-`get-scheduler-state`'s `running_buckets` is a **live DB projection** (tasks where
-`state=RUNNING AND current_worker_id IS NOT NULL`), not an independent in-memory set.
-It is self-consistent within a single call but **skews across separate RPC calls** on
-a busy cluster — a task can move workers between two calls seconds apart. Do not
-diagnose a "worker running a task the tasks-table doesn't show" by diffing
-`running_buckets` against a *separately-timed* `iris query`; that mismatch is snapshot
-skew, not a leak. To check for a genuine leak, use one atomic query (e.g. RUNNING
-tasks whose `current_worker_id` is absent from `workers`).
+See [priority bands](docs/priority-bands.md). Scheduler `running_buckets` and
+separate SQL reads are different snapshots; use one atomic query to diagnose
+assignment leaks. For Kubernetes capacity use `rpc controller list-backends`;
+there is no Iris worker daemon or Iris autoscaler.
 
 ## SQL Queries
 
-The controller exposes its SQLite DB via RPC:
+The controller query RPC is read-only and admin-only. Discover tables before
+assuming schema; keep expensive analysis off the live controller:
 
 ```bash
-iris query "SELECT state, count(*) FROM jobs GROUP BY state"
-iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f csv
+iris query "SELECT name FROM sqlite_master WHERE type='table'"
+iris query 'SELECT state, count(*) FROM tasks GROUP BY state' -f csv
 ```
-
-**Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.
-
-State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 7=WORKER_FAILED, 8=UNSCHEDULABLE, 9=ASSIGNED (tasks only), 10=PREEMPTED (tasks only), 11=COSCHED_FAILED (tasks only — a coscheduled sibling bounced when its gang-mate went down; terminal, not charged preemption budget), 12=MISSING.
 
 ### Sharp edges
 
-- **Active states**: 2 (BUILDING), 3 (RUNNING), **and 9 (ASSIGNED)** — not just RUNNING. Forgetting ASSIGNED causes resource attribution misdiagnosis.
-- **Committed resources**: `workers` has `committed_cpu_millicores`, `committed_mem_bytes`, etc. Total capacity is in `metadata_proto` (serialized protobuf). Available = capacity - committed.
-- **`request_proto`**: serialized protobuf in `jobs.request_proto`. You need protobuf to decode — plain SQL cannot inspect task constraints.
+- Active resource holders include ASSIGNED (9), BUILDING (2), and RUNNING (3).
+- `workers.committed_*` measures allocations; capacity is in `metadata_proto`.
+- Decode the serialized protobuf in `jobs.request_proto` to inspect job constraints.
+- Use [task states](docs/task-states.md) and [schema.py](src/iris/cluster/controller/schema.py)
+  for state codes and columns.
 
 ### Useful queries
 
 ```sql
--- Failed jobs with errors
-SELECT job_id, error, exit_code FROM jobs WHERE state=5 ORDER BY submitted_at_ms DESC LIMIT 10;
+SELECT job_id, error, exit_code FROM jobs WHERE state=5
+ORDER BY submitted_at_ms DESC LIMIT 10;
 
--- Quota-blocked scale groups
+SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
+WHERE task_id LIKE '/user/job/%' ORDER BY attempt_id;
+
 SELECT name, consecutive_failures, quota_reason FROM scaling_groups
 WHERE consecutive_failures > 0 OR quota_reason != '';
-
--- Active slices (GCP)
-SELECT slice_id, lifecycle, scale_group, worker_ids FROM slices WHERE lifecycle='ready';
-
--- Task attempt history (debugging retries)
-SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
-WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
 ```
 
-Controller audit events (`event=<action> entity=<id> trigger=<trigger> <k=v ...>`)
-are emitted as structured `logger.info` lines — query them through
-`iris process logs` with its **built-in `--substring` filter**, not via SQL.
-
-**`process logs` has no `--since` flag** (its only options are `-t/--target`,
-`--level`, `-f/--follow`, `--max-lines`, `--substring`). Do **not** pipe the raw
-output through `grep` — an unrecognized `--since` is dropped and a post-hoc `grep`
-over the default window silently returns nothing. Filter server-side instead:
-
-```bash
-iris process logs --substring='event=worker_failed' --max-lines 200
-iris process logs --substring='<slice-or-worker-or-job-id>' --max-lines 40   # trace one entity's whole lifecycle
-```
-
-Useful event names (the `action` passed to `log_event`): `worker_registered`,
-`worker_failing`, `worker_pruned`, `assignment_queued`, `task_preempted`,
-`task_unschedulable`, `task_timeout`, `job_submitted`, `slice_ready`,
-`slice_pruned`, `reconcile_rpc_failed`. `task_preempted` records
-`reason=Preempted by <preemptor-task-id>`, so substring-tracing a victim shows
-exactly which higher-priority job evicted it.
-
-Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
+Read audit events with `process logs`. Filter server-side
+with `--substring='event=worker_failed'` or an entity ID. `process logs` has no
+`--since` flag; a grep over the default tail can miss older evidence.
 
 ### Bulk actions: query → act
 
-`iris query` is admin-only and read-only, so it is the safe surface for *finding*
-the exact set of tasks/jobs you want to act on. `iris task preempt`, `iris task fail`,
-and `iris job cancel` read IDs from **stdin** (`--stdin`, or a literal `-`), so a
-query pipes straight into an action — no hand-copying ids. Stdin parsing is
-CSV-tolerant: it takes the first field of each line and keeps only ids (leading
-`/`), so a `-f csv` header row and trailing columns are dropped automatically.
-
-**Always `--dry-run` first** to confirm the set, then re-run without it:
+Task preemption/failure and job cancellation accept `--stdin` and `--dry-run`.
+CSV headers and extra columns are ignored. Select exact IDs and preview before
+an authorized action:
 
 ```bash
-# Drain everything EXCEPT one protected job off a slice, so it can bind its ports.
-SLICE=marin-tpu-v4-reserved-2048-us-central2-b-...
 SEL="SELECT t.task_id FROM tasks t JOIN workers w ON t.current_worker_id=w.worker_id
-     WHERE w.slice_id='$SLICE' AND t.state IN (2,3,9) AND t.job_id NOT LIKE '/larry/%'"
-
-iris query -f csv "$SEL" | iris task preempt --stdin --dry-run          # preview
-iris query -f csv "$SEL" | iris task preempt --stdin --reason "drain slice for /larry"
+     WHERE w.slice_id='<slice-id>' AND t.state IN (2,3,9)"
+iris query -f csv "$SEL" | iris task preempt --stdin --dry-run
+iris query -f csv "$SEL" | iris task preempt --stdin --reason 'authorized slice drain'
 ```
-
-`task preempt` reschedules under the Task's preemption budget; `task fail` does
-not retry. Select Task IDs (`t.task_id`, task index kept) when you only need to
-clear specific workers. Canceling the Job would stop all of its Tasks.
-
-Canonical joins (the schema doesn't pre-wire these, so keep them here):
-
-```sql
--- Which scale group is the size-N slice? (find the slice_id to target)
-SELECT scale_group, device_variant, count(*) AS workers, count(DISTINCT slice_id) AS slices
-FROM workers WHERE device_type='tpu' GROUP BY scale_group, device_variant;
-
--- Everything occupying a slice's workers, by job and task state.
-SELECT t.job_id, t.state, count(*) FROM tasks t
-JOIN workers w ON t.current_worker_id=w.worker_id
-WHERE w.slice_id='<slice_id>' AND t.state IN (2,3,9) GROUP BY t.job_id, t.state;
-
--- Co-tenants sharing a worker VM with a given job (CPU tasks bin-packed onto
--- TPU hosts show up here — a common source of host-global port collisions).
-SELECT t.job_id, t.task_id, w.md_tpu_worker_id FROM tasks t
-JOIN workers w ON t.current_worker_id=w.worker_id
-WHERE w.worker_id IN (
-  SELECT current_worker_id FROM tasks WHERE job_id LIKE '/larry/%' AND state IN (2,3,9)
-) AND t.job_id NOT LIKE '/larry/%' AND t.state IN (2,3,9);
-```
-
-To *dump* rather than act, feed the same selection to `iris job logs` /
-`iris job describe` per ID, or read the task rows directly with a wider `SELECT`.
 
 ### Offline checkpoint analysis
 
-For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
-
-```bash
-# Download the checkpoint file (path printed by command above)
-sqlite3 /tmp/controller.sqlite3 "SELECT ..."
-```
-
-Prefer to use the last checkpoint from GCS. Only take a new controller checkpoint if this is too old:
-
-```bash
-iris cluster controller checkpoint
-```
+Use an existing checkpoint from `storage.remote_state_dir` for slow analysis.
+Take a new one with `iris cluster controller checkpoint` only when needed.
+Restore/download details are in [checkpoint recovery](docs/controller-recovery.md).
+Keep offline databases read-only too.
 
 ## Stats Namespaces
 
-Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
+Measurements live in Finelog, separate from controller decisions. Discover
+schemas and bound the time window before querying; see [query-finelog](../../.agents/skills/query-finelog/SKILL.md).
 
-Namespaces:
+| Namespace | Meaning |
+| --- | --- |
+| `iris.worker` | Host utilization per tick, keyed by `ts` |
+| `iris.task` | Per-attempt resource samples; Kubernetes CPU needs consecutive samples, memory peaks reset with the agent, and disk usage is unavailable |
+| `iris.task_event` | Backend verdicts and controller actions, retained up to 30 days; use `task events` first |
+| `iris.task_state` | Task counts and wait ages per root job every 30 seconds; empty `root_job_id` is the cluster rollup, emitted even when idle |
+| `iris.admission_probe` | Kubernetes admission canary outcomes every 60 seconds; failure or silence can identify webhook outages |
+| `iris.profile` | CPU/memory/thread captures; filter by `source`, `type`, and time; retention target is seven days |
+| `telemetry_v1.node_agent` | Physical-node gauges, including runtime-filesystem capacity |
 
-- `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
-- `iris.task` — per-attempt task resource snapshots, keyed by `ts`. Worker
-  daemons write their process readings directly. On Kubernetes, each
-  `iris-node-agent` samples the task containers on its node from kubelet
-  `/metrics/resource` every 60 seconds. The agent runs on the host network and
-  reads its own kubelet over loopback; the request does not go through the
-  apiserver, so node telemetry stays off the cluster's Konnectivity tunnel. CPU
-  is derived from consecutive cumulative counter samples, so the first row after
-  an agent start reports zero CPU. Memory uses the working-set gauge and an
-  agent-local peak; an agent restart resets that peak. Kubelet resource metrics
-  do not expose container filesystem usage, so Kubernetes rows report zero disk
-  usage. The node-agent service account requires `get` on `nodes/metrics`, which
-  is the subresource the kubelet authorizes that endpoint against.
-- `iris.task_event` — up to 30 days of deduplicated backend verdicts and
-  state-changing controller actions per task attempt. Query all attempts with
-  `iris task events /user/job/0`, or directly:
+Disruption events identify the machine with `node_system_uuid`/provider ID and
+the reboot with `node_boot_id`. Group nearby events from the same machine and
+boot before counting separate hardware failures.
 
-  ```sql
-  SELECT attempt_id, ts, type, reason, message, source, count
-  FROM "iris.task_event"
-  WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
-  ORDER BY ts ASC;
-  ```
-
-  Kubernetes disruptions use `source='k8s/disruption'`. `node_provider_id` and
-  `node_system_uuid` identify a physical machine; `node_boot_id` distinguishes
-  reboots. To inspect taint-manager evictions across the fleet:
-
-  ```sql
-  SELECT cluster, ts, task_id, attempt_id, pod_name, node_name,
-         node_uid, node_provider_id, node_boot_id, node_system_uuid,
-         reason, message, pod_conditions_json, node_taints_json,
-         node_conditions_json
-  FROM "iris.task_event"
-  WHERE source='k8s/disruption' AND reason='DeletionByTaintManager'
-  ORDER BY ts DESC;
-  ```
-
-  One node drain can disrupt many pods. Treat rows with the same cluster,
-  `node_system_uuid`, `node_boot_id`, and nearby timestamps as one machine
-  incident before counting repeat offenders.
-- `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
-- `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
-
-Retention is finelog segment-based. Target for `iris.profile` is 7 days.
-
-Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
-
-Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (periodic thread dumps of every running pod + on-demand all types), and by the controller for `/system/controller` self-captures. The k8s backend has no per-node worker daemon, so its `PeriodicProfiler` runs the equivalent 10-minute loop controller-side (`profile_poll_interval`), dumping each running pod's threads off the reconcile path.
-
-Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `finelog.config`):
+Workers capture periodic CPU profiles; Kubernetes captures periodic thread
+dumps. The dashboard's Profile history and Profile now controls retrieve or
+create captures. For a job-wide CPU breakdown:
 
 ```bash
-cd lib/finelog
-uv run finelog query marin "SELECT source, type, format, count(*) FROM \"iris.profile\"
-  WHERE source LIKE '/user/job/%' AND type='cpu' GROUP BY 1,2,3"
-```
-
-To aggregate a whole job's CPU profiles into a per-worker-sub-job breakdown + merged
-flamegraph, use `lib/iris/scripts/job_profile_summary.py` — it resolves the cluster's finelog
-deployment, pulls every CPU capture under a job (and its descendant sub-jobs), parses the
-speedscope stacks, and reports where CPU is spent:
-
-```bash
-uv run python lib/iris/scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
-uv run python lib/iris/scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
-uv run python lib/iris/scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
-uv run python lib/iris/scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
+uv run python lib/iris/scripts/job_profile_summary.py /user/job
+uv run python lib/iris/scripts/job_profile_summary.py /user/job -o merged.folded --svg flame.svg
 ```
 
 ## Users & Auth
 
 ```bash
-iris login                            # IAP clusters: cache the IAP edge refresh token locally
-iris rpc controller list-users        # active users with task/job counts
-iris user budget list                 # per-user budget limits
+iris rpc controller list-users
+iris user budget list
 ```
 
-See [shared budgets](docs/federation.md#shared-budgets) for federation configuration.
-
-Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
-and forwards a signed assertion the controller verifies; the controller mints **no**
-user token. `iris login` runs the browser desktop-OAuth flow once and caches the IAP
-edge refresh token (each RPC silently re-mints the short-lived edge token from it).
-Authorization is **config-driven** — roles are resolved per request from an in-memory
-`RolePolicy` built from the cluster config at controller start (admins from
-`auth.admin_users`, the IAP `unprovisioned_role` for everyone else). There is no
-`users` table and no reconciliation: config is the sole source of truth. To deprovision
-a user, remove them from `auth.admin_users` and reload/restart the controller; the
-rebuilt policy resolves them to the non-admin default on their next request (no token to
-revoke — the role is resolved per request). The only fleet-wide credential kill switch
-is rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
-re-auths every worker.
+IAP supplies user identity; controller config supplies roles. See
+[IAP access](docs/iap-gclb.md#controller-access-control), [cluster auth config](config/README.md),
+and [shared budgets](docs/federation.md#shared-budgets). Never print bearer tokens.
 
 ### Worker credential renewal
 
-Workers renew their controller JWT through `RenewWorkerToken` one day before
-its 30-day expiry. A background check runs every 30 seconds, including while
-idle. The RPC admits authenticated workers and admins and always issues a
-worker-role credential; expired credentials cannot renew themselves.
-
-Rigging serializes concurrent renewal requests and keeps a still-valid token
-usable during a transient issuer outage, retrying after 30 seconds. Renewed
-credentials are atomically stored with mode `0600` in
-`<worker cache_dir>/credentials/worker.jwt`. Worker and node-agent restarts use
-the cached credential when it expires later than the bootstrap token. The controller
-renews its own provisioning credential before using it for new workers.
-
-If task state advances but logs are absent, inspect worker-local Docker logs.
-`Table(log) ... UNAUTHENTICATED` can come from controller endpoint discovery,
-before any request reaches Finelog. Compare a direct Finelog RPC with
-`ListEndpoints` using the worker credential. Decode only expiry metadata when
-diagnosing; never print the bearer token. A timeout can invalidate a working
-cached endpoint and expose a credential that expired earlier.
-
-A worker whose bootstrap and cached credentials have both expired needs a fresh
-worker credential from an operator. Update `/etc/iris/worker_config.json`, then
-restart the worker and node-agent processes.
-Preserve running task containers and verify their adoption, unchanged attempts,
-and fresh Finelog rows. Restarting shared Finelog does not repair this condition.
-Deploy the controller's renewal RPC before deploying workers that call it.
+Workers renew JWTs before expiry and cache them at
+`<cache_dir>/credentials/worker.jwt` with mode `0600`. If task state advances
+but logs report UNAUTHENTICATED, compare endpoint discovery and direct Finelog
+access using expiry metadata only. Expired bootstrap and cached credentials
+need an operator-issued replacement; preserve running containers when restarting
+the worker/node agent. Deploy controller renewal support before its callers.
 
 ### Calling the IAP endpoint with `curl`
 
-The built-in Marin desktop OAuth client is configured as an IAP programmatic
-client. The first command opens a browser and caches a long-lived refresh token
-in `~/.config/marin/credentials/marin.json`:
-
-```bash
-uv run iris --cluster marin login
-```
-
-Mint a short-lived IAP ID token from the cached credentials and send it in
-`Proxy-Authorization`:
-
-```bash
-IAP_TOKEN="$(uv run python -c 'from rigging.credentials import iap_edge_provider; print(iap_edge_provider("marin").get_token())')"
-curl --fail-with-body \
-  --header "Proxy-Authorization: Bearer ${IAP_TOKEN}" \
-  https://iris.oa.dev/proxy/system.log-server/health
-```
-
-`Proxy-Authorization` is reserved for IAP. Keep `Authorization` available for
-an Iris JWT when a controller route requires one. When
-`auth.iap.signed_header_audience` is configured, the controller accepts the
-identity assertion added by IAP and resolves the caller's Iris role by email.
-
-The path proxy encodes `/` in an endpoint name as `.`. The finelog endpoint
-`/system/log-server` is therefore `system.log-server` in the public URL.
-`/proxy/system/finelog` addresses an endpoint named `/system` with a `finelog`
-subpath and does not reach the controller's finelog server.
+Use `rigging.credentials.iap_edge_provider(<cluster>).get_token()` with
+`Proxy-Authorization`; reserve `Authorization` for Iris JWTs. Endpoint names
+replace `/` with `.` in proxy URLs: `/system/log-server` becomes
+`/proxy/system.log-server/health`. See [IAP ingress](docs/iap-gclb.md).
 
 ## Troubleshooting
 
-| Symptom | Diagnostic |
-|---------|-----------|
-| Job stuck PENDING | `iris rpc controller get-scheduler-state` for constraints. Check quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
-| Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
-| Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
-| Task retrying | `iris job describe /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
-| Task failed with exit 137 / suspected OOM | `iris job describe /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
-| Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
-| `ArchMismatchImageExecuted` alert, or tasks die instantly with exit 255 | See [Image architecture mismatch](#image-architecture-mismatch). |
+| Symptom | First check |
+| --- | --- |
+| PENDING job | Scheduler constraints, autoscaler demand/backoff/quota |
+| GCP workers absent | `cluster vm status`, then worker bootstrap logs |
+| Repeated retries | Task events, attempt exit reason, application result archive |
+| Exit 137 | Container memory limit and peak; confirm OOM before resubmitting |
+| RPC timeout with healthy `/health` | Controller thread profile |
+| Dashboard unavailable | Configured IAP route or Kubernetes port-forward |
+| Instant exit 255 / exec format error | [Image architecture mismatch](#image-architecture-mismatch) |
 
 ### Image architecture mismatch
 
-An image built for the wrong CPU architecture fails at exec. The pod log shows
-`exec /usr/local/bin/python: exec format error` and the container exits 255 in under a
-second. The `ArchMismatchImageExecuted` alert reports an `evidence` column on
-`/k8s/arch_mismatch`: `message` means the kubelet captured that text and the mismatch is
-confirmed, `signature` means only the exit-255-in-under-a-second pattern matched, which an
-unrelated instant failure also produces. Confirm a `signature` row before acting.
-
-Only containers set to `terminationMessagePolicy: FallbackToLogsOnError` yield `message`
-evidence — Iris sets it on `task` and `stage-workdir`. Everything else reports `signature`.
-
-Confirm the tag really lost the architecture. A multi-arch tag is an index listing every
-platform:
-
-```bash
-TOK=$(curl -s "https://ghcr.io/token?scope=repository%3Amarin-community%2Firis-task%3Apull&service=ghcr.io" \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
-curl -s -H "Authorization: Bearer $TOK" \
-  -H "Accept: application/vnd.oci.image.index.v1+json" \
-  https://ghcr.io/v2/marin-community/iris-task/manifests/latest \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print([m.get('platform') for m in d.get('manifests',[])] or 'SINGLE-ARCH')"
-```
-
-A `platform: unknown` entry is buildx provenance, not a real architecture. If `linux/arm64`
-is missing, the tag itself is broken — rebuild and push a two-platform index before
-touching any node. Evicting first only re-pulls the same broken image.
-
-Then check what the node actually cached, since `imagePullPolicy: IfNotPresent` means a
-node never refreshes a tag it already holds:
-
-```bash
-kubectl --context <ctx> -n iris debug node/<node> --image=busybox --profile=sysadmin \
-  --attach=false -- chroot /host crictl inspecti ghcr.io/marin-community/iris-task:latest
-```
-
-Once the registry is confirmed good, drop the stale copy so the node re-pulls:
-
-```bash
-kubectl --context <ctx> -n iris debug node/<node> --image=busybox --profile=sysadmin \
-  --attach=false -- chroot /host crictl rmi ghcr.io/marin-community/iris-task:latest
-```
-
-Do not evict a node whose cached image still works unless the registry tag is confirmed
-good. On 2026-07-29 the only arm64 builds left in ghcr were the ones cached on the nodes;
-the tag had been overwritten with an amd64-only manifest, so an eviction would have been
-unrecoverable. Pinning the config to an index digest avoids both the drift and the
-overwrite.
+`ArchMismatchImageExecuted` evidence `message` confirms an exec-format error;
+`signature` is only an instant-exit heuristic. Check the registry's platform
+index before removing any working node cache. See
+[image diagnostics](docs/image-push.md#image-architecture-mismatch).
 
 ## GCP (TPU) Operations
 
 ### Connecting
 
-```bash
-# SSH tunnel (IAP)
-gcloud compute ssh iris-controller-marin --zone=us-central1-a \
-  --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
-
-# Then: iris --controller-url=http://localhost:10000 ...
-# Or preferred named-cluster auto-tunnel: iris --cluster=marin ...
-# Exact-file form for custom or pinned configs: iris --config=lib/iris/config/marin.yaml ...
-```
-
-Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
+Prefer named configs (`marin`, `marin-dev`); use the configured project/zone
+for direct GCP access. IAP-fronted controllers do not need SSH tunnels.
 
 ### GCP Resources
 
-```bash
-# Controller VM
-gcloud compute instances list --project=hai-gcp-models \
-  --filter="labels.iris-marin-controller=true" --format="table(name,zone,status)"
-
-# Iris-managed worker VMs
-gcloud compute instances list --project=hai-gcp-models \
-  --filter="labels.iris-marin-managed=true" --format="table(name,zone,status)"
-
-# TPU VMs (all zones)
-gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- \
-  --format="table(name,zone,state,acceleratorType)" | head -30
-```
+Use the cluster's `iris-<label_prefix>-controller` and
+`iris-<label_prefix>-managed` labels to find controller and worker instances.
+`gcloud compute tpus tpu-vm list --zone=<zone>` lists TPU VMs.
 
 ### TPU Bad-Node Recovery
 
-**Trigger patterns** (bad node, not a code bug):
-- `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
-- `FAILED_PRECONDITION`
-- `Device or resource busy`
-
-**Recovery:** extract worker IP from logs -> map to VM name (`gcloud compute tpus tpu-vm list --zone <ZONE> --format="table(name,networkEndpoints[0].ipAddress)"`) -> delete bad node (`gcloud compute tpus tpu-vm delete <NAME> --zone <ZONE> --quiet`) -> resubmit job.
-
-Only delete the specific bad node. If multiple nodes fail simultaneously or the same node fails again, escalate to the user.
+For `No accelerator found`, `FAILED_PRECONDITION`, or `Device or resource busy`,
+map the worker IP to the exact TPU VM and verify a host fault first. With recovery
+authorization, replace only that node and resubmit the affected work. Escalate
+simultaneous or repeated failures; see [infrastructure troubleshooting](../../.agents/skills/use-iris/references/troubleshooting.md).
 
 ### GCP State
 
-State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages) and `controller-state/` (SQLite checkpoints). Per-task log parquet segments are shipped separately by finelog under `<finelog.remote_log_dir>/log/` (see `lib/finelog/config/<cluster>.yaml`).
+Use `storage.remote_state_dir` for bundles and controller checkpoints.
+Finelog segments use its separately configured `remote_log_dir`.
 
 ### GCP Gotchas
 
-- **Quota is the primary scaling bottleneck.** The autoscaler backs off exponentially per scale group. Check with `iris rpc controller get-autoscaler-status`.
-- **Stuck TPU VMs.** Occasionally a TPU VM gets stuck in DELETING for days. Check: `gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- --filter="state=DELETING"`.
-
----
+Quota failures back off per scale group. Check autoscaler status before adding
+capacity. Inspect DELETING TPU VMs through GCP before retrying provisioning.
 
 ## CoreWeave (GPU) Operations
 
-[`docs/coreweave.md`](docs/coreweave.md) describes the Kubernetes architecture.
-The named `cw-*` configs in `lib/iris/config/` are the source of truth for each
-cluster's kubeconfig, context, namespace, and accelerator groups.
-
-### Access and read-only status
-
-CoreWeave configs pin a Kubernetes context, so no `kubectl config use-context`
-step is needed. The configured kubeconfig path is used unless `KUBECONFIG` is
-set in the operator shell.
+Use the kubeconfig, context, and namespace from the named config; an ambient
+`KUBECONFIG` can override the configured path. See
+[access and read-only status](docs/coreweave.md#access-and-read-only-status)
+for credential-safe Pod/Kueue/NodePool projections and override diagnosis.
 
 ```bash
-CLUSTER=cw-rno2a
-
-uv run iris cluster list
-uv run iris --cluster="$CLUSTER" cluster status                 # controller and port-forward
-uv run iris --cluster="$CLUSTER" rpc controller list-backends  # accelerators, nodes, and availability
-uv run iris --cluster="$CLUSTER" cluster dashboard              # blocks until Ctrl+C
+iris --cluster=<name> cluster status
+iris --cluster=<name> rpc controller list-backends
 ```
-
-CoreWeave has no Iris worker daemon or Iris autoscaler. Use `list-backends`, not
-the worker count in `cluster status`, for the Kubernetes resource view.
-
-For a pending task, inspect Kueue admission and NodePool provisioning without
-rendering Pod environment values:
-
-```bash
-CW_KUBECONFIG=~/.kube/coreweave-iris
-CW_CONTEXT=<platform.coreweave.kube_context>
-CW_NAMESPACE=<kubernetes_provider.namespace>
-
-kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
-  get pods -l iris.task_id \
-  -o custom-columns='POD:.metadata.name,PHASE:.status.phase,SCHEDULING:.status.conditions[?(@.type=="PodScheduled")].reason,NODE:.spec.nodeName'
-kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
-  get workloads.kueue.x-k8s.io \
-  -o custom-columns='WORKLOAD:.metadata.name,QUOTA:.status.conditions[?(@.type=="QuotaReserved")].status,ADMITTED:.status.conditions[?(@.type=="Admitted")].status,REASON:.status.conditions[?(@.type=="QuotaReserved")].reason'
-kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" \
-  get nodepools.compute.coreweave.com \
-  -o custom-columns='POOL:.metadata.name,CURRENT:.status.currentNodes,QUEUED:.status.queuedNodes,IN_PROGRESS:.status.inProgressNodes,CONDITION:.status.conditions[*].type,STATUS:.status.conditions[*].status,REASON:.status.conditions[*].reason'
-```
-
-`SchedulingGated` means Kueue still holds the Pod. `QuotaReserved=True` means
-the Workload has reserved quota; check `Admitted` if the Pod remains gated.
-NodePool conditions show provisioning failures or delays. These projections
-omit Pod environment values; do not use `kubectl describe pod` on task Pods.
-
-If Iris reports that the configured context does not exist, compare the shell
-override and the canonical CoreWeave kubeconfig before changing either config:
-
-```bash
-printf 'KUBECONFIG=%s\n' "${KUBECONFIG:-<unset>}"
-rg -n 'kubeconfig_path|kube_context|namespace' "lib/iris/config/${CLUSTER}.yaml"
-kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts -o name
-
-env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
-```
-
-`cluster status`, `list-backends`, `task describe`, `task events`, logs, and
-plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
-mutate the cluster, but it can print literal environment values; avoid it on
-task Pods. Starting, stopping, or restarting a cluster or controller changes
-shared infrastructure. Run those commands only with explicit user approval;
-use the `use-iris` skill for controller rollouts. Direct Kubernetes changes
-such as `apply`, `delete`,
-`scale`, `drain`, `cordon`, and `uncordon` also require explicit approval.
 
 ### Public LoadBalancer reachability
 
-Federation reaches a CoreWeave controller through the public Traefik
-LoadBalancer. A direct `iris --cluster=<name> cluster status` uses a Kubernetes
-port-forward, so it can succeed while the federation route is unreachable.
+A working port-forward does not prove federation ingress works. Test controller,
+in-cluster ingress, and external reachability separately; see the
+[LoadBalancer runbook](docs/coreweave.md#public-loadbalancer-reachability).
 
-Test each layer separately:
+### CoreWeave root filesystem full
 
-```bash
-KUBECONFIG=~/.kube/coreweave-iris
-CONTEXT=<platform.coreweave.kube_context>
-NAMESPACE=<platform.coreweave.namespace>
-HOST=<provisioning.coreweave.federation_dns.hostname>
+`NodeRuntimeFilesystemAlmostFull` reports `/` or separately mounted `/tmp`
+below 5% free for five minutes. It needs deployed node agents and Grafana;
+the NVMe `node_disk_*` gauge alone does not cover root. Missing/stale samples
+do not establish pressure; see [alert provisioning](../../infra/grafana/README.md).
 
-# Controller and ingress objects.
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
-  get pods,svc,ingress,certificate -o wide
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n traefik \
-  get pods,svc,endpointslice -o wide
-
-# Controller Service and Traefik route from inside the cluster.
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
-  exec deploy/iris-controller -- sh -c \
-  'curl -sS -o /dev/null -w "controller=%{http_code}\n" http://iris-controller-svc:10000/health'
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n "$NAMESPACE" \
-  exec deploy/iris-controller -- sh -c \
-  "curl -ksS -o /dev/null -w 'ingress=%{http_code}\n' https://$HOST/health"
-
-# The same public route from outside CoreWeave.
-curl -vk --connect-timeout 5 --max-time 10 "https://$HOST/health"
-```
-
-Interpret the result at the first failing layer:
-
-- Controller `200` and ingress `403` mean the backend, Traefik route, and
-  `ipAllowList` middleware are active. `403` is expected when the test source
-  is not allowlisted.
-- An external `403` proves the public route works. If the federation parent is
-  also rejected, compare its observed egress IP with the live
-  `iris-federation-ipallowlist` Middleware.
-- An external `503` reaches Traefik but not a healthy backend. Inspect the
-  Traefik EndpointSlice and controller Service.
-- A public VIP that answers inside the cluster but times out from multiple
-  external networks points to LoadBalancer route propagation. Check Cilium's
-  managed BGP session before escalating:
-
-```bash
-TRAEFIK_NODE=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  -n traefik get pod -l app.kubernetes.io/name=traefik \
-  -o jsonpath='{.items[0].spec.nodeName}')
-CILIUM_POD=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  -n cw-cilium-system get pod --field-selector "spec.nodeName=$TRAEFIK_NODE" \
-  -o jsonpath='{.items[0].metadata.name}')
-PEER=$(kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  get ciliumbgpclusterconfig cilium-bgp \
-  -o jsonpath='{.spec.bgpInstances[0].peers[0].peerAddress}')
-
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
-  exec "$CILIUM_POD" -c cilium -- cilium-dbg bgp peers
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n cw-cilium-system \
-  exec "$CILIUM_POD" -c cilium -- \
-  cilium-dbg bgp routes advertised ipv4 unicast peer "$PEER"
-```
-
-An established BGP session that advertises the public VIP, combined with an
-external TCP timeout, requires a CoreWeave route-export escalation. Restarting
-Iris or Traefik does not repair that layer.
+If exec reports `write /tmp/runc-process…: no space left on device`, check host
+root bytes/inodes even when Ready and DiskPressure look normal. Inspect
+`/var/log/runsc`; use a node-debug container's main command when exec cannot
+start. See [runtime storage](docs/coreweave.md#runtime-storage) for automatic
+NVMe log placement and diagnosis. Task/Shellbox `/tmp` uses private Kubernetes
+storage, separate from host `/tmp`. Historical evidence is in [Echo](https://marina.oa.dev/echo/wiki/947).
 
 ### CoreWeave kernel deadlock pending reboot
 
-`CoreWeaveNodeKernelDeadlock` means CoreWeave reported the structured node
-condition `KernelDeadlock=True`. The node lifecycle controller normally cordons
-the node and moves it toward `production-reboot`; tenant pods can block that
-transition even while `Ready=True`.
-
-Read the canonical kubeconfig and context from the cluster config, then inspect
-the condition and blockers:
-
-```bash
-kubectl --kubeconfig <kubeconfig> --context <context> get node <node> \
-  -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
-kubectl --kubeconfig <kubeconfig> --context <context> get pods --all-namespaces \
-  --field-selector spec.nodeName=<node> -o wide
-kubectl --kubeconfig <kubeconfig> --context <context> get pdb --all-namespaces
-```
-
-Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
-`production-reboot` and `CWActive` lists tenant Deployments, get operator
-approval before changing workloads. Record each owner's original replica count
-and pod template, then choose an action by workload semantics:
-
-| Blocker | Reboot-unblocking action |
-| --- | --- |
-| Stateless or leader-elected Deployment | Add one replica, wait for it to become Ready on a healthy node, then delete only the pod bound to the deadlocked node. The current cert-manager and Kueue controllers are in this class. |
-| Singleton controller with persistent state or no concurrency protection | Do not overlap replicas. Confirm that its state is durable, accept the control-plane outage, and scale it to zero. The Iris controller uses a `Recreate` strategy and a PVC, so it belongs here. |
-| Availability service with a PodDisruptionBudget or hard placement constraints | First provide compatible capacity. If that is unavailable, use an operator-approved temporary placement change and wait for a Ready replacement. Scale to zero only with explicit approval for the resulting outage and after confirming that recovery does not depend on the service. Traefik belongs here. |
-| Running Iris task pod | Preserve the Iris state transition, not the pod: obtain the canonical attempt ID from `IRIS_TASK_ID`, stop the parent job or mark the attempt preempted, then delete the exact pod normally so Iris can retry it. Node-local task images and caches are disposable. |
-| Completed or failed Iris task pod | Delete the exact pod normally. It does not need replacement capacity. |
-| StatefulSet, local-volume workload, unmanaged pod, or unknown owner | Stop and escalate. Do not infer that another replica is safe. |
-
-A PodDisruptionBudget states the desired availability but does not prove that
-replicas may run concurrently. Scaling an owner to zero also bypasses the
-eviction protection that operators often expect from a PodDisruptionBudget, so
-treat it as an explicit outage decision. Change one owner at a time and confirm
-that `CWActive` drops the blocker before continuing. Do not delete provider
-DaemonSets or use `kubectl drain --force`.
-
-Iris coordinator task PDBs follow the job's priority band. SYSTEM and
-PRODUCTION use `minAvailable: 1` and intentionally block voluntary eviction.
-INTERACTIVE and BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods
-during a drain, and Iris records the disruption as `PREEMPTED` and retries it
-within the job's preemption budget. For a SYSTEM or PRODUCTION blocker, follow
-the running-task procedure in the table above. Do not weaken its live PDB to
-recover a node without the job owner's approval.
-
-If a replacement remains Pending because no healthy node satisfies its required
-node affinity or pod anti-affinity, stop before deleting the original pod.
-Provision compatible capacity when possible. Record and restore any temporary
-placement change after the reboot. Use the `use-iris` skill for the exact Iris
-task retry sequence or when a bound pod does not terminate.
-
-CoreWeave should continue the pending reboot without a separate Iris restart.
-Before restoring workloads, verify that the provider operation completed, the
-node boot ID changed, `KernelDeadlock=False`, `Ready=True`, CoreWeave returned
-the node lifecycle state to `production`, and both the cordon and any
-`node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
-and original replica counts first, wait for them to become Ready, then remove
-temporary capacity or placement changes.
+Check `KernelDeadlock`, `PendingPhaseState`, `CWActive`, and bound workloads.
+Preserve provider cordons and follow the [node-reboot runbook](docs/coreweave.md#coreweave-kernel-deadlock-pending-reboot);
+do not overlap stateful controllers or force-delete live GPU processes.
 
 ### Rolling back the egress allowlist
 
-The allowlist is described in `docs/container-profiles.md`. Rolling it back
-changes controller config; pods already running keep their Cilium policies
-until they exit or an operator deletes the policies. `iris cluster stop` does
-not delete them.
-
-1. To stop new root jobs defaulting to `ALLOWLIST`, set
-   `defaults.egress_allowlist.default: false` and restart the controller.
-   Running `ALLOWLIST` jobs keep the policy, and so do their retries and the
-   child jobs they launch, which inherit it.
-2. To stop enforcing the allowlist for every pod started from now on, also
-   remove `kubernetes_provider.cilium` and restart the controller. New and
-   stored `ALLOWLIST` jobs then start their pods on the cluster network.
-3. To open the network of pods already running under the allowlist, delete the
-   per-pod policies first and the namespace policy second. In the other order,
-   a pod with its own rules reaches only those rules, losing the controller and
-   cluster DNS, until its policy is deleted. A pod that no policy selects is
-   unrestricted.
-
-```bash
-KUBECTL="kubectl --kubeconfig $HOME/.kube/coreweave-iris --context <context> -n <namespace>"
-$KUBECTL get ciliumnetworkpolicies -o name | grep -- '-egress$' | xargs -r $KUBECTL delete
-$KUBECTL delete ciliumnetworkpolicy iris-egress-allowlist
-```
-
-`iris cluster start` recreates `iris-egress-allowlist` while
-`kubernetes_provider.cilium` is set.
+Changing defaults affects new jobs; stored policies and existing Pods have
+separate lifetimes. Follow the [allowlist rollback order](docs/coreweave.md#rolling-back-the-egress-allowlist)
+and [container profile semantics](docs/container-profiles.md).
 
 ## CI Workflows
 
-| Workflow | Trigger | What |
-|----------|---------|------|
-| `marin-canary-ferry.yaml` | Daily 6AM UTC | TPU canary on GCP (`marin-dev.yaml`) |
-| `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
-| `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
-| `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes SHA-pinned `iris-{controller,worker,task}` images to GHCR (see Controller Restart) |
+| Workflow | Purpose |
+| --- | --- |
+| `marin-canary-ferry.yaml` | TPU canary on GCP |
+| `marin-canary-ferry-coreweave.yaml` | GPU canary on the shared `iris-ci` fleet |
+| `iris-smoke-coreweave.yaml` | CoreWeave integration; shares the CI controller and capacity with the GPU canary |
+| `ops-docker-images.yaml` | Rebuild and publish pinned Iris images |
 
-```bash
-# Trigger manually
-gh workflow run "<workflow name>" -R marin-community/marin --ref main
-# View failed run
-gh run view <run-id> -R marin-community/marin --log-failed | tail -50
-```
+Inspect workflow source before dispatching or retrying: CoreWeave CI resets
+workers and redeploys its shared controller. Those actions need the same target
+authorization as manual operations. Read failures with `gh run view <id> --log-failed`.

@@ -217,5 +217,24 @@ worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-It also authorizes ShellSim commands and bounded public GitHub clones. Share
-the URL only with trusted users and treat it as a credential.
+It also authorizes ShellSim commands, bounded public GitHub clones, and, when
+enabled, web searches. Share the URL only with trusted users and treat it as a
+credential.
+
+## Web search
+
+The **Web search** checkbox above the Chat composer adds a `web_search` tool,
+backed by Parallel's search API, to the request's `tools` field. It is shown
+only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
+dashboard server adds the key to each call, so the browser never receives it.
+Each search is billed to the account that owns the key.
+
+```bash
+uv run marin-serve iris MODEL --cluster marin --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
+```
+
+A custom launcher that calls `build_dashboard_app` directly must submit the same
+secret and pass `web_search=parallel_web_search_from_secret()` from
+`marin.inference.web_search`. In brokered mode, the model worker jobs do not
+receive the key; in direct mode, the model server shares the dashboard's task
+and can read it.

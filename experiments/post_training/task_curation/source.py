@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from finestore.rl.curation import PipelineReference, SourceDeclaration
+from finestore.rl.curation import IndependentQC, PipelineReference, SourceDeclaration
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -72,6 +72,7 @@ class SourceInfo:
     count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
+    independent_qc: IndependentQC | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status="Excluded" if "excluded" in tags else "Available",
             pipeline=invocation,
+            independent_qc=info.independent_qc,
         )
 
 
