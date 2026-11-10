@@ -367,15 +367,34 @@ def test_job_config_stores_no_environment_and_redacts_command_lines(state):
     fake = {name: f"made-up-{name.lower()}" for name in ("HF_TOKEN", "WANDB_API_KEY", "CW_KEY_ID", "CW_KEY_SECRET")}
     request.environment.secrets.update(fake)
     request.environment.env_vars.update({"SERVICE_URL": "made-up-env-value"})
-    request.environment.setup_scripts.append("export HF_TOKEN=made-up-script-token && uv sync")
-    request.entrypoint.run_command.argv[:] = ["python", "train.py", "--hf-token", "made-up-cli-token"]
+    request.environment.setup_scripts.append(
+        "export HF_TOKEN=made-up-script-token && pip install --index-url https://u:made-up-url-pw@pypi.example/simple x"
+    )
+    request.entrypoint.setup_commands.append("huggingface-cli login --token made-up-login-token")
+    request.entrypoint.run_command.argv[:] = [
+        "python",
+        "train.py",
+        "--hf-token",
+        "made-up-cli-token",
+        "--gcp-key=AIzaSyMADEUPmadeupMADEUPmadeupMADEUP12",
+        "ya29.made-up-oauth",
+    ]
     request.submit_argv[:] = ["iris", "job", "run", "-e", "SERVICE_URL", "made-up-argv-value", "--", "python"]
 
     submit_job(state, "train", request)
 
     config = rows.job_configs[0]
-    assert json.loads(config.setup_scripts_json) == ["export HF_TOKEN=[REDACTED] && uv sync"]
-    assert "--hf-token" in json.loads(config.entrypoint_json)["run_command"]["argv"]
+    assert json.loads(config.setup_scripts_json) == [
+        "export HF_TOKEN= && pip <redacted> --index-url <redacted> <redacted>"
+    ]
+    assert json.loads(config.entrypoint_json)["run_command"]["argv"] == [
+        "python",
+        "<redacted>",
+        "--hf-token",
+        "<redacted>",
+        "--gcp-key",
+        "<redacted>",
+    ]
     written = repr([*rows.jobs, *rows.job_configs, *rows.attempts])
     for value in [
         *fake.values(),
@@ -383,6 +402,10 @@ def test_job_config_stores_no_environment_and_redacts_command_lines(state):
         "made-up-cli-token",
         "made-up-argv-value",
         "made-up-script-token",
+        "made-up-url-pw",
+        "made-up-login-token",
+        "AIzaSyMADEUP",
+        "ya29.",
     ]:
         assert value not in written
     for name in [*fake, "SERVICE_URL"]:
@@ -395,7 +418,7 @@ def test_entrypoint_rows_never_carry_inline_file_contents():
     stored = json.loads(controller_rows._redacted_entrypoint_json(json.dumps(entrypoint)))
 
     assert "workdir_files" not in stored
-    assert stored["run_command"]["argv"] == ["python", "t.py"]
+    assert stored["run_command"]["argv"] == ["python", "<redacted>"]
 
 
 def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):

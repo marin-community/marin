@@ -287,7 +287,7 @@ class IrisJobConfig:
     """A job's config, written once when the job is submitted.
 
     Every controller ``job_config`` column is copied except the environment,
-    of which only the setup scripts are kept; command lines are redacted.
+    of which only the setup scripts are kept; command lines keep names only.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -321,13 +321,12 @@ class IrisJobConfig:
     termination_grace_ms: int
     task_image: str
     name: str
-    # The environment's setup scripts only, redacted. Environment variables and
+    # The environment's setup scripts only, names only. Environment variables and
     # secrets are not copied, neither names nor values.
     setup_scripts_json: str
-    # The command, with values of sensitively named flags and token-like strings
-    # redacted; workdir file contents are not stored.
+    # The command and setup commands, names only; workdir file contents are not stored.
     entrypoint_json: str
-    # The submitter's command line: -e and --secret values and sensitive flag values redacted.
+    # The submitter's command line, names only.
     submit_argv_json: str
     bundle_id: str
     ports_json: str

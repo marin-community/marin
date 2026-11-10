@@ -11,10 +11,11 @@ syntax variant.
 
 import pytest
 from iris.cluster.redaction import (
+    NAMES_ONLY_REDACTED,
+    NAMES_ONLY_UNPARSED,
     REDACTED_VALUE,
-    redact_command_argv,
-    redact_script,
-    redact_stored_submit_argv,
+    names_only_argv,
+    names_only_script,
     redact_submit_argv,
 )
 
@@ -157,58 +158,71 @@ def test_redact_submit_argv_attached_long_form_missing_value():
     assert redact_submit_argv(argv) == argv
 
 
-_RUN = ["iris", "job", "run"]
-_CMD = ["--", "python", "t.py"]
+R = NAMES_ONLY_REDACTED
 
 
+def test_names_only_argv_keeps_the_command_and_flag_names():
+    argv = ["python", "train.py", "--hf-token", "made-up-1", "--lr", "3e-4"]
+
+    assert names_only_argv(argv) == ["python", R, "--hf-token", R, "--lr", R]
+
+
+def test_names_only_argv_cuts_attached_values():
+    argv = ["mysql", "-pmade-up-2", "--api-key=made-up-3", "-eSERVICE_KEY", "made-up-4"]
+
+    assert names_only_argv(argv) == ["mysql", "-p", "--api-key", "-e", R]
+
+
+def test_names_only_argv_redacts_a_shell_body_whole():
+    argv = ["bash", "-c", "export HF_TOKEN=made-up-5 && python x.py"]
+
+    assert names_only_argv(argv) == ["bash", "-c", R]
+
+
+def test_names_only_argv_on_an_iris_submit_line():
+    argv = ["iris", "job", "run", "-e", "SERVICE_URL", "made-up-6", "--secret", "SERVICE_KEY", "made-up-7"]
+    argv += ["--", "python", "t.py"]
+
+    assert names_only_argv(argv) == ["iris", R, R, "-e", R, R, "--secret", R, R, "--", "python", R]
+
+
+def test_names_only_script_keeps_command_words_after_separators_and_assignment_names():
+    script = "export HF_TOKEN=made-up-8 && pip install --index-url https://u:made-up-9@pypi.example/simple x | tee log"
+    script += "\ngit clone https://made-up-10@github.com/o/r.git; huggingface-cli login --token made-up-11"
+
+    assert names_only_script(script) == (
+        f"export HF_TOKEN= && pip {R} --index-url {R} {R} | tee {R}\ngit {R} {R} ; huggingface-cli {R} --token {R}"
+    )
+
+
+def test_names_only_script_marks_an_unparsable_line():
+    assert names_only_script('uv sync\necho "made-up-12') == f"uv {R}\n{NAMES_ONLY_UNPARSED}"
+
+
+_MADE_UP_SECRETS = [
+    "made-up-hf-token",
+    "AIzaSyMADEUPmadeupMADEUPmadeupMADEUP12",
+    "ya29.made-up-oauth-token",
+    "https://user:made-up-pw@pypi.example.com/simple",
+    "https://made-up-gh-token@github.com/org/repo.git",
+    "short",
+]
+
+
+@pytest.mark.parametrize("secret", _MADE_UP_SECRETS)
 @pytest.mark.parametrize(
-    "flags",
+    "shape",
     [
-        ["-e", "SERVICE_URL", "made-up-value"],
-        ["-eSERVICE_URL", "made-up-value"],
-        ["--env-vars", "SERVICE_URL", "made-up-value"],
-        ["--env-vars=SERVICE_URL", "made-up-value"],
-        ["--secret", "SERVICE_KEY", "made-up-value"],
-        ["--secret=SERVICE_KEY", "made-up-value"],
+        ["python", "t.py", "{s}"],
+        ["python", "t.py", "--token", "{s}"],
+        ["python", "t.py", "--token={s}"],
+        ["tool", "-p{s}"],
+        ["env", "HF_TOKEN={s}", "python", "t.py"],
+        ["bash", "-c", "login --token {s} && run"],
     ],
-    ids=["e", "e-attached", "env-vars", "env-vars-attached", "secret", "secret-attached"],
 )
-def test_stored_submit_argv_drops_every_env_and_secret_value(flags):
-    redacted = redact_stored_submit_argv([*_RUN, *flags, *_CMD])
+def test_no_value_survives_names_only_redaction(shape, secret):
+    argv = [part.format(s=secret) for part in shape]
 
-    assert "made-up-value" not in redacted
-    assert redacted[: len(_RUN)] == _RUN
-    assert redacted[len(_RUN)].split("=")[0] == flags[0].split("=")[0]
-    assert redacted[-len(_CMD) :] == _CMD
-
-
-def test_stored_submit_argv_redacts_a_command_given_without_double_dash():
-    redacted = redact_stored_submit_argv([*_RUN, "python", "train.py", "--hf-token", "made-up-token"])
-
-    assert redacted == [*_RUN, "python", "train.py", "--hf-token", REDACTED_VALUE]
-
-
-def test_command_argv_redacts_values_of_sensitive_flags():
-    argv = ["python", "t.py", "--hf-token", "made-up-1", "--api-key=made-up-2", "--epochs", "3"]
-
-    assert redact_command_argv(argv) == [
-        "python",
-        "t.py",
-        "--hf-token",
-        REDACTED_VALUE,
-        f"--api-key={REDACTED_VALUE}",
-        "--epochs",
-        "3",
-    ]
-
-
-def test_script_redacts_sensitive_assignments_only():
-    script = "export WANDB_API_KEY=made-up-key && export LOG_LEVEL=debug && uv sync"
-
-    assert redact_script(script) == f"export WANDB_API_KEY={REDACTED_VALUE} && export LOG_LEVEL=debug && uv sync"
-
-
-def test_command_argv_redacts_assignments_inside_a_shell_string():
-    argv = ["bash", "-c", "export HF_TOKEN=made-up-token && python x.py"]
-
-    assert redact_command_argv(argv) == ["bash", "-c", f"export HF_TOKEN={REDACTED_VALUE} && python x.py"]
+    for redacted in (names_only_argv(argv), names_only_script(" ".join(f"'{part}'" for part in argv)).split(" ")):
+        assert not any(secret in token for token in redacted)

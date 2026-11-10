@@ -9,6 +9,7 @@ for ``iris job run``) into a form the shared redactor can consume.
 """
 
 import re
+import shlex
 
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
@@ -96,93 +97,63 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
     return out
 
 
-_SECRET_FLAG = "--secret"
+# Names-only redaction for command lines and scripts kept in long-term storage.
+# Fail-closed: only command words, flag names and assignment names survive.
+NAMES_ONLY_REDACTED = "<redacted>"
+NAMES_ONLY_UNPARSED = "<unparsed>"
+_SHELL_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", "--"})
+_ASSIGNMENT_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def _flag_name(token: str) -> str | None:
-    """The name of a ``--name`` / ``--name=value`` / ``-n`` token, or None."""
-    if not token.startswith("-") or token == "-" or token == "--":
-        return None
-    return token.lstrip("-").split("=", 1)[0]
-
-
-def redact_command_argv(argv: list[str]) -> list[str]:
-    """Redact a user command for long-term storage.
-
-    A value after a flag whose name looks sensitive (``--hf-token X``,
-    ``--api-key=X``) is replaced. Every other token passes through
-    :func:`redact_script`, which catches sensitive ``NAME=value`` assignments
-    (as in ``bash -c "export HF_TOKEN=..."``) and prefixed or high-entropy tokens. A secret
-    passed as a plain positional argument or inside a URL with an ordinary
-    shape is not caught.
-    """
+def _names_only(tokens: list[str]) -> list[str]:
+    """Keep each command word, flag name and assignment name; replace every other token."""
     out: list[str] = []
-    redact_next = False
-    for token in argv:
-        if redact_next and not token.startswith("-"):
-            out.append(REDACTED_VALUE)
-            redact_next = False
+    command_word_next = True
+    for token in tokens:
+        if token in _SHELL_SEPARATORS:
+            out.append(token)
+            command_word_next = True
             continue
-        redact_next = False
-        name = _flag_name(token)
-        if name is not None and is_sensitive_key_name(name):
-            if "=" in token:
-                out.append(token.split("=", 1)[0] + "=" + REDACTED_VALUE)
-            else:
-                out.append(token)
-                redact_next = True
-            continue
-        out.append(redact_script(token))
+        assignment = _ASSIGNMENT_NAME_RE.match(token)
+        if assignment is not None:
+            out.append(assignment.group(0))
+        elif token.startswith("--"):
+            out.append(token.split("=", 1)[0])
+        elif token.startswith("-") and token != "-":
+            # A short flag can carry its value attached (-pPASSWORD, -eKEY).
+            out.append(token[:2])
+        elif command_word_next:
+            out.append(token)
+            command_word_next = False
+        else:
+            out.append(NAMES_ONLY_REDACTED)
     return out
 
 
-def redact_stored_submit_argv(argv: list[str]) -> list[str]:
-    """Redact an ``iris job run`` command line for long-term storage, failing closed.
+def names_only_argv(argv: list[str]) -> list[str]:
+    """Reduce an already split command line to its command words, flag names and assignment names.
 
-    Every ``-e``/``--env-vars`` value and every ``--secret`` source is replaced,
-    whatever its name, in the bare and attached forms. Then the whole argv goes
-    through :func:`redact_command_argv`, since the command may follow the flags
-    without ``--``.
+    ``python train.py --hf-token X --lr 3e-4`` becomes
+    ``python <redacted> --hf-token <redacted> --lr <redacted>``. A ``bash -c``
+    body is one argument, so it is redacted whole.
     """
-    out = list(argv)
-    i = 0
-    while i < len(out):
-        token = out[i]
-        next_token = out[i + 1] if i + 1 < len(out) else None
-        if token == "--":
-            break
-        if _env_var_flag_key(token, next_token) is not None:
-            attached = token not in (_ENV_VAR_LONG_FLAG, _ENV_VAR_SHORT_FLAG)
-            value_index = i + 1 if attached else i + 2
-            if value_index < len(out):
-                out[value_index] = REDACTED_VALUE
-            i = value_index + 1
-            continue
-        if token == _SECRET_FLAG or token.startswith(_SECRET_FLAG + "="):
-            value_index = i + 1 if "=" in token else i + 2
-            if value_index < len(out):
-                out[value_index] = REDACTED_VALUE
-            i = value_index + 1
-            continue
-        i += 1
-    # ``iris job run`` accepts the command without ``--``, so the sensitive-flag
-    # rule covers the whole argv. It may also hide a --secret NAME; that fails closed.
-    return redact_command_argv(out)
+    return _names_only(list(argv))
 
 
-_ASSIGNMENT_RE = re.compile(r"""\b([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)""")
+def names_only_script(script: str) -> str:
+    """Reduce a shell script or command string the same way, line by line.
 
-
-def redact_script(script: str) -> str:
-    """Redact a shell script or command string for long-term storage.
-
-    The value of a ``NAME=value`` assignment whose NAME looks sensitive
-    (``export WANDB_API_KEY=...``) is replaced, and the rest goes through the
-    shared string redactor.
+    Each line is tokenized with :mod:`shlex`; a line that does not parse becomes
+    ``<unparsed>``.
     """
-
-    def assignment(match: re.Match[str]) -> str:
-        name = match.group(1)
-        return f"{name}={REDACTED_VALUE}" if is_sensitive_key_name(name) else match.group(0)
-
-    return redact_string(_ASSIGNMENT_RE.sub(assignment, script))
+    lines = []
+    for line in script.splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            lines.append(NAMES_ONLY_UNPARSED)
+            continue
+        lines.append(" ".join(_names_only(tokens)))
+    return "\n".join(lines)

@@ -24,16 +24,25 @@ changed columns as redacted, never as the controller's own values:
 | Column | Differs from the controller DB |
 | --- | --- |
 | `iris.controller_db.jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
-| `iris.controller_db.job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, with sensitive `NAME=value` assignments and token-like strings redacted. Environment variables and secrets are not copied, neither names nor values |
-| `iris.controller_db.job_config.entrypoint_json` | The command with the values of flags whose names look sensitive (`--hf-token X`, `--api-key=X`) and prefixed or high-entropy tokens redacted; setup commands as setup scripts. Not caught: a secret passed as a plain positional argument, in an ordinary-looking URL, or as a flag value that starts with `-`. Workdir file contents are never stored |
-| `iris.controller_db.job_config.submit_argv_json` | Every `-e`/`--env-vars` value and `--secret` source redacted, whatever its name (a `--secret` name may be redacted too); then the whole command line as in `entrypoint_json`, since the command may follow the flags without `--` |
+| `iris.controller_db.job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, **names only** (below). Environment variables and secrets are not copied, neither names nor values |
+| `iris.controller_db.job_config.entrypoint_json` | The command and setup commands, **names only** (below). Workdir file contents are never stored |
+| `iris.controller_db.job_config.submit_argv_json` | The submitter's command line, **names only** (below) |
 | `iris.controller_db.job_config.accelerator_*` | Added: the device request flattened (below) |
 | `iris.controller_db.tasks.placement` | The DB's `tasks.cluster`, as for jobs |
 | `iris.controller_db.tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
 
-**Copied raw:** the free-text `error` columns of jobs, tasks and attempts, and
+**Names only:** command lines and scripts keep only the command words (the
+first word, and the first after `&&`, `||`, `;`, `|`, `&` or `--`), flag names
+(`--lr`, `-e`, cut at `=` or after a short flag's letter) and assignment names
+(`NAME=`). Every value, positional argument and quoted string, including a whole
+`bash -c "..."` body, is `<redacted>`. A script line that does not parse is
+`<unparsed>`. So `python train.py --hf-token X --lr 3e-4` is stored as
+`python <redacted> --hf-token <redacted> --lr <redacted>`.
+
+**Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as
-a scheduler or Kueue message). They can echo a command or image name.
+a scheduler or Kueue message), stay readable, with token-like strings redacted.
+They can still echo a short value from a command.
 
 **The one place the copy is not every change:** an `iris.controller_db.tasks`
 row is written at submit and when the task's state, current attempt, current

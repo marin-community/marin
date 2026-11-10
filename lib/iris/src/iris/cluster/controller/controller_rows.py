@@ -34,6 +34,7 @@ from itertools import batched
 from typing import Protocol
 
 from finelog.client.log_client import Table
+from rigging.redaction import redact_string
 from rigging.timing import Timestamp
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
@@ -41,7 +42,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import redact_command_argv, redact_script, redact_stored_submit_argv
+from iris.cluster.redaction import names_only_argv, names_only_script
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -222,19 +223,24 @@ def _dt_from_ms(epoch_ms: int | None) -> datetime | None:
 
 
 def _setup_scripts_json(environment_json: str) -> str:
-    """The environment's setup scripts, redacted. Environment variables and secrets are never copied."""
-    return json.dumps([redact_script(script) for script in json.loads(environment_json).get("setup_scripts", [])])
+    """The environment's setup scripts, names only. Environment variables and secrets are never copied."""
+    return json.dumps([names_only_script(script) for script in json.loads(environment_json).get("setup_scripts", [])])
 
 
 def _redacted_entrypoint_json(entrypoint_json: str) -> str:
     entrypoint = json.loads(entrypoint_json)
     # The controller DB already omits inline file contents; never let them reach Finelog.
     entrypoint.pop("workdir_files", None)
-    entrypoint["setup_commands"] = [redact_script(command) for command in entrypoint.get("setup_commands", [])]
+    entrypoint["setup_commands"] = [names_only_script(command) for command in entrypoint.get("setup_commands", [])]
     run_command = entrypoint.get("run_command")
     if run_command is not None:
-        run_command["argv"] = redact_command_argv(run_command.get("argv", []))
+        run_command["argv"] = names_only_argv(run_command.get("argv", []))
     return json.dumps(entrypoint)
+
+
+def _free_text(value: str | None) -> str | None:
+    """Error and status text stay readable, with token-like strings redacted."""
+    return redact_string(value) if value is not None else None
 
 
 def _dt(value: Timestamp | None) -> datetime | None:
@@ -283,7 +289,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     started_at=_dt(r.started_at_ms),
                     finished_at=_dt(r.finished_at_ms),
                     exit_code=r.exit_code,
-                    error=r.error,
+                    error=_free_text(r.error),
                     num_tasks=r.num_tasks,
                     scheduling_deadline_at=_dt_from_ms(r.scheduling_deadline_epoch_ms),
                     backend_id=r.backend_id,
@@ -326,7 +332,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     name=r.name,
                     setup_scripts_json=_setup_scripts_json(r.environment_json),
                     entrypoint_json=_redacted_entrypoint_json(r.entrypoint_json),
-                    submit_argv_json=json.dumps(redact_stored_submit_argv(list(r.submit_argv_json))),
+                    submit_argv_json=json.dumps(names_only_argv(list(r.submit_argv_json))),
                     bundle_id=r.bundle_id,
                     ports_json=json.dumps(list(r.ports_json)),
                     fail_if_exists=bool(r.fail_if_exists),
@@ -353,7 +359,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     task_id=r.task_id.to_wire(),
                     task_index=r.task_index,
                     state=job_pb2.TaskState.Name(r.state),
-                    error=r.error,
+                    error=_free_text(r.error),
                     exit_code=r.exit_code,
                     task_submitted_at=r.submitted_at_ms.as_naive_utc(),
                     started_at=_dt(r.started_at_ms),
@@ -366,7 +372,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     priority_insertion=r.priority_insertion,
                     priority_band=job_pb2.PriorityBand.Name(r.priority_band),
                     container_id=r.container_id,
-                    status_message=r.status_message,
+                    status_message=_free_text(r.status_message),
                     current_worker_id=str(r.current_worker_id) if r.current_worker_id is not None else None,
                     current_worker_address=r.current_worker_address,
                     backend_id=r.backend_id,
@@ -398,7 +404,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     started_at=_dt(r.started_at_ms),
                     finished_at=_dt(r.finished_at_ms),
                     exit_code=r.exit_code,
-                    error=r.error,
+                    error=_free_text(r.error),
                     terminal_reason=r.terminal_reason,
                     worker_id=str(worker_id) if worker_id is not None else None,
                     node_name=r.node_name,
