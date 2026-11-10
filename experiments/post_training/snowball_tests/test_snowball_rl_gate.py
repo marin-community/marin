@@ -33,9 +33,9 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
+from experiments.post_training.snowball_tests.fixtures import SELECTION_IDENTITY, write_receipt
 from experiments.post_training.snowball_tests.fixtures import answer as _answer
 from experiments.post_training.snowball_tests.fixtures import write_json as _json
-from experiments.post_training.snowball_tests.fixtures import write_receipt
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 VLLM = "vllm/median_generation_throughput"
@@ -591,7 +591,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     tasks = selection if preset_name == "data-medium" else None
     settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),) if tasks is None else ()
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
-    task_name = "fixture-selection@2026.11.10" if tasks else None
+    task_name = SELECTION_IDENTITY if tasks else None
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint())
     staged = source.with_name("native-staging")
     source.rename(staged)
@@ -635,7 +635,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
         "data-short",
     ],
 )
-def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, monkeypatch, case):
+def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, selection, monkeypatch, case):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     preset_name = "data-short" if case == "data-short" else "learning-medium"
@@ -644,7 +644,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
     built = snowball.build_run(
-        preset, control=control, replicates=replicas, tasks=presets.default_selection() if case == "data-short" else None
+        preset, control=control, replicates=replicas, tasks=selection if case == "data-short" else None
     )
     sources = [
         recorded_runs(
@@ -652,6 +652,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
             training.name,
             score=0.1 if case == "fail-no-login" else 0.5,
             fingerprint=training.fingerprint(),
+            inputs=gate.GateInputs(preset_name=preset_name, tasks=SELECTION_IDENTITY) if case == "data-short" else None,
             attempt_id=f"native-{index}",
         )
         for index, training in enumerate(built.runs)
@@ -723,7 +724,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     if control:
         arguments.append("--control")
     if case == "data-short":
-        arguments.extend(["--tasks", f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"])
+        arguments.extend(["--tasks", SELECTION_IDENTITY])
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
     expected = (

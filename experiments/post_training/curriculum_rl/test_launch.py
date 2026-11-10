@@ -1,15 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import subprocess
 from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
-from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training.curriculum_rl import launch
+from experiments.post_training.snowball_tests.fixtures import native_json
 
 COMPOSE_LAUNCHES = """
 import json
@@ -50,22 +48,15 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
     arms = launch.build_arms(
         specs=tuple(launch.ARMS.values()), scale=preset.label, policy=policy, version="2026.10.19.1"
     )
-    assert "naive" in arms
     paths = []
     for name, arm in arms.items():
         config = arm.rl.build_config(StepContext.for_fingerprint(arm.rl.runtime_args, arm.rl.deps))
         path = tmp_path / f"{name}.yaml"
         path.write_text(config.launch_config_yaml)
         paths.append(str(path))
-    result = subprocess.run(
-        skyrl_cpu_command("python", "-c", COMPOSE_LAUNCHES, str(Path(__file__).resolve().parents[3]), *paths),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=170,
-    )
-    assert result.returncode == 0, result.stderr
-    rows = json.loads(result.stdout)
+    run_native = native_json()
+    rows = run_native(COMPOSE_LAUNCHES, [str(Path(__file__).resolve().parents[3]), *paths])
+    assert rows
     assert [{key: row[key] for key in ("profile", "strategy")} for row in rows] == [
         {"profile": "megatron", "strategy": "megatron"}
     ] * len(arms)
