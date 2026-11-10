@@ -3,7 +3,7 @@
 The oracle is a tiny Hero-shaped model whose floor is 16 keys, so most positions of its two documents
 are scaled. Megatron runs in bf16, which its packed and context-parallel attention kernels require, so
 the gate is set by the noise in the same run: queries that see at most 16 keys have a factor of 1, and
-Megatron's error there is the bf16 noise floor. Past the floor, the error against the right oracle must
+Megatron's error there is the bf16 noise floor, capped at NOISE_FLOOR_CAP. Past the floor, the error against the right oracle must
 stay within NOISE_RATIO of that floor, and the wrong oracle must be WRONG_ORACLE_RATIO further away.
 Megatron must pass unpacked, packed, and packed under CP2, with the log scaling fields set and null. A
 checkpoint whose power is 1 instead of the oracle's 2 must fail the same gate.
@@ -39,6 +39,9 @@ PAD_TOKEN_ID = 0
 # Queries before this prediction index see at most the floor's 16 keys, so their factor is exactly 1.
 FLOOR_PREDICTIONS = 16
 NOISE_RATIO = 1.5
+# An error at every position also raises the noise floor, so the floor itself is capped. On H100 the
+# measured floor was 0.0096 nats in every geometry.
+NOISE_FLOOR_CAP = 0.03
 WRONG_ORACLE_RATIO = 2.0
 
 
@@ -97,7 +100,8 @@ class Gate:
     @property
     def passed(self) -> bool:
         return (
-            self.past_floor_error <= NOISE_RATIO * self.noise_floor
+            self.noise_floor <= NOISE_FLOOR_CAP
+            and self.past_floor_error <= NOISE_RATIO * self.noise_floor
             and self.wrong_oracle_error >= WRONG_ORACLE_RATIO * self.past_floor_error
         )
 
