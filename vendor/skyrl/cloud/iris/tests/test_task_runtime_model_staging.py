@@ -275,7 +275,7 @@ def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeyp
 
     monkeypatch.setattr(hf_model_cache, "snapshot_download", reject_hub_download)
     monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", reject_hub_download)
-    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity)
+    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity, manifest.revision)
     node_path = task_runtime.stage_model(locator)
     snapshot = huggingface_hub.snapshot_download(
         "org/policy",
@@ -310,9 +310,11 @@ def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, mo
     )
     cache = tmp_path / "hf-cache"
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
-    policy = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity)
+    policy = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity, manifest.revision)
     # The derived export config can retain locators for training-only teachers whose TTL expired.
-    teacher = HuggingFaceModelCache("org/teacher", "b" * 40, "memory://expired-teacher-mirror", "sha256:" + "c" * 64)
+    teacher = HuggingFaceModelCache(
+        "org/teacher", "b" * 40, "memory://expired-teacher-mirror", "sha256:" + "c" * 64, "b" * 40
+    )
     config = OmegaConf.create(
         {
             "run": {"mode": "checkpoint_export"},
@@ -340,7 +342,7 @@ def test_expired_node_mirror_requests_a_cpu_relaunch(tmp_path, monkeypatch, miss
     (mirror / missing).unlink()
     cache = tmp_path / "hf-cache"
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
-    locator = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity)
+    locator = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity, manifest.revision)
     with pytest.raises(FileNotFoundError, match="relaunch.*CPU coordinator"):
         task_runtime.stage_model(locator)
     assert not tuple(cache.glob("**/model.safetensors"))
@@ -356,7 +358,7 @@ def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
     )
     cache = tmp_path / "hf-cache"
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
-    locator = HuggingFaceModelCache("org/policy", "main", str(mirror), manifest.identity)
+    locator = HuggingFaceModelCache("org/policy", "main", str(mirror), manifest.identity, manifest.revision)
     ready = Barrier(8)
 
     def stage():
@@ -399,8 +401,12 @@ def test_shared_snapshot_keeps_tokenizers_and_templates_and_repairs_truncated_we
         tokenizer_mode="policy",
     )
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
-    full = HuggingFaceModelCache("org/model", "a" * 40, str(embedded), embedded_manifest.identity)
-    partial = HuggingFaceModelCache("org/model", "a" * 40, str(model_only), model_manifest.identity)
+    full = HuggingFaceModelCache(
+        "org/model", "a" * 40, str(embedded), embedded_manifest.identity, embedded_manifest.revision
+    )
+    partial = HuggingFaceModelCache(
+        "org/model", "a" * 40, str(model_only), model_manifest.identity, model_manifest.revision
+    )
     node = task_runtime.stage_model(full)
     shard = node / "model.safetensors"
     inode = shard.stat().st_ino

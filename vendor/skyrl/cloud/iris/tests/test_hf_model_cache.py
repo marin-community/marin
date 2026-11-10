@@ -556,7 +556,7 @@ def test_wait_mirrors_renew_repeatedly_and_retry_storage_errors(tmp_path, monkey
         refresh(path, before=before)
 
     monkeypatch.setattr(StoragePath, "refresh_lifetime", refresh_with_transient_failure)
-    locator = HuggingFaceModelCache("org/model", "a" * 40, uri, manifest.identity)
+    locator = HuggingFaceModelCache("org/model", "a" * 40, uri, manifest.identity, manifest.revision)
     # Requested 100 days is clamped by the URI's ttl=14d prefix.
     with hf_model_cache.keep_hugging_face_model_caches_alive([locator], ttl_days=100):
         assert clock.waiting.wait(timeout=10)

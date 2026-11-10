@@ -286,6 +286,7 @@ def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
             for model in mirrors:
                 manifest = load_model_manifest(model["uri"])
                 assert manifest.identity == model["identity"]
+                assert manifest.revision == model["resolved_revision"]
                 assert Path(model["uri"], "model.safetensors").read_bytes() == save(
                     {"weight": np.arange(4, dtype=np.float32)}
                 )

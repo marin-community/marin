@@ -261,13 +261,28 @@ def stage_task_data(data_json: str, *, role: str) -> None:
     _log(f"{role.capitalize()} data staged to node-local paths: {resolved}")
 
 
+def _write_model_ref(cache_root: Path, revision: str, resolved_revision: str) -> None:
+    if revision == resolved_revision:
+        return
+    refs = (cache_root / "refs").resolve()
+    ref = (refs / revision).resolve()
+    ref.relative_to(refs)
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ref-", dir=ref.parent) as temporary:
+        staged = Path(temporary) / "commit"
+        staged.write_text(resolved_revision)
+        os.replace(staged, ref)
+
+
 def stage_model(model: HuggingFaceModelCache) -> Path:
     """Restore a CPU-made bucket mirror into this node's offline HF cache."""
+    if not is_hugging_face_commit(model.resolved_revision):
+        raise ValueError(f"Hugging Face cache requires a resolved commit: {model.model_id}")
     try:
         manifest = load_model_manifest(model.uri)
         if manifest.identity != model.identity or manifest.model_id != model.model_id:
             raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
-        if not manifest.revision or not is_hugging_face_commit(manifest.revision):
+        if manifest.revision != model.resolved_revision:
             raise ValueError(f"Hugging Face mirror requires an immutable revision: {model.uri}")
         cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model.model_id.replace('/', '--')}"
         local_path = cache_root / "snapshots" / manifest.revision
@@ -302,12 +317,7 @@ def stage_model(model: HuggingFaceModelCache) -> Path:
                         destination = local_path / entry.path
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         os.replace(staging / entry.path, destination)
-            if model.revision != manifest.revision:
-                refs = (cache_root / "refs").resolve()
-                ref = (refs / model.revision).resolve()
-                ref.relative_to(refs)
-                ref.parent.mkdir(parents=True, exist_ok=True)
-                ref.write_text(manifest.revision)
+            _write_model_ref(cache_root, model.revision, model.resolved_revision)
         return local_path
     except FileNotFoundError as error:
         raise FileNotFoundError(
