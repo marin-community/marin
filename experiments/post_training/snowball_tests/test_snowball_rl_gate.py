@@ -589,13 +589,8 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, t
     tasks = selection if preset_name == "data-medium" else None
     settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),) if tasks is None else ()
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
-    task_name = f"{tasks.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{tasks.version}" if tasks else None
-    source = recorded_runs(
-        preset.name,
-        built.runs[0].name,
-        fingerprint=built.runs[0].fingerprint(),
-        inputs=gate.GateInputs(preset_name=preset_name, tasks=task_name),
-    )
+    task_name = "fixture-selection@2026.11.10" if tasks else None
+    source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint())
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / gate.GATE_INPUTS_FILENAME).unlink()

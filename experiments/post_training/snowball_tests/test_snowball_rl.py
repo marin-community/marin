@@ -276,7 +276,7 @@ print(json.dumps([
         )
         for name, config in zip(expected, configs, strict=True)
     }
-    assert actual == expected, "Native config or launch envelope changed: bump PRESET_REVISION and recollect controls."
+    assert actual == expected, "Fingerprint envelope changed: bump PRESET_REVISION and recollect controls."
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
