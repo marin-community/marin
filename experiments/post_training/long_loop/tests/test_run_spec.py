@@ -104,3 +104,22 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     assert "long-loop/report" in names
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)
+
+
+def test_hf_export_adoption_hands_the_mirror_to_rl_without_export(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = yaml.safe_load((SPEC.parent / "adopted-sft-20261005.yaml").read_text())
+    terminal = build_spec_graph(resolved, "2026.11.10.1", through="rl")
+    steps = {step.name: step for step in graph_handles([terminal])}
+    mirror = steps["long-loop/round1/sft-hf"]
+    assert mirror.adopt_source == resolved["adopted_sft"]["uri"]
+    assert "long-loop/round1/adopt-sft" in steps
+    assert not any(name.endswith(("/sft", "/sft-handoff", "/base")) or "micro-" in name for name in steps)
+    endpoint = steps["long-loop/round1/endpoint"]
+    assert steps["long-loop/round1/adopt-sft"] in endpoint.deps and mirror in endpoint.deps
+    validate_graph(terminal, tmp_path / "rl-graph", "s3://marin-us-east-02a/marin/")
+    rows = json.loads((tmp_path / "rl-graph/graph.json").read_text())
+    assert {"stage": mirror.name, "status": "adopted", "source": mirror.adopt_source} in rows
+    with pytest.raises(ValueError, match="stop at --through rl"):
+        build_spec_graph({**resolved, "blockers": []}, "2026.11.10.1", through="archive")

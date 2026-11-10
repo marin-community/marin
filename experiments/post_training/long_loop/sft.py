@@ -103,18 +103,35 @@ def restore_frozen(
     return jax.block_until_ready(state["params"])
 
 
-def validate_handoff(root: str) -> None:
+def check_expert_tensors(config: dict, weight_map: dict) -> None:
     """Reject schema declarations that would cause Bridge to omit expert weights."""
-    config = read_json(prefix_join(root, "hf/config.json"))
-    weight_map = read_json(prefix_join(root, "hf/model.safetensors.index.json"))["weight_map"]
-    if config["grugmoe_artifact_schema_version"] != 2:
-        raise ValueError("Long-loop handoff requires split-expert schema 2")
-    for layer in range(config["num_hidden_layers"]):
-        for expert in range(config["num_experts"]):
-            for projection in ("gate_proj", "up_proj", "down_proj"):
-                name = f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
-                if name not in weight_map:
-                    raise ValueError(f"Invalid SFT export: schema-2 tensor missing: {name}")
+    schema = config["grugmoe_artifact_schema_version"]
+    if schema == 2:
+        names = [
+            f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"
+            for layer in range(config["num_hidden_layers"])
+            for expert in range(config["num_experts"])
+            for projection in ("gate_proj", "up_proj", "down_proj")
+        ]
+    elif schema == 1:
+        names = [
+            f"model.layers.{layer}.mlp.experts.{projection}.weight"
+            for layer in range(config["num_hidden_layers"])
+            for projection in ("gate_proj", "up_proj", "down_proj")
+        ]
+    else:
+        raise ValueError(f"Long-loop handoff requires Grug expert schema 1 or 2, not {schema}")
+    for name in names:
+        if name not in weight_map:
+            raise ValueError(f"Invalid SFT export: schema-{schema} tensor missing: {name}")
+
+
+def validate_handoff(root: str, relative_path: str = "hf") -> None:
+    hf = prefix_join(root, relative_path) if relative_path else root
+    check_expert_tensors(
+        read_json(prefix_join(hf, "config.json")),
+        read_json(prefix_join(hf, "model.safetensors.index.json"))["weight_map"],
+    )
 
 
 def export_sft(

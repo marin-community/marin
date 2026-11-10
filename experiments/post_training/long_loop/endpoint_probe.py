@@ -34,8 +34,12 @@ def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> l
     )
 
 
-def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: dict | None = None) -> None:
-    validate_handoff(model_root)
+def probe(
+    *, output: str, model_root: str, tokenizer_revision: str, settings: dict | None = None, relative_path: str = "hf"
+) -> None:
+    """Serve the HF export at ``model_root/relative_path``; ``""`` selects the root itself."""
+    validate_handoff(model_root, relative_path)
+    hf = prefix_join(model_root, relative_path) if relative_path else model_root
     root = find_project_root()
     assert root is not None, "Run from the Marin worktree"
     if settings is None:
@@ -52,14 +56,12 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
         }
     window = settings["window"]
     tokenizer_repo = settings["tokenizer_repo"]
-    check_context_limit(
-        "SFT endpoint", read_json(prefix_join(model_root, "hf/config.json"))["max_position_embeddings"], window
-    )
+    check_context_limit("SFT endpoint", read_json(prefix_join(hf, "config.json"))["max_position_embeddings"], window)
     model = load_model_config(root / settings["model_config"])
     model = replace(
         model,
         name="long-loop-sft-probe",
-        location=prefix_join(model_root, "hf"),
+        location=hf,
         revision=None,
         tokenizer=tokenizer_repo,
         tokenizer_revision=tokenizer_revision,
@@ -121,7 +123,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
                 response.raise_for_status()
                 receipts[str(token)] = response.json()
                 stops[token] = response.json()["choices"][0]["finish_reason"]
-            fs, path = filesystem_for(prefix_join(model_root, "hf/tokenizer.json"))
+            fs, path = filesystem_for(prefix_join(hf, "tokenizer.json"))
             tokenizer_hash = hashlib.sha256(fs.cat_file(path)).hexdigest()
             check_endpoint(
                 EndpointEvidence(
