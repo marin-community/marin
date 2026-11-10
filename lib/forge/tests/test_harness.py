@@ -38,9 +38,11 @@ from forge.harness.tools.submit import SubmitTool
 from forge.harness.tools.validate import ValidateRequest, ValidateTool
 from forge.harness.tools.web import WebFetchTool, WebSearchTool
 from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
+from forge.model.content_hash import digest
 from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, Message, Role, ToolCall, Usage
 from forge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
+from forge.model.review import Defect, DefectClaim, Observation, ObservedStatus
 from forge.model.workpiece import Conversation, Submission
 from forge.resources.env import (
     CommandResult,
@@ -113,7 +115,7 @@ async def test_malformed_report_and_schema_errors_recover_with_replayable_histor
     client = FakeInference(script)
     environment(ctx)
     result = await AgenticHarness(262144, LLMPolicy(), "continue", 20000).run(
-        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task())}
+        ctx, Conversation((), ()), client, {"shell": ShellTool(30, 120), "report": ReportTool(arithmetic_task(), {})}
     )
     await ctx.drain()
     assert isinstance(result, Returned) and result.payload == AdversaryReport(())
@@ -175,17 +177,9 @@ async def test_grade_uses_current_draft_and_report_snapshots_candidate_files() -
     assert isinstance(first, ToolResult) and json.loads(first.content)["reward"] == 1
     assert isinstance(second, ToolResult) and json.loads(second.content)["reward"] == 0
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"candidate"))
-    report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)))(
+    report = await ReportTool(arithmetic_task(environment_requirements=requirements(image=None)), {})(
         ctx,
-        {
-            "findings": [
-                {
-                    "claim": "false reject",
-                    "candidate": {"reply": "12", "files": ["/workspace/answer"]},
-                    "expected": {"status": "graded", "reward_max": 0},
-                }
-            ]
-        },
+        {"findings": [finding("false_reject", {"reply": "12", "files": ["/workspace/answer"]}, "graded", 0.0, 1.0)]},
     )
     await ctx.emit(WriteFile(PurePosixPath("/workspace/answer"), b"changed"))
     await ctx.drain()
@@ -371,24 +365,32 @@ async def test_context_exit_counts_retained_turns_and_only_appended_tokens(overf
         assert result.session.messages == client.requests[-1].conversation
 
 
+def finding(
+    defect: str, candidate: dict[str, object], status: str, observed: float | None, deserved: float | None
+) -> dict[str, object]:
+    return {
+        "defect": defect,
+        "why_the_grade_is_wrong": f"{defect} demonstrated",
+        "candidate": candidate,
+        "grader_observed_status": status,
+        "grader_observed_reward": observed,
+        "deserved_reward": deserved,
+    }
+
+
 async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() -> None:
     ctx = Context(log=EventLog())
     environment(ctx)
     task = arithmetic_task()
-    tool = ReportTool(task)
+    tool = ReportTool(task, {})
     commentary = await tool(ctx, {"findings": ["No grading defect found"]})
     assert isinstance(commentary, ToolResult)
-    claim = {
-        "claim": "wrong answer accepted",
-        "candidate": {"reply": "9"},
-        "expected": {"status": "graded", "reward_min": 1},
-    }
+    claim = finding("false_accept", {"reply": "9"}, "graded", 1.0, 0.0)
     report = await tool(ctx, {"findings": [claim]})
     assert isinstance(report, ReturnRequest) and isinstance(report.payload, AdversaryReport)
-    finding = report.payload.findings[0]
-    assert finding.claim == "wrong answer accepted" and finding.candidate.reply == "9"
-    assert finding.expected.met_by(GradeResult(Outcome.GRADED, 1))
-    assert not finding.expected.met_by(GradeResult(Outcome.GRADED, 0))
+    reported = report.payload.findings[0]
+    assert reported.claim == "false_accept demonstrated" and reported.candidate.reply == "9"
+    assert reported.defect == DefectClaim(Defect.FALSE_ACCEPT, Observation(ObservedStatus.GRADED, 1.0), 0.0)
     # The adversary can edit its scratch task file, but cannot change the bound task's machine requirement.
     edited = arithmetic_task(environment_requirements=requirements(image=None))
     await ctx.emit(WriteFile(PurePosixPath("/workspace/task.json"), edited.model_dump_json().encode()))
@@ -399,6 +401,59 @@ async def test_adversary_report_requires_claim_evidence_and_uses_bound_task() ->
     assert isinstance(rejected, ToolResult) and "Candidate files require a task machine" in rejected.content
     assert isinstance(empty, ReturnRequest) and isinstance(empty.payload, AdversaryReport)
     assert empty.payload.findings == ()
+
+
+# full-s-20261108 S/d04.structure.periodicity/23: a false reject reported its deserved 0.85-1.0 as the observed grade.
+@pytest.mark.parametrize(
+    "args,error",
+    [
+        (("false_reject", "graded", 0.9, 0.9), "describes a correct grade"),
+        (("false_reject", "graded", 1.0, 0.0), "less credit than deserved"),
+        (("false_accept", "graded", 0.0, 1.0), "more credit than deserved"),
+        (("false_accept", "submission_failure", None, 0.0), "describes a correct grade"),
+        (("false_reject", "graded", None, 1.0), "null unless the status is graded"),
+        (("false_reject", "graded", 0.0, None), "needs deserved_reward"),
+        (("grader_crash", "graded", 0.0, None), "needs grader_observed_status grader_error"),
+        (("false_reject", "grader_error", None, 1.0), "is a grader_crash finding"),
+        (
+            ("false_reject", "graded", 0.85, 1.0),
+            "your grade call on this exact candidate returned graded with reward 0.0",
+        ),
+    ],
+)
+async def test_report_rejects_findings_that_restate_a_correct_or_unobserved_grade(
+    args: tuple[str, str, float | None, float | None], error: str
+) -> None:
+    ctx = Context(log=EventLog())
+    environment(ctx)
+    defect, status, observed, deserved = args
+    own = {digest(Candidate("12")): Observation(ObservedStatus.GRADED, 0.0)}
+    result = await ReportTool(arithmetic_task(), own)(
+        ctx, {"findings": [finding(defect, {"reply": "12"}, status, observed, deserved)]}
+    )
+    await ctx.drain()
+    assert isinstance(result, ToolResult) and error in result.content
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("false_reject", "graded", 0.0, 1.0),
+        ("false_reject", "submission_failure", None, 1.0),
+        ("grader_crash", "grader_error", None, None),
+    ],
+)
+async def test_report_accepts_each_defect_direction(args: tuple[str, str, float | None, float | None]) -> None:
+    ctx = Context(log=EventLog())
+    environment(ctx)
+    defect, status, observed, deserved = args
+    result = await ReportTool(arithmetic_task(), {})(
+        ctx, {"findings": [finding(defect, {"reply": "12"}, status, observed, deserved)]}
+    )
+    await ctx.drain()
+    assert isinstance(result, ReturnRequest) and isinstance(result.payload, AdversaryReport)
+    claim = result.payload.findings[0].defect
+    assert claim is not None and claim.defect is Defect(defect) and claim.shown_by(claim.observed)
 
 
 async def test_malformed_grader_checks_return_feedback_and_corrected_checks_are_reported() -> None:

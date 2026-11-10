@@ -5,6 +5,7 @@
 
 """Completed validation evidence and the decisions made from it."""
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -132,14 +133,82 @@ class ControlResult:
     cause: Cause | None = None
 
 
+class Defect(StrEnum):
+    """How the grader mis-scores a candidate, relative to the reward the candidate deserves."""
+
+    FALSE_ACCEPT = "false_accept"
+    FALSE_REJECT = "false_reject"
+    GRADER_CRASH = "grader_crash"
+
+
+class ObservedStatus(StrEnum):
+    GRADED = "graded"
+    SUBMISSION_FAILURE = "submission_failure"
+    GRADER_ERROR = "grader_error"
+
+
+# Rewards a grader prints and the model copies back agree to this tolerance.
+REWARD_TOLERANCE = 1e-6
+
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    """What a grader did to a candidate: a reward exactly when graded."""
+
+    status: ObservedStatus
+    reward: float | None = None
+
+    def __post_init__(self) -> None:
+        if (self.status is ObservedStatus.GRADED) != (self.reward is not None):
+            raise ValueError("an observed reward is given exactly when the status is graded")
+        if self.reward is not None and not math.isfinite(self.reward):
+            raise ValueError(f"observed reward {self.reward} is not finite")
+
+    def matches(self, other: "Observation") -> bool:
+        if self.reward is None or other.reward is None:
+            return self.status is other.status
+        return abs(self.reward - other.reward) <= REWARD_TOLERANCE
+
+
+@dataclass(frozen=True, slots=True)
+class DefectClaim:
+    """What the grader DID to a candidate, kept apart from what the candidate DESERVED (#11183)."""
+
+    defect: Defect
+    observed: Observation
+    deserved_reward: float | None
+
+    def shown_by(self, observation: Observation) -> bool:
+        """Whether ``observation`` is wrong in the claimed direction; a correct grade never qualifies."""
+        if self.defect is Defect.GRADER_CRASH:
+            return observation.status is ObservedStatus.GRADER_ERROR
+        deserved = self.deserved_reward
+        if deserved is None or observation.status is ObservedStatus.GRADER_ERROR:
+            return False
+        if observation.status is ObservedStatus.SUBMISSION_FAILURE:
+            return self.defect is Defect.FALSE_REJECT and deserved > REWARD_TOLERANCE
+        assert observation.reward is not None
+        if self.defect is Defect.FALSE_ACCEPT:
+            return observation.reward > deserved + REWARD_TOLERANCE
+        return observation.reward < deserved - REWARD_TOLERANCE
+
+
 @dataclass(frozen=True, slots=True)
 class AdversaryFinding:
+    """A replayed claim. ``expected`` is the legacy observed-grade band; findings with ``defect`` replay by direction.
+
+    ``revision`` is the report round that produced the finding: 0 is the first report, later rounds answer replay
+    feedback. Every replayed finding of every round is kept, reproduced or not.
+    """
+
     claim: str
     candidate: Candidate
-    expected: RewardBand
+    expected: RewardBand | None
     grade: GradeResult | None
     met: bool
     cause: Cause | None = None
+    defect: DefectClaim | None = None
+    revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)

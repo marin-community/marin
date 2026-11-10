@@ -111,12 +111,12 @@ def adversary_config(harness: RecordingHarness) -> ForgeConfig:
     )
 
 
-def resources(ctx: Context, restart: int | None = None) -> Resources:
+def resources(ctx: Context, restart: int | None = None, grader: CandidateEngine = CandidateEngine()) -> Resources:
     bundle = Resources(
         Environments(),
         FakeInference(()),
         RolloutResource(SolverEngine(3, restart), solver_model, "solver"),
-        GradingResource(CandidateEngine(), "grader"),
+        GradingResource(grader, "grader"),
         Clock(),
         Ids(),
         {},
@@ -724,3 +724,148 @@ async def test_adversary_window_exhaustion_completes_and_explains_review(
     assert len(client.requests) == 1
     assert isinstance(bundle.envs, Environments) and bundle.envs.created[0].closed
     await ctx.drain()
+
+
+def report_call(identity: str, *findings: tuple[str, str, str, float | None, float | None]) -> Completion:
+    return Completion(
+        "",
+        (
+            ToolCall(
+                identity,
+                "report",
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "defect": defect,
+                                "why_the_grade_is_wrong": f"{defect} on {reply}",
+                                "candidate": {"reply": reply},
+                                "grader_observed_status": status,
+                                "grader_observed_reward": observed,
+                                "deserved_reward": deserved,
+                            }
+                            for defect, reply, status, observed, deserved in findings
+                        ]
+                    }
+                ),
+            ),
+        ),
+    )
+
+
+async def run_scripted_adversary(
+    workpiece: Workpiece, script: tuple[Completion, ...], engine: CandidateEngine = CandidateEngine(), revisions: int = 1
+) -> tuple[ValidationResult, FakeInference, ForgeConfig]:
+    setup = config()
+    harness = AgenticHarness(262144, sampling(setup.policy), "report findings", 20000)
+    setup = replace(
+        setup,
+        policy=setup.policy.overlaid({"adversary.roster": ["finder"], "adversary.max_revisions": revisions}),
+        adversaries={"finder": harness},
+        tools={"finder": {}},
+    )
+    ctx = Context(log=EventLog())
+    client = FakeInference(script)
+    bundle = replace(resources(ctx, grader=engine), role_inference={"adversary": client})
+    result = (await validate(ctx, workpiece, setup, bundle)).result
+    await ctx.drain()
+    return result, client, setup
+
+
+# full-s-20261108 S/d04.structure.periodicity/23: replay 0.0 dropped a false reject reported as expected 0.85-1.0.
+async def test_false_reject_with_observed_and_deserved_apart_is_a_finding(workpiece: Workpiece) -> None:
+    result, client, setup = await run_scripted_adversary(
+        workpiece, (report_call("r1", ("false_reject", "9", "graded", 0.0, 1.0)),)
+    )
+    (finding,) = result.adversary[0].findings
+    assert finding.met and finding.grade is not None and finding.grade.reward == 0.0 and finding.expected is None
+    assert len(client.requests) == 1
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify) and decision.findings == ("finder: false_reject on 9",)
+
+
+async def test_false_accept_reproduces_and_a_correct_grade_does_not(workpiece: Workpiece) -> None:
+    result, client, _ = await run_scripted_adversary(
+        workpiece,
+        (
+            report_call("r1", ("false_accept", "12", "graded", 1.0, 0.0), ("false_accept", "9", "graded", 1.0, 0.0)),
+            report_call("r2"),
+        ),
+    )
+    accepted, unconfirmed = result.adversary[0].findings
+    assert accepted.met and not unconfirmed.met and unconfirmed.grade is not None and unconfirmed.grade.reward == 0
+    feedback = client.requests[1].messages[-1]
+    assert feedback.role == Role.TOOL and feedback.tool_call_id == "r1"
+    assert "1 finding(s) did not reproduce" in feedback.content and "false_accept on 9" in feedback.content
+    assert '"reward": 0.0' in feedback.content and "This is your last revision." in feedback.content
+
+
+# A revision answers the replay in the same session; a restated report of the replayed candidate must match it.
+async def test_failed_replay_returns_to_the_session_and_a_revision_recovers_the_finding(workpiece: Workpiece) -> None:
+    confused = ("false_accept", "9", "graded", 1.0, 0.0)
+    result, client, setup = await run_scripted_adversary(
+        workpiece,
+        (
+            report_call("r1", confused),
+            report_call("r2", confused),
+            report_call("r3", ("false_reject", "9", "graded", 0.0, 1.0)),
+        ),
+    )
+    first, revised = result.adversary[0].findings
+    assert (first.revision, first.met, revised.revision, revised.met) == (0, False, 1, True)
+    rejected = client.requests[2].messages[-1]
+    assert rejected.tool_call_id == "r2" and "returned graded with reward 0.0" in rejected.content
+    assert client.requests[2].conversation[-3].tool_call_id == "r1"
+    restored = VALIDATION_RESULT.validate_json(VALIDATION_RESULT.dump_json(result))
+    assert restored == result
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify) and decision.findings == ("finder: false_reject on 9",)
+
+
+@pytest.mark.parametrize("revisions", [0, 1, 2])
+async def test_non_reproducing_claims_stay_dropped_after_the_revision_budget(
+    workpiece: Workpiece, revisions: int
+) -> None:
+    script = tuple(report_call(f"r{index}", ("false_accept", f"{9 - index}", "graded", 1.0, 0.0)) for index in range(4))
+    result, client, setup = await run_scripted_adversary(workpiece, script, revisions=revisions)
+    findings = result.adversary[0].findings
+    assert len(client.requests) == revisions + 1
+    assert [finding.revision for finding in findings] == list(range(revisions + 1))
+    assert not any(finding.met for finding in findings)
+    assert isinstance(default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget), Accept)
+
+
+async def test_grader_crash_finding_reproduces_as_a_modify(workpiece: Workpiece) -> None:
+    crash = GradeResult(
+        Outcome.INFRA_ERROR, None, "grader exited 1", failure=GradingFailure.GRADER_EXIT, diagnostics={"stderr": "boom"}
+    )
+    result, client, setup = await run_scripted_adversary(
+        workpiece, (report_call("r1", ("grader_crash", "9", "grader_error", None, None)),), CandidateEngine(crash)
+    )
+    (finding,) = result.adversary[0].findings
+    assert finding.met and finding.cause is Cause.GRADER_EXECUTION and len(client.requests) == 1
+    decision = default_review(workpiece.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify) and "finder: grader_crash on 9" in decision.findings
+
+
+# full-s-20261108 S/d04.structure.periodicity/23 round 0, as written before findings carried a defect claim.
+OLD_FINDING = {
+    "claim": "The negation rule in grade.py zeroes a fully correct solution key.",
+    "candidate": {"reply": "EA1 of oxygen is exothermic", "files": []},
+    "expected": {"status": "graded", "reward_min": 0.85, "reward_max": 1.0},
+    "grade": {"status": "graded", "reward": 0.0},
+    "met": False,
+    "cause": None,
+}
+
+
+def test_old_shape_findings_parse_and_review_as_before(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    old = {**json.loads(VALIDATION_RESULT.dump_json(evidence())), "task_digest": workpiece.submission.digest}
+    old["adversary"] = [{"name": "adversary", "completed": True, "findings": [OLD_FINDING], "reasons": []}]
+    restored = VALIDATION_RESULT.validate_json(json.dumps(old))
+    (finding,) = restored.adversary[0].findings
+    assert finding.defect is None and finding.revision == 0 and finding.expected is not None
+    assert not finding.met and finding.expected.reward_min == 0.85
+    setup = config()
+    assert isinstance(default_review(workpiece.with_(evidence=(restored,)), setup.band, setup.budget), Accept)
