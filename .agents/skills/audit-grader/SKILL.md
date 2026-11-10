@@ -21,7 +21,9 @@ The audit has seven steps:
 2. **Write a contract for each check.** State its pass and fail conditions from
    the task text, before reading the grader code.
 3. **Build labeled fixtures.** Write short responses labeled from the contract
-   alone, and run them against the grader as regression tests.
+   alone, and run them against the grader as regression tests. When they show
+   a defect that a change to the grader can fix, build a replacement grader
+   from the contracts.
 4. **Compare with the reference and stress the grader.** Grade the same
    responses with the benchmark authors' grader, and add property tests,
    fuzzing, and content-free responses.
@@ -52,7 +54,7 @@ Terms used below:
 - **Reference implementation**: the benchmark authors' original grader, if one
   exists.
 - **Replacement grader**: an implementation of the contracts, with one switch
-  per decision entry.
+  per decision entry. Step 3 says when the audit needs one.
 - **Panel**: responses from several models and decoding settings, graded by
   every grader.
 - **Scored coverage**: the share of expected items that receive a verdict.
@@ -165,10 +167,9 @@ later contract change or decision entry with its reason.
   reader could defend either, for example which characters count as
   whitespace, or whether other words may surround an answer. Give it a
   decision entry, and write the contract's reading as the proposal.
-- If you implement the contracts as a replacement grader, give it one switch
-  per decision, so that the effect of each reading can be measured. For an LLM
-  judge, a replacement changes the deterministic stages and keeps the judge
-  model and template.
+- Give a replacement grader one switch per decision, so that the effect of
+  each reading can be measured. For an LLM judge, a replacement changes the
+  deterministic stages and keeps the judge model and template.
 
 ## 3. Build labeled fixtures
 
@@ -188,15 +189,22 @@ for the parser and the label mapping, run with a fake judge, and candidate
 responses for extraction and judge-prompt rendering. Grade candidate responses
 with the real judge only in step 5.
 
+When a fixture or a later step shows a defect that a change to the grader can
+fix, build a replacement grader from the contracts. Steps 5 and 6 compare it
+with the grader on the same responses, so a recommendation to fix the grader
+comes with the measured difference in error rate. When the audit finds no
+such defect, it needs no replacement, and step 6 estimates the error rate of
+the grader alone.
+
 ## 4. Compare with the reference and stress the grader
 
 - Run the grader and the reference implementation on the same responses, and
   classify every disagreement as a grader defect, a reference defect, or a
   decision. Run the whole reference pipeline, including its sampling, retry,
   and aggregation code. Skip this comparison when no reference exists.
-- If you built a replacement grader, run the reference's unit tests against
-  it, and list each assertion that the contract contradicts. If the reference
-  has no tests, list the grader's own tests that encode a decision.
+- If the audit has a replacement grader, run the reference's unit tests
+  against it, and list each assertion that the contract contradicts. If the
+  reference has no tests, list the grader's own tests that encode a decision.
 - Add property and metamorphic tests. A verdict must stay the same under edits
   that the contract ignores, and a passing response must fail after an edit
   that the contract forbids.
@@ -219,11 +227,11 @@ anything. When the task authorizes compute, generate responses from several
 models and decoding settings with the pinned prompt rendering, and launch the
 jobs through `use-iris`. Otherwise, report what the stored records show and
 treat the panel as not run. Grade every response with the grader under audit,
-the reference, and any replacement. Before you use the panel to change a
-replacement grader, set aside held-out responses, such as one sampled run per
-configuration. Report pass rates per check, verdict disagreements, scored
-coverage (the share of expected items that receive a verdict), and the change
-in each model's score.
+and with the reference and the replacement where they exist. Before you use
+the panel to change a replacement grader, set aside held-out responses, such
+as one sampled run per configuration. Report pass rates per check, verdict
+disagreements, scored coverage (the share of expected items that receive a
+verdict), and the change in each model's score.
 
 - Rerun at least one configuration with identical settings, and compare each
   score change with the rerun difference.
@@ -234,24 +242,33 @@ in each model's score.
   extraction produces; feeding both the same text hides differences in
   extraction.
 - For an RL reward, report the share of passes that contradict the contract, as
-  judged by a replacement grader or the blinded review. These are false
-  rewards.
+  judged by the replacement grader, or by the blinded review when the audit
+  has none. These are false rewards.
 
 ## 6. Estimate the error rate with a blinded review
 
 Before the review, record in the issue the result that would change the
-recommendation in step 7. For example: the replacement passes every fixture,
-scored coverage is complete, and its error rate is lower than the current
-grader's, with a paired interval that excludes zero.
+recommendation in step 7. With a replacement, for example: the replacement
+passes every fixture, scored coverage is complete, and its error rate is lower
+than the current grader's, with a paired interval that excludes zero. Without
+one, for example: the upper end of the grader's error-rate interval is below
+2%.
 
-1. Draw the sample with a script and a recorded seed. Stratify by whether the
-   grader under audit and the replacement (or the reference) disagree, and
-   record the population size of each stratum. Sample all or most of the
-   disagreements. The agreement stratum is usually most of the population, so
-   its sample size sets the width of each grader's interval. A review round
-   is one sample and its reviews. Draw the final round from the held-out
-   responses of step 5. If a round prompts changes to the replacement grader,
-   run another round on held-out responses that no earlier round used.
+1. Draw the sample with a script and a recorded seed, and record the population
+   size of each stratum. With a replacement grader, stratify by whether it and
+   the grader under audit disagree; without one, stratify the same way against
+   the reference. Sample all or most of the disagreements. The agreement
+   stratum is usually most of the population, so its sample size sets the
+   width of each grader's interval. With neither a replacement nor a
+   reference, stratify by the grader's verdict, one stratum per label, so that
+   the review covers every label. No stratum then concentrates the errors, so
+   size every stratum's sample for the interval that the result recorded above
+   needs. A review round is one sample and its reviews. Draw the final round
+   from the held-out responses of step 5, or from the whole panel when the
+   audit has no replacement, because nothing was then fitted to the panel. If
+   a round prompts changes to the replacement grader, or shows the first
+   defect that calls for one, run another round on held-out responses that no
+   earlier round used.
 2. Freeze the sample: write the sha256 of the case list in the issue before
    any review starts.
 3. Render the cases into batch files. Each case shows an opaque case id, the
@@ -278,10 +295,10 @@ grader's, with a paired interval that excludes zero.
    intervals that resample within strata. A lean on an `ambiguous` verdict
    only prefers one of the readings that the text allows, so also report each
    rate over the cases where both verdicts are definite and agree. Report the
-   paired difference between graders, Cohen's kappa between the reviewers'
-   leans, and the disputed cases. For a grader with more than two labels, also
-   report the confusion matrix against the consensus. Do not resolve disputed
-   cases yourself.
+   paired difference between graders when the audit compares two, Cohen's
+   kappa between the reviewers' leans, and the disputed cases. For a grader
+   with more than two labels, also report the confusion matrix against the
+   consensus. Do not resolve disputed cases yourself.
 
 ## 7. Report
 
