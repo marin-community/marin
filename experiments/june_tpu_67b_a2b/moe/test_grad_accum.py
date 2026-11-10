@@ -13,7 +13,9 @@ microbatch loop. With ``overlap_last_microbatch`` the step gives the same loss, 
 the expert weights' gradients are reduced instead one layer at a time in the last microbatch's backward layer scan.
 """
 
+import collections
 import dataclasses
+import re
 
 import jax
 import jax.numpy as jnp
@@ -383,6 +385,39 @@ def test_overlapping_the_last_microbatch_reduces_the_expert_gradients_per_layer(
             assert forward, (msg, reductions)  # The routing statistics, so the op_name test means something.
             after_loop = [r.elements for r in reductions if not r.in_loop and not r.scalar and r not in forward]
             assert sorted(after_loop) == sorted(other), (msg, reductions)
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.multidevice
+def test_overlapping_the_last_microbatch_keeps_no_copy_of_the_expert_weights():
+    # The last microbatch's layer scan routes each layer's expert weights through their reductions inside the layer's
+    # checkpoint, so its backward reads the slices of the weights the scan was given. Routed before the checkpoint, the
+    # checkpoint's inputs would be the reductions' outputs, which the scan stacks for its backward: a second copy of
+    # the expert weights, carried through the layer scans by one more loop. With one
+    # data shard, so that marking the weights moves no data; wide experts give the expert weights shapes of their own.
+    with use_cpu_devices(8):
+        policy = jmp.get_policy("p=f32,c=bfloat16")
+        cfg = dataclasses.replace(BASE, intermediate_dim=24)
+        mesh = _meshes()["replica4_expert2"]
+        with jax.set_mesh(mesh):
+            params = june_train.initial_state(
+                cfg, optimizer=optax.adam(1e-2), mp=policy, key=jax.random.key(0), ema_beta=None
+            ).params
+            compute = jax.eval_shape(policy.cast_to_compute, params)
+            per_layer = june_train._per_layer_reduced(params)
+        expert_shapes = collections.Counter(
+            "bf16[" + ",".join(map(str, x.sharding.shard_shape(x.shape))) + "]"
+            for x, is_expert in zip(jax.tree.leaves(compute), jax.tree.leaves(per_layer), strict=True)
+            if is_expert
+        )
+        assert sum(expert_shapes.values()) == 3, expert_shapes
+        for k in (2, 4):
+            hlo = compiled_step_hlo(cfg, mesh, policy, microbatches=k, overlap_last_microbatch=True)
+            loop_states = re.findall(r"= (\(.*?\)) while\(", hlo)
+            held = [sum(state.count(shape) for shape in expert_shapes) for state in loop_states]
+            # Two loops carry the expert weights, each of them once: the forward layer scans of the microbatch loop
+            # and of the last microbatch. Routed before the checkpoint, a third loop carries the stacked copy.
+            assert sorted(h for h in held if h) == [3, 3], (k, held)
 
 
 def test_overlapping_the_last_microbatch_needs_two_microbatches():

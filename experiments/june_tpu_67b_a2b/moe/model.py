@@ -11,7 +11,7 @@ import dataclasses
 import functools
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -781,6 +781,61 @@ def _apply_grad_offsets(layer: "Block", offsets: "Block", sinks: "Block | None" 
     return jax.tree.map(apply, offsets, layer, sinks, is_leaf=lambda x: x is None)
 
 
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
+def _gather_into_sink(shard: jax.Array, sink: jax.Array, gathered_spec: P) -> jax.Array:
+    """All-gather ``shard``, one layer of a weight sharded over the replicas (ZeRO-1), to ``gathered_spec``.
+
+    ``gathered_spec`` is the weight's sharding marked ``reduced`` over the batch axes, so the gradient is each device's
+    unreduced partial sum. The transpose of the gather would reduce-scatter it into the shard at once; instead it
+    leaves unreduced through ``sink``, a zero input of the gathered type that the forward ignores, for the caller to
+    accumulate and reduce once per step. The shard's own cotangent is zero."""
+    del sink
+    return reshard(shard, gathered_spec)
+
+
+def _gather_into_sink_fwd(shard, sink, gathered_spec):
+    del sink
+    return reshard(shard, gathered_spec), None
+
+
+def _gather_into_sink_bwd(gathered_spec, _, cotangent):
+    del gathered_spec
+    return None, cotangent
+
+
+_gather_into_sink.defvjp(_gather_into_sink_fwd, _gather_into_sink_bwd)
+
+
+def _apply_gathers(layer: "Block", sinks: "Block", buffers: "Block", index: jax.Array) -> tuple["Block", "Block"]:
+    """Gather the layer weights that have a sink in ``sinks`` (None elsewhere), cast to the sink's dtype, to the sink's
+    sharding with ``_gather_into_sink``, and write each into layer ``index`` of its buffer in ``buffers``, the stacked
+    destinations of the gathered weights in the model's sharding: the layer with the gathered weights in place, and
+    the buffers. The write carries the value only; the gradient leaves through the sink."""
+
+    def gather(sink, weight):
+        if sink is None:
+            return None
+        return _gather_into_sink(weight.astype(sink.dtype), sink, jax.typeof(sink).sharding.spec)
+
+    def write(gathered, buffer):
+        if gathered is None:
+            return buffer
+        # Unmarked, in the sharding of a layer of the buffer: dropping ``reduced`` moves no data, and a weight also
+        # sharded over ``data`` (FSDP) keeps this device's slice.
+        layer_spec = P(*jax.typeof(buffer).sharding.spec[1:])
+        value = reshard(jax.lax.stop_gradient(gathered).astype(buffer.dtype), layer_spec)
+        return jax.lax.dynamic_update_index_in_dim(buffer, value, index, 0)
+
+    gathered = jax.tree.map(gather, sinks, layer, is_leaf=lambda x: x is None)
+    layer = jax.tree.map(lambda g, w: w if g is None else g, gathered, layer, is_leaf=lambda x: x is None)
+    return layer, jax.tree.map(write, gathered, buffers, is_leaf=lambda x: x is None)
+
+
+def _block_with_grad_offsets(layer: "Block", offsets: "Block", sinks: "Block | None", *args):
+    """``layer`` applied to ``args`` with its weights routed through ``_apply_grad_offsets``."""
+    return _apply_grad_offsets(layer, offsets, sinks)(*args)
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -910,7 +965,6 @@ class Transformer(eqx.Module):
             config=cfg,
         )
 
-    @named_call
     def __call__(
         self,
         token_ids: Int[Array, "B S"],
@@ -920,6 +974,39 @@ class Transformer(eqx.Module):
         block_grad_offsets: "Block | None" = None,
         block_grad_sinks: "Block | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        hidden, router_metrics, _ = self._forward(
+            token_ids,
+            mask,
+            position_ids=position_ids,
+            block_grad_offsets=block_grad_offsets,
+            block_grad_sinks=block_grad_sinks,
+        )
+        return hidden, router_metrics
+
+    @named_call(name="Transformer")
+    def _forward(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+        *,
+        position_ids: jax.Array | None = None,
+        block_grad_offsets: "Block | None" = None,
+        block_grad_sinks: "Block | None" = None,
+        block_gather_sinks: "Block | None" = None,
+        block_gather_buffers: "Block | None" = None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], "Block | None"]:
+        """The final hidden states, the per-layer router metrics and ``block_gather_buffers`` holding the block weights
+        gathered by ``block_gather_sinks`` (None without them).
+
+        ``block_gather_sinks`` is a stacked ``Block`` with a zero "sink" for each weight to gather (None elsewhere): each
+        layer of the scan all-gathers its slice of that weight, cast to the sink's dtype, to the sink's sharding just
+        before using it (``_gather_into_sink``), so XLA can prefetch the next layer's weights during this one. Their
+        gradients leave unreduced through the sinks. ``block_gather_buffers`` (both or neither) is a stacked ``Block``
+        with a full-size destination in the model's sharding for each of those weights: the scan carries it and writes
+        each layer's gathered weights into it, so the gathered stack is the carried buffer rather than a separate scan
+        output, for the caller to reuse."""
+        if (block_gather_sinks is None) != (block_gather_buffers is None):
+            raise ValueError("block_gather_sinks and block_gather_buffers go together")
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -941,7 +1028,10 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
+        gathered_blocks = None
         if self.blocks is not None:
+            if block_gather_sinks is not None:
+                raise ValueError("block_gather_sinks needs the stacked layer layout (use_array_stacked_blocks)")
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
@@ -966,23 +1056,34 @@ class Transformer(eqx.Module):
             mask_schedule = _long_layer_schedule(cfg.num_layers)
 
             def _scan_layers(
-                carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, Bool[Array, ""], Block | None, Block | None],
-            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask, layer_grad_offsets, layer_grad_sinks = scan_inputs
-                if layer_grad_offsets is not None:
-                    layer = _apply_grad_offsets(layer, layer_grad_offsets, layer_grad_sinks)
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope, position_ids
-                )
+                carry: tuple[Float[Array, "B S D"], Block | None],
+                scan_inputs: tuple[Block, Bool[Array, ""], Block | None, Block | None, Block | None, jax.Array | None],
+            ) -> tuple[tuple[Float[Array, "B S D"], Block | None], dict[str, jax.Array]]:
+                carry_hidden, buffers = carry
+                layer, layer_use_long_mask, layer_grad_offsets, layer_grad_sinks, layer_gather_sinks, index = scan_inputs
+                if layer_gather_sinks is not None:
+                    layer, buffers = _apply_gathers(layer, layer_gather_sinks, buffers, index)
+                layer_args = (carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope)
+                if layer_grad_offsets is None:
+                    hidden_out, stats = eqx.filter_checkpoint(layer, policy=remat_policy)(*layer_args, position_ids)
+                else:
+                    # The reductions inside the checkpoint: its inputs are then the layer's own slices, which the
+                    # backward reads in place, rather than the marked weights, which the scan would stack as a copy.
+                    # A weight also sharded over ``data`` (FSDP) is gathered again in the backward, like the rest of
+                    # what the checkpoint recomputes.
+                    hidden_out, stats = eqx.filter_checkpoint(_block_with_grad_offsets, policy=remat_policy)(
+                        layer, layer_grad_offsets, layer_grad_sinks, *layer_args, position_ids
+                    )
+                return (hidden_out, buffers), stats
 
             stacked = self.stacked_blocks.stacked
             if cfg.replicated_grad_reduction == "after_scan":
                 stacked = _mark_reduced(stacked, cfg.replicated_grad_max_bytes)
-            hidden, stacked_router_stats = jax.lax.scan(
+            layer_indices = None if block_gather_sinks is None else jnp.arange(cfg.num_layers, dtype=jnp.int32)
+            (hidden, gathered_blocks), stacked_router_stats = jax.lax.scan(
                 _scan_layers,
-                hidden,
-                xs=(stacked, mask_schedule, block_grad_offsets, block_grad_sinks),
+                (hidden, block_gather_buffers),
+                xs=(stacked, mask_schedule, block_grad_offsets, block_grad_sinks, block_gather_sinks, layer_indices),
                 unroll=cfg.scan_unroll,
             )
             if cfg.router_stats_reduction == "after_scan":
@@ -1005,7 +1106,7 @@ class Transformer(eqx.Module):
                 "skipped_assignments_per_layer": stacked_router_stats["skipped_assignments"],
             }
         hidden = self.final_gated_norm(self.final_norm(hidden))
-        return hidden, router_metrics
+        return hidden, router_metrics, gathered_blocks
 
     @named_call
     def logits(
@@ -1028,7 +1129,7 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        cross_entropy_loss, aux_loss, router_metrics = self.next_token_loss_terms(
+        cross_entropy_loss, aux_loss, router_metrics, _ = self.next_token_loss_terms(
             token_ids,
             loss_weight,
             mask=mask,
@@ -1052,14 +1153,23 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         block_grad_offsets: "Block | None" = None,
         block_grad_sinks: "Block | None" = None,
-    ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
-        """The cross-entropy loss, the weighted router aux loss and the raw per-layer router metrics.
+        block_gather_sinks: "Block | None" = None,
+        block_gather_buffers: "Block | None" = None,
+    ) -> "LossTerms":
+        """The cross-entropy loss, the weighted router aux loss, the raw per-layer router metrics and the buffers
+        holding the block weights gathered by ``block_gather_sinks`` (see ``_forward``).
 
-        ``next_token_loss`` is their sum, with the metrics summarized by ``summarize_loss_metrics``. Callers that
-        combine several batches, such as gradient accumulation, combine the raw metrics first and summarize once.
+        ``next_token_loss`` is the sum of the losses, with the metrics summarized by ``summarize_loss_metrics``.
+        Callers that combine several batches, such as gradient accumulation, combine the raw metrics first and
+        summarize once.
         """
-        hidden, router_metrics = self(
-            token_ids, mask=mask, block_grad_offsets=block_grad_offsets, block_grad_sinks=block_grad_sinks
+        hidden, router_metrics, gathered_blocks = self._forward(
+            token_ids,
+            mask,
+            block_grad_offsets=block_grad_offsets,
+            block_grad_sinks=block_grad_sinks,
+            block_gather_sinks=block_gather_sinks,
+            block_gather_buffers=block_gather_buffers,
         )
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
@@ -1078,7 +1188,17 @@ class Transformer(eqx.Module):
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
-        return cross_entropy_loss, aux_loss, router_metrics
+        return LossTerms(cross_entropy_loss, aux_loss, router_metrics, gathered_blocks)
+
+
+class LossTerms(NamedTuple):
+    """``Transformer.next_token_loss_terms``: the loss terms, the raw router metrics and the buffers holding the
+    gathered block weights."""
+
+    cross_entropy_loss: jax.Array
+    aux_loss: jax.Array
+    router_metrics: dict[str, jax.Array]
+    gathered_blocks: Block | None
 
 
 def router_token_validity(token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array | None) -> Bool[Array, "B S"]:

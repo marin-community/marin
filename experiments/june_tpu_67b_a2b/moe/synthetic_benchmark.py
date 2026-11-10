@@ -202,6 +202,12 @@ def parse_args() -> argparse.Namespace:
         "--microbatches >= 2 and --carry-compute-params.",
     )
     parser.add_argument(
+        "--gather-in-first-microbatch",
+        action="store_true",
+        help="With --zero1, all-gather the expert weights layer by layer in the first microbatch's forward, into the "
+        "compute copy, instead of at the end of the step.",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -325,6 +331,7 @@ def main() -> None:
             microbatches=args.microbatches,
             zero1=args.zero1,
             overlap_last_microbatch=args.overlap_last_microbatch,
+            gather_in_first_microbatch=args.gather_in_first_microbatch,
         ),
         eval=None,
     )
@@ -335,7 +342,7 @@ def main() -> None:
         "window=%d mp=%s expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d "
         "remat=%s "
         "replicated_grads=%s router_stats=%s qb_balance=%s qb_sync_interval=%d carry_compute_params=%s "
-        "zero1=%s watch_interval=%d flops_per_example=%.4e",
+        "zero1=%s gather_in_first_microbatch=%s watch_interval=%d flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -363,6 +370,7 @@ def main() -> None:
         args.qb_sync_interval,
         args.carry_compute_params,
         args.zero1,
+        args.gather_in_first_microbatch,
         args.watch_interval,
         flops_per_example,
     )
