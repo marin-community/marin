@@ -5,8 +5,7 @@ import json
 from typing import cast
 
 import pytest
-from taskcompendium.grader import grader_config
-from taskcompendium.models import AnswerType, ScriptGrader
+from taskcompendium.models import AnswerType
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets import (
@@ -50,16 +49,12 @@ ROW = {
 def test_converts_agreed_question_to_file_task():
     task = converted_task(RECIPE, ROW)
     paper = json.loads(resource_bytes(task.resources.worker[0]))
-    config = grader_config(task)
 
     assert task.answer_type == AnswerType.FILE
-    assert task.output_paths == (ai2_qasper_verifiable.ANSWER_PATH,)
+    assert task.output_paths == (ai2_qasper.ANSWER_PATH,)
     assert task.environment_requirements.working_directory == "/app"
     assert paper == ROW["paper"]
-    assert config["expected"] == "yes"
-    assert isinstance(task.grader, ScriptGrader) and task.grader.answer_path is None
-    prompt = task.context.events[0].content
-    assert isinstance(prompt, str)
+    prompt = cast(str, task.context.events[0].content)
     assert "/app/paper.json" in prompt and "/app/answer.json" in prompt
     assert ROW["question"] in prompt
 

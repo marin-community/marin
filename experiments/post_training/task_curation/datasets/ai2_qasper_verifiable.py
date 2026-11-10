@@ -15,18 +15,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, IntendedUse, RawRow, WorkspaceFiles
 
-from experiments.post_training.task_curation.datasets.ai2_qasper import (
-    ANSWER_PATH,
-    REPOSITORY,
-    REVISION,
-    TRAIN_FILE,
-    CategoricalAnnotation,
-    build_task,
-    uses_missing_evidence,
-)
-from experiments.post_training.task_curation.datasets.ai2_qasper import (
-    read_questions as read_qasper_questions,
-)
+from experiments.post_training.task_curation.datasets import ai2_qasper
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
@@ -44,7 +33,7 @@ intentional and should not be treated as a quality defect.
 """
 
 
-def agreed_answer(annotations: list[CategoricalAnnotation]) -> str | None:
+def agreed_answer(annotations: list[ai2_qasper.CategoricalAnnotation]) -> str | None:
     """This function returns the answers the annotators agreed on. If there was disagreement, it returns None.
 
     Empty annotations and non-categorical answers also return None.
@@ -61,11 +50,11 @@ def agreed_answer(annotations: list[CategoricalAnnotation]) -> str | None:
 
 
 def read_questions(path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
-    for row in read_qasper_questions(path):
+    for row in ai2_qasper.read_questions(path):
         annotations = row["answers"]["answer"]
         evidence = (item for answer in annotations for item in answer["evidence"])
         expected = agreed_answer(annotations)
-        if expected is not None and not uses_missing_evidence(evidence):
+        if expected is not None and not ai2_qasper.uses_missing_evidence(evidence):
             yield {**row, "expected": expected}
 
 
@@ -78,18 +67,18 @@ def convert(row: RawRow, context: ConversionContext) -> TaskSpec:
             "paper_id": data["paper"]["id"],
             "question_id": data["question_id"],
             "annotations": data["answers"],
-            "answer_path": ANSWER_PATH,
+            "answer_path": ai2_qasper.ANSWER_PATH,
         },
         environment=required_grader_environment(context),
         timeout=10,
         answer_path=None,
     )
-    return build_task(row, package, ("qa", "paper", "exact", "qasper"))
+    return ai2_qasper.build_task(row, package, ("qa", "paper", "exact", "qasper"))
 
 
 def golden_answer(task: TaskSpec) -> WorkspaceFiles:
     answer = json.dumps({"answer": grader_config(task)["expected"]}).encode()
-    return WorkspaceFiles({ANSWER_PATH: answer})
+    return WorkspaceFiles({ai2_qasper.ANSWER_PATH: answer})
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:
@@ -107,7 +96,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             ),
             config=CurationRecipe(
                 name="ai2_qasper_verifiable",
-                source=HfSource(REPOSITORY, REVISION, (TRAIN_FILE,), SourceFormat.PARQUET, read=read_questions),
+                source=HfSource(
+                    ai2_qasper.REPOSITORY,
+                    ai2_qasper.REVISION,
+                    (ai2_qasper.TRAIN_FILE,),
+                    SourceFormat.PARQUET,
+                    read=read_questions,
+                ),
                 convert=convert,
                 version="4",
                 intended_use=IntendedUse.TRAIN,

@@ -72,30 +72,19 @@ def read_questions(path: StoragePath) -> Iterator[dict[str, Any]]:
 def build_task(row: RawRow, package: GraderPackage, tags: tuple[str, ...]) -> TaskSpec:
     """Build a QASPER paper workspace task with the shared answer contract."""
     data = row.data
+    prompt = PROMPT.format(paper_path=PAPER_PATH, answer_path=ANSWER_PATH, question=data["question"])
+    paper_resource = inline_resource(
+        PAPER_PATH.removeprefix("/"), json.dumps(data["paper"], ensure_ascii=False).encode()
+    )
+    environment = shell_environment(environment_requirements(AGENT_IMAGE)).model_copy(
+        update={"working_directory": "/app"}
+    )
     return TaskSpec(
         id=row.id,
         source=row.source,
-        context=ConversationInput(
-            events=(
-                TextMessage(
-                    role="user",
-                    content=PROMPT.format(
-                        paper_path=PAPER_PATH,
-                        answer_path=ANSWER_PATH,
-                        question=data["question"],
-                    ),
-                ),
-            )
-        ),
-        environment_requirements=shell_environment(environment_requirements(AGENT_IMAGE)).model_copy(
-            update={"working_directory": "/app"}
-        ),
-        resources=ResourceGroups(
-            worker=(
-                inline_resource(PAPER_PATH.removeprefix("/"), json.dumps(data["paper"], ensure_ascii=False).encode()),
-            ),
-            verifier=package.resources,
-        ),
+        context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
+        environment_requirements=environment,
+        resources=ResourceGroups(worker=(paper_resource,), verifier=package.resources),
         output_paths=(ANSWER_PATH,),
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
