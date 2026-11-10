@@ -670,7 +670,16 @@ def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pyte
 
 @pytest.mark.timeout(120)
 def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch):
-    step = skyrl_step(_spec(), _execution(), export_hf=True)
+    spec = _spec()
+    spec = dataclasses.replace(
+        spec,
+        config_yaml=(
+            "entrypoint: standard\n"
+            "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
+            "model_num_attention_heads: 8\n" + spec.config_yaml
+        ),
+    )
+    step = skyrl_step(spec, _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     )
