@@ -316,11 +316,13 @@ async def test_validate_returns_lowering_failure_without_starting_trials(workpie
     setup = config(harness)
     if authored:
         assert result.lowering_cause is Cause.INVALID_TASK
-        assert setup.submit_gate(workpiece.submission) == ("Task resources require a task machine",)
+        assert setup.submit_gate(workpiece.submission, workpiece.proposal.header.verification) == (
+            "Task resources require a task machine",
+        )
     else:
         assert result.lowering_cause is Cause.GRADER_INFRA
         with pytest.raises(Hold, match="Lowering failed"):
-            setup.submit_gate(workpiece.submission)
+            setup.submit_gate(workpiece.submission, workpiece.proposal.header.verification)
     assert isinstance(
         default_review(workpiece.with_(evidence=(result,)), config(harness).band, config(harness).budget),
         Modify if authored else Incomplete,

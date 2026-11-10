@@ -40,10 +40,13 @@ from forge.lowering import (
     requirements,
 )
 from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
+from forge.model.proposal import TASK_PROPOSAL, TaskProposal
 from forge.policy import GRADER_BASE_IMAGE, load_policy, resolution_lines
 from forge.resources.env import ReadFile
 from forge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, shellsim_factory
 from forge.wiring import submit_gate
+
+pytest_plugins = ("lib.forge.tests.test_proposal",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +138,7 @@ def test_shellsim_binding_omits_host_cpu_allocation() -> None:
 # a missing judge reference must return author feedback during parsing and programmatic preflight.
 @pytest.mark.parametrize("defect", ["shell", "final_action", "reference", "blank_reference", "checklist"])
 async def test_authored_interface_errors_return_tool_feedback(
-    tool_type: type[SubmitTool] | type[ValidateTool], defect: str
+    tool_type: type[SubmitTool] | type[ValidateTool], defect: str, proposal: TaskProposal
 ) -> None:
     task = arithmetic_task(
         answer_format=FinalAction(normal_submission=PlainText()), grader=NoGrader(reason="interface preflight")
@@ -172,7 +175,11 @@ async def test_authored_interface_errors_return_tool_feedback(
     with pytest.raises(InvalidTaskSpec, match=message):
         lower_with_settings(task, settings, factories)
     controls = (Control(Candidate("12"), RewardBand(Outcome.GRADED, 1), ControlKind.POSITIVE),)
-    files = {"/task.json": task.model_dump_json().encode(), "/controls.json": CONTROLS.dump_json(controls)}
+    files = {
+        "/task.json": task.model_dump_json().encode(),
+        "/controls.json": CONTROLS.dump_json(controls),
+        "/proposal.json": TASK_PROPOSAL.dump_json(proposal),
+    }
 
     async def read(event: ReadFile) -> bytes:
         return files[str(event.path)]

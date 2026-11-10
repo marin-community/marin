@@ -5,6 +5,7 @@
 
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -39,6 +40,7 @@ from forge.harness.tools import adversary_tools, standard_tools
 from forge.harness.tools.validate import ValidateTool
 from forge.lowering import (
     LoweringSettings,
+    check_verification,
     host_requirements,
     lower_with_settings,
     lowering_settings,
@@ -47,11 +49,13 @@ from forge.lowering import (
     rollout_engine,
 )
 from forge.model.content_hash import digest
+from forge.model.proposal import Verification
 from forge.model.review import BandOutcome, BandRules, Budget
 from forge.model.workpiece import Submission, Workpiece
 from forge.policy import Policy, load_policy, resolution_lines
 from forge.policy import sampling as policy_sampling
 from forge.resources.bundle import Resources
+from forge.resources.clef import CLEF_MODEL, ClefBackend
 from forge.resources.clock import Clock, Now, now
 from forge.resources.env import Env, EnvFactory, ShellboxEnvFactory
 from forge.resources.grading import GradeCandidate, GradingResource, grade
@@ -91,7 +95,13 @@ class RelayEndpoint(EndpointSource):
         return GlmEndpoint(url if url.endswith("/v1") else f"{url}/v1", self.token, self.pool)
 
 
+SHELL_ASSIGNMENT = re.compile(r"[A-Z][A-Z0-9_]*=")
+"""A token file line such as ``GLM_API_TOKEN=...`` passed whole instead of its value."""
+
+
 def endpoint_source(base_url: str | None, relay_job: str | None, token: str, model: str, pool: str) -> EndpointSource:
+    if SHELL_ASSIGNMENT.match(token):
+        raise ValueError("GLM_API_KEY holds a shell assignment (NAME=value); pass only the value")
     if bool(base_url) == bool(relay_job):
         raise ValueError("Set exactly one of GLM_RELAY_JOB and GLM_BASE_URL")
     if relay_job:
@@ -207,11 +217,16 @@ def build_resources(
 
 
 def submit_gate(
-    submission: Submission, *, settings: LoweringSettings, factories: Mapping[str, MachineFactory]
+    submission: Submission,
+    verification: Verification,
+    *,
+    settings: LoweringSettings,
+    factories: Mapping[str, MachineFactory],
 ) -> tuple[str, ...]:
     if not submission.controls:
         return ("Supply at least one control candidate",)
     try:
+        check_verification(submission.task, verification, settings)
         lower_with_settings(submission.task, settings, factories)
     except InvalidTaskSpec as error:
         return (str(error),)
@@ -298,7 +313,11 @@ def build_config(policy: Policy, arm: str, factories: Mapping[str, MachineFactor
 
 
 def provider_policy(policy: Policy) -> Policy:
-    """Reject deadlines that expire before the declared provider availability window."""
+    """Reject deadlines that expire before the provider availability window, and decision_model without Clef."""
+    if Verification.DECISION_MODEL in policy.setting("proposals.verifications", tuple) and (
+        policy.setting("judge.model", str) != CLEF_MODEL
+    ):
+        raise ValueError(f"proposals.verifications includes decision_model, which needs judge.model {CLEF_MODEL!r}")
     window = policy.setting("provider.unavailable_wait", float)
     turn = policy.setting("solver.turn_timeout", float)
     if turn < window + policy.setting("provider.stall_timeout", float):
@@ -348,11 +367,24 @@ async def runtime(
         for role in roles:
             model = policy.setting(f"{role}.model", str)
             provider = TypeAdapter(LLMProviderConfig).validate_python({**provider_fields, "model": model})
-            role_source = replace(source, model=model) if isinstance(source, RelayEndpoint) else source
-            if role == "judge":
-                role_source = PooledEndpoint(role_source, Pool(policy.setting("judge.pool", str)))
-            logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
-            client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
+            clef = role == "judge" and model == CLEF_MODEL
+            route = policy.setting("judge.route", str) if clef else model
+            role_source = replace(source, model=route) if isinstance(source, RelayEndpoint) else source
+            client: CompletionBackend
+            if clef:
+                logging.info(
+                    "MODEL role=judge model=%s route declared=%s resolved=%s/systemone",
+                    model,
+                    route,
+                    role_source.current().base_url,
+                )
+                clef_http = await owned.enter_async_context(httpx.AsyncClient())
+                client = ClefBackend(role_source, clef_http, policy.setting("provider.stall_timeout", float))
+            else:
+                if role == "judge":
+                    role_source = PooledEndpoint(role_source, Pool(policy.setting("judge.pool", str)))
+                logging.info("MODEL role=%s model=%s endpoint=%s", role, model, role_source.current().base_url)
+                client = await owned.enter_async_context(GlmClient(role_source, provider, limit_output=False))
             clients[role] = WaitingBackend(
                 client,
                 policy.setting("provider.unavailable_wait", float),

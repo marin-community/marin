@@ -39,6 +39,7 @@
   "sampling.top_p": 0.95,
   "sampling.reasoning_effort": "high",
   "sampling.max_continuations": 0,
-  "judge.model": "",
-  "judge.pool": "high"
+  "judge.model": "clef",
+  "judge.pool": "high",
+  "judge.route": "glm-5.3"
 }

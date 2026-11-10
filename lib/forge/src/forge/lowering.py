@@ -22,9 +22,12 @@ from taskcompendium.models import (
     judge_spec,
 )
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import RUBRIC_REFERENCE
 
 from forge.model.controls import Candidate
+from forge.model.proposal import Verification
 from forge.policy import GRADER_BASE_IMAGE, Policy
+from forge.resources.clef import CLEF_MODEL
 from forge.resources.sandbox.factories import (
     SANDBOX_SCHEDULING_TIMEOUT,
     grading_environment,
@@ -235,6 +238,10 @@ def lower_with_settings(
             raise InvalidTaskSpec(
                 f"Judge model must be empty or {settings.judge_model!r}, as selected by policy judge.model"
             )
+        if settings.judge_model == CLEF_MODEL and (
+            grading_environment(task) is not None or judge.rubric != RUBRIC_REFERENCE or not judge.question.strip()
+        ):
+            raise InvalidTaskSpec(CLEF_GRADER)
         connection = JudgeConnection(
             "http://forge-judge.invalid/v1", "inference-effect", default_model=settings.judge_model
         )
@@ -255,6 +262,36 @@ def lower_with_settings(
         factories=factories,
         judge_connection=connection,
     )
+
+
+CLEF_GRADER = (
+    "The Clef decision model grades a host VerifyitGrader (no environment) with mode=judge, rubric=reference, "
+    "the task question plus its rubric in question, and the gold answer in references"
+)
+
+
+def check_verification(task: TaskSpec, verification: Verification, settings: LoweringSettings) -> None:
+    """Require the grader kind the proposal's verification names.
+
+    ``decision_model`` needs a Clef-judged grader and fails closed (``ValueError``, a host refusal) when policy
+    selects no Clef judge; ``answer_in_box`` and ``code`` need a deterministic grader. Other kinds are unchecked.
+
+    Raises:
+        InvalidTaskSpec: The authored grader does not match the verification.
+        ValueError: The verification is ``decision_model`` and policy ``judge.model`` is not Clef.
+    """
+    judge = judge_spec(task.grader) is not None
+    if verification is Verification.DECISION_MODEL:
+        if settings.judge_model != CLEF_MODEL:
+            raise ValueError(
+                f"decision_model grading needs policy judge.model {CLEF_MODEL!r}, not {settings.judge_model!r}"
+            )
+        if not judge:
+            raise InvalidTaskSpec(
+                f"Verification is decision_model, so a script or deterministic grader is refused. {CLEF_GRADER}"
+            )
+    elif verification in (Verification.ANSWER_IN_BOX, Verification.CODE) and judge:
+        raise InvalidTaskSpec(f"Verification is {verification}: submit a deterministic grader, not a judge")
 
 
 def check_candidates(task: TaskSpec, candidates: Sequence[Candidate]) -> None:

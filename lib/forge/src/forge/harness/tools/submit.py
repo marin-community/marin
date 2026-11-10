@@ -13,10 +13,13 @@ from forge.harness.protocol import SubmitRequest, ToolResult
 from forge.harness.tools.base import ValidatedTool
 from forge.lowering import check_candidates
 from forge.model.controls import CONTROLS
+from forge.model.proposal import TASK_PROPOSAL, Verification
 from forge.model.workpiece import Submission
 from forge.resources.env import ReadFile
 
-type Gate = Callable[[Submission], tuple[str, ...]]
+type Gate = Callable[[Submission, Verification], tuple[str, ...]]
+PROPOSAL_FILE = "proposal.json"
+"""The proposal the author stage writes beside the controls; validation rechecks the workpiece's own."""
 
 
 async def read_submission(
@@ -26,10 +29,13 @@ async def read_submission(
         task = TaskSpec.model_validate_json(await ctx.emit(ReadFile(PurePosixPath(task_path))))
         controls = CONTROLS.validate_json(await ctx.emit(ReadFile(PurePosixPath(controls_path))))
         check_candidates(task, tuple(control.candidate for control in controls))
+        proposal = TASK_PROPOSAL.validate_json(
+            await ctx.emit(ReadFile(PurePosixPath(controls_path).with_name(PROPOSAL_FILE)))
+        )
     except ValueError as error:
         return ToolResult(f"Invalid draft: {error}")
     submission = Submission(task, controls, notes)
-    findings = gate(submission)
+    findings = gate(submission, proposal.header.verification)
     return ToolResult("\n".join(findings)) if findings else submission
 
 

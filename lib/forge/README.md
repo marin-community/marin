@@ -56,7 +56,7 @@ Export these in the same shell as the launch (never commit or print them):
 | variable | source | used for |
 |---|---|---|
 | `CW_KEY_ID`, `CW_KEY_SECRET` | your personal CoreWeave key (`CW_STORAGE_KEY_ID/SECRET` in `~/openathena/.env`) | reading proposals, publishing outputs |
-| `GLM_API_KEY` | the **high-pool** GLM token (`GLM_API_TOKEN=` in `glm-infer/glm_api_token.txt`), not the bulk token | author, solver and adversary model calls through the relay |
+| `GLM_API_KEY` | the **high-pool** GLM token: the value after `GLM_API_TOKEN=` in `glm-infer/glm_api_token.txt` (source the file; the driver refuses the whole line), not the bulk token | author, solver and adversary model calls through the relay |
 | `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers, e.g. `/muchanem/glm53-relay-rno2a-g-20261027T0414Z` | endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
 | `PARALLEL_API_KEY` | `TASKFORGE_PARALLEL_KEY` in `~/openathena/.env` | the author's web tools (optional) |
 

@@ -40,6 +40,7 @@ from forge.harness.tools.web import WebFetchTool, WebSearchTool
 from forge.lowering import GRADING_MACHINE, LoweringSettings, requirements, rollout_engine
 from forge.model.controls import CONTROLS, Candidate, Control, ControlKind, RewardBand
 from forge.model.llm import Completion, FinishReason, Message, Role, ToolCall, Usage
+from forge.model.proposal import TASK_PROPOSAL, TaskProposal, Verification
 from forge.model.workpiece import Conversation, Submission
 from forge.resources.env import (
     CommandResult,
@@ -59,7 +60,10 @@ from forge.resources.web import FakeWeb, ParallelWeb, WebFetch, WebSearch, fetch
 pytestmark = pytest.mark.asyncio
 
 
-def accept(submission: Submission) -> tuple[str, ...]:
+pytest_plugins = ("lib.forge.tests.test_proposal",)
+
+
+def accept(submission: Submission, verification: Verification) -> tuple[str, ...]:
     return ()
 
 
@@ -451,16 +455,20 @@ async def test_web_rejections_distinguish_author_errors_from_service_errors(stat
 
 
 @pytest.mark.parametrize("name", ["submit", "validate"])
-async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(tmp_path: Path, name: str) -> None:
+async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(
+    tmp_path: Path, name: str, proposal: TaskProposal
+) -> None:
     sink = JsonlSink(str(tmp_path / "draft.jsonl"))
     log = EventLog(sink=sink)
     ctx = Context(log=log)
     env = environment(ctx)
     await ctx.emit(RunCommand("task", 30))
     await ctx.emit(RunCommand("controls", 30))
+    proposal_file = WriteFile(PurePosixPath("/workspace/proposal.json"), TASK_PROPOSAL.dump_json(proposal))
+    await ctx.emit(proposal_file)
     tool_type = SubmitTool if name == "submit" else ValidateTool
     rejected = await tool_type(
-        lambda _: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
+        lambda *_: ("Missing negative controls",), "/workspace/task.json", "/workspace/controls.json"
     )(ctx, {})
     assert rejected == ToolResult("Missing negative controls")
     mixed = Completion(
@@ -484,6 +492,7 @@ async def test_draft_gate_and_mixed_return_turn_preserve_all_replies_and_replay(
     replay_env, replay_client = environment(replay), FakeInference(())
     await replay.emit(RunCommand("task", 30))
     await replay.emit(RunCommand("controls", 30))
+    await replay.emit(proposal_file)
     assert await harness.run(replay, initial, replay_client, tools) == result
     await replay.drain()
     assert not replay_client.requests and replay_env.files == env.files

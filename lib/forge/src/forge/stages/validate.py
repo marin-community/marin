@@ -18,7 +18,7 @@ from forge.effects.events import Note, Resolved
 from forge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
 from forge.harness.protocol import Returned, Stopped, StopReason
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
-from forge.lowering import host_requirements, lower_with_settings, lowering_settings, requirements
+from forge.lowering import check_verification, host_requirements, lower_with_settings, lowering_settings, requirements
 from forge.model.controls import Control
 from forge.model.llm import Message, Role
 from forge.model.proposal import render
@@ -160,6 +160,7 @@ async def validate(ctx: Context, workpiece: Workpiece, config: ForgeConfig, reso
     settings = lowering_settings(config.policy)
     task = submission.task
     try:
+        check_verification(task, workpiece.proposal.header.verification, settings)
         spec = lower_with_settings(task, settings, resources.factories).model_copy(update={"trace": TraceMode.MESSAGES})
     except (ValueError, NotImplementedError) as error:
         return Validated(
