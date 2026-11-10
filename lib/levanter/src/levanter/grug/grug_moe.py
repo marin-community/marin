@@ -58,7 +58,7 @@ from levanter.grug._moe.ep_ring import (
     _moe_mlp_ep_ring_local,
     _scatter_add_dispatch_combine,
 )
-from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
+from levanter.grug._moe.ep_ring_filtered import MoeSendGather, MoeTokenSum, _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug._moe.pallas_gather_sum import MoeGatherSum, resolve_interpret
 from levanter.grug.sharding import (
@@ -371,6 +371,8 @@ class MoEExpertMlp(eqx.Module):
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
     gather_sum: MoeGatherSum = eqx.field(static=True, default="xla")
+    send_gather: MoeSendGather = eqx.field(static=True, default="xla")
+    token_sum: MoeTokenSum = eqx.field(static=True, default="take")
 
     @staticmethod
     def init(
@@ -388,6 +390,8 @@ class MoEExpertMlp(eqx.Module):
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
         gather_sum: MoeGatherSum = "xla",
+        send_gather: MoeSendGather = "xla",
+        token_sum: MoeTokenSum = "take",
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -412,6 +416,8 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
             gather_sum=gather_sum,
+            send_gather=send_gather,
+            token_sum=token_sum,
         )
 
     @named_call
@@ -442,6 +448,8 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
             gather_sum=self.gather_sum,
+            send_gather=self.send_gather,
+            token_sum=self.token_sum,
         )
 
 
@@ -463,6 +471,8 @@ def moe_mlp(
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
     gather_sum: MoeGatherSum = "xla",
+    send_gather: MoeSendGather = "xla",
+    token_sum: MoeTokenSum = "take",
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -502,6 +512,10 @@ def moe_mlp(
 
     `gather_sum="pallas"` uses Pallas-Triton for `ring_filtered`'s backward row gathers on GPU or in the CPU
     interpreter. The default, `"xla"`, uses XLA fusions.
+
+    `send_gather="pallas"` builds `ring_filtered`'s forward send buffer with the same Pallas-Triton row gather, and
+    `token_sum="clamped"` sums each token's returned rows (and its dispatch-backward rows) with clamped indices whose
+    validity test stays in the gather's fusion; both give the same results bit for bit (`ring_filtered` only).
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if gather_sum not in get_args(MoeGatherSum):
@@ -511,6 +525,17 @@ def moe_mlp(
             raise ValueError(
                 f"gather_sum='pallas' requires ring_filtered, got implementation={resolved_implementation!r}"
             )
+        resolve_interpret(None)  # fails fast on backends without Pallas-Triton
+    if send_gather not in get_args(MoeSendGather):
+        raise ValueError(f"send_gather must be one of {get_args(MoeSendGather)}, got {send_gather!r}")
+    if token_sum not in get_args(MoeTokenSum):
+        raise ValueError(f"token_sum must be one of {get_args(MoeTokenSum)}, got {token_sum!r}")
+    if (send_gather, token_sum) != ("xla", "take") and resolved_implementation != "ring_filtered":
+        raise ValueError(
+            f"send_gather={send_gather!r} / token_sum={token_sum!r} require ring_filtered, "
+            f"got implementation={resolved_implementation!r}"
+        )
+    if send_gather == "pallas":
         resolve_interpret(None)  # fails fast on backends without Pallas-Triton
 
     if mesh is None:
@@ -615,6 +640,8 @@ def moe_mlp(
                 _moe_mlp_ep_ring_filtered_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
                 gather_sum=gather_sum,
+                send_gather=send_gather,
+                token_sum=token_sum,
             )
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local

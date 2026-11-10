@@ -21,6 +21,7 @@ from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
+from levanter.grug._moe.ep_ring_filtered import MoeSendGather, MoeTokenSum
 from levanter.grug._moe.pallas_gather_sum import MoeGatherSum
 from levanter.grug.attention import (
     AttentionMask,
@@ -119,6 +120,15 @@ class GrugModelConfig:
     """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
     moe_gather_sum: MoeGatherSum = "xla"
     """Backward row gathers for ``ring_filtered``: XLA or Pallas-Triton (GPU, or the CPU interpreter)."""
+    moe_send_gather: MoeSendGather = "xla"
+    """How ``ring_filtered``'s sender builds its forward send buffer from the tokens: an XLA fusion ("xla") or the
+    Pallas-Triton row gather ("pallas", GPU only). Same values bit for bit. Needs
+    ``moe_implementation="ring_filtered"``."""
+    moe_token_sum: MoeTokenSum = "take"
+    """How ``ring_filtered``'s sender sums each token's rows over its send slots, in the forward combine and the dispatch
+    backward: ``jnp.take`` with a fill mask per slot ("take"; XLA computes each mask in a kernel of its own) or a
+    clamped index with the validity test inside the gather's fusion ("clamped"). Same values bit for bit. Needs
+    ``moe_implementation="ring_filtered"``."""
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
@@ -526,6 +536,8 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 num_expert_waves=cfg.num_expert_waves,
                 gather_sum=cfg.moe_gather_sum,
+                send_gather=cfg.moe_send_gather,
+                token_sum=cfg.moe_token_sum,
             ),
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,

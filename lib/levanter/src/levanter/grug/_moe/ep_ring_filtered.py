@@ -18,8 +18,10 @@ the down projection's backward (``_down_project_combine``), so the backward neve
 outputs: remat neither saves them nor recomputes the down projection.
 """
 
+import functools
 import math
 from collections.abc import Callable
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -34,8 +36,25 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _combine_gather_sum_impl
-from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _select_local_assignments
-from levanter.grug._moe.pallas_gather_sum import MoeGatherSum
+from levanter.grug._moe.ep_ring import (
+    _combine_rows,
+    _dispatch_rows,
+    _gather_sum_slots,
+    _select_local_assignments,
+    _take_valid_rows,
+    _use_pallas_gather,
+)
+from levanter.grug._moe.pallas_gather_sum import MoeGatherSum, gather_valid_rows
+
+MoeSendGather = Literal["xla", "pallas"]
+"""How ``ring_filtered``'s sender builds the send buffer from its tokens in the forward: an XLA fusion ("xla") or the
+Pallas-Triton row gather of ``pallas_gather_sum`` ("pallas"), with the same values."""
+
+MoeTokenSum = Literal["take", "clamped"]
+"""How ``ring_filtered``'s sender sums each token's rows from its send-buffer slots (the forward combine and the
+dispatch backward): ``jnp.take`` with ``mode="fill"`` per slot ("take"), or a clamped index with the slot's validity
+compared inside the gather ("clamped"), with the same values. With "take" XLA computes each slot's fill mask in a
+small kernel of its own (K per call); with "clamped" the compare joins the gather-sum's fusion."""
 
 
 def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int) -> float:
@@ -128,6 +147,82 @@ def _down_project_combine_bwd(residual, cotangent):
 _down_project_combine.defvjp(_down_project_combine_fwd, _down_project_combine_bwd)
 
 
+def _gather_sum_slots_clamped(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
+    """``ep_ring._gather_sum_slots`` for slots in ``[0, P]`` (``P`` reads zero), with a clamped index and every slot's
+    validity computed together in one small kernel (XLA otherwise builds one mask kernel per slot). Same terms, same
+    order, same bits."""
+    num_rows = rows.shape[0]
+    keep = jax.lax.optimization_barrier(slots < num_rows)
+    out = jnp.zeros((slots.shape[0], rows.shape[1]), dtype=jnp.float32)
+    for k in range(slots.shape[1]):
+        taken = rows.at[jnp.minimum(slots[:, k], num_rows - 1)].get(mode="promise_in_bounds")
+        out += jnp.where(keep[:, k, None], taken, 0).astype(jnp.float32)
+    return out.astype(rows.dtype)
+
+
+def _token_gather_sum(rows: Float[Array, "P H"], slots: Int[Array, "T K"], token_sum: MoeTokenSum):
+    return _gather_sum_slots_clamped(rows, slots) if token_sum == "clamped" else _gather_sum_slots(rows, slots)
+
+
+# The sender's two token-side row movements with the options above: the forward send-buffer gather (its transpose,
+# the dispatch backward, is a gather-sum over the token's slots) and the combine's gather-sum (its transpose, the
+# combine backward, is a masked gather). With both options at their defaults the caller uses ep_ring's
+# _dispatch_rows/_combine_rows, which these reproduce bit for bit.
+@functools.partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+def _send_rows(
+    x: Float[Array, "T H"],
+    slot_token: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    slots: Int[Array, "T K"],
+    send_gather: MoeSendGather,
+    token_sum: MoeTokenSum,
+) -> Float[Array, "P H"]:
+    return _send_rows_fwd(x, slot_token, slot_valid, slots, send_gather, token_sum)[0]
+
+
+def _send_rows_fwd(x, slot_token, slot_valid, slots, send_gather, token_sum):
+    if _use_pallas_gather(send_gather, x.shape[-1]):
+        rows = gather_valid_rows(x, slot_token, slot_valid)
+    else:
+        rows = _take_valid_rows(x, slot_token, slot_valid)
+    return rows, slots
+
+
+def _send_rows_bwd(send_gather, token_sum, slots, g):
+    return _token_gather_sum(g, slots, token_sum), None, None, None
+
+
+_send_rows.defvjp(_send_rows_fwd, _send_rows_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+def _return_rows(
+    rows: Float[Array, "P H"],
+    slot_token: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    slots: Int[Array, "T K"],
+    backward: MoeGatherSum,
+    token_sum: MoeTokenSum,
+) -> Float[Array, "T H"]:
+    return _token_gather_sum(rows, slots, token_sum)
+
+
+def _return_rows_fwd(rows, slot_token, slot_valid, slots, backward, token_sum):
+    return _token_gather_sum(rows, slots, token_sum), (slot_token, slot_valid)
+
+
+def _return_rows_bwd(backward, token_sum, residuals, g):
+    slot_token, slot_valid = residuals
+    if _use_pallas_gather(backward, g.shape[-1]):
+        d_rows = gather_valid_rows(g, slot_token, slot_valid)
+    else:
+        d_rows = _take_valid_rows(g, slot_token, slot_valid)
+    return d_rows, None, None, None
+
+
+_return_rows.defvjp(_return_rows_fwd, _return_rows_bwd)
+
+
 def _moe_mlp_ep_ring_filtered_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -142,6 +237,8 @@ def _moe_mlp_ep_ring_filtered_local(
     transport_capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
     gather_sum: MoeGatherSum = "xla",
+    send_gather: MoeSendGather = "xla",
+    token_sum: MoeTokenSum = "take",
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Filtered all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
 
@@ -158,6 +255,10 @@ def _moe_mlp_ep_ring_filtered_local(
 
     ``gather_sum`` selects the expert-side dispatch and sender-side combine backward gathers. Token-side gathers
     remain XLA fusions.
+
+    ``send_gather`` and ``token_sum`` pick how the sender's token-side row movements run (the forward send-buffer
+    gather; the combine's per-token sum and the dispatch backward's): see ``MoeSendGather`` and ``MoeTokenSum``. Same
+    values and gradients bit for bit.
     """
     tokens, topk = selected_experts_local.shape
     hidden_dim = x_local.shape[1]
@@ -217,7 +318,11 @@ def _moe_mlp_ep_ring_filtered_local(
         received_metadata = jax.lax.all_to_all(metadata, "expert", split_axis=0, concat_axis=0, tiled=True)
         received_metadata = tree_checkpoint_name(received_metadata, _CHECKPOINT_DISPATCH_INPUT)
 
-        send_x = _dispatch_rows(x_local, safe_source, slot_valid, slot, "xla")
+        token_side_default = send_gather == "xla" and token_sum == "take"
+        if token_side_default:
+            send_x = _dispatch_rows(x_local, safe_source, slot_valid, slot, "xla")
+        else:
+            send_x = _send_rows(x_local, safe_source, slot_valid, slot, send_gather, token_sum)
         received_x = jax.lax.all_to_all(
             send_x.reshape(ep_size, pair_capacity, hidden_dim), "expert", split_axis=0, concat_axis=0, tiled=True
         ).reshape(send_rows, hidden_dim)
@@ -269,6 +374,10 @@ def _moe_mlp_ep_ring_filtered_local(
             concat_axis=0,
             tiled=True,
         ).reshape(send_rows, hidden_dim)
-        out_local = _combine_rows(returned, safe_source, slot_valid, slot, gather_sum).astype(x_local.dtype)
+        if token_side_default:
+            out_local = _combine_rows(returned, safe_source, slot_valid, slot, gather_sum)
+        else:
+            out_local = _return_rows(returned, safe_source, slot_valid, slot, gather_sum, token_sum)
+        out_local = out_local.astype(x_local.dtype)
         drops = jax.lax.psum(jnp.stack([sender_dropped, receiver_dropped]), token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=drops[0], receiver_dropped=drops[1])

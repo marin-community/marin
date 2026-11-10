@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare Pallas row gathers with the XLA reference."""
+"""Compare ``ring_filtered``'s row-movement options (Pallas row gathers, clamped token sums) with the XLA reference."""
 
 import math
 
@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grug._moe.ep_ring import _combine_rows, _dispatch_rows, _gather_sum_slots, _take_valid_rows
+from levanter.grug._moe.ep_ring_filtered import _gather_sum_slots_clamped
 from levanter.grug._moe.pallas_gather_sum import gather_sum_rows, gather_valid_rows
 from levanter.grug.grug_moe import moe_mlp
 from levanter.testing.devices import use_test_devices
@@ -87,10 +88,36 @@ def test_pallas_backward_falls_back_to_xla_for_untileable_widths():
         np.testing.assert_array_equal(_bits(a), _bits(e))
 
 
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
+def test_gather_sum_slots_clamped_matches_take_bitwise(dtype):
+    k_rows, k_slots = jax.random.split(jax.random.key(3))
+    num_rows, tokens, slots_per_token, hidden = 90, 40, 8, 48
+    rows = _rows(k_rows, (num_rows, hidden), dtype)
+    # The sender's slots: in [0, num_rows), or the sentinel num_rows for a destination the token does not reach.
+    slots = jax.random.randint(k_slots, (tokens, slots_per_token), 0, 2 * num_rows)
+    slots = jnp.where(slots < num_rows, slots, num_rows).astype(jnp.int32)
+    expected = jax.jit(_gather_sum_slots)(rows, slots)
+    actual = jax.jit(_gather_sum_slots_clamped)(rows, slots)
+    assert actual.dtype == dtype
+    np.testing.assert_array_equal(_bits(actual), _bits(expected))
+
+
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"gather_sum": "pallas"},
+        {"send_gather": "pallas"},
+        {"token_sum": "clamped"},
+        {"gather_sum": "pallas", "send_gather": "pallas", "token_sum": "clamped"},
+    ],
+    ids=["gather_sum", "send_gather", "token_sum", "all"],
+)
 @pytest.mark.multidevice
-def test_ring_filtered_pallas_gather_sum_matches_xla_bitwise(dtype):
+def test_ring_filtered_row_movement_options_match_xla_bitwise(options, dtype):
+    """On 4 expert shards with sender and receiver drops and uneven padding, ring_filtered with each row-movement
+    option gives the outputs, gradients and drop counts of the defaults, bit for bit."""
     with use_test_devices(4) as devices:
         shards, tokens_per_shard, hidden, inter, experts, topk = 4, 32, 32, 16, 32, 4
         tokens = shards * tokens_per_shard
@@ -121,7 +148,7 @@ def test_ring_filtered_pallas_gather_sum_matches_xla_bitwise(dtype):
         token_valid_sharded = jax.device_put(jnp.asarray(token_valid), NamedSharding(mesh, P(("data", "expert"))))
         cotangent_sharded = jax.device_put(cotangent, batch)
 
-        def run(gather_sum):
+        def run(**options):
             def loss(x, cw, w_up_gate, w_down):
                 out, counts = moe_mlp(
                     x,
@@ -136,7 +163,7 @@ def test_ring_filtered_pallas_gather_sum_matches_xla_bitwise(dtype):
                     capacity_factor=0.3,
                     pooled_transport_capacity_factor=0.5,
                     report_capacity_overflow=True,
-                    gather_sum=gather_sum,
+                    **options,
                 )
                 return jnp.sum((out * cotangent_sharded).astype(jnp.float32)), (out, counts)
 
@@ -144,12 +171,12 @@ def test_ring_filtered_pallas_gather_sum_matches_xla_bitwise(dtype):
                 grad_fn = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True))
                 jaxpr = str(jax.make_jaxpr(grad_fn)(*args))
                 (_, (out, counts)), grads = grad_fn(*args)
-            # Only the Pallas path has kernels, so the bitwise comparison below cannot pass trivially.
-            assert ("pallas_call" in jaxpr) == (gather_sum == "pallas")
+            # Only a Pallas option adds kernels, so the bitwise comparison below cannot pass trivially.
+            assert ("pallas_call" in jaxpr) == ("pallas" in options.values())
             return out, counts, grads
 
-        xla_out, xla_counts, xla_grads = run("xla")
-        out, counts, grads = run("pallas")
+        xla_out, xla_counts, xla_grads = run()
+        out, counts, grads = run(**options)
         assert int(xla_counts.sender_dropped) > 0 and int(xla_counts.receiver_dropped) > 0
         assert int(counts.sender_dropped) == int(xla_counts.sender_dropped)
         assert int(counts.receiver_dropped) == int(xla_counts.receiver_dropped)
