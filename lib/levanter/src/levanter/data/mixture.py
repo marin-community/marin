@@ -558,7 +558,7 @@ def _compute_block_assignment(base_ids, index, key):
 
 
 def rescale_mixture_schedule_for_batch_schedule(
-    mixture_schedule: Sequence[Tuple[int, dict[str, float]]], batch_schedule: BatchSchedule
+    mixture_schedule: Sequence[Tuple[int, dict[str, float]]], batch_schedule: BatchSchedule, *, start_step: int = 0
 ) -> List[Tuple[int, dict[str, float]]]:
     """
     Rescale the mixture schedule to match the batch schedule. MixtureDataset expects the mixture schedule to be in terms
@@ -569,12 +569,15 @@ def rescale_mixture_schedule_for_batch_schedule(
     Args:
         mixture_schedule: The mixture schedule to rescale
         batch_schedule: The batch schedule to rescale to
+        start_step: The training step that reads the mixture's first example. Stage steps count from it, and the
+            returned indices count from that step's data offset.
 
     Returns:
         The rescaled mixture schedule in terms of example indices
     """
 
     # for each step in mixture_schedule, we want to compute its data offset in the batch schedule
+    start_offset = batch_schedule.global_data_offset_by_step(start_step)
     out = []
     for i, (step, weights) in enumerate(mixture_schedule):
         # find the batch index that corresponds to this step
@@ -583,7 +586,7 @@ def rescale_mixture_schedule_for_batch_schedule(
                 raise ValueError("Negative step indices are only allowed for the last step")
             data_offset = -1
         else:
-            data_offset = batch_schedule.global_data_offset_by_step(step)
+            data_offset = batch_schedule.global_data_offset_by_step(start_step + step) - start_offset
 
         out.append((data_offset, weights))
 
