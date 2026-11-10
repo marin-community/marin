@@ -397,12 +397,12 @@ def test_cpu_draft_mirror_avoids_the_hub_until_any_mirror_file_expires(tmp_path,
     monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)
     cache = HuggingFaceModelCache("org/draft", "d" * 40, str(mirror), manifest.identity, manifest.revision)
     prepared = prepare_draft_model(
-        SpeculatorModelConfig(str(mirror), manifest.identity, manifest.revision),
+        SpeculatorModelConfig(str(mirror), manifest.identity),
         cache_ttl_days=14,
         cache_source_prefix="s3://region/run",
         model_caches=(cache,),
     )
-    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity, manifest.revision)
+    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity)
     assert (mirror / "model.safetensors").is_file()
     assert hf_model_cache.load_model_manifest(str(mirror)).identity == manifest.identity
     assert opened == ([("org/draft", "d" * 40)] if missing else [])
