@@ -241,3 +241,20 @@ def test_prepare_timeout_is_not_retried_as_a_serving_readiness_timeout(serving):
     assert isinstance(caught.value.__cause__, TimeoutError)
     assert serving.events == ["prepare", "prepare stopped"]
     assert len(serving.requests) == 1
+
+
+@pytest.mark.parametrize("device", ["gpu", "tpu"])
+def test_unpinned_gpu_skips_preparation_but_tpu_keeps_it(serving, caplog, device):
+    config = _config(REVISION)
+    resources = (
+        ResourceConfig.with_gpu("H100", count=1, regions=["us-east1"])
+        if device == "gpu"
+        else ResourceConfig.with_tpu("v4-8", regions=["us-east1"])
+    )
+    config = replace(config, iris=replace(config.iris, worker_resources=resources))
+    with remote_inference(config):
+        pass
+    assert serving.events == (["gpu"] if device == "gpu" else ["prepare", "gpu"])
+    assert len(serving.downloads) == (0 if device == "gpu" else 1)
+    if device == "gpu":
+        assert "Skipping CPU model preparation for unpinned GPU placement" in caplog.text

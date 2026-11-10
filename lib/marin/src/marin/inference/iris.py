@@ -22,7 +22,16 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fray.client import JobHandle, wait_all
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus, ResourceConfig, TpuConfig, create_environment
+from fray.types import (
+    ActorConfig,
+    Entrypoint,
+    GpuConfig,
+    JobRequest,
+    JobStatus,
+    ResourceConfig,
+    TpuConfig,
+    create_environment,
+)
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
@@ -817,6 +826,12 @@ def _populate_model_cache(entries: list[str], iris: IrisConfig) -> None:
     placements always resolve inside a CPU job so a different prefix cannot become a false hit.
     """
     if not entries:
+        return
+    if isinstance(iris.worker_resources.device, GpuConfig) and not iris.worker_resources.target_cluster:
+        logger.warning(
+            "Skipping CPU model preparation for unpinned GPU placement: serving may auto-federate "
+            "while the CPU job stays local. Set target_cluster to prepare the serving cache."
+        )
         return
     jobs: list[JobHandle] = []
     try:
