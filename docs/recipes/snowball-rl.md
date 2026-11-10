@@ -121,9 +121,11 @@ The collected configurations and training/generation numerical path remain the c
 For each built-in guard, tolerance is
 `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with fixed `k = len(preset.guards)`.
 Candidate and control means must differ in the worse direction by more than that tolerance to
-fail the guard. Update time uses the median over the measured updates; inconsistent timing-phase evidence is INVALID. Staleness-0 KL uses the
-selected-token-weighted mean over the entire measured window, requires finite observations for
-nonempty updates, and treats an empty window as INVALID. Pooled KL is telemetry.
+fail the guard. An objective that is not a guard uses `k = len(preset.objectives)` for its
+calibrated change. Update time uses the median over measured updates; inconsistent timing-phase
+evidence is INVALID. Staleness-0 KL uses the selected-token-weighted mean over the entire
+measured window, requires finite observations for nonempty updates, and treats an empty window
+as INVALID. Pooled KL is telemetry.
 
 Only objectives and built-in guards determine `improves`, `trade-off`, `regression` or
 `no change`. Failed infrastructure invariants affect the verdict independently. Zero-spread
@@ -133,18 +135,19 @@ show scored task count and candidate/control means with the control minimum and 
 
 Add repeatable conditions with `--require 'KEY<=NUMBER'`, `KEY>=NUMBER`, `KEY<=control` or
 `KEY>=control`. Numeric bounds apply to every candidate replicate. Each relative requirement
-uses `k=1` independently; repeating a built-in condition uses its existing row. Requirements cannot widen a built-in guard's
-threshold. A relative requirement with zero spread needs a numeric bound. Preflight checks the
-key against control r0's computed metrics. Train-long and controls refuse requirements.
-Python callers use `build_run(requirements=(...))`. Requirements affect report identity, while
-training names and configurations stay fixed.
+uses `k=1` independently; repeating a built-in condition uses its existing row. Requirements
+cannot widen a built-in guard's threshold. A relative requirement with zero spread needs a
+numeric bound. Preflight checks the key against control r0's computed metrics. Train-long and
+controls refuse requirements. Python callers use `build_run(requirements=(...))`. Requirements
+affect report identity, while training names and configurations stay fixed.
 
-All planned updates must finish, training policy/final loss, policy loss, logged loss statistics and gradients must be finite, panel coverage
-must reach 99%, grader infrastructure failures must be at most 1%, and fixed-length speed
-replies must have the prescribed length. The grader-error check uses the conservative upper
-bound on overlapping error and rollout-failure counts; a bound above 1% fails. Missing or
-inconsistent counters fail that invariant. Missing receipts, provenance, guards, mismatch
-counts, or incompatible panel/configuration evidence make the comparison INVALID.
+All planned updates must finish. Training policy loss, final loss, logged loss statistics and
+gradients must be finite, panel coverage must reach 99%, grader infrastructure failures must be
+at most 1%, and fixed-length speed replies must have the prescribed length. The grader-error
+check uses the conservative upper bound on overlapping error and rollout-failure counts; a
+bound above 1% fails. Missing or inconsistent counters fail that invariant. Missing receipts,
+provenance, guards, mismatch counts, or incompatible panel/configuration evidence make the
+comparison INVALID.
 
 Run stored comparisons on CPU:
 
@@ -212,5 +215,6 @@ identify their actual locations.
 | gap | implication and follow-up |
 |---|---|
 | layout-p40-only | calibrated training gates cover the 40-GPU layout; other layouts need qualification |
+| mismatch-is-agreement | mismatch measures policy agreement; exactness claims need an explicit zero-mismatch bound |
 | AAII coverage; no-agentic-tasks | scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tools and long context need separate qualification |
 | no-image-sandbox | image-only tasks need a sandbox backend |

@@ -309,12 +309,12 @@ def test_failed_training_invariants_do_not_supply_a_directional_label(recorded_r
 
 
 @pytest.mark.parametrize("preset", ["speed-short", "data-short"])
-def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset):
+def test_current_generation_counters_compare_with_stored_controls(recorded_runs, selection, preset):
     controls(recorded_runs, preset)
     inputs = None
     if preset == "data-short":
         selected = presets.selection_artifact("candidate-training@2026.11.10")
-        shutil.copytree(presets.default_selection().path(), selected.path())
+        shutil.copytree(selection.path(), selected.path())
         inputs = gate.GateInputs(preset_name=preset, tasks="candidate-training@2026.11.10")
     root = recorded_runs(preset, "users/test/current-generation", speed=101, inputs=inputs)
     if inputs is not None:
@@ -582,15 +582,16 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_storage_locat
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
-def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, tmp_path, monkeypatch, preset_name):
+def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, selection, tmp_path, monkeypatch, preset_name):
     controls(recorded_runs, preset_name)
     model = tmp_path / "model"
     model.mkdir()
     monkeypatch.setattr(presets, "MODEL_URI", str(model))
     preset = presets.PRESETS[preset_name]
-    tasks = presets.default_selection() if preset_name == "data-medium" else None
+    tasks = selection if preset_name == "data-medium" else None
     settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),) if tasks is None else ()
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
+    task_name = "fixture-selection@2026.11.10" if tasks else None
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint())
     staged = source.with_name("native-staging")
     source.rename(staged)
@@ -609,7 +610,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, tmp_path, mo
     assert {key: json.loads(value) for key, value in decoded.items()} == (
         {} if tasks else {"trainer.policy.optimizer_config.lr": 2e-6}
     )
-    assert recorded.tasks == (f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}" if tasks else None)
+    assert recorded.tasks == task_name
     before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
     report = rescore(preset_name, "--candidate", built.runs[0].name)
     assert report["verdict"] == "pass", report

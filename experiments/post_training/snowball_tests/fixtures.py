@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import ArtifactStep, artifact_identity
+from marin.execution.lazy import artifact_identity
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -45,19 +45,20 @@ def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
     panel = tmp_path / presets.DEFAULT_TEST_PANEL_NAME / presets.DEFAULT_TEST_PANEL_VERSION
-    write_json(
-        root / "summary.json",
-        {
-            "recipe": {
-                "heldout": [{"version": "2026.10.23.1", "rows": 910}],
-                "exclusions": [{"uri": str(panel / presets.FULL_VALIDATION_FILENAME), "version": panel.name}],
-            },
-            "training_rows": 100000,
-            "validation_rows": 100,
-            "full_validation_rows": 910,
-            "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
-        },
-    )
+    summary = {
+        "recipe": {"heldout": [{"version": "2026.10.23.1", "rows": 910}]},
+        "training_rows": 100000,
+        "validation_rows": 100,
+        "full_validation_rows": 910,
+        "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
+    }
+    write_json(root / "summary.json", summary)
+    candidate = presets.selection_artifact("fixture-selection@2026.11.10")
+    candidate_summary = deepcopy(summary)
+    candidate_summary["recipe"]["exclusions"] = [
+        {"uri": str(panel / presets.FULL_VALIDATION_FILENAME), "version": panel.name}
+    ]
+    write_json(Path(candidate.path()) / "summary.json", candidate_summary)
     write_json(
         panel / "summary.json",
         {
@@ -67,7 +68,7 @@ def selection(tmp_path, monkeypatch):
             "grader_kind_counts": {"validation": {}, "full_validation": {}},
         },
     )
-    return ArtifactStep.adopt("tests/candidate", "2026.10.26", str(root))
+    return candidate
 
 
 def source_provenance(monkeypatch):
