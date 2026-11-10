@@ -52,7 +52,11 @@ class CompactChatEngineClient:
 
     @contextmanager
     def capture(self, top_k: int) -> Iterator[ChatTopKCapture]:
-        """Keep one request's numeric evidence separate from concurrent chats."""
+        """Collect one chat's numeric evidence while its serving await runs.
+
+        The caller must consume generate() inside this scope. The yielded
+        capture retains the numeric evidence after the scope exits.
+        """
         capture = ChatTopKCapture(top_k)
         token = self._capture.set(capture)
         try:

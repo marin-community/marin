@@ -96,6 +96,8 @@ it receives the endpoint and credentials is follow-up work.
 whose TaskSpec conversions are unfinished. [campaign_releases.py](campaign_releases.py)
 declares externally published campaign releases kept as data pointers: their admission,
 split and qualification evidence lives in the pinned release itself, so a conversion
-recipe would invent a second provenance. These entries remain visible in the
+recipe would invent a second provenance. Set `SourceInfo.independent_qc` so the
+Atlas presents the release's own verdict, method, counts and pinned evidence URL.
+These entries remain visible in the
 Atlas and are omitted from campaign execution. Add a recipe when a source's
 conversion is implemented, retaining its stable source ID.
