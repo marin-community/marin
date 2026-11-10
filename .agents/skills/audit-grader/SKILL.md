@@ -86,7 +86,7 @@ checker behaviors that step 3 treats as decisions, and kept its frozen samples
 in its own repository; where it differs from the steps below, follow the steps.
 [references/validation.md](references/validation.md) reports runs of this skill,
 without the answer keys, on five small graders with planted defects that cover
-the four kinds above.
+the four kinds above, and a blind rerun on IFBench.
 
 ## Records
 
