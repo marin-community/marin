@@ -267,9 +267,11 @@ excludes both its `heldout` development input and the independent test panel
 listed in `exclusions`. Exclusions match task IDs, public semantics, complete
 conversations and whitespace-normalized final user statements.
 
-Copy the recipe to a new immutable version before building. The published
-`snowball-100k@2026.11.04.1` and `snowball-test-panel@2026.11.06.1` stay frozen;
-adding exclusions or changing the panel recipe builds a new release. Existing
+The checked-in recipe names version `2026.11.10.1`, which is not yet published;
+build it before training on it. The published `snowball-100k@2026.11.04.1`
+(built before the test panel existed, without `exclusions`) and
+`snowball-test-panel@2026.11.06.1` stay frozen; any further recipe change takes
+a new version. Existing
 Snowball controls adopt those published task files.
 
 Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
