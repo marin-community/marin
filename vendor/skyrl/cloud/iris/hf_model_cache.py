@@ -116,7 +116,10 @@ class _MirroredSnapshot:
 
 def load_model_manifest(model_uri: str) -> ModelManifest:
     marker_uri = join_resource_path(model_uri, MODEL_MANIFEST_FILENAME)
-    return ModelManifest.from_mapping(read_json(marker_uri), marker_uri)
+    payload = read_json(marker_uri)
+    if payload is None:
+        raise FileNotFoundError(f"Model mirror manifest is missing: {marker_uri}")
+    return ModelManifest.from_mapping(payload, marker_uri)
 
 
 def _cached_manifest(
@@ -133,7 +136,7 @@ def _cached_manifest(
     # identifies a partial cache that the next lock holder can rebuild.
     try:
         manifest = load_model_manifest(cache_uri)
-    except ValueError:
+    except (FileNotFoundError, ValueError):
         return None
     if manifest.model_id != model_id or manifest.revision != revision or manifest.tokenizer_mode != tokenizer_mode:
         return None
