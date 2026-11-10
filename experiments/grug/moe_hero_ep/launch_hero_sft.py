@@ -97,6 +97,9 @@ REPLAY_COMPONENT_PREFIX = "replay/"
 SFT_DECAY_FRACTION = 0.1
 SFT_MIN_LR_RATIO = 0.1
 SPECIAL_TOKEN_LR_MULTIPLIER = math.sqrt(32)
+# The highest routed capacity factor that fits at CP4 x EP16 with the default remat slop. At 1.6875 the
+# first all-to-all runs out of HBM, and at 1.75 and 2.0 the rematerialization check fails during compile.
+SFT_CAPACITY_FACTOR = 1.625
 # Chat special tokens of the 09.18 tokenizer and the single ordinary token each LM-head column copies.
 SPECIAL_TOKEN_ANCHORS = (
     (128006, " role"),
@@ -578,9 +581,10 @@ def _grad_norm(value: str) -> float | None:
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    required=True,
+    default=SFT_CAPACITY_FACTOR,
+    show_default=True,
     help=f"Routed expert capacity per shard as a multiple of the even share; the hero trained at "
-    f"{HERO_MODEL_CONFIG.capacity_factor:g}. Higher values cut drops and use more HBM.",
+    f"{HERO_MODEL_CONFIG.capacity_factor:g}. The default is the highest that fits in HBM.",
 )
 @click.option(
     "--eval-every",
