@@ -685,10 +685,53 @@ the seven chat special-token columns of the LM head from single-token anchors.
 | `--stop-after-steps` | Stop after this many updates; unset runs the full epoch |
 | `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
 | `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
+| `--expert-placement` | Expert placement JSON that renumbers the start checkpoint's routed experts |
 
-Every option above except `--router-bias` and the last three is required. `GrugTrainerConfig`
-gains `router_bias_mode` and `special_tokens` (`SpecialTokenInit`); their defaults leave
-pretraining unchanged.
+Every option above except `--router-bias` and the last four is required. `GrugTrainerConfig`
+gains `router_bias_mode`, `special_tokens` (`SpecialTokenInit`), and `expert_placement` (`ExpertPlacement`);
+their defaults leave pretraining unchanged.
+
+#### Expert placement
+
+The ragged expert-parallel transport drops a routed assignment when the capacity block that holds its expert
+is full. A capacity block is a contiguous run of global expert ids within one expert shard: 12 experts at
+EP16. With a frozen router bias, SFT data loads a few experts at 15-35 times the mean, so the blocks holding
+them overflow. At capacity factor 1.5 the one-rack smoke `hero-sft-smoke-v2` dropped 5.0% of assignments.
+
+An expert placement renumbers each layer's experts so every block carries a similar load. It moves the router
+columns, router bias, QB betas, expert weights, and their optimizer moments together, so the model computes the
+same function. The trainer applies it once, when it restores the placement's source checkpoint. Each checkpoint
+the run saves records the placement in its `metadata.json`, under `expert_placement`, and a restart from one is
+not placed again. The trainer refuses to restore a checkpoint whose recorded placement is not the run's, and a
+checkpoint without a record that is not the source. A placement fits one mesh: the trainer refuses it unless the
+expert axis and block width match.
+
+`expert_placement.py` builds a placement from a run's per-expert routing histograms. It assigns experts by
+greedy longest-processing-time: heaviest first, each into the lightest block with a free slot. Build one from a
+frozen-bias run that starts from the same checkpoint. A placed run logs its histograms by placed expert id, so
+the builder reads the run's placement from its W&B config and maps the loads back to the source order:
+
+```bash
+python -m experiments.grug.moe_hero_ep.expert_placement \
+  --wandb-run marin-community/marin_moe_sft/hero-sft-smoke-v2 --first-step 393491 --last-step 393515 \
+  --num-layers 48 --expert-axis-size 16 \
+  --source-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --out experiments/grug/moe_hero_ep/hero_sft_expert_placement_step393491.json
+```
+
+`hero_sft_expert_placement_step393491.json` is that placement, built from all 25 steps of v2. Held-out
+scoring on v2 shows how many steps a placement needs: built from 5 steps, a placement drops 0.71% of
+assignments on v2's last 8 steps at capacity factor 1.5 (0.10% at 2.0). The per-step oracle drops 0.47%, and
+one step's placement drops 0.94%. On Snowball 10.05's full 4,750-step frozen-bias SFT, a placement built from
+the first steps stays within 0.5 points of the per-step oracle through the end of the epoch.
+
+A placed run writes its checkpoints under `expert-placement-<fingerprint>/` below its output path or
+`--checkpoint-root`, and carries the W&B tag `expert-placement-<fingerprint>`. A relaunch with another
+placement, or none, starts again from the source checkpoint instead of resuming checkpoints whose experts are
+in a different order. Tools that pair experts across checkpoints, such as weight merging against the
+pretraining checkpoint, must first apply `ExpertPlacement.inverse()` to the placement that
+`ExpertPlacement.recorded_in(metadata)` reads from the checkpoint. A Hugging Face export does not carry that
+metadata.
 
 Print the plan for a one-rack smoke test:
 

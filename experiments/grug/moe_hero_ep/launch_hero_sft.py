@@ -34,6 +34,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.harrier_length_stats import harrier_length_statistics
 from experiments.grug.moe_hero_ep.harrier_long_context_mix import harrier_long_context_data_config
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import HARRIER_MIX_2026_08_18_STORE, validation_components
@@ -321,6 +322,7 @@ def build_sft_run(
     stop_after_steps: int | None = None,
     eval_every: int = 0,
     checkpoint_root: str | None = None,
+    expert_placement: ExpertPlacement | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero SFT run that continues ``initialize_from`` at ``start_step``.
@@ -329,17 +331,25 @@ def build_sft_run(
     ``checkpoint_root`` puts every checkpoint, permanent ones included, below one lifecycle-managed prefix.
     ``eval_every`` counts absolute steps, so the first eval lands on the first multiple after ``start_step``;
     the trainer's first-step eval never fires on a restored run. ``capacity_factor`` replaces the hero's routed
-    expert capacity; with a frozen bias, SFT data overflows the hero's 1.5.
+    expert capacity; with a frozen bias, SFT data overflows the hero's 1.5. ``expert_placement`` renumbers the
+    routed experts of ``initialize_from`` so each capacity block carries a similar load.
     """
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if muon_lr <= 0 or adam_lr <= 0:
         raise ValueError("learning rates must be positive")
+    if expert_placement is not None and not expert_placement.permutes(initialize_from):
+        raise ValueError(f"the expert placement permutes {expert_placement.source_checkpoint}, not {initialize_from}")
     if capacity_factor <= 0:
         raise ValueError(f"capacity_factor must be positive, got {capacity_factor}")
     model = with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, capacity_factor=capacity_factor))
     context_axis_size = HERO_CONTEXT_AXIS_SIZE
     expert_axis_size = hero_expert_axis_size(context_axis_size)
+    if expert_placement is not None:
+        # Fail before scheduling racks; the trainer checks again against the mesh it builds.
+        expert_placement.validate_for(
+            num_layers=model.num_layers, num_experts=model.num_experts, expert_axis_size=expert_axis_size
+        )
     batch_size = hero_rack_batch_size(model.max_seq_len) * dp_racks
     stores = load_sft_stores()
     plan = plan_sft_mixture(stores, batch_size=batch_size, replay_fraction=replay_fraction)
@@ -386,6 +396,7 @@ def build_sft_run(
         ),
         router_bias_mode=router_bias_mode,
         special_tokens=special_token_init(start_step),
+        expert_placement=expert_placement,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -414,17 +425,21 @@ def build_sft_run(
     )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
+        # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
+        # placement, or none, starts again from the source checkpoint; the trainer would refuse to resume them.
+        output_path = ctx.output_path if expert_placement is None else _placement_path(ctx.output_path, expert_placement)
         if checkpoint_root is None:
-            permanent_path = prefix_join(ctx.output_path, "checkpoints")
+            permanent_path = prefix_join(output_path, "checkpoints")
             temporary_path = temporary_checkpoint_base_path(
-                ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
             resume_paths = checkpoint_resume_paths(
-                ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
         else:
-            permanent_path = prefix_join(checkpoint_root, "checkpoints")
-            temporary_path = prefix_join(checkpoint_root, "resume")
+            root = checkpoint_root if expert_placement is None else _placement_path(checkpoint_root, expert_placement)
+            permanent_path = prefix_join(root, "checkpoints")
+            temporary_path = prefix_join(root, "resume")
             resume_paths = [temporary_path, permanent_path]
         trainer = hero_trainer_config(
             run_id=run_id,
@@ -445,6 +460,7 @@ def build_sft_run(
                     f"racks-{dp_racks}",
                     f"router-bias-{router_bias_mode.value}",
                     f"capacity-{capacity_factor:g}",
+                    *([] if expert_placement is None else [_placement_label(expert_placement)]),
                     "gb200",
                 ],
                 group="hero-sft",
@@ -515,6 +531,15 @@ def build_sft_run(
     )
 
 
+def _placement_label(placement: ExpertPlacement) -> str:
+    """Names a placed run's checkpoint directory and W&B tag."""
+    return f"expert-placement-{placement.fingerprint}"
+
+
+def _placement_path(base: str, placement: ExpertPlacement) -> str:
+    return prefix_join(base, _placement_label(placement))
+
+
 def _grad_norm(value: str) -> float | None:
     if value == "none":
         return None
@@ -569,6 +594,13 @@ def _grad_norm(value: str) -> float | None:
     default=None,
     help="Put all checkpoints below this prefix, e.g. a tmp/ttl=3d path for a smoke test.",
 )
+@click.option(
+    "--expert-placement",
+    "expert_placement_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Expert placement JSON from `expert_placement.py`; renumbers the start checkpoint's routed experts.",
+)
 @build_options
 def main(
     run_id: str,
@@ -583,6 +615,7 @@ def main(
     capacity_factor: float,
     eval_every: int,
     checkpoint_root: str | None,
+    expert_placement_path: Path | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_sft_run(
         run_id=run_id,
@@ -598,6 +631,9 @@ def main(
         stop_after_steps=stop_after_steps,
         eval_every=eval_every,
         checkpoint_root=checkpoint_root,
+        expert_placement=(
+            None if expert_placement_path is None else ExpertPlacement.from_json(expert_placement_path.read_text())
+        ),
     )
 
 
