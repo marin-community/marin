@@ -58,6 +58,7 @@ def lm_flops_per_token(
     local_kv_heads: int | None = None,
     global_kv_heads: int | None = None,
     num_full_attention_layers: int | None = None,
+    head_dim: int | None = None,
 ):
     """Analytic forward FLOPs per token.
 
@@ -67,22 +68,23 @@ def lm_flops_per_token(
     that are not a plain stride, such as every fourth layer plus the last. ``local_kv_heads`` /
     ``global_kv_heads`` give those two layer classes different KV-head counts (heterogeneous GQA).
     Left at their defaults (``None``) every layer is full attention with ``num_kv_heads``, matching
-    the original megatron-lm estimate exactly.
+    the original megatron-lm estimate exactly. ``head_dim`` defaults to ``hidden_dim / num_heads``.
     """
-    head_dim = hidden_dim / num_heads
+    head_width = hidden_dim / num_heads if head_dim is None else head_dim
+    attention_dim = hidden_dim if head_dim is None else num_heads * head_dim
     shared_intermediate_dim = intermediate_dim if shared_intermediate_dim is None else shared_intermediate_dim
     routed_mlp = 2 * (3 if glu else 2) * hidden_dim * intermediate_dim * num_experts_per_tok
     shared_mlp = 2 * (3 if glu else 2) * hidden_dim * shared_intermediate_dim * num_shared_experts
     mlp = routed_mlp + shared_mlp
     if num_experts > 1:
         mlp += 2 * hidden_dim * num_experts  # router layer
-    dense_proj = 2 * hidden_dim * hidden_dim
+    dense_proj = 2 * hidden_dim * attention_dim
 
     def _qkv_proj(kv_heads: int) -> float:
-        return 2 * hidden_dim * (num_heads * head_dim + 2 * kv_heads * head_dim)
+        return 2 * hidden_dim * (num_heads * head_width + 2 * kv_heads * head_width)
 
     def _attn_per_token(attn_span: int) -> float:
-        return _attention_map_flops(seq_len * attn_span, num_heads, head_dim) / seq_len
+        return _attention_map_flops(seq_len * attn_span, num_heads, head_width) / seq_len
 
     num_global_layers = _full_attention_layer_count(
         num_layers, seq_len, sliding_window, global_every, num_full_attention_layers
@@ -109,13 +111,14 @@ def lm_attention_flops_per_token(
     sliding_window: int | None = None,
     global_every: int | None = None,
     num_full_attention_layers: int | None = None,
+    head_dim: int | None = None,
 ) -> AttentionFlops:
     """Forward attention-map FLOPs per token: the part of ``lm_flops_per_token`` that depends on the mask.
 
     ``noncausal`` counts each query's full layer span, as ``lm_flops_per_token`` does. ``causal`` counts
     ``min(i + 1, span)`` keys at query position ``i``. Projections are excluded.
     """
-    head_dim = hidden_dim / num_heads
+    head_width = hidden_dim / num_heads if head_dim is None else head_dim
     num_global_layers = _full_attention_layer_count(
         num_layers, seq_len, sliding_window, global_every, num_full_attention_layers
     )
@@ -124,8 +127,8 @@ def lm_attention_flops_per_token(
     else:
         assert sliding_window is not None
         spans = [(num_global_layers, seq_len), (num_layers - num_global_layers, sliding_window)]
-    noncausal = sum(n * _attention_map_flops(seq_len * span, num_heads, head_dim) for n, span in spans)
+    noncausal = sum(n * _attention_map_flops(seq_len * span, num_heads, head_width) for n, span in spans)
     causal = sum(
-        n * _attention_map_flops(_causal_query_key_pairs(seq_len, span), num_heads, head_dim) for n, span in spans
+        n * _attention_map_flops(_causal_query_key_pairs(seq_len, span), num_heads, head_width) for n, span in spans
     )
     return AttentionFlops(noncausal=noncausal / seq_len, causal=causal / seq_len)
