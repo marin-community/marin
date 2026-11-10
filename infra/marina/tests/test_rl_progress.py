@@ -5,14 +5,20 @@ import copy
 import hashlib
 import json
 
-import pytest
-
-from experiments.post_training import publish_rl_progress as publication
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID
 
 
-def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client, monkeypatch):
+def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
     client, request = rl_progress_client
-    query_path = f"/a/{publication.APPLET_ID}/query"
+    query_path = f"/a/{APPLET_ID}/query"
+    api_path = f"/a/{APPLET_ID}/api/runs"
+    insert_sql = "INSERT INTO rl_runs (run_id, attempt_id, record) VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))"
+
+    def publish(record):
+        response = client.post(api_path, json=record)
+        assert response.status_code == 200, response.text
+        return response.json()
+
     membership = [f"task-{index}" for index in range(100)]
     record = {
         "run_id": "test/control",
@@ -50,9 +56,9 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "artifact_uri": "s3://example/test",
         "evidence": [],
     }
-    url = publication.publish_result(record, "http://localhost")
-    assert url.endswith("#run=test%2Fcontrol&attempt=native-first")
-    publication.publish_result(copy.deepcopy(record), "http://localhost")
+    record["baseline"]["saved_evidence"] = {"source": "native output"}
+    assert publish(record) == record
+    publish(copy.deepcopy(record))
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -60,15 +66,22 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "status": "failed",
         "optimizer_steps": 0,
     }
-    publication.publish_result(failed, "http://localhost")
+    publish(failed)
     changed = copy.deepcopy(record)
     changed.update(issue=456, label="corrected label", verdict="fail")
     changed["final"]["reward"] = 0.9
-    publication.publish_result(changed, "http://localhost")
+    assert publish(changed) == changed
+    for omit_issue in (False, True):
+        missing_issue = copy.deepcopy(changed)
+        if omit_issue:
+            missing_issue.pop("issue")
+        else:
+            missing_issue["issue"] = None
+        assert publish(missing_issue) == changed
     partial = copy.deepcopy(record)
     partial.update(run_id="test/partial", attempt_id="partial")
     partial["final"]["scored"] = 98
-    publication.publish_result(partial, "http://localhost")
+    publish(partial)
     unknown = record | {
         "run_id": "test/unknown",
         "attempt_id": "unknown",
@@ -82,7 +95,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "evaluation": None,
         "optimizer_steps": None,
     }
-    publication.publish_result(unknown, "http://localhost")
+    publish(unknown)
     for run_id, invalid in (
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
@@ -96,7 +109,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "POST",
             query_path,
             json_body={
-                "sql": publication.INSERT,
+                "sql": insert_sql,
                 "parameters": {"run_id": run_id, "attempt_id": "bad", "record": json.dumps(invalid)},
             },
         )
@@ -108,11 +121,11 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "POST",
         query_path,
         json_body={
-            "sql": publication.INSERT,
+            "sql": insert_sql,
             "parameters": {"run_id": "test/huge-extra", "attempt_id": "bad", "record": huge_extra},
         },
     )
-    payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
+    payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     assert len(payload["runs"]) == 4
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-first"]["final"]["reward"] == 0.9
@@ -123,16 +136,14 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key"}
 
-    def rejected_record(origin, method, path, **kwargs):
-        if path.endswith("/api/runs"):
-            return {
-                "runs": [],
-                "skipped_records": [
-                    {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"], "error": "unsupported result"}
-                ],
-            }
-        return request(origin, method, path, **kwargs)
-
-    monkeypatch.setattr("marina.client.marina_request", rejected_record)
-    with pytest.raises(RuntimeError, match=r"test/control/native-first.*unsupported result"):
-        publication.publish_result(changed, "http://localhost")
+    before = client.get(api_path).json()
+    for invalid in (
+        changed | {"baseline": None},
+        changed | {"elapsed_seconds": float("nan")},
+        changed | {"extra": float("inf")},
+        changed | {"gate_result": {"comparisons": "invalid"}},
+    ):
+        response = client.post(api_path, content=json.dumps(invalid), headers={"Content-Type": "application/json"})
+        assert response.status_code == 422
+        assert response.json()["detail"]
+        assert client.get(api_path).json() == before

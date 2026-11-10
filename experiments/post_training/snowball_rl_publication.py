@@ -14,6 +14,7 @@ from marin.execution.artifact import RECORD_FILENAME, read_record
 from marin.rl import skyrl_records
 from marin.rl.rl_progress import RunSummary
 from marin.rl.skyrl_records import read_stored_skyrl_attempts
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import publish_rl_progress
@@ -43,6 +44,19 @@ def publishes(preset: presets.Preset) -> bool:
         presets.Focus.DATA,
         presets.Focus.TRAIN,
     )
+
+
+CONTROL_PRESETS = tuple(
+    sorted(
+        name
+        for name, preset in presets.PRESETS.items()
+        if publishes(preset)
+        and any(
+            pin.revision == presets.PRESET_REVISION
+            for pin in gate.CONTROLS.get(gate.SHARED_CONTROLS.get(name, name), ())
+        )
+    )
+)
 
 
 def label(inputs: gate.GateInputs) -> str:
@@ -258,9 +272,9 @@ def publish_runs(
 
 def publish_controls(preset_name: str, *, service_url: str | None = None) -> PublicationOutcome:
     """Publish the exact pinned controls from their stored native outputs."""
+    if preset_name not in CONTROL_PRESETS:
+        raise click.UsageError("Progress publication requires a trained-panel preset with current control pins")
     preset = presets.PRESETS[preset_name]
-    if not publishes(preset):
-        raise click.UsageError("Progress publication requires a trained-panel preset")
     result = PublicationOutcome()
     for pin in gate.control_pins(preset_name):
         outcome = publish_runs(
@@ -281,14 +295,12 @@ def publish_controls(preset_name: str, *, service_url: str | None = None) -> Pub
 @click.option(
     "--preset",
     "preset_name",
-    type=click.Choice(sorted(name for name, preset in presets.PRESETS.items() if publishes(preset))),
+    type=click.Choice(CONTROL_PRESETS),
     required=True,
 )
 @click.option("--url", help="Marina origin (defaults to the Marina service).")
 def main(preset_name: str, url: str | None) -> None:
     """Publish a preset's pinned controls from their stored native outputs."""
-    from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415
-
     configure_coreweave_s3()
     result = publish_controls(preset_name, service_url=url)
     click.echo(json.dumps(result.to_dict()))

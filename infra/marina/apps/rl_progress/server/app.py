@@ -4,8 +4,9 @@
 """Serve the existing Postgres run summaries without changing stored evidence."""
 
 import json
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from marin.rl.rl_progress import RunSummary
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -31,6 +32,31 @@ def migrate(connection: Connection) -> None:
 def create_api(services):
     api = FastAPI()
     engine = services.engine()
+
+    @api.post("/runs")
+    def publish(record: dict[str, Any]) -> dict:
+        try:
+            summary = RunSummary.model_validate(record)
+            encoded = json.dumps(record, allow_nan=False)
+        except ValidationError as error:
+            raise HTTPException(
+                422, detail=error.errors(include_input=False, include_context=False, include_url=False)
+            ) from error
+        except ValueError as error:
+            raise HTTPException(422, detail=str(error)) from error
+        with engine.begin() as connection:
+            return connection.execute(
+                text(
+                    """INSERT INTO rl_runs (run_id, attempt_id, record)
+                    VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
+                    ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = jsonb_set(
+                        EXCLUDED.record, '{issue}',
+                        COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
+                                 rl_runs.record -> 'issue', 'null'::jsonb))
+                    RETURNING record"""
+                ),
+                {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": encoded},
+            ).scalar_one()
 
     @api.get("/runs")
     def runs():

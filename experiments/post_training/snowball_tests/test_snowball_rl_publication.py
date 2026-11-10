@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -180,10 +181,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     interrupted = {"once": True}
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
-        if path.endswith("/api/runs") and interrupted["once"]:
+        response = request(origin, method, path, json_body=json_body)
+        if method == "POST" and path.endswith("/api/runs") and interrupted["once"]:
             interrupted["once"] = False
-            raise RuntimeError("Readback unavailable after insert")
-        return request(origin, method, path, json_body=json_body)
+            raise RuntimeError("Response unavailable after insert")
+        return response
 
     monkeypatch.setattr("marina.client.marina_request", unavailable_readback)
     first = publication.publish_runs(
@@ -194,7 +196,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
         issue=73,
         service_url="http://localhost",
     )
-    assert len(first.served_records) == 1 and first.errors == ["Readback unavailable after insert"]
+    assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "test_panel/aaii_category/coding/mean"
     report, second_gate = saved_gate(("policy/entropy<=0", f"{relative_key}>=control"))
@@ -224,6 +226,18 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     payload = client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
+    assert repeated.urls[str(sources[0])].endswith("#run=tests%2Fpublication-0&attempt=native-0")
+
+    def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
+        response = request(origin, method, path, json_body=json_body)
+        if method == "POST" and path.endswith("/api/runs"):
+            return response | {"attempt_id": "wrong-returned-attempt"}
+        return response
+
+    monkeypatch.setattr("marina.client.marina_request", wrong_returned_key)
+    with pytest.raises(RuntimeError, match="different returned identity"):
+        publisher.publish_result(rows["native-0"], "http://localhost")
+    monkeypatch.setattr("marina.client.marina_request", request)
     expected = report.model_dump(mode="json", include={"verdict", "label", "reason", "invariants"}) | {
         "comparisons": [
             row.model_dump(mode="json")
@@ -381,6 +395,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] is None
     for root in controls:
         (root / gate.GATE_INPUTS_FILENAME).unlink()
+    invalid_command = CliRunner().invoke(publication.main, ["--preset", "train-long"])
+    assert invalid_command.exit_code == 2
+    with pytest.raises(click.UsageError):
+        publication.publish_controls("train-long", service_url="http://localhost")
     command = CliRunner().invoke(publication.main, ["--preset", "data-medium", "--url", "http://localhost"])
     assert command.exit_code == 0, (command.output, command.exception)
     assert json.loads(command.output)["unserved_records"] == []
