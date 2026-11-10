@@ -126,8 +126,7 @@ def _prune_dead_workers(
 
 
 def _sweep_expired_endpoints(db: ControllerDB, now: Timestamp) -> int:
-    """Delete endpoints whose lease has expired. Reads already hide them; this
-    reclaims storage so the lease — not the FK CASCADE — is the GC trigger."""
+    """Reclaim expired endpoints after their owning tasks become terminal."""
     with db.transaction() as cur:
         removed = cur.caches[EndpointsProjection].sweep_expired(cur, now)
     for endpoint_id in removed:

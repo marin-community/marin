@@ -31,7 +31,7 @@ def _make_row(endpoint_id: str, name: str, task_id: JobName, *, address: str = "
     )
 
 
-# --- Load / add / remove ----------------------------------------------------
+# --- Load / add / withdraw -------------------------------------------------
 
 
 def test_projection_loads_existing_rows_on_startup(state):
@@ -73,11 +73,12 @@ def test_projection_publishes_one_atomic_mutation_per_transaction(state):
 
     with state._db.transaction() as cur:
         state._endpoints.add(cur, _make_row("e1", "renamed", task))
-        state._endpoints.remove(cur, "e2")
+        state._endpoints.withdraw(cur, "e2")
 
     assert len(mutations) == 2
-    assert [row.endpoint_id for row in mutations[1].upserts] == ["e1"]
-    assert mutations[1].deletes == ("e2",)
+    assert {row.endpoint_id for row in mutations[1].upserts} == {"e1", "e2"}
+    assert mutations[1].deletes == ()
+    assert state._endpoints.get("e2") is None
 
 
 def test_rollback_leaves_memory_untouched(state):
@@ -114,7 +115,7 @@ def test_add_rejects_terminal_task(state):
     assert state._endpoints.get("e1") is None
 
 
-def test_remove_drops_endpoint_by_id(state):
+def test_withdraw_hides_endpoint_from_discovery(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id
     with state._db.transaction() as cur:
@@ -122,9 +123,9 @@ def test_remove_drops_endpoint_by_id(state):
         state._endpoints.add(cur, _make_row("e2", "beta", t))
 
     with state._db.transaction() as cur:
-        removed = state._endpoints.remove(cur, "e1")
-    assert removed is not None and removed.endpoint_id == "e1"
+        state._endpoints.withdraw(cur, "e1")
     assert {r.endpoint_id for r in state._endpoints.query()} == {"e2"}
+    assert {r.endpoint_id for r in state._endpoints.proxy_rows()} == {"e1", "e2"}
 
 
 def test_remove_by_job_ids_drops_subtree(state):
@@ -228,10 +229,10 @@ def test_replace_from_resets_dict(state, tmp_path: Path):
     # Auth DB is required by replace_from to fully restore; backup it too.
     state._db.backup_to(backup_dir / "auth.sqlite3")
 
-    # Mutate after the backup: remove the original, add a new endpoint that
+    # Mutate after the backup: withdraw the original, add a new endpoint that
     # only exists in the live DB.
     with state._db.transaction() as cur:
-        state._endpoints.remove(cur, "e-backup")
+        state._endpoints.withdraw(cur, "e-backup")
         state._endpoints.add(cur, _make_row("e-live", "live", t))
     assert state._endpoints.get("e-backup") is None
     assert state._endpoints.get("e-live") is not None

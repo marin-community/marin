@@ -6,8 +6,8 @@
 :class:`EndpointClient` owns both the RPC stub and the background lease renewal,
 so callers never register an endpoint without keeping it alive: ``register``
 registers and starts renewing; ``unregister`` (or ``close``) stops renewing and
-deletes. :class:`EndpointLeaseRenewer` is the renewal engine ``EndpointClient``
-drives; a crashed task simply stops renewing and its lease expires.
+withdraws the endpoint from discovery. :class:`EndpointLeaseRenewer` handles
+renewals; a crashed task simply stops renewing and its lease expires.
 """
 
 import logging
@@ -84,7 +84,7 @@ class EndpointClient:
     """Registers service endpoints and keeps their leases renewed.
 
     ``register`` registers an endpoint and starts renewing its lease on a daemon
-    thread; the lease is what keeps the controller serving the endpoint, so
+    thread; the lease is what keeps the endpoint discoverable, so
     registration without renewal is never exposed. ``close`` stops renewing and
     best-effort unregisters everything still registered before disconnecting.
     """
@@ -127,7 +127,7 @@ class EndpointClient:
         return response.endpoint_id
 
     def unregister(self, endpoint_id: str) -> None:
-        """Stop renewing ``endpoint_id`` and delete it. Idempotent."""
+        """Stop renewing ``endpoint_id`` and withdraw it from discovery. Idempotent."""
         self._renewer.untrack(endpoint_id)
         self._registered.discard(endpoint_id)
         self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
@@ -150,9 +150,9 @@ class EndpointClient:
     def close(self) -> None:
         """Stop renewing and best-effort unregister everything still registered.
 
-        Each delete uses a short deadline so an unreachable controller can't
-        stall shutdown; anything left registered expires once its lease lapses.
-        ``untrack`` waits out any in-flight renewal so the delete cannot be
+        Each withdrawal uses a short deadline so an unreachable controller can't
+        stall shutdown; anything left registered leaves discovery when its lease lapses.
+        ``untrack`` waits out any in-flight renewal so the withdrawal cannot be
         undone by a renewal that was mid-RPC.
         """
         self._renewer.close()
@@ -223,7 +223,7 @@ class EndpointLeaseRenewer:
         """Stop renewing an endpoint; it expires once its current lease elapses.
 
         Blocks until any in-flight renewal of this endpoint completes, so a
-        caller that unregisters immediately after cannot have its delete undone
+        caller that unregisters immediately after cannot have its withdrawal undone
         by a renewal that was already mid-RPC.
         """
         with self._cond:
