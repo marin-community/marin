@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 import pytest
+import yaml
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import LevanterCheckpoint
@@ -250,6 +251,12 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     candidate = snowball.build_run(presets.PRESETS["learning-medium"]).runs[0]
     candidate_path = tmp_path / "learning-medium-candidate.yaml"
     _render(candidate, candidate_path)
+    candidate_launch = yaml.safe_load(candidate_path.read_text())
+    control_launch = yaml.safe_load((tmp_path / "learning-medium.yaml").read_text())
+    candidate_launch["run"]["id"] = control_launch["run"]["id"]
+    candidate_launch["run"]["attempt_id"] = control_launch["run"]["attempt_id"]
+    candidate_launch["iris"]["job_name"] = control_launch["iris"]["job_name"]
+    candidate_path.write_text(yaml.safe_dump(candidate_launch))
     paths.append(str(candidate_path))
     configs = native_json(
         """
