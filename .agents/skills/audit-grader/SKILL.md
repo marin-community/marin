@@ -263,12 +263,14 @@ one, for example: the upper end of the grader's error-rate interval is below
    reference, stratify by the grader's verdict, one stratum per label, so that
    the review covers every label. No stratum then concentrates the errors, so
    size every stratum's sample for the interval that the result recorded above
-   needs. A review round is one sample and its reviews. Draw the final round
-   from the held-out responses of step 5, or from the whole panel when the
-   audit has no replacement, because nothing was then fitted to the panel. If
-   a round prompts changes to the replacement grader, or shows the first
-   defect that calls for one, run another round on held-out responses that no
-   earlier round used.
+   needs. For example, by item 5, when a review finds no error, a stratum that
+   holds 70% of the population needs about 130 cases with a consensus for an
+   upper end below 2%. A review round is one sample and its reviews. Draw the
+   final round from the held-out responses of step 5, or from the whole panel
+   when the audit has no replacement, because nothing was then fitted to the
+   panel. If a round prompts changes to the replacement grader, or shows the
+   first defect that calls for one, run another round on held-out responses
+   that no earlier round used.
 2. Freeze the sample: write the sha256 of the case list in the issue before
    any review starts.
 3. Render the cases into batch files. Each case shows an opaque case id, the
@@ -292,13 +294,19 @@ one, for example: the upper end of the grader's error-rate interval is below
    verdict that differs from the consensus. A grader's error rate is the share
    of population verdicts with an error. Estimate it per stratum from the cases
    with a consensus, weight it by stratum size, and give 95% bootstrap
-   intervals that resample within strata. A lean on an `ambiguous` verdict
-   only prefers one of the readings that the text allows, so also report each
-   rate over the cases where both verdicts are definite and agree. Report the
-   paired difference between graders when the audit compares two, Cohen's
-   kappa between the reviewers' leans, and the disputed cases. For a grader
-   with more than two labels, also report the confusion matrix against the
-   consensus. Do not resolve disputed cases yourself.
+   intervals that resample within strata. A stratum in which a grader has no
+   error among its n cases with a consensus adds zero to every resample,
+   although the grader's true rate there can be above zero. For such a
+   stratum, multiply its share of the population by the upper end of the exact
+   two-sided 95% interval for no error in n cases, `1 - 0.025 ** (1 / n)`
+   (about 3.7/n), and raise the upper end of the grader's interval by this
+   product; with several such strata, by the largest product. A lean on an
+   `ambiguous` verdict only prefers one of the readings that the text allows,
+   so also report each rate over the cases where both verdicts are definite
+   and agree. Report the paired difference between graders when the audit
+   compares two, Cohen's kappa between the reviewers' leans, and the disputed
+   cases. For a grader with more than two labels, also report the confusion
+   matrix against the consensus. Do not resolve disputed cases yourself.
 
 ## 7. Report
 
