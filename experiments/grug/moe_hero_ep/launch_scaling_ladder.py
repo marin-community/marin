@@ -45,6 +45,8 @@ Changelog:
         every 500 steps. Its learning rate moves from 5% to 1% of peak over those steps. The run forks
         hero-ctx65k-step372k at step 390251 and restores the average of its last 11 permanent checkpoints (see
         ``trigger_hero.sh``).
+    2026-11-08 (#8435): the same extension, from the same checkpoint, replaces qk_mult_long_scale 1.108 with log
+        scaling from floor 65536, slope 0.1, power 2. This run, hero-lce-log65536sq-step390k, is the 262K recipe.
 """
 
 import dataclasses

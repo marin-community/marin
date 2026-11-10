@@ -376,9 +376,8 @@ EVALS.update(
     {
         # --- Harbor (agentic registry benchmarks) ---
         # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
-        # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
+        # Harbor's verifier scores the boxed answer.
         "aime-harbor": harbor_definition("aime-harbor"),
-        "aime-smoke": harbor_definition("aime-smoke", 2),
         # Agentic datasets contain Harbor task directories and run with Daytona.
         "tb2": harbor_definition("tb2"),
         "tb2-lite": harbor_definition("tb2-lite", 2),

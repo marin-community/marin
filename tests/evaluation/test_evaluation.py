@@ -1851,7 +1851,7 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
 
 
 def test_resolve_eval_keys_validates_programmatic_selections() -> None:
-    assert resolve_eval_keys("gsm8k-smoke,aime-smoke") == ("gsm8k-smoke", "aime-smoke")
+    assert resolve_eval_keys("gsm8k-smoke,aime-harbor") == ("gsm8k-smoke", "aime-harbor")
     with pytest.raises(ValueError):
         resolve_eval_keys("gsm8k-smoke,missing")
 

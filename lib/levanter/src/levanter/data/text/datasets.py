@@ -832,8 +832,8 @@ class LmDataConfig:
     mixture_start_step: int | None = None
     """The training step that reads the mixture's first sequence, for a run that continues on a new data store.
     Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
-    restore at a later step continues in place. A restore before this step raises. Requires one mixture stage and
-    the restart stop strategy, and excludes ``prior_context_phases``."""
+    restore at a later step continues in place. A restore before this step raises. The steps of ``train_weights``
+    stages count from this step. Requires the restart stop strategy, and excludes ``prior_context_phases``."""
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -889,8 +889,6 @@ class LmDataConfig:
                 raise ValueError(
                     "mixture_start_step excludes prior_context_phases, which replay this config's sources"
                 )
-            if isinstance(weights, list) and len(weights) != 1:
-                raise ValueError("mixture_start_step requires one mixture stage")
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -1014,7 +1012,9 @@ class LmDataConfig:
         mix_key, shuffle_key = jax.random.split(key)
         weights = self._training_weights(Pos.size)
         if isinstance(weights, list):
-            weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
+            weights = rescale_mixture_schedule_for_batch_schedule(
+                weights, batch_schedule, start_step=self.mixture_start_step or 0
+            )
         initial_batch_size = batch_schedule.batch_size_at_step(0)
         datasets, doc_caches = self._train_sets_and_caches(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
         start_offsets = (
