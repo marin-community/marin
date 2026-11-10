@@ -299,6 +299,7 @@ def test_child_queue_deadline_resets_for_next_child_but_not_a_running_one(monkey
                         if finished or (sequential and clock["now"] >= 2)
                         else job_pb2.JOB_STATE_RUNNING
                     ),
+                    task_state_counts={"running": 1},
                 ),
             ]
             if sequential and clock["now"] >= 2:

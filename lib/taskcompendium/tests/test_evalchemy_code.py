@@ -25,6 +25,7 @@ from taskcompendium.evaluation.spec import (
     TextGeneration,
     TrialPolicy,
 )
+from taskcompendium.importers.evalchemy.assets.code_protocol import crux_answer
 from taskcompendium.importers.evalchemy.code import convert_python, python_item, read_crux
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -127,3 +128,28 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
         assert private["problem"]["code" if case["suite"] == "cruxeval" else "test"]
         if case["suite"] == "humaneval":
             assert private["problem"]["test"] not in item.task.context.events[0].content
+
+
+@pytest.mark.parametrize(
+    ("direction", "response", "expected"),
+    [
+        (
+            "input",
+            "Use [ANSWER] and [/ANSWER] tags.\n[ANSWER]assert f(16) == 17[/ANSWER]",
+            "f(16)",
+        ),
+        (
+            "input",
+            "Use [ANSWER] and [/ANSWER] tags.\n[ANSWER]assert f(16) == 17[/ANSWER]"
+            "\nExample: [ANSWER]assert f(1) == 2[/ANSWER]",
+            "f(16)",
+        ),
+        (
+            "output",
+            "Use [ANSWER] and [/ANSWER] tags.\n[ANSWER]assert f(16) == 17[/ANSWER]",
+            "17",
+        ),
+    ],
+)
+def test_crux_answer_skips_restated_tag_instruction(direction, response, expected):
+    assert crux_answer(response, direction) == expected

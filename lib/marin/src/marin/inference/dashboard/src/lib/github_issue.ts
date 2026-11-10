@@ -109,6 +109,7 @@ function setupSection(
   }
   if (conversation.pythonTools.trim()) lines.push('- Python tools: configured (source not included)')
   if (conversation.shellWorkspace) lines.push('- Shell workspace: enabled (files not included)')
+  if (conversation.webSearch) lines.push('- Web search: enabled')
   return lines.join('\n')
 }
 
