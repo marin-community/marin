@@ -201,15 +201,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "test_panel/aaii_category/coding/mean"
-    report, second_gate = saved_gate(("policy/entropy<=0", f"{relative_key}>=control"))
+    report, second_gate = saved_gate(("policy/entropy<=0", "policy/entropy>=0", f"{relative_key}>=control"))
     assert [
         (row.metric, row.run, row.control) for row in report.comparisons if row.role == gate.ComparisonRole.REQUIREMENT
     ] == [(relative_key, pytest.approx(0.5), pytest.approx(0.505))]
     assert report.verdict == "fail" and all(row.passes is not False for row in report.comparisons)
-    assert [(fact.replicate, fact.holds) for fact in report.invariants if fact.name == "require/policy/entropy"] == [
-        (0, True),
-        (1, False),
-    ]
+    assert [
+        (fact.replicate, fact.comparator, fact.holds)
+        for fact in report.invariants
+        if fact.name == "require/policy/entropy"
+    ] == [(0, "<=", True), (0, ">=", True), (1, "<=", False), (1, ">=", True)]
     receipt = json.loads((sources[0] / "terminal.json").read_text())
     receipt["result"]["finished_at"] = (
         datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
@@ -242,6 +243,20 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     with pytest.raises(RuntimeError, match="different returned identity"):
         publisher.publish_result(rows["native-0"], "http://localhost")
     monkeypatch.setattr("marina.client.marina_request", request)
+    invalid_numeric = deepcopy(rows["native-0"])
+    invalid_numeric["gate_result"]["comparisons"][0]["run"] = "0.5"
+    refused = client.post(f"/a/{publisher.APPLET_ID}/api/runs", json=invalid_numeric)
+    assert refused.status_code == 422
+    assert client.get(f"/a/{publisher.APPLET_ID}/api/runs").json() == payload
+    stored_facts = rows["native-0"]["gate_result"]["invariants"]
+    assert [
+        (fact["replicate"], fact["comparator"], fact["holds"])
+        for fact in stored_facts
+        if fact["name"] == "require/policy/entropy"
+    ] == [(0, "<=", True), (0, ">=", True), (1, "<=", False), (1, ">=", True)]
+    assert {fact["comparator"] for fact in stored_facts if fact["name"] == "planned_updates"} == {"=="}
+    assert {fact["comparator"] for fact in stored_facts if fact["name"].endswith("/panel_scored_fraction")} == {">="}
+    assert {fact["comparator"] for fact in stored_facts if fact["name"].endswith("/grader_error_fraction")} == {"<="}
     expected = report.model_dump(mode="json", include={"verdict", "label", "reason", "invariants"}) | {
         "comparisons": [
             row.model_dump(mode="json")

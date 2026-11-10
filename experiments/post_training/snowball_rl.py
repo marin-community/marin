@@ -631,7 +631,7 @@ def _status(
         if metric.key not in {item.key for item in preset.objectives}
     ]
     invariant_lines = [
-        f"r{row.replicate} {row.name}: {row.value} (required {row.limit}); "
+        f"r{row.replicate} {row.name}: {row.value} {row.comparator or '(comparator unknown)'} {row.limit}; "
         + ("within bound" if row.holds else "outside bound")
         for row in (report.invariants if report else ())
     ]
