@@ -22,6 +22,7 @@ from experiments.grug.moe_hero_ep.expert_placement import (
     ExpertPlacement,
     balanced_expert_order,
     projected_drop_fraction,
+    source_order_loads,
 )
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
@@ -225,6 +226,19 @@ def test_balanced_order_spreads_hot_experts_so_capacity_stops_dropping():
     assert sorted(order[0]) == list(range(8))
     assert projected_drop_fraction(loads, identity, block_experts=4, capacity_factor=1.5) > 0.1
     assert projected_drop_fraction(loads, order, block_experts=4, capacity_factor=1.5) == 0.0
+
+
+def test_loads_logged_by_a_placed_run_map_back_to_source_order():
+    placement = _placement([[2, 0, 3, 1], [1, 3, 0, 2]])
+    source_loads = np.array([[4.0, 3.0, 2.0, 1.0], [8.0, 6.0, 7.0, 5.0]])
+    # A placed run logs slot i for the source expert order[layer][i].
+    logged = np.take_along_axis(source_loads, np.asarray(placement.order), axis=1)
+
+    np.testing.assert_array_equal(
+        source_order_loads(logged, placement, source_checkpoint=placement.source_checkpoint), source_loads
+    )
+    with pytest.raises(ValueError, match="placed relative to"):
+        source_order_loads(logged, placement, source_checkpoint="s3://bucket/other")
 
 
 def _trained_state(config, optimizer, mesh):

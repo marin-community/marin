@@ -460,6 +460,7 @@ def build_sft_run(
                     f"racks-{dp_racks}",
                     f"router-bias-{router_bias_mode.value}",
                     f"capacity-{capacity_factor:g}",
+                    *([] if expert_placement is None else [_placement_label(expert_placement)]),
                     "gb200",
                 ],
                 group="hero-sft",
@@ -530,8 +531,13 @@ def build_sft_run(
     )
 
 
+def _placement_label(placement: ExpertPlacement) -> str:
+    """Names a placed run's checkpoint directory and W&B tag."""
+    return f"expert-placement-{placement.fingerprint}"
+
+
 def _placement_path(base: str, placement: ExpertPlacement) -> str:
-    return prefix_join(base, f"expert-placement-{placement.fingerprint}")
+    return prefix_join(base, _placement_label(placement))
 
 
 def _grad_norm(value: str) -> float | None:

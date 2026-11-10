@@ -169,8 +169,32 @@ def projected_drop_fraction(
     return float(np.clip(block_loads - capacity, 0, None).sum() / loads.sum())
 
 
-def routing_loads_from_wandb(run_path: str, *, num_layers: int, first_step: int, last_step: int) -> np.ndarray:
-    """Sum each layer's per-expert routing histogram over ``[first_step, last_step]`` of a W&B run."""
+def source_order_loads(
+    loads: np.ndarray, run_placement: ExpertPlacement | None, *, source_checkpoint: str
+) -> np.ndarray:
+    """Per-expert loads in ``source_checkpoint``'s expert order, from loads a run logged by global expert id.
+
+    A placed run logs slot ``i`` for the source expert ``run_placement.order[layer][i]``; an unplaced run
+    logs the source order directly.
+    """
+    if run_placement is None:
+        return loads
+    if not run_placement.permutes(source_checkpoint):
+        raise ValueError(
+            f"the run's experts are placed relative to {run_placement.source_checkpoint}, not {source_checkpoint}"
+        )
+    source = np.empty_like(loads)
+    np.put_along_axis(source, np.asarray(run_placement.order), loads, axis=1)
+    return source
+
+
+def routing_loads_from_wandb(
+    run_path: str, *, num_layers: int, first_step: int, last_step: int, source_checkpoint: str
+) -> np.ndarray:
+    """Sum each layer's per-expert routing histogram over ``[first_step, last_step]`` of a W&B run.
+
+    Returns the loads in ``source_checkpoint``'s expert order, also when the run itself was placed.
+    """
     keys = [ROUTING_HISTOGRAM_KEY.format(layer=layer) for layer in range(num_layers)]
     run = wandb.Api(timeout=120).run(run_path)
     rows = list(run.scan_history(keys=keys, min_step=first_step, max_step=last_step + 1))
@@ -178,7 +202,14 @@ def routing_loads_from_wandb(run_path: str, *, num_layers: int, first_step: int,
         raise ValueError(f"{run_path} logged no routing histograms in steps {first_step}..{last_step}")
     loads = np.stack([np.sum([row[key]["values"] for row in rows], axis=0) for key in keys]).astype(np.float64)
     logger.info("Summed %d steps of routing histograms from %s", len(rows), run_path)
-    return loads
+    # The trainer logs its config to W&B, so a placed run's placement is its `trainer.expert_placement`.
+    recorded = run.config["trainer"].get("expert_placement")
+    run_placement = None if recorded is None else ExpertPlacement.from_dict(recorded)
+    if run_placement is not None:
+        logger.info(
+            "%s ran in expert placement %s; mapping its loads to source order", run_path, run_placement.fingerprint
+        )
+    return source_order_loads(loads, run_placement, source_checkpoint=source_checkpoint)
 
 
 def build_placement(
@@ -215,7 +246,13 @@ def main(
     capacity_factors: Sequence[float],
 ) -> None:
     logging.basicConfig(level=logging.INFO)
-    loads = routing_loads_from_wandb(wandb_run, num_layers=num_layers, first_step=first_step, last_step=last_step)
+    loads = routing_loads_from_wandb(
+        wandb_run,
+        num_layers=num_layers,
+        first_step=first_step,
+        last_step=last_step,
+        source_checkpoint=source_checkpoint,
+    )
     placement = build_placement(
         loads,
         source_checkpoint=source_checkpoint,

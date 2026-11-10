@@ -708,7 +708,8 @@ expert axis and block width match.
 
 `expert_placement.py` builds a placement from a run's per-expert routing histograms. It assigns experts by
 greedy longest-processing-time: heaviest first, each into the lightest block with a free slot. Build one from a
-frozen-bias run that starts from the same checkpoint:
+frozen-bias run that starts from the same checkpoint. A placed run logs its histograms by placed expert id, so
+the builder reads the run's placement from its W&B config and maps the loads back to the source order:
 
 ```bash
 python -m experiments.grug.moe_hero_ep.expert_placement \
@@ -725,8 +726,9 @@ one step's placement drops 0.94%. On Snowball 10.05's full 4,750-step frozen-bia
 the first steps stays within 0.5 points of the per-step oracle through the end of the epoch.
 
 A placed run writes its checkpoints under `expert-placement-<fingerprint>/` below its output path or
-`--checkpoint-root`. A relaunch with another placement, or none, starts again from the source checkpoint
-instead of resuming checkpoints whose experts are in a different order. Tools that pair experts across checkpoints, such as weight merging against the
+`--checkpoint-root`, and carries the W&B tag `expert-placement-<fingerprint>`. A relaunch with another
+placement, or none, starts again from the source checkpoint instead of resuming checkpoints whose experts are
+in a different order. Tools that pair experts across checkpoints, such as weight merging against the
 pretraining checkpoint, must first apply `ExpertPlacement.inverse()` to the placement that
 `ExpertPlacement.recorded_in(metadata)` reads from the checkpoint. A Hugging Face export does not carry that
 metadata.
