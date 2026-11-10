@@ -39,8 +39,7 @@ from marin.rl.skyrl_records import (
     TERMINAL_RECEIPT_FILENAME,
     SkyRLLaunchReceipt,
     SkyRLLaunchResponse,
-    read_skyrl_launch_config,
-    read_stored_skyrl_receipt,
+    _stored_skyrl_receipt,
 )
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
@@ -1049,12 +1048,10 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
     Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
     controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
     """
-    receipt = read_stored_skyrl_receipt(run_output)
+    receipt, config = _stored_skyrl_receipt(run_output)
     if receipt is not None:
         return receipt
-    try:
-        config = read_skyrl_launch_config(run_output)
-    except FileNotFoundError:
+    if config is None:
         return None
     name = config["iris"]["job_name"]
     info = get_job_info()
@@ -1065,7 +1062,8 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
             root = find_project_root(Path(__file__))
             if root is None:
                 raise RuntimeError("Iris receipt discovery requires a Marin checkout")
-            endpoint = stack.enter_context(connect_controller(config_file=root / IRIS_HUB_CLUSTER_CONFIG))
+            route = config["iris"]["parent_cluster_config"] or config["iris"]["cluster_config"]
+            endpoint = stack.enter_context(connect_controller(config_file=root / route))
             address, credentials = endpoint.url, endpoint.credentials
         client = stack.enter_context(rpc_client(address, credentials))
         response = client.list_jobs(

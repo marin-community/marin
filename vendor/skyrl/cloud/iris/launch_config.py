@@ -179,7 +179,7 @@ class SkyRLLaunchConfig:
 
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
-    """Compose a raw mapping into the strict structured launch schema."""
+    """Compose the structured launch schema, omitting empty named evaluation data."""
     schema = OmegaConf.structured(SkyRLLaunchConfig)
     composed = OmegaConf.merge(schema, raw)
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)

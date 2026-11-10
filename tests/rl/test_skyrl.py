@@ -692,6 +692,7 @@ def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
     assert current_id == config.attempt_id and set(stored) == {"earlier-failed-attempt"}
     (tmp_path / "resolved-launch.yaml").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
+    assert read_skyrl_launch_receipt(str(tmp_path)) is None
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
