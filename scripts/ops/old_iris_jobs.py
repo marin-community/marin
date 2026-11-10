@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Report Iris jobs that stay active past an age threshold.
+"""Report Iris jobs that keep running past an age threshold.
 
 The ``old-iris-jobs`` Loom watch (``infra/loom/watches/old-iris-jobs.md``) runs
 this script, posts the message it writes to Slack, and keeps the state it writes
@@ -17,9 +17,10 @@ The message tells the owner to cancel a job through the cluster that found it: t
 hub routes a cancel to the peer that runs a federated job, and an owner may lack
 the port-forward access that a CoreWeave controller needs.
 
-A job is reported once while it stays old and active. The state holds the keys of
-the reported jobs that still are; a job that stops being active leaves the state
-and is reported again if it becomes old and active later.
+A job is reported once while it keeps running. A preempted task returns to
+pending while its job stays running, so a tree whose tasks all wait keeps its key
+in the state but is not reported. A job that stops running leaves the state and is
+reported again if it becomes old and active later.
 """
 
 import json
@@ -49,7 +50,7 @@ def job_key(cluster: str, root: JobName) -> str:
 
 
 @dataclass(frozen=True)
-class ActiveTree:
+class RunningTree:
     """A root job's running jobs on the cluster that runs them, with the earliest start time."""
 
     cluster: str
@@ -60,7 +61,7 @@ class ActiveTree:
 
 @dataclass(frozen=True)
 class OldJob:
-    """A root job active past the threshold, with the resources its tree holds."""
+    """A root job running past the threshold, with the resources its active tasks hold."""
 
     # The cluster whose controller found the job; the owner cancels the job through it.
     scanned_cluster: str
@@ -68,7 +69,7 @@ class OldJob:
     cluster: str
     root: JobName
     started_at_ms: int
-    # Active task count per per-task resource description.
+    # Active task count per per-task resource description; empty while every task waits.
     occupied: Mapping[str, int]
 
     @property
@@ -80,8 +81,8 @@ def active_task_count(job: JobStatus) -> int:
     return sum(job.task_state_counts.get(state, 0) for state in ACTIVE_TASK_STATES)
 
 
-def old_trees(scanned_cluster: str, running_jobs: Iterable[JobStatus], cutoff_ms: int) -> list[ActiveTree]:
-    """Group running jobs by running cluster and root; keep trees started before ``cutoff_ms`` with an active task.
+def old_trees(scanned_cluster: str, running_jobs: Iterable[JobStatus], cutoff_ms: int) -> list[RunningTree]:
+    """Group running jobs by running cluster and root; keep the trees started before ``cutoff_ms``.
 
     ``scanned_cluster`` names the jobs the scanned controller runs itself; a
     federated job keeps the name of the peer that runs it.
@@ -98,8 +99,8 @@ def old_trees(scanned_cluster: str, running_jobs: Iterable[JobStatus], cutoff_ms
     for (cluster, root), members in by_root.items():
         started_at_ms = min(started for started, _ in members)
         jobs = tuple(job for _, job in members)
-        if started_at_ms < cutoff_ms and any(active_task_count(job) for job in jobs):
-            trees.append(ActiveTree(cluster, root, started_at_ms, jobs))
+        if started_at_ms < cutoff_ms:
+            trees.append(RunningTree(cluster, root, started_at_ms, jobs))
     return trees
 
 
@@ -148,7 +149,7 @@ def _compose_message(new_jobs: Sequence[OldJob], now_ms: int, min_age_days: floa
         return "", []
     lines = [
         f"*Iris jobs active for more than {min_age_days:g} days*",
-        "Each job is listed once while it stays active. Cancel a job you no longer need with the command above it.",
+        "Each job is listed once while it keeps running. Cancel a job you no longer need with the command above it.",
     ]
     size = sum(_line_bytes(line) for line in lines) + DEFERRED_LINE_BYTES
     posted: list[OldJob] = []
@@ -174,10 +175,11 @@ def _compose_message(new_jobs: Sequence[OldJob], now_ms: int, min_age_days: floa
 def report(old_jobs: Sequence[OldJob], reported: set[str], now_ms: int, min_age_days: float) -> tuple[str, set[str]]:
     """Return the Slack message for the jobs not yet reported, and the reported keys for the next run.
 
-    The message is empty when no job is new. The next keys drop jobs that are no
-    longer old and active, and omit new jobs the message had no room for.
+    A job with no active task is not posted but keeps its key. The message is
+    empty when no job is new. The next keys drop jobs that no longer run, and omit
+    new jobs the message had no room for.
     """
-    new_jobs = [job for job in old_jobs if job.key not in reported]
+    new_jobs = [job for job in old_jobs if job.occupied and job.key not in reported]
     message, posted = _compose_message(new_jobs, now_ms, min_age_days)
     current = {job.key for job in old_jobs}
     return message, (reported & current) | {job.key for job in posted}
@@ -235,7 +237,7 @@ def main(clusters: tuple[str, ...], min_age_days: float, state_path: Path, messa
     message, next_reported = report(list(old_jobs.values()), reported, now_ms, min_age_days)
     message_path.write_text(message)
     state_path.write_text(json.dumps({"reported": sorted(next_reported)}, indent=2) + "\n")
-    click.echo(f"{len(old_jobs)} old active jobs; {len(next_reported - reported)} in the message")
+    click.echo(f"{len(old_jobs)} old running jobs; {len(next_reported - reported)} in the message")
 
 
 if __name__ == "__main__":

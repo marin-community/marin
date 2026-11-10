@@ -365,9 +365,10 @@ The `old-iris-jobs` watch runs the `ops` profile at 09:00 Pacific on weekdays
 `marin` hub and posts the Iris root jobs that have been active for more than 7
 days to `#marin-alerts`, with owner, age, and the resources their active tasks
 hold. The watch state records the jobs it has posted, so each job is posted once
-while it stays active. The hub covers the jobs it federates to CoreWeave. Loom
-has no CoreWeave kubeconfig, so jobs submitted directly to a CoreWeave
-controller are not in the report. The watch does not cancel jobs.
+while it keeps running, including while its tasks wait after a preemption. The
+hub covers the jobs it federates to CoreWeave. Loom has no CoreWeave kubeconfig,
+so jobs submitted directly to a CoreWeave controller are not in the report. The
+watch does not cancel jobs.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)

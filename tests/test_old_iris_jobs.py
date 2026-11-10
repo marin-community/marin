@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 from iris.client.workload import Device, DeviceKind, JobStatus, ResourceRequest
 from iris.client.workload_codec import job_status_from_proto
 from iris.cluster.types import JobName
@@ -52,6 +54,9 @@ def test_old_trees_group_children_under_their_root_on_the_cluster_that_runs_them
             JobName.from_wire("/alice/train"),
             JobName.from_wire("/alice/train/eval"),
         },
+        ("marin", JobName.from_wire("/carol/waiting"), NOW_MS - 10 * MS_PER_DAY): {
+            JobName.from_wire("/carol/waiting"),
+        },
         ("cw-rno2a", JobName.from_wire("/dave/gang"), NOW_MS - 9 * MS_PER_DAY): {
             JobName.from_wire("/dave/gang"),
             JobName.from_wire("/dave/gang/workers"),
@@ -97,17 +102,33 @@ def test_report_lists_each_old_job_once_and_defers_jobs_beyond_the_message_size(
     assert third_reported == second_reported
 
 
-def test_report_lists_a_job_again_after_it_stops_being_active():
-    kept, finished, paused = _old_job("kept", 9), _old_job("finished", 9), _old_job("paused", 30)
-    _, first_reported = report([kept, finished, paused], set(), NOW_MS, 7)
+def test_report_lists_a_job_again_after_it_stops_running():
+    kept, finished, resubmitted = _old_job("kept", 9), _old_job("finished", 9), _old_job("resubmitted", 30)
+    _, first_reported = report([kept, finished, resubmitted], set(), NOW_MS, 7)
     _, second_reported = report([kept], first_reported, NOW_MS, 7)
 
-    message, third_reported = report([kept, paused], second_reported, NOW_MS, 7)
+    message, third_reported = report([kept, resubmitted], second_reported, NOW_MS, 7)
 
     assert second_reported == {kept.key}
-    assert third_reported == {kept.key, paused.key}
-    assert str(paused.root) in message
+    assert third_reported == {kept.key, resubmitted.key}
+    assert str(resubmitted.root) in message
     assert str(kept.root) not in message
+
+
+def test_report_lists_a_job_once_across_a_preemption_that_leaves_every_task_pending():
+    job = _old_job("preemptible", 9)
+    waiting = replace(job, occupied={})
+    fresh_waiting = replace(_old_job("never-posted", 9), occupied={})
+
+    first_message, first_reported = report([job, fresh_waiting], set(), NOW_MS, 7)
+    waiting_message, waiting_reported = report([waiting, fresh_waiting], first_reported, NOW_MS, 7)
+    resumed_message, _ = report([job, fresh_waiting], waiting_reported, NOW_MS, 7)
+
+    assert str(job.root) in first_message
+    assert str(fresh_waiting.root) not in first_message
+    assert waiting_message == ""
+    assert waiting_reported == {job.key}
+    assert resumed_message == ""
 
 
 def test_report_tells_owners_to_cancel_through_the_cluster_that_found_the_job():
