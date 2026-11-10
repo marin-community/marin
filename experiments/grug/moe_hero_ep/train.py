@@ -66,7 +66,7 @@ from levanter.utils.mesh import MeshConfig
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
-    restore_grug_state_from_checkpoint,
+    restore_grug_state_and_source,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
@@ -1450,29 +1450,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_placement = config.trainer.expert_placement
         if expert_placement is not None:
             _validate_expert_placement(expert_placement, config)
-        # Restore tries candidates newest first and returns the first that loads, so the last one it asked
-        # a template for is the one it loaded.
-        attempted_candidates: list[str] = []
-
-        def candidate_template(candidate: str):
-            attempted_candidates.append(candidate)
-            return template_for_candidate_layout(state, candidate, config.trainer.master_param_mode)
-
-        state = restore_grug_state_from_checkpoint(
+        state, loaded_checkpoint = restore_grug_state_and_source(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
-            template_for_candidate=candidate_template,
+            template_for_candidate=lambda candidate: template_for_candidate_layout(
+                state, candidate, config.trainer.master_param_mode
+            ),
         )
         if config.trainer.master_param_mode == MasterParamMode.DEVICE:
             state = take_master_as_params(state)
         restored_nothing = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
         if released_initial_state and restored_nothing:
             state = _init_state(model_key)
-        if expert_placement is not None and not restored_nothing and attempted_candidates:
-            state = _place_restored_experts(state, expert_placement, loaded_checkpoint=attempted_candidates[-1])
+        if expert_placement is not None and loaded_checkpoint is not None and not restored_nothing:
+            state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
         special_tokens = config.trainer.special_tokens
         # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
         if special_tokens is not None and int(state.step) == special_tokens.start_step:
