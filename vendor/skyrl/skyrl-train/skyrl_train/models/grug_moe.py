@@ -45,7 +45,7 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_STACKED_EXPERT_SCHEMA_VERSION = 1
 GRUG_SPLIT_EXPERT_SCHEMA_VERSION = 2
 # Split experts with the log_scaling_* fields, null when off. A stack that cannot apply the factor
-# rejects the schema instead of training at the wrong query scale past the floor.
+# rejects a config with the fields set instead of training at the wrong query scale past the floor.
 GRUG_LOG_SCALING_SCHEMA_VERSION = 3
 GRUG_DEFAULT_GLOBAL_EVERY = 4
 GRUG_EAGER_ATTENTION_BACKEND = "eager"
@@ -874,6 +874,8 @@ class GrugMoeModel(GrugMoePreTrainedModel):
         super().__init__(config)
         if config.uses_hero_architecture:
             raise ValueError("Hero architecture requires the Megatron backend; the eager model supports Snowball only")
+        if config.log_scaling_n_floor is not None:
+            raise ValueError("log scaling requires the Megatron backend; the eager model does not apply it")
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.embed_norm = GrugMoeRMSNorm(config.hidden_size, config.rms_norm_eps)
         self.embed_gated_norm = GrugMoeGatedNorm(config.hidden_size)
