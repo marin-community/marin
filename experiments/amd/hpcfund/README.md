@@ -82,14 +82,12 @@ With this venv, runs with the flags sometimes crash as the processes shut down a
 The wrapper runs `uv run --no-sync`, so build the venv once on a login node:
 
 ```bash
-uv sync
-uv pip install --extra-index-url https://stable.repo.amd.com/rocm/whl-next/ --index-strategy unsafe-best-match \
-    "rocm[libraries,device-gfx942,device-gfx950]==10.1.0" \
-    jax==0.12.0 jaxlib==0.12.0 jax-rocm10-plugin==0.12.0 jax-rocm10-pjrt==0.12.0 \
-    jax-triton==0.3.1 triton==3.6.0
+uv sync --all-packages --extra rocm --no-dev
 ```
 
-The 0.12.0 plugin and PJRT wheels come from PyPI; AMD's index has ROCm 10.1.0 but stops at JAX 0.11.1. Keep the plugin at 0.12.0 or later when jax-triton is installed. Earlier plugins delete each compiled jax_triton kernel file on its first launch without holding a lock, so a process that launches a new kernel on several GPUs at once fails with `CustomCall failed: /tmp/tmpXXXXXXXX; No such file or directory` or hangs at the next collective.
+The `rocm` extra installs JAX 0.12.0 with its ROCm 10 plugin from PyPI, jax-triton 0.3.1, Triton 3.6.0, and the ROCm 10.1.0 runtime with MI300X (gfx942) and MI350X/MI355X (gfx950) device libraries from AMD's TheRock index. `--no-dev` is required: the default `dev` groups pin JAX 0.11.1, and uv rejects the combination.
+
+Keep the ROCm plugin at 0.12.0 or later when jax-triton is installed. Earlier plugins delete each compiled jax_triton kernel file on its first launch without holding a lock, so a process that launches a new kernel on several GPUs at once fails with `CustomCall failed: /tmp/tmpXXXXXXXX; No such file or directory` or hangs at the next collective.
 
 ## Known issues
 

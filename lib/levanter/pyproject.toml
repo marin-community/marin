@@ -110,6 +110,23 @@ deepep = [
   # come from the host GPU environment.
 ]
 tpu = ["jax==0.11.1", "jaxlib==0.11.1", "libtpu==0.0.46.*"]
+# AMD Instinct GPUs (MI300X gfx942, MI350X/MI355X gfx950). JAX 0.12 is the first
+# release whose ROCm plugin keeps jax_triton kernel files alive across concurrent
+# first launches (#9853). The ROCm runtime comes from AMD's TheRock wheels.
+rocm = [
+  "jax==0.12.0",
+  "jaxlib==0.12.0",
+  "jax-rocm10-plugin==0.12.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm[libraries,device-gfx942,device-gfx950]==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # uv applies index sources only to direct dependencies, so the packages the
+  # rocm metapackage pulls in are listed here to resolve from AMD's index.
+  "rocm-sdk-core==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm-sdk-libraries==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm-sdk-device-gfx942==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "rocm-sdk-device-gfx950==10.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "jax-triton==0.3.1; sys_platform == 'linux'",
+  "triton==3.6.0; sys_platform == 'linux'",
+]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
@@ -187,12 +204,14 @@ dev = [
 
 
 [tool.uv]
+# Each accelerator extra pins its own JAX stack; never solve two at once.
 conflicts = [
   [
     { extra = "gpu" },
     { extra = "tpu" },
+    { extra = "rocm" },
   ],
-]  # Never solve for both GPU and TPU at once
+]
 
 [tool.uv.sources]
 # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
