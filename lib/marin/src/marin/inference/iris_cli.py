@@ -225,6 +225,14 @@ def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> 
 def _prepared_direct_service(
     service: IrisServiceConfig, placement: ResourceConfig, workspace_dir: Path | None, client: IrisClient
 ) -> IrisServiceConfig:
+    regions = placement.regions
+    if not placement.target_cluster and (not regions or len(regions) != 1 or ANY_REGION in regions):
+        click.echo(
+            "Warning: skipping CPU model preparation without a cluster or single-region pin; "
+            "weights will download on the serving worker. Set --region or --target-cluster.",
+            err=True,
+        )
+        return service
     setup_scripts = None if workspace_dir is not None else [_checkout_free_setup_script(_marin_core_version(), ())]
     environment = create_environment(workspace=str(workspace_dir or Path.cwd()), setup_scripts=setup_scripts)
     click.echo("Preparing Hugging Face weights on CPU before reserving accelerators...")

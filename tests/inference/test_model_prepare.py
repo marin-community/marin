@@ -9,9 +9,12 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import marin.inference.iris as iris_module
+import marin.inference.iris_cli as cli_module
 import marin.inference.model_cache as cache_module
 import pytest
+from click.testing import CliRunner
 from fray.types import CpuConfig, JobStatus, ResourceConfig, create_environment
+from iris.resources.state import JobState
 from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from marin.evaluation.runner import _inference_session
 from marin.inference.config import (
@@ -261,3 +264,68 @@ def test_unpinned_gpu_skips_preparation_but_tpu_keeps_it(serving, caplog, device
     assert len(serving.downloads) == (0 if device == "gpu" else 1)
     if device == "gpu":
         assert "Skipping CPU model preparation for unpinned GPU placement" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "placement,prepares,fail",
+    [
+        ([], False, False),
+        (["--region", "us-central2"], True, False),
+        (["--region", "us-central2,us-east1"], False, False),
+        (["--region", "*"], False, False),
+        (["--target-cluster", "cw-rno2a", "--gpu", "H100x1"], True, False),
+        (["--region", "us-central2"], True, True),
+    ],
+)
+def test_cli_prepares_only_a_pinned_cache_before_accelerator_submission(serving, monkeypatch, placement, prepares, fail):
+    serving.fail_prepare = fail
+    monkeypatch.setattr(cache_module, "get_job_info", lambda: None)
+    monkeypatch.setattr("levanter.model_cache.model_info", lambda *_a, **_k: SimpleNamespace(sha=REVISION))
+
+    class Job:
+        job_id = "/test/prepare"
+
+        def __init__(self, entrypoint):
+            self.entrypoint = entrypoint
+
+        def state_only(self):
+            with pytest.MonkeyPatch.context() as env:
+                env.setenv("MARIN_PREFIX", serving.worker_prefix)
+                function, args, kwargs = self.entrypoint.resolve()
+                try:
+                    function(*args, **kwargs)
+                except OSError:
+                    return JobState.FAILED
+            return JobState.SUCCEEDED
+
+        def cancel(self):
+            serving.events.append("prepare stopped")
+
+    def submit(**kwargs):
+        prepare = kwargs["name"].startswith("prepare-model-")
+        serving.events.append("prepare" if prepare else "gpu")
+        return Job(kwargs["entrypoint"])
+
+    client = SimpleNamespace(submit=submit, resolve_endpoint=lambda _endpoint: "https://controller/proxy/serve.test")
+
+    @contextmanager
+    def connect(**_kwargs):
+        yield SimpleNamespace(url="https://controller", config=None, credentials=None)
+
+    @contextmanager
+    def remote(*_args, **_kwargs):
+        yield client
+
+    monkeypatch.setattr(cli_module, "connect_controller", connect)
+    monkeypatch.setattr(cli_module.IrisClient, "remote", remote)
+    result = CliRunner().invoke(cli_module.main, ["org/candidate", "--no-wait", *placement])
+    if prepares and fail:
+        assert result.exit_code != 0
+        assert serving.events == ["prepare", "prepare stopped"]
+    else:
+        assert result.exit_code == 0, result.output
+        assert serving.events == (["prepare", "gpu"] if prepares else ["gpu"])
+        assert len(serving.downloads) == int(prepares)
+    if not prepares:
+        assert "skipping CPU model preparation" in result.output
+        assert "Preparing Hugging Face weights on CPU" not in result.output
