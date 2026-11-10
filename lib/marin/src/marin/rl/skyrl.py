@@ -31,6 +31,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
 from marin.rl.skyrl_records import (
+    EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
     TERMINAL_RECEIPT_FILENAME,
     SkyRLLaunchResponse,
@@ -969,7 +970,7 @@ def skyrl_step(
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(
             checkpoint_root=prefix_join(temporary_root, "checkpoints"),
-            export_root=prefix_join(ctx.output_path, "exports"),
+            export_root=prefix_join(ctx.output_path, EXPORTS_SUBDIRECTORY),
             attempts_root=attempts_root,
             resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
             terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_RECEIPT_FILENAME),

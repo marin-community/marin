@@ -648,6 +648,7 @@ def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
         "marin.rl.skyrl_records.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup")
     )
     launch["artifacts"]["attempts_root"] = str(tmp_path / "attempts")
+    launch["artifacts"]["export_root"] = str(tmp_path / "exports")
     launch["iris"]["wandb_entity"] = "tests-team"
     launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["wandb"])
     launch["skyrl"]["trainer"].setdefault("algorithm", {})["batch_invariant"] = False

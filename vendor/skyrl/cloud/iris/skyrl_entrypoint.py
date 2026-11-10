@@ -12,7 +12,7 @@ from typing import Callable, cast
 
 from omegaconf import DictConfig, open_dict
 from iris.cluster.client.job_info import get_job_info
-from marinskyrl.checkpoint_paths import TRACKING_FILENAME
+from marinskyrl.checkpoint_paths import TRACKING_FILENAME, attempt_directory
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.io import io
 
@@ -20,8 +20,28 @@ from cloud.iris.launch_config import RunMode, load_launch_config
 from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
 
 
+def _write_tracking(config: DictConfig) -> None:
+    """Write native attempt IDs, first start time and installed vLLM version."""
+    directory = attempt_directory(str(config.skyrl.trainer.export_path), str(config.run.attempt_id))
+    path = join_resource_path(directory, TRACKING_FILENAME)
+    previous = json.loads(io.read_bytes(path)) if io.exists(path) else {}
+    try:
+        vllm_version = version("vllm")
+    except PackageNotFoundError:
+        vllm_version = None
+    record = {
+        key: config.skyrl.runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")
+    }
+    record.update(
+        started_at=previous.get("started_at", datetime.now(timezone.utc).isoformat()),
+        engine={"vllm_version": vllm_version},
+    )
+    io.makedirs(directory, exist_ok=True)
+    io.write_bytes_atomic(path, json.dumps(record).encode())
+
+
 def run_config(config_path: Path) -> None:
-    """Load one launch config and call its registered SkyRL function."""
+    """Write native startup tracking and execute the configured SkyRL workload."""
     config = load_launch_config(config_path)
     module = registered_rl_entrypoint_module(str(config.runtime.entrypoint))
     job_info = get_job_info()
@@ -36,22 +56,7 @@ def run_config(config_path: Path) -> None:
         if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
             config.skyrl.runtime.checkpoint_path = str(config.skyrl.trainer.resume_path or config.inputs.model.uri)
     if job_info is not None and config.run.mode != RunMode.CHECKPOINT_EXPORT:
-        directory = join_resource_path(str(config.skyrl.trainer.export_path), "attempts", str(config.run.attempt_id))
-        path = join_resource_path(directory, TRACKING_FILENAME)
-        previous = json.loads(io.read_bytes(path)) if io.exists(path) else {}
-        try:
-            vllm_version = version("vllm")
-        except PackageNotFoundError:
-            vllm_version = None
-        record = {
-            key: config.skyrl.runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")
-        }
-        record.update(
-            started_at=previous.get("started_at", datetime.now(timezone.utc).isoformat()),
-            engine={"vllm_version": vllm_version},
-        )
-        io.makedirs(directory, exist_ok=True)
-        io.write_bytes_atomic(path, json.dumps(record).encode())
+        _write_tracking(config)
     run = cast(Callable[[DictConfig], None], getattr(importlib.import_module(module), "run"))
     run(config.skyrl)
 

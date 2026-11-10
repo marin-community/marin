@@ -422,7 +422,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
 def test_cat_count_generate_preserves_task_ids_and_token_metrics(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context, monkeypatch
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context
 ):
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)

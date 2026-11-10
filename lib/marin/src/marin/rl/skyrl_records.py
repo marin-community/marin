@@ -24,7 +24,9 @@ RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
 TERMINAL_RECEIPT_FILENAME = "terminal.json"
 TRACKING_FILENAME = "tracking.json"
 ATTEMPT_RECEIPT_FILENAME = "receipt.json"
-METRICS_PATTERN = "exports/metrics/step-*.json"
+EXPORTS_SUBDIRECTORY = "exports"
+ATTEMPTS_SUBDIRECTORY = "attempts"
+METRICS_PATTERN = "metrics/step-*.json"
 ENGINE_CONFIG_KEYS = (
     "backend",
     "model_dtype",
@@ -83,12 +85,20 @@ def read_skyrl_launch_config(run_output: str) -> dict:
 
 def read_skyrl_attempt_tracking(run_output: str, attempt_id: str) -> dict:
     """Read startup tracking with engine settings and the native W&B URL."""
-    fs, key = filesystem_for(prefix_join(run_output, f"exports/attempts/{attempt_id}/{TRACKING_FILENAME}"))
+    _, config = _stored_skyrl_receipt(run_output)
+    if config is None:
+        return {}
+    if config["run"]["attempt_id"] != attempt_id:
+        _, attempts = read_stored_skyrl_attempts(run_output)
+        if attempt_id not in attempts:
+            return {}
+        config = attempts[attempt_id].config
+    fs, key = filesystem_for(
+        prefix_join(config["artifacts"]["export_root"], f"{ATTEMPTS_SUBDIRECTORY}/{attempt_id}/{TRACKING_FILENAME}")
+    )
     if not fs.exists(key):
         return {}
     record = json.loads(fs.cat(key))
-    _, attempts = read_stored_skyrl_attempts(run_output)
-    config = attempts[attempt_id].config if attempt_id in attempts else read_skyrl_launch_config(run_output)
     generator = config["skyrl"]["generator"]
     engine = {key: generator.get(key) for key in ENGINE_CONFIG_KEYS}
     engine.update(
@@ -113,8 +123,11 @@ def _stored_skyrl_receipt(run_output: str) -> tuple[SkyRLLaunchReceipt | None, d
         return None, None
     config = read_skyrl_launch_config(run_output)
     attempt_id = config["run"]["attempt_id"]
+    # Pinned control receipts use the configured attempts_root.
     for uri in (
-        prefix_join(run_output, f"exports/attempts/{attempt_id}/{ATTEMPT_RECEIPT_FILENAME}"),
+        prefix_join(
+            config["artifacts"]["export_root"], f"{ATTEMPTS_SUBDIRECTORY}/{attempt_id}/{ATTEMPT_RECEIPT_FILENAME}"
+        ),
         prefix_join(config["artifacts"]["attempts_root"], f"{attempt_id}.json"),
     ):
         fs, key = filesystem_for(uri)
@@ -136,7 +149,7 @@ def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, S
     current = config["run"]["attempt_id"]
     attempts = {current: receipt} if receipt is not None else {}
     for pattern in (
-        prefix_join(run_output, f"exports/attempts/*/{ATTEMPT_RECEIPT_FILENAME}"),
+        prefix_join(config["artifacts"]["export_root"], f"{ATTEMPTS_SUBDIRECTORY}/*/{ATTEMPT_RECEIPT_FILENAME}"),
         prefix_join(config["artifacts"]["attempts_root"], "*.json"),
     ):
         fs, key = filesystem_for(pattern)
@@ -148,7 +161,8 @@ def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, S
 
 def read_skyrl_metrics(run_output: str) -> dict[int, dict]:
     """Read each saved step's metrics from a native run."""
-    fs, key = filesystem_for(prefix_join(run_output, METRICS_PATTERN))
+    config = read_skyrl_launch_config(run_output)
+    fs, key = filesystem_for(prefix_join(config["artifacts"]["export_root"], METRICS_PATTERN))
     rows = [json.loads(fs.cat(path)) for path in sorted(fs.glob(key))]
     return {int(row["step"]): row for row in rows}
 

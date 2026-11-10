@@ -19,10 +19,9 @@ from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import attempt_receipt_path, policy_export_path, selected_export_step
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
-from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, launch_provenance
@@ -167,9 +166,7 @@ def _record_failure(
     failure: str,
 ) -> LaunchResult:
     result = _result(config, LaunchState.FAILED, outcome=outcome, failure=failure)
-    attempt_uri = join_resource_path(
-        str(config.artifacts.export_root), "attempts", str(config.run.attempt_id), "receipt.json"
-    )
+    attempt_uri = attempt_receipt_path(str(config.artifacts.export_root), str(config.run.attempt_id))
     write_json(attempt_uri, _receipt(config, result))
     return result
 
@@ -232,9 +229,7 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         )
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
     payload = _receipt(config, result)
-    attempt_uri = join_resource_path(
-        str(config.artifacts.export_root), "attempts", str(config.run.attempt_id), "receipt.json"
-    )
+    attempt_uri = attempt_receipt_path(str(config.artifacts.export_root), str(config.run.attempt_id))
     write_json(attempt_uri, payload)
     write_json(terminal_receipt_uri, payload)
     return result
