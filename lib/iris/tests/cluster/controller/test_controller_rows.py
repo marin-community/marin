@@ -447,6 +447,7 @@ _COLUMNS: dict[str, _Classified] = {
             "res_device_json": "res_device_json",
             "constraints_json": "constraints_json",
             "has_coscheduling": "has_coscheduling",
+            "coscheduling_group_by": "coscheduling_group_by",
             "scheduling_timeout_ms": "scheduling_timeout_ms",
             "max_task_failures": "max_task_failures",
             "max_retries_failure": "max_retries_failure",
@@ -469,7 +470,6 @@ _COLUMNS: dict[str, _Classified] = {
             "bundle_id": "user-text",
             "ports_json": "user-text",
             "egress_allow_json": "user-text",
-            "coscheduling_group_by": "user-text",
         },
         _JOB_KEY | {"accelerator_kind", "accelerator_type", "accelerators_per_task"},
     ),
@@ -555,6 +555,7 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
         f"{classified.row_class.__name__} fields without a classified source: {sorted(fields.keys() - sources)}; "
         f"classified sources without a field: {sorted(sources - fields.keys())}; see {_RULE}"
     )
+    assert not set(retired.values()) & (set(copied.values()) | classified.derived), "a retired field is still live"
     for column, field in retired.items():
         assert column not in db_columns
         assert (

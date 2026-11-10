@@ -288,8 +288,8 @@ class IrisJobConfig:
 
     Copies the controller ``job_config`` columns whose values the controller or
     a fixed vocabulary writes. Text the user wrote is not copied: the
-    environment, command lines, setup scripts, egress hosts, ports, bundle id and
-    coscheduling label. ``docs/controller-rows.md`` lists each excluded column.
+    environment, command lines, setup scripts, egress hosts, ports and bundle id.
+    ``docs/controller-rows.md`` lists each excluded column.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -311,6 +311,8 @@ class IrisJobConfig:
     accelerators_per_task: int
     constraints_json: str | None
     has_coscheduling: bool
+    # The worker attribute coscheduled tasks share, such as "tpu-name".
+    coscheduling_group_by: str
     priority_band: str
     preemption_policy: str
     existing_job_policy: str

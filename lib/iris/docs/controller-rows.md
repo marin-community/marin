@@ -25,7 +25,9 @@ when the controller or a fixed vocabulary writes its value (ids, keys, states,
 enums, times, counts, resource numbers, policies, placement). Do not copy a
 column whose value is text the user wrote. Identifiers the user chose that
 name or place the work, such as the job name, user, `task_image` and
-`constraints_json`, are copied, since queries group and filter by them.
+`constraints_json`, are copied, since queries group and filter by them;
+`coscheduling_group_by` names a worker attribute, from the same vocabulary as
+the constraint keys.
 `task_image` is an image reference (`registry/path:tag`), which is needed to
 know what ran; a container runtime rejects credentials in a reference, and
 registry auth comes from the node's credential helper. The
@@ -38,7 +40,7 @@ Not copied, all from `job_config`:
 | --- | --- |
 | `environment_json` | Environment variables and secrets |
 | `entrypoint_json`, `submit_argv_json` | Command lines and setup commands the user wrote |
-| `bundle_id`, `ports_json`, `egress_allow_json`, `coscheduling_group_by` | User-written ids, ports, hosts and labels |
+| `bundle_id`, `ports_json`, `egress_allow_json` | User-written ids, ports and hosts |
 | `name` | Same as `iris.controller_db__jobs.name` |
 
 Copied columns that differ from the controller DB:

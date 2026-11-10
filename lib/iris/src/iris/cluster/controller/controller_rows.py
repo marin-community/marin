@@ -320,6 +320,7 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
                     accelerators_per_task=accelerator.per_task,
                     constraints_json=r.constraints_json,
                     has_coscheduling=bool(r.has_coscheduling),
+                    coscheduling_group_by=r.coscheduling_group_by,
                     priority_band=job_pb2.PriorityBand.Name(r.priority_band),
                     preemption_policy=job_pb2.JobPreemptionPolicy.Name(r.preemption_policy),
                     existing_job_policy=job_pb2.ExistingJobPolicy.Name(r.existing_job_policy),
