@@ -131,6 +131,18 @@ class GrugTrainerConfig:
     XLA's GPU loop unrolling may run the copies of the microbatch loop body in any order; an optimization barrier at
     the top of each microbatch keeps them in order, so one microbatch's gradients are summed before the next starts."""
 
+    zero1: bool = False
+    """ZeRO-1 over the replicas: shard the expert weights' float32 parameters, optimizer state and EMA over
+    ``replica_dcn`` as well as ``expert``, so each replica keeps and updates 1/``replica_dcn`` of them. Each expert
+    weight's gradient is then reduced once per step into that shard (a reduce-scatter in place of an all-reduce, half
+    the bytes), and the updated compute-dtype parameters are all-gathered back to every replica at the end of the step,
+    after the update. With ``overlap_last_microbatch`` the per-layer reductions in the last microbatch's backward are
+    reduce-scatters into that shard. The other weights are unchanged: the embedding and output projection are already
+    sharded over the replicas, and the block weights stay replicated. The numbers are those of the replicated update up
+    to the order of the optimizer's norm sums. Needs ``microbatches`` >= 2, ``carry_compute_params`` (the all-gather
+    writes the compute copy, which the forward reads), and the expert count divisible by ``expert`` x ``replica_dcn``.
+    The checkpoint layout is unchanged, so a checkpoint saved with it on loads with it off and the other way round."""
+
     overlap_last_microbatch: bool = False
     """With ``microbatches`` > 1: run the last microbatch after the microbatch loop and reduce each layer's expert
     weight gradients (the float32 sum of the earlier microbatches plus the last one's, cast to the compute dtype)
@@ -192,7 +204,8 @@ def build_train_dataset(
     return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
 
 
-_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_REPLICA_AXIS = "replica_dcn"
+_BATCH_AXES: tuple[str, ...] = (_REPLICA_AXIS, "data", "expert")
 _EXPERT_AXIS = "expert"
 
 
@@ -373,20 +386,75 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     carry_compute_params: bool = False,
+    zero1: bool = False,
 ) -> GrugTrainState:
+    """The step-0 train state; with ``zero1`` the expert weights' parameters, optimizer state and EMA are sharded over
+    the replicas (``GrugTrainerConfig.zero1``) and the compute copy keeps the model's sharding."""
+    if zero1 and not carry_compute_params:
+        raise ValueError("zero1 needs carry_compute_params: the end-of-step all-gather writes the compute copy")
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     if params.blocks is not None:
         num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     else:
         num_moe_layers = model_config.num_layers
+    compute_params = mp.cast_to_compute(params) if carry_compute_params else None
+    if zero1:
+        params = _zero1_sharded(params)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=_initial_qb_betas(model_config, num_moe_layers),
-        compute_params=mp.cast_to_compute(params) if carry_compute_params else None,
+        compute_params=compute_params,
     )
+
+
+def _zero1_spec(spec: P) -> P:
+    """``spec`` with its ``expert`` dimension also split over the replicas, for a weight sharded over ``expert`` and
+    not already over the replicas; any other spec unchanged.
+
+    ``replica_dcn`` goes after ``expert``, so it splits each device's expert shard: the replicas that hold the same
+    experts (one per node) each keep a part, and the reduce-scatter and all-gather run among them, across nodes only.
+    """
+    partitions = [entry if isinstance(entry, tuple) else (entry,) for entry in spec]
+    if any(_REPLICA_AXIS in axes for axes in partitions):
+        return spec
+    for i, axes in enumerate(partitions):
+        if _EXPERT_AXIS in axes:
+            partitions[i] = (*axes, _REPLICA_AXIS)
+            return P(*(axes[0] if len(axes) == 1 else axes for axes in partitions))
+    return spec
+
+
+def _zero1_sharded(params: Transformer) -> Transformer:
+    def shard(x):
+        if not isinstance(x, jax.Array):
+            return x
+        spec = jax.typeof(x).sharding.spec
+        return reshard(x, _zero1_spec(spec))
+
+    return jax.tree.map(shard, params)
+
+
+def _resharded_like(tree, like):
+    """``tree`` resharded leaf by leaf to the shardings of ``like``, a tree of the same structure."""
+    return jax.tree.map(
+        lambda x, target: reshard(x, jax.typeof(target).sharding) if isinstance(x, jax.Array) else x, tree, like
+    )
+
+
+def rebuilt_compute_params(state: GrugTrainState, mp: jmp.Policy) -> GrugTrainState:
+    """``state`` with its compute copy recast from its parameters, in the compute copy's own sharding.
+
+    For a restored state: checkpoints leave the compute copy out, so the caller passes a state whose compute copy (the
+    initial one) only gives the sharding. With ``zero1`` this all-gathers the expert weights the parameters shard over
+    the replicas.
+    """
+    if state.compute_params is None:
+        return state
+    compute_params = jax.jit(lambda p, c: _resharded_like(mp.cast_to_compute(p), c))(state.params, state.compute_params)
+    return dataclasses.replace(state, compute_params=compute_params)
 
 
 def _initial_qb_betas(model_config: GrugModelConfig, num_moe_layers: int) -> jax.Array:
@@ -442,10 +510,14 @@ def _make_train_step(
     diagnose_numerics: bool = False,
     qb_sync_interval: int = 0,
     microbatches: int = 1,
+    zero1: bool = False,
     overlap_last_microbatch: bool = False,
 ):
     if microbatches < 1:
         raise ValueError(f"microbatches must be at least 1, got {microbatches}")
+    if zero1 and microbatches < 2:
+        # With one microbatch the gradients are reduced in the backward, so zero1 would only add the all-gather.
+        raise ValueError(f"zero1 needs microbatches >= 2, got {microbatches}")
     if overlap_last_microbatch and microbatches < 2:
         raise ValueError(f"overlap_last_microbatch needs at least 2 microbatches, got {microbatches}")
     one = jnp.array(1, dtype=jnp.int32)
@@ -463,6 +535,8 @@ def _make_train_step(
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        if zero1 and state.compute_params is None:
+            raise ValueError("zero1 needs carry_compute_params")
         if ema_beta is not None:
             qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
         else:
@@ -478,7 +552,7 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        def loss_terms_fn(compute_params, microbatch, block_grad_offsets=None):
+        def loss_terms_fn(compute_params, microbatch, block_grad_offsets=None, block_grad_sinks=None):
             return compute_params.next_token_loss_terms(
                 microbatch.tokens,
                 microbatch.loss_weight,
@@ -486,6 +560,7 @@ def _make_train_step(
                 reduction="sum",
                 logsumexp_weight=z_loss,
                 block_grad_offsets=block_grad_offsets,
+                block_grad_sinks=block_grad_sinks,
             )
 
         if microbatches > 1:
@@ -494,7 +569,12 @@ def _make_train_step(
             else:
                 qb_compute_params = _apply_qb_betas(state.compute_params, state.pending_qb_betas)
             loss, summarized_metrics, accumulated_grads = _microbatched_loss_and_grads(
-                loss_terms_fn, qb_compute_params, batch, microbatches, overlap_last_microbatch
+                loss_terms_fn,
+                qb_compute_params,
+                batch,
+                microbatches,
+                overlap_last_microbatch,
+                grad_shardings=qb_params,
             )
             grads = mp.cast_to_param(accumulated_grads)
         elif state.compute_params is None:
@@ -553,6 +633,14 @@ def _make_train_step(
                 lambda betas: betas,
                 pending_qb_betas,
             )
+
+        def next_compute_params(params: Transformer) -> Transformer:
+            compute_params = mp.cast_to_compute(params)
+            if not zero1:
+                return compute_params
+            # The all-gather of the updated expert weights, in the compute dtype, back to the model's sharding.
+            return _resharded_like(compute_params, state.compute_params)
+
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
@@ -560,7 +648,7 @@ def _make_train_step(
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=pending_qb_betas,
-            compute_params=None if state.compute_params is None else mp.cast_to_compute(params),
+            compute_params=None if state.compute_params is None else next_compute_params(params),
         )
 
         return next_state, metrics, watch_stats
@@ -634,6 +722,8 @@ def _microbatched_loss_and_grads(
     batch,
     microbatches: int,
     overlap_last_microbatch: bool = False,
+    *,
+    grad_shardings: Transformer,
 ) -> tuple[jax.Array, dict, Transformer]:
     """Loss, summarized metrics and gradients of the whole ``batch``, one microbatch at a time.
 
@@ -650,15 +740,18 @@ def _microbatched_loss_and_grads(
     over those axes, with no cross-device reduction in the backward. The partials accumulate in float32 on every
     device. ``_finalize_accumulated_grad`` then casts each to the dtype of ``params`` and reduces it once: an
     all-reduce, or a reduce-scatter for a weight sharded over a batch axis. Only the loss, routing statistics and QB
-    threshold reductions of the forward still run once per microbatch. The returned gradients have the dtype and
-    sharding of ``params``.
+    threshold reductions of the forward still run once per microbatch. The returned gradients have the dtype of
+    ``params`` and the sharding of ``grad_shardings``, a tree like ``params``: the parameters the optimizer updates,
+    whose sharding over the replicas (``GrugTrainerConfig.zero1``) turns the reduction into a reduce-scatter.
 
     With ``overlap_last_microbatch`` the loop runs the first ``microbatches - 1`` microbatches and the last one runs
     after it, with the expert weights (``_per_layer_reduced``) left unmarked. Its layer scan gets each layer's slice
     of their accumulators as ``block_grad_offsets``, and its backward reduces that layer's ``accumulator + gradient``,
     cast as ``_finalize_accumulated_grad`` casts it, as soon as the layer is done: the same arithmetic and one reduction
     per weight per step, but overlapping the backward of the layers below it. The other weights are reduced after the
-    last microbatch, as without it.
+    last microbatch, as without it. An expert weight whose ``grad_shardings`` entry shards more than ``params`` does
+    (ZeRO-1) is reduce-scattered there, per layer: its gradient leaves the layer scan through a zero "sink" input with
+    that sharding (``block_grad_sinks``), since the weight's own gradient must keep the weight's sharding.
     """
     batch_size = batch.tokens.shape[0]
     batch_shards = _batch_shards(get_abstract_mesh())
@@ -707,7 +800,7 @@ def _microbatched_loss_and_grads(
     (grad_sum, loss, cross_entropy_loss, aux_loss), stacked_router_metrics = jax.lax.scan(body, init, head)
     if not overlap_last_microbatch:
         router_metrics = _combine_microbatch_router_metrics(stacked_router_metrics, row_valid_tokens)
-        grads = jax.tree.map(_finalize_accumulated_grad, grad_sum, params)
+        grads = jax.tree.map(_finalize_accumulated_grad, grad_sum, params, grad_shardings)
         return loss, summarize_loss_metrics(router_metrics, cross_entropy_loss, aux_loss), grads
 
     # The last microbatch, outside the loop: its expert weights stay unmarked, and each layer's gradient plus the
@@ -724,26 +817,48 @@ def _microbatched_loss_and_grads(
         per_layer.stacked_blocks.stacked,
     )
 
-    def last_loss_and_terms(p, microbatch, token_share):
-        cross_entropy_sum, aux, router = loss_terms_fn(p, microbatch, offsets)
+    def sink(p, target, pl):
+        # A zero in the gradient's sharding, for an expert weight whose gradient shards more than the weight.
+        spec = jax.typeof(target).sharding.spec
+        return jnp.zeros(p.shape, p.dtype, out_sharding=spec) if pl and spec != jax.typeof(p).sharding.spec else None
+
+    sinks = jax.tree.map(
+        sink, params.stacked_blocks.stacked, grad_shardings.stacked_blocks.stacked, per_layer.stacked_blocks.stacked
+    )
+    if all(x is None for x in jax.tree.leaves(sinks, is_leaf=lambda x: x is None)):
+        sinks = None
+
+    def last_loss_and_terms(p, block_sinks, microbatch, token_share):
+        cross_entropy_sum, aux, router = loss_terms_fn(p, microbatch, offsets, block_sinks)
         cross_entropy = cross_entropy_sum / loss_denominator
         aux = token_share * aux
         return cross_entropy + aux, (cross_entropy, aux, router)
 
-    (last_loss, (last_ce, last_aux, last_router)), last_grads = jax.value_and_grad(last_loss_and_terms, has_aux=True)(
-        last_params, last_microbatch, last_share
-    )
+    (last_loss, (last_ce, last_aux, last_router)), (last_grads, sink_grads) = jax.value_and_grad(
+        last_loss_and_terms, argnums=(0, 1), has_aux=True
+    )(last_params, sinks, last_microbatch, last_share)
+    if sinks is not None:
+        # The sinks' gradients are the reduce-scattered expert gradients; the weights' own are zero.
+        stacked = jax.tree.map(
+            lambda g, sink_grad: g if sink_grad is None else sink_grad,
+            last_grads.stacked_blocks.stacked,
+            sink_grads,
+        )
+        last_grads = eqx.tree_at(lambda t: t.stacked_blocks.stacked, last_grads, stacked)
     stacked_router_metrics = jax.tree.map(
         lambda h, t: jnp.concatenate([h, t[None]], axis=0), stacked_router_metrics, last_router
     )
     router_metrics = _combine_microbatch_router_metrics(stacked_router_metrics, row_valid_tokens)
 
-    def finalize(acc, g, p, pl):
+    def finalize(acc, g, p, target, pl):
         if pl:
-            return g  # Already reduced in the backward, with the accumulator added.
-        return _finalize_accumulated_grad(acc + g.astype(jnp.float32), p) if isinstance(acc, jax.Array) else acc
+            # Already reduced in the backward, with the accumulator added, into the sharding of ``target``.
+            return reshard(g, jax.typeof(target).sharding)
+        if not isinstance(acc, jax.Array):
+            return acc
+        return _finalize_accumulated_grad(acc + g.astype(jnp.float32), p, target)
 
-    grads = jax.tree.map(finalize, grad_sum, last_grads, params, per_layer)
+    grads = jax.tree.map(finalize, grad_sum, last_grads, params, grad_shardings, per_layer)
     loss, cross_entropy_loss, aux_loss = loss + last_loss, cross_entropy_loss + last_ce, aux_loss + last_aux
     return loss, summarize_loss_metrics(router_metrics, cross_entropy_loss, aux_loss), grads
 
@@ -805,14 +920,14 @@ def _zero_accumulator(marked_param):
     return jnp.zeros(marked_param.shape, jnp.float32, out_sharding=spec)
 
 
-def _finalize_accumulated_grad(grad_sum, param):
-    """Reduce one accumulated gradient across devices into ``param``'s dtype and sharding.
+def _finalize_accumulated_grad(grad_sum, param, target):
+    """Reduce one accumulated gradient across devices into ``param``'s dtype and ``target``'s sharding.
 
     The float32 sum is cast to ``param``'s dtype (bfloat16 under a bfloat16 compute policy) before the reduction, so
     the step moves as many bytes as one microbatch's gradient did, not twice that."""
     if not isinstance(grad_sum, jax.Array):
         return grad_sum
-    return reshard(grad_sum.astype(param.dtype), jax.typeof(param).sharding)
+    return reshard(grad_sum.astype(param.dtype), jax.typeof(target).sharding)
 
 
 def _batch_shards(mesh) -> int:
@@ -854,6 +969,55 @@ def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> N
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
 
 
+def _eval_hooks(
+    evaluator: TaggedEvaluator,
+    *,
+    prefix: str,
+    eval_current: bool,
+    eval_ema: bool,
+    model_shardings: Transformer | None,
+) -> list[Callable[..., None]]:
+    """The eval hooks: one evaluating the current and/or the EMA model, or with ``model_shardings`` one per model, each
+    gathering its model to ``model_shardings`` first (``_with_model_resharded``)."""
+    if model_shardings is None:
+        return [cb_tagged_evaluate(evaluator, prefix=prefix, eval_current=eval_current, eval_ema=eval_ema)]
+    return [
+        _with_model_resharded(
+            cb_tagged_evaluate(evaluator, prefix=prefix, eval_current=not ema, eval_ema=ema), model_shardings, ema=ema
+        )
+        for ema, enabled in ((False, eval_current), (True, eval_ema))
+        if enabled
+    ]
+
+
+def _with_model_resharded(hook: Callable[..., None], shardings: Transformer, *, ema: bool) -> Callable[..., None]:
+    """``hook`` run with the step's current model (``ema``: its EMA model) resharded to ``shardings``, a tree of
+    shardings like the model's, once per step.
+
+    With ``zero1`` the float32 models shard the expert weights over the replicas; evaluating them as they are would
+    all-gather every expert weight in every layer of every eval batch. This gathers the one model the hook evaluates
+    once, in float32 as the evaluator runs it, and drops it when the hook returns, so one gathered model is live at a
+    time. A step already evaluated (the forced call after the last step) gathers nothing."""
+
+    @jax.jit
+    def gather(model: Transformer) -> Transformer:
+        return jax.tree.map(lambda x, s: reshard(x, s) if isinstance(x, jax.Array) else x, model, shardings)
+
+    field_name = "eval_model" if ema else "model"
+    last_step: int | None = None
+
+    def resharded_hook(info: callbacks.StepInfo, force: bool = False) -> None:
+        nonlocal last_step
+        if info.step < 0 or info.step == last_step:
+            return
+        view = info.state
+        model = gather(getattr(view, field_name))
+        hook(dataclasses.replace(info, state=dataclasses.replace(view, **{field_name: model})), force)
+        last_step = info.step
+
+    return resharded_hook
+
+
 @contextlib.contextmanager
 def exit_if_hung(timeout: float | None):
     """Dump every thread's traceback and exit the process with status 1 if the block runs longer than ``timeout``."""
@@ -890,6 +1054,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         diagnose_numerics=config.trainer.diagnose_numerics,
         qb_sync_interval=config.trainer.qb_sync_interval,
         microbatches=config.trainer.microbatches,
+        zero1=config.trainer.zero1,
         overlap_last_microbatch=config.trainer.overlap_last_microbatch,
     )
 
@@ -936,11 +1101,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 carry_compute_params=config.trainer.carry_compute_params,
+                zero1=config.trainer.zero1,
             )
 
         # Checkpoints leave the compute copy out, so the restore exemplar does too: a run can resume from a checkpoint
         # saved with carry_compute_params on or off.
-        state = _checkpointed(_init_state(model_key))
+        state = _init_state(model_key)
+        initial_compute_params = state.compute_params
+        state = _checkpointed(state)
 
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         if config.trainer.sft_weights_only_init:
@@ -972,9 +1140,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 initialize_from=trainer.initialize_from,
             )
 
-        if config.trainer.carry_compute_params:
-            # Rebuilt from the (possibly restored) parameters, so it never comes from a checkpoint.
-            state = dataclasses.replace(state, compute_params=jax.jit(trainer.mp.cast_to_compute)(state.params))
+        # Rebuilt from the (possibly restored) parameters, so it never comes from a checkpoint, in the sharding of the
+        # initial copy.
+        state = rebuilt_compute_params(dataclasses.replace(state, compute_params=initial_compute_params), trainer.mp)
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
@@ -1023,15 +1191,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
             if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
-                state_callbacks.add_hook(
-                    cb_tagged_evaluate(
-                        evaluator,
-                        prefix=eval_cfg.prefix,
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
-                    ),
-                    every=interval,
-                )
+                model_shardings = None
+                if config.trainer.zero1:
+                    assert state.compute_params is not None
+                    model_shardings = jax.tree.map(lambda x: x.sharding, state.compute_params)
+                for eval_hook in _eval_hooks(
+                    evaluator,
+                    prefix=eval_cfg.prefix,
+                    eval_current=eval_cfg.eval_current,
+                    eval_ema=eval_ema,
+                    model_shardings=model_shardings,
+                ):
+                    state_callbacks.add_hook(eval_hook, every=interval)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0

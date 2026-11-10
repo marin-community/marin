@@ -734,10 +734,37 @@ def unreduced_to_local(x: jax.Array, *, leading: int = 0) -> jax.Array:
 _reduce_with_offset.defvjp(_reduce_with_offset_fwd, _reduce_with_offset_bwd)
 
 
-def _apply_grad_offsets(layer: "Block", offsets: "Block") -> "Block":
-    """Route the layer weights that have an offset in ``offsets`` (None elsewhere) through ``_reduce_with_offset``."""
+@functools.partial(jax.custom_vjp, nondiff_argnums=(3, 4))
+def _reduce_into_sink(weight: jax.Array, offset: jax.Array, sink: jax.Array, reduced_spec: P, sink_spec: P) -> jax.Array:
+    """``_reduce_with_offset`` with the reduced gradient sharded as ``sink_spec``, which shards more than the weight
+    does (ZeRO-1: the expert dimension over the replicas as well), so the reduction is a reduce-scatter.
 
-    def apply(offset, weight):
+    A custom_vjp's backward must return a cotangent of its input's type, so the gradient cannot leave as the weight's:
+    it leaves as that of ``sink``, a zero input sharded as ``sink_spec`` that the forward ignores; the weight's
+    cotangent is zero. The caller differentiates with respect to the sinks."""
+    del offset, sink, sink_spec
+    return reshard(weight, reduced_spec)
+
+
+def _reduce_into_sink_fwd(weight, offset, sink, reduced_spec, sink_spec):
+    del sink, sink_spec
+    return reshard(weight, reduced_spec), offset
+
+
+def _reduce_into_sink_bwd(reduced_spec, sink_spec, offset, cotangent):
+    del reduced_spec
+    total = (_local_to_unreduced(offset) + cotangent.astype(jnp.float32)).astype(cotangent.dtype)
+    return None, None, reshard(total, sink_spec)
+
+
+_reduce_into_sink.defvjp(_reduce_into_sink_fwd, _reduce_into_sink_bwd)
+
+
+def _apply_grad_offsets(layer: "Block", offsets: "Block", sinks: "Block | None" = None) -> "Block":
+    """Route the layer weights that have an offset in ``offsets`` (None elsewhere) through ``_reduce_with_offset``, or
+    through ``_reduce_into_sink`` where ``sinks`` has a sink for them."""
+
+    def apply(offset, weight, sink=None):
         if offset is None:
             return weight
         # The offset (``unreduced_to_local`` of the weight's gradient sum): dim 0 over the axes the weight is marked
@@ -745,9 +772,13 @@ def _apply_grad_offsets(layer: "Block", offsets: "Block") -> "Block":
         offset_spec = jax.typeof(offset).sharding.spec
         axes = offset_spec.partitions[0]
         reduced_spec = P(*offset_spec.partitions[1:], reduced=frozenset(axes if isinstance(axes, tuple) else (axes,)))
-        return _reduce_with_offset(weight, offset, reduced_spec, jax.typeof(weight).sharding.spec)
+        if sink is None:
+            return _reduce_with_offset(weight, offset, reduced_spec, jax.typeof(weight).sharding.spec)
+        return _reduce_into_sink(weight, offset, sink, reduced_spec, jax.typeof(sink).sharding.spec)
 
-    return jax.tree.map(apply, offsets, layer, is_leaf=lambda x: x is None)
+    if sinks is None:
+        return jax.tree.map(apply, offsets, layer, is_leaf=lambda x: x is None)
+    return jax.tree.map(apply, offsets, layer, sinks, is_leaf=lambda x: x is None)
 
 
 class Block(eqx.Module):
@@ -887,6 +918,7 @@ class Transformer(eqx.Module):
         *,
         position_ids: jax.Array | None = None,
         block_grad_offsets: "Block | None" = None,
+        block_grad_sinks: "Block | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -935,11 +967,11 @@ class Transformer(eqx.Module):
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, Bool[Array, ""], Block | None],
+                scan_inputs: tuple[Block, Bool[Array, ""], Block | None, Block | None],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask, layer_grad_offsets = scan_inputs
+                layer, layer_use_long_mask, layer_grad_offsets, layer_grad_sinks = scan_inputs
                 if layer_grad_offsets is not None:
-                    layer = _apply_grad_offsets(layer, layer_grad_offsets)
+                    layer = _apply_grad_offsets(layer, layer_grad_offsets, layer_grad_sinks)
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(
                     carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope, position_ids
                 )
@@ -950,7 +982,7 @@ class Transformer(eqx.Module):
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers,
                 hidden,
-                xs=(stacked, mask_schedule, block_grad_offsets),
+                xs=(stacked, mask_schedule, block_grad_offsets, block_grad_sinks),
                 unroll=cfg.scan_unroll,
             )
             if cfg.router_stats_reduction == "after_scan":
@@ -1019,13 +1051,16 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         block_grad_offsets: "Block | None" = None,
+        block_grad_sinks: "Block | None" = None,
     ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
         """The cross-entropy loss, the weighted router aux loss and the raw per-layer router metrics.
 
         ``next_token_loss`` is their sum, with the metrics summarized by ``summarize_loss_metrics``. Callers that
         combine several batches, such as gradient accumulation, combine the raw metrics first and summarize once.
         """
-        hidden, router_metrics = self(token_ids, mask=mask, block_grad_offsets=block_grad_offsets)
+        hidden, router_metrics = self(
+            token_ids, mask=mask, block_grad_offsets=block_grad_offsets, block_grad_sinks=block_grad_sinks
+        )
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 

@@ -196,6 +196,12 @@ def parse_args() -> argparse.Namespace:
         help="Keep a compute-dtype copy of the parameters in the train state, written by the update.",
     )
     parser.add_argument(
+        "--zero1",
+        action="store_true",
+        help="Shard the expert weights' parameters and optimizer state over the replicas (ZeRO-1); needs "
+        "--microbatches >= 2 and --carry-compute-params.",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -317,6 +323,7 @@ def main() -> None:
             qb_sync_interval=args.qb_sync_interval,
             carry_compute_params=args.carry_compute_params,
             microbatches=args.microbatches,
+            zero1=args.zero1,
             overlap_last_microbatch=args.overlap_last_microbatch,
         ),
         eval=None,
@@ -328,7 +335,7 @@ def main() -> None:
         "window=%d mp=%s expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d "
         "remat=%s "
         "replicated_grads=%s router_stats=%s qb_balance=%s qb_sync_interval=%d carry_compute_params=%s "
-        "watch_interval=%d flops_per_example=%.4e",
+        "zero1=%s watch_interval=%d flops_per_example=%.4e",
         args.size,
         model.num_layers,
         model.hidden_dim,
@@ -355,6 +362,7 @@ def main() -> None:
         args.qb_balance,
         args.qb_sync_interval,
         args.carry_compute_params,
+        args.zero1,
         args.watch_interval,
         flops_per_example,
     )
