@@ -162,22 +162,20 @@ def test_redact_submit_argv_attached_long_form_missing_value():
 R = NAMES_ONLY_REDACTED
 
 
-def test_names_only_argv_keeps_the_command_and_flag_names():
-    argv = ["python", "train.py", "--hf-token", "made-up-1", "--lr", "3e-4"]
-
-    assert names_only_argv(argv) == ["python", R, "--hf-token", R, "--lr", R]
-
-
-def test_names_only_argv_cuts_attached_values():
-    argv = ["mysql", "-pmade-up-2", "--api-key=made-up-3", "-eSERVICE_KEY", "made-up-4"]
-
-    assert names_only_argv(argv) == ["mysql", "-p", "--api-key", "-e", R]
-
-
-def test_names_only_argv_redacts_a_shell_body_whole():
-    argv = ["bash", "-c", "export HF_TOKEN=made-up-5 && python x.py"]
-
-    assert names_only_argv(argv) == ["bash", "-c", R]
+@pytest.mark.parametrize(
+    "argv, expected",
+    [
+        (["python", "train.py", "--hf-token", "made-up-1", "--lr", "3e-4"], ["python", R, "--hf-token", R, "--lr", R]),
+        (
+            ["mysql", "-pmade-up-2", "--api-key=made-up-3", "-eSERVICE_KEY", "made-up-4"],
+            ["mysql", "-p", "--api-key", "-e", R],
+        ),
+        (["bash", "-c", "export HF_TOKEN=made-up-5 && python x.py"], ["bash", "-c", R]),
+    ],
+    ids=["flag-names", "attached-values", "shell-body"],
+)
+def test_names_only_argv_keeps_command_and_flag_names_only(argv, expected):
+    assert names_only_argv(argv) == expected
 
 
 def test_names_only_argv_on_an_iris_submit_line():

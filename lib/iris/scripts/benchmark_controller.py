@@ -66,7 +66,6 @@ from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
 )
-from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack, build_log_stack
 from iris.cluster.controller.ops.task import Assignment, apply_reconcile_updates
@@ -2392,15 +2391,7 @@ def _build_synthetic_reconcile_state(
     log_stack = build_log_stack(
         log_service_address="", local_log_dir=db_dir / "log-server", host="127.0.0.1", worker_token_provider=None
     )
-    db.attach_controller_rows(
-        ControllerRowTables(
-            cluster="benchmark",
-            job_table=log_stack.job_table,
-            job_config_table=log_stack.job_config_table,
-            job_task_table=log_stack.job_task_table,
-            task_attempt_table=log_stack.task_attempt_table,
-        )
-    )
+    db.attach_controller_rows(log_stack.controller_row_tables("benchmark"))
     health = WorkerHealthTracker()
     txns = ControllerTestState(db, health=health)
 

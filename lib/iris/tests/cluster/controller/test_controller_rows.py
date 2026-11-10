@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The controller's durable job, job config and attempt rows in Finelog."""
+"""The controller's durable job, job config, task and attempt rows in Finelog."""
 
 import json
 from dataclasses import dataclass

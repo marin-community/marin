@@ -77,7 +77,7 @@ TASK_EVENT_STORAGE_POLICY = StoragePolicy(
 )
 
 
-# The job, job config and attempt namespaces outlive the controller DB's 7-day
+# The iris.controller_db.* namespaces outlive the controller DB's 7-day
 # window. Their history stays in the archive (remote retention is retain_forever);
 # these policies only bound the hub's local copy, and older segments are read
 # back from the archive.
@@ -245,7 +245,7 @@ class TaskEventRow(TaskEventDiagnostics):
 
 @dataclass
 class IrisJob:
-    """A snapshot of one controller ``jobs`` row, written when the job changes state.
+    """A snapshot of one controller ``jobs`` row, written whenever a write path changes the job.
 
     Rows are appended, never replaced: the job's current state is its row with
     the latest ``(ts, seq)``. A job is identified by ``(cluster, root_job_id,

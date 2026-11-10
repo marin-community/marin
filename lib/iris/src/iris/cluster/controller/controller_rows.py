@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Durable Finelog copies of the controller's job, job config and attempt rows.
+"""Durable Finelog copies of the controller's job, job config, task and attempt rows.
 
 The controller DB deletes terminal jobs after a few days. A write path that
-changes a job or an attempt marks its id here. Just before the transaction
+changes a job, task or attempt marks its id here. Just before the transaction
 commits, the marked rows are read back in batches, so each row is the entity's
-final state in that transaction; after commit they are written to ``iris.controller_db.jobs``
-/ ``iris.controller_db.job_config`` / ``iris.controller_db.task_attempts``, the same post-commit path
-``iris.task_event`` uses. A rolled-back transaction writes nothing.
+final state in that transaction; after commit they are written to the
+``iris.controller_db.*`` namespaces, the same post-commit path ``iris.task_event``
+uses. A rolled-back transaction writes nothing.
 
 Only work this controller executes is written: rows for jobs whose ``cluster`` is
 ``LOCAL_CLUSTER``. A job handed off to a federation peer, and the mirror rows of
@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import batched
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from finelog.client.log_client import Table
 from rigging.redaction import redact_string
@@ -206,16 +206,21 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
             logger.exception("controller rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
 
 
-def _accelerator_columns(device_json: str | None) -> dict:
+class _Accelerator(NamedTuple):
     """``iris.controller_db.job_config``'s flattened device columns, counted as the scheduler counts them."""
+
+    kind: str | None
+    type: str | None
+    per_task: int
+
+
+def _accelerator(device_json: str | None) -> _Accelerator:
     device = proto_from_json(device_json, job_pb2.DeviceConfig) if device_json else job_pb2.DeviceConfig()
     if device.HasField("gpu"):
-        kind, count = "gpu", get_gpu_count(device)
-    elif device.HasField("tpu"):
-        kind, count = "tpu", get_tpu_count(device)
-    else:
-        kind, count = None, 0
-    return {"accelerator_kind": kind, "accelerator_type": get_device_variant(device), "accelerators_per_task": count}
+        return _Accelerator("gpu", get_device_variant(device), get_gpu_count(device))
+    if device.HasField("tpu"):
+        return _Accelerator("tpu", get_device_variant(device), get_tpu_count(device))
+    return _Accelerator(None, get_device_variant(device), 0)
 
 
 def _dt_from_ms(epoch_ms: int | None) -> datetime | None:
@@ -270,7 +275,15 @@ def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
 
 def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> None:
     ts = stats_timestamp()
-    j, c, a, t = jobs_table.c, job_config_table.c, task_attempts_table.c, tasks_table.c
+    _snapshot_jobs(cur, tables, marked, ts)
+    _snapshot_configs(cur, tables, marked, ts)
+    _snapshot_tasks(cur, tables, marked, ts)
+    _snapshot_attempts(cur, tables, marked, ts)
+
+
+def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+    """Job rows for ``marked.jobs``."""
+    j = jobs_table.c
     for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
         for r in cur.execute(select(jobs_table).where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)):
             marked.job_rows.append(
@@ -297,6 +310,11 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     ts=ts,
                 )
             )
+
+
+def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+    """Config rows for the jobs submitted in this transaction."""
+    j, c = jobs_table.c, job_config_table.c
     for chunk in batched(marked.submitted, _ID_CHUNK_SIZE):
         query = (
             select(job_config_table, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms)
@@ -304,6 +322,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
             .where(c.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)
         )
         for r in cur.execute(query):
+            accelerator = _accelerator(r.res_device_json)
             marked.config_rows.append(
                 IrisJobConfig(
                     cluster=tables.cluster,
@@ -315,7 +334,9 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     res_memory_bytes=r.res_memory_bytes,
                     res_disk_bytes=r.res_disk_bytes,
                     res_device_json=r.res_device_json,
-                    **_accelerator_columns(r.res_device_json),
+                    accelerator_kind=accelerator.kind,
+                    accelerator_type=accelerator.type,
+                    accelerators_per_task=accelerator.per_task,
                     constraints_json=r.constraints_json,
                     has_coscheduling=bool(r.has_coscheduling),
                     coscheduling_group_by=r.coscheduling_group_by,
@@ -342,6 +363,11 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     ts=ts,
                 )
             )
+
+
+def _snapshot_tasks(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+    """Task rows for ``marked.tasks``."""
+    j, t = jobs_table.c, tasks_table.c
     for chunk in batched(marked.tasks, _ID_CHUNK_SIZE):
         query = (
             select(tasks_table, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms.label("job_submitted_at_ms"))
@@ -380,6 +406,11 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     ts=ts,
                 )
             )
+
+
+def _snapshot_attempts(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
+    """Attempt rows for ``marked.attempts``."""
+    j, a, t = jobs_table.c, task_attempts_table.c, tasks_table.c
     for chunk in batched(marked.attempts, _ID_CHUNK_SIZE):
         query = (
             select(task_attempts_table, t.job_id, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms)

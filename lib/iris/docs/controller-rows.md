@@ -63,7 +63,7 @@ Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
 submitted_at_ms)`, because job ids are reused after a job ends, and a live
 parent can resubmit a finished child under the same name (the child keeps its
 parent's `root_submitted_at_ms`; `submitted_at_ms` is its own submit time). All
-three tables carry the job key. The two `_ms` columns are epoch milliseconds;
+four tables carry the job key. The two `_ms` columns are epoch milliseconds;
 the other time columns are timestamps. An attempt is `attempt_uid`, and it
 carries the job key plus `(task_id, attempt_id)`. `node_name` (Kubernetes) or
 `worker_id` (worker VMs) places an attempt on a machine.
@@ -149,6 +149,6 @@ flush drops those rows. To find gaps, compare daily row counts with the
 controller DB.
 
 History is kept in the archive (remote retention is `retain_forever`). The
-storage policies (5 years; 8 GiB for `iris.controller_db.task_attempts`, 4 GiB each for the
-other two) bound only the hub's local copy; older segments are read back from
+storage policies (5 years; 8 GiB each for `tasks` and `task_attempts`, 4 GiB
+each for `jobs` and `job_config`) bound only the hub's local copy; older segments are read back from
 the archive.

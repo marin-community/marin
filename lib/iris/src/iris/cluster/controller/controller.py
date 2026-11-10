@@ -72,7 +72,7 @@ from iris.cluster.controller.checkpoint import (
     upload_checkpoint,
     write_checkpoint,
 )
-from iris.cluster.controller.controller_rows import ControllerRowTables, row_cluster
+from iris.cluster.controller.controller_rows import row_cluster
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -346,8 +346,8 @@ class ControllerConfig:
     cluster_id: str = field(kw_only=True)
     """This cluster's real identity (from the cluster config ``name``). Required.
 
-    Written as ``cluster`` on the controller's ``iris.controller_db.*`` / ``iris.controller_db.task_attempts``
-    Finelog rows when its Finelog does not forward (see ``finelog_forwarding_cluster``).
+    Written as ``cluster`` on the controller's ``iris.controller_db.*`` Finelog rows
+    when its Finelog does not forward (see ``finelog_forwarding_cluster``).
     Sent as the ``requester_id`` on each ``FederationSync``, and the tag
     a minted capability URL carries so a federation parent can relay it back here."""
 
@@ -495,13 +495,7 @@ class Controller:
         # the stack for its own logging and shuts it down at stop().
         self._log_stack = log_stack
         self._db.attach_controller_rows(
-            ControllerRowTables(
-                cluster=row_cluster(config.cluster_id, config.finelog_forwarding_cluster),
-                job_table=log_stack.job_table,
-                job_config_table=log_stack.job_config_table,
-                job_task_table=log_stack.job_task_table,
-                task_attempt_table=log_stack.task_attempt_table,
-            )
+            log_stack.controller_row_tables(row_cluster(config.cluster_id, config.finelog_forwarding_cluster))
         )
         self._log_client = log_stack.client
         self._log_service_address = log_stack.address

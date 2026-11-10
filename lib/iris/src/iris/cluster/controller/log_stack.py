@@ -23,6 +23,7 @@ from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_polic
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, TokenProvider
 
+from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
     JOB_CONFIG_NAMESPACE,
@@ -80,6 +81,16 @@ class LogStack:
     job_task_table: Table
     task_attempt_table: Table
     server: Any = None
+
+    def controller_row_tables(self, cluster: str) -> ControllerRowTables:
+        """The ``iris.controller_db.*`` tables, writing ``cluster`` (see ``controller_rows.row_cluster``)."""
+        return ControllerRowTables(
+            cluster=cluster,
+            job_table=self.job_table,
+            job_config_table=self.job_config_table,
+            job_task_table=self.job_task_table,
+            task_attempt_table=self.task_attempt_table,
+        )
 
     def close(self) -> None:
         self.client.close()
