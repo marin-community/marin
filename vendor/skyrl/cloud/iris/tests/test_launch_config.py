@@ -409,8 +409,6 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     }
     assert first_start <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
     assert record["engine"]["vllm_version"] == ("fixture-vllm" if entrypoint == "generate" else None)
-    record["wandb_url"] = "https://wandb.example/retained-attempt"
-    record_path.write_text(json.dumps(record))
     fail = False
     skyrl_entrypoint.run_config(destination)
     assert json.loads(record_path.read_text()) == record

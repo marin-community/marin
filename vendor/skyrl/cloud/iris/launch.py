@@ -154,7 +154,7 @@ def _result(
     )
 
 
-def _manifest(config: DictConfig, result: LaunchResult) -> dict[str, Any]:
+def _receipt(config: DictConfig, result: LaunchResult) -> dict[str, Any]:
     return {
         "config": OmegaConf.to_container(config, resolve=True),
         "result": asdict(result),
@@ -167,17 +167,19 @@ def _record_failure(
     failure: str,
 ) -> LaunchResult:
     result = _result(config, LaunchState.FAILED, outcome=outcome, failure=failure)
-    attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
-    write_json(attempt_uri, _manifest(config, result))
+    attempt_uri = join_resource_path(
+        str(config.artifacts.export_root), "attempts", str(config.run.attempt_id), "receipt.json"
+    )
+    write_json(attempt_uri, _receipt(config, result))
     return result
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
-    terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
-    if StoragePath(terminal_manifest_uri).exists():
-        raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
+    terminal_receipt_uri = str(config.artifacts.terminal_manifest_uri)
+    if StoragePath(terminal_receipt_uri).exists():
+        raise ValueError(f"Terminal receipt is immutable and already exists: {terminal_receipt_uri}")
 
     if backend is None:
         # The concrete Iris backend imports the training/export stack. Keep it
@@ -229,10 +231,12 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
-    payload = _manifest(config, result)
-    attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
+    payload = _receipt(config, result)
+    attempt_uri = join_resource_path(
+        str(config.artifacts.export_root), "attempts", str(config.run.attempt_id), "receipt.json"
+    )
     write_json(attempt_uri, payload)
-    write_json(terminal_manifest_uri, payload)
+    write_json(terminal_receipt_uri, payload)
     return result
 
 

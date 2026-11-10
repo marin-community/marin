@@ -14,7 +14,6 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -24,6 +23,7 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
+from marin.rl.skyrl_records import IRIS_HUB_CLUSTER_CONFIG
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config

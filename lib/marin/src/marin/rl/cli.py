@@ -18,7 +18,7 @@ import click
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -29,7 +29,8 @@ from rigging.timing import Duration
 from marin.execution.lazy import ArtifactStep, run
 from marin.execution.remote import sanitize_job_name
 from marin.experiment.cli import BuildResult, build_options_with_runner, graph_handles
-from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG, IrisSkyRLExecution
+from marin.rl.skyrl import IrisSkyRLExecution
+from marin.rl.skyrl_records import IRIS_HUB_CLUSTER_CONFIG
 
 _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
@@ -173,10 +174,9 @@ def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
 
 @contextmanager
 def iris_client(*, config_file: Path | None = None, workspace: Path | None = None) -> Iterator[IrisClient]:
-    info = get_job_info()
-    if info is not None and info.controller_address:
-        with IrisClient.in_cluster(info.controller_address) as client:
-            yield client
+    ctx = get_iris_ctx()
+    if ctx is not None and ctx.client is not None:
+        yield ctx.client
     else:
         with open_iris_client(
             config_file=config_file or Path(IRIS_HUB_CLUSTER_CONFIG), workspace=workspace or find_project_root()

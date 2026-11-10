@@ -10,7 +10,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Callable, cast
 
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, open_dict
 from iris.cluster.client.job_info import get_job_info
 from marinskyrl.checkpoint_paths import TRACKING_FILENAME
 from marinskyrl.resource_locator import join_resource_path
@@ -43,32 +43,12 @@ def run_config(config_path: Path) -> None:
             vllm_version = version("vllm")
         except PackageNotFoundError:
             vllm_version = None
-        generator = OmegaConf.to_container(config.skyrl.generator, resolve=True)
         record = {
             key: config.skyrl.runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")
         }
         record.update(
             started_at=previous.get("started_at", datetime.now(timezone.utc).isoformat()),
-            wandb_url=previous.get("wandb_url"),
-            engine={
-                **{
-                    key: generator.get(key)
-                    for key in (
-                        "backend",
-                        "model_dtype",
-                        "vllm_attention_backend",
-                        "enable_prefix_caching",
-                        "max_num_seqs",
-                        "max_num_batched_tokens",
-                        "enable_chunked_prefill",
-                        "enforce_eager",
-                        "engine_init_kwargs",
-                    )
-                },
-                "batch_invariant": config.skyrl.trainer.algorithm.batch_invariant,
-                "vllm_env": {key: value for key, value in config.runtime.task_env.items() if key.startswith("VLLM_")},
-                "vllm_version": vllm_version,
-            },
+            engine={"vllm_version": vllm_version},
         )
         io.makedirs(directory, exist_ok=True)
         io.write_bytes_atomic(path, json.dumps(record).encode())

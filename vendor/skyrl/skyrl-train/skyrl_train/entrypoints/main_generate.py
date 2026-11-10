@@ -28,10 +28,7 @@ from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_d
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import trainer_metrics
 from skyrl_train.metric_names import (
-    EVAL_OUTCOME_METRIC_PREFIX,
-    GENERATE_OUTCOME_METRIC_PREFIX,
     PROMPTS_DROPPED_TOO_LONG_METRIC,
-    TASK_TIMING_KEYS,
 )
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
 from skyrl_train.evaluate import evaluate
@@ -117,16 +114,6 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     "generate/wall_seconds": elapsed,
                     "generate/response_tokens": tokens,
                     PROMPTS_DROPPED_TOO_LONG_METRIC: self.eval_dataset.prompts_dropped_too_long,
-                    **{
-                        GENERATE_OUTCOME_METRIC_PREFIX + key.removeprefix(EVAL_OUTCOME_METRIC_PREFIX): value
-                        for key, value in results.items()
-                        if key.startswith(EVAL_OUTCOME_METRIC_PREFIX)
-                    },
-                    **{
-                        key.removeprefix("eval/all/"): value
-                        for key, value in results.items()
-                        if any(key.startswith(f"eval/all/{raw}/") for raw in TASK_TIMING_KEYS)
-                    },
                 }
             )
             if local_vllm:

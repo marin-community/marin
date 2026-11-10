@@ -49,7 +49,6 @@ from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -60,6 +59,7 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
+from marin.rl.skyrl_records import IRIS_HUB_CLUSTER_CONFIG
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file

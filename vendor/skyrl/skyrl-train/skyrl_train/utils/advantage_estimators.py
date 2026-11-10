@@ -147,9 +147,6 @@ def compute_rloo_n_outcome_advantage(
     exclude_from_baseline: Optional[np.ndarray] = None,
     group_advantage_invariant: GroupAdvantageInvariant | None = None,
     config=None,
-    *,
-    metrics: dict[str, float],
-    pad_size: int,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -173,8 +170,6 @@ def compute_rloo_n_outcome_advantage(
         - response_mask: Float[torch.Tensor, "batch_size seqlen"]
         - index: np.ndarray (batch_size) - group IDs for each sample
         - exclude_from_baseline: Optional[np.ndarray] (batch_size) - bool array, True = exclude
-        - metrics: receives reward/rloo_n_filtered_groups and reward/rloo_n_total_groups
-        - pad_size: trailing padding rows, excluded from those group counts
 
     Returns:
         - advantages: Float[torch.Tensor, "batch_size seqlen"]
@@ -280,11 +275,6 @@ def compute_rloo_n_outcome_advantage(
         n_groups_all_excluded = sum(1 for group_id in set(index) if len(id2included_scores[group_id]) == 0)
         n_groups_below_min = sum(1 for group_id in set(index) if 0 < len(id2included_scores[group_id]) < min_group_size)
         n_total_groups = len(set(index))
-        metric_groups = set(index[: bsz - pad_size])
-        metrics["reward/rloo_n_filtered_groups"] = float(
-            sum(len(id2included_scores[g]) < min_group_size or id2no_variance[g] for g in metric_groups)
-        )
-        metrics["reward/rloo_n_total_groups"] = float(len(metric_groups))
         if n_excluded > 0 or n_groups_below_min > 0 or n_no_variance_groups > 0:
             loguru.logger.info(
                 f"RLOO-N: {n_excluded}/{bsz} samples excluded from baseline, "
@@ -312,9 +302,6 @@ def compute_rloo_n_pbs_advantage(
     group_advantage_invariant: GroupAdvantageInvariant | None = None,
     config=None,
     token_level_shaping: Optional[torch.Tensor] = None,
-    *,
-    metrics: dict[str, float],
-    pad_size: int,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Combine RLOO-N outcome advantage with potential-based token shaping.
@@ -351,8 +338,6 @@ def compute_rloo_n_pbs_advantage(
         exclude_from_baseline=exclude_from_baseline,
         group_advantage_invariant=group_advantage_invariant,
         config=config,
-        metrics=metrics,
-        pad_size=pad_size,
         **kwargs,
     )
 
