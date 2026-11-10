@@ -25,6 +25,7 @@ from fray.current_client import current_client
 from fray.types import (
     ActorConfig,
     Entrypoint,
+    EnvironmentConfig,
     GpuConfig,
     JobRequest,
     JobStatus,
@@ -44,6 +45,7 @@ from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rigging.secrets import SecretBehavior, forwarded_secrets
 from rigging.timing import Deadline, Duration
 
 from marin.inference.auxiliary import build_auxiliary_app
@@ -86,6 +88,7 @@ from marin.inference.types import (
     OpenAIEndpoint,
     RunningModel,
 )
+from marin.inference.web_search import PARALLEL_API_KEY_SECRET, parallel_web_search_from_secret
 from marin.inference.worker import InferenceWorker, run_inference_worker
 
 logger = logging.getLogger(__name__)
@@ -490,6 +493,7 @@ def _register_dashboard(
         model_id=model.endpoint.model,
         info=info,
         request_timeout_seconds=service.controller_proxy_timeout_seconds,
+        web_search=parallel_web_search_from_secret(),
     )
     with serve_app_background(app, serving_socket):
         address = f"http://{job_info.advertise_host}:{serving_port}"
@@ -902,7 +906,7 @@ def _start_direct_inference(
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
             ports=ports,
             resources=iris.worker_resources,
-            environment=iris.worker_environment,
+            environment=_child_worker_environment(iris.worker_environment),
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
             max_task_failures=iris.max_retries_failure,
@@ -1006,6 +1010,23 @@ def _run_broker_worker(
                 time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
+def _child_worker_environment(environment: EnvironmentConfig) -> EnvironmentConfig:
+    """Return the environment for an inference job submitted from this task.
+
+    Inherited secrets become an explicit map without ``PARALLEL_API_KEY``, because the child job runs
+    model code that may come from the model repository. A dashboard in that child job has no web search.
+    """
+    if environment.secret_behavior is SecretBehavior.ISOLATE:
+        return environment
+    supplied = {*environment.secrets, *environment.env_vars}
+    inherited = forwarded_secrets(exclude={*supplied, PARALLEL_API_KEY_SECRET})
+    return replace(
+        environment,
+        secrets={**inherited, **environment.secrets},
+        secret_behavior=SecretBehavior.ISOLATE,
+    )
+
+
 def _submit_broker_workers(
     run_id: str,
     config: RemoteInferenceConfig,
@@ -1026,7 +1047,7 @@ def _submit_broker_workers(
                         args=(worker_id, config.model, config.engine, iris, broker, request_provider),
                     ),
                     resources=iris.worker_resources,
-                    environment=iris.worker_environment,
+                    environment=_child_worker_environment(iris.worker_environment),
                     max_retries_failure=broker.max_retries_failure,
                     max_retries_preemption=broker.max_retries_preemption,
                     max_task_failures=broker.max_retries_failure,

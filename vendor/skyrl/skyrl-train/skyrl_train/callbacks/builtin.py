@@ -46,6 +46,7 @@ from skyrl_train.inference_observability import (
 )
 
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
+from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
 from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
 from .types import (
@@ -56,7 +57,7 @@ from .types import (
 
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
-CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {}
+CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
 
 
 def register_callback(name: str):

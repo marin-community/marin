@@ -75,7 +75,7 @@ uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b \
   --evals mmlu-smoke \
   --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --limit 2 \
   --dry-run
 ```
@@ -168,7 +168,8 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
-capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
+capacity. Use `tb2-lite` or `swebench-lite` for validation runs. Use `--limit N` to cap
+`aime-harbor` and other full evaluations.
 
 Resume an interrupted Harbor evaluation from its existing results tree:
 
@@ -279,7 +280,7 @@ It is exploratory and is not part of a verified evaluation policy cohort.
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
 `experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`,
-`swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `ot-tblite`.
+`swebench-lite`, `swebench-full`, `aime-harbor`, and `ot-tblite`.
 
 ### Choose a model
 
@@ -371,7 +372,9 @@ does not depend on the web server's thread-pool size.
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
 a record for that eval; other steps continue. For a Hugging Face model with caching enabled,
 `remote_inference` checks the completion marker in-process when the coordinator and serving
-workers share a cluster and region. A hit skips CPU preparation. A miss, or a different or
+workers can be proven to share a cluster and region. A hit skips CPU preparation.
+A named CoreWeave target still submits the CPU job because its local Iris controller reports
+the execution cluster as `local`, which does not prove a match to the target name. A miss, or a different or
 unrestricted serving placement, submits a CPU job with the serving placement constraints before
 reserving GPUs or TPUs. Unpinned GPU placement skips preparation with a warning: the GPU job
 can auto-federate while a CPU prepare job stays local. Pin `target_cluster` to prepare its cache. Both paths use the worker's model resolver.

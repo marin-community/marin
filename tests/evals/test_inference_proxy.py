@@ -57,6 +57,7 @@ from marin.inference.types import (
     StreamStart,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from rigging.secrets import SecretBehavior
 from rigging.timing import ExponentialBackoff
 
 from experiments.evals.federated_inference_proxy_demo import _redacted_url
@@ -1055,7 +1056,11 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 
 
 @pytest.mark.parametrize("instances", [1, 2])
-def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, instances) -> None:
+def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, tmp_path, instances) -> None:
+    # The broker task holds the dashboard-only Parallel key beside ordinary worker credentials.
+    (tmp_path / "PARALLEL_API_KEY").write_text("parallel-key")
+    (tmp_path / "HF_TOKEN").write_text("hf-token")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
     broker_actor.register_worker("worker-0", InferenceWorkerMetadata(1, "vllm", "http://unused"))
     proxy_models: list[str] = []
@@ -1159,6 +1164,9 @@ def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, ins
     for worker_request in client.submissions:
         assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
+        assert worker_request.environment.secrets["HF_TOKEN"] == "hf-token"
+        assert "PARALLEL_API_KEY" not in worker_request.environment.secrets
+        assert worker_request.environment.secret_behavior is SecretBehavior.ISOLATE
         assert worker_request.resources.regions == ["us-east5"]
         assert worker_request.resources.zone == "us-east5-a"
 
