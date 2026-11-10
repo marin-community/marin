@@ -45,6 +45,7 @@ class RunSpec:
     execution: FilePin
     smoke_overrides: dict[str, int]
     adopted_sft: FilePin | None = None
+    adopted_handoff: FilePin | None = None
 
 
 # Geometry, context, group mix and data are deliberately absent. A smoke must
@@ -85,6 +86,7 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
             continue
         result["datasets"][name] = read_pin(pin, directory)
     result["adopted_sft"] = read_pin(spec.adopted_sft, directory) if spec.adopted_sft is not None else None
+    result["adopted_handoff"] = read_pin(spec.adopted_handoff, directory) if spec.adopted_handoff is not None else None
     sft_manifest = result["datasets"]["sft"]
     for field, pin in sft_manifest["sections"].items():
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)

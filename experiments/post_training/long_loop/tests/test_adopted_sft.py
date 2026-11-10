@@ -78,3 +78,13 @@ def test_missing_payload_or_wrong_tokenizer_prevents_handoff(recorded_selection,
             output=str(tmp_path / "missing"), checkpoint_pin=pin, model=model, tokenizer_revision="b" * 40
         )
     assert not (tmp_path / "missing/selected.json").exists()
+
+
+def test_changed_payload_size_prevents_handoff(recorded_selection, tmp_path):
+    pin, model, checkpoint = recorded_selection
+    (checkpoint / "manifest.ocdbt").write_bytes(b"truncated")
+    with pytest.raises(ValueError, match="payload is missing or changed"):
+        verify_adopted_sft(
+            output=str(tmp_path / "changed"), checkpoint_pin=pin, model=model, tokenizer_revision="b" * 40
+        )
+    assert not (tmp_path / "changed/selected.json").exists()

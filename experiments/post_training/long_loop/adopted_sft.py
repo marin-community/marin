@@ -52,15 +52,15 @@ def verify_adopted_sft(*, output: str, checkpoint_pin: dict, model: dict, tokeni
         raise ValueError("Adopted SFT payload inventory is empty or refers to a different checkpoint")
     fs, checkpoint_key = filesystem_for(checkpoint)
     expected_keys = {prefix_join(checkpoint_key, entry["path"]) for entry in inventory["files"]}
-    if set(fs.find(checkpoint_key)) != expected_keys:
+    objects = fs.find(checkpoint_key, detail=True)
+    if set(objects) != expected_keys:
         raise ValueError("Adopted SFT payload inventory does not cover the exact checkpoint file set")
     payload_bytes = 0
     for entry in inventory["files"]:
         relative = entry["path"]
         if relative.startswith("/") or ".." in relative.split("/"):
             raise ValueError("Checkpoint payload inventory contains a non-relative path")
-        fs, key = filesystem_for(prefix_join(checkpoint, relative))
-        info = fs.info(key)
+        info = objects[prefix_join(checkpoint_key, relative)]
         if info["type"] != "file" or info["size"] != entry["bytes"]:
             raise ValueError(f"Adopted SFT payload is missing or changed: {relative}")
         if relative not in {"metadata.json", "manifest.json"}:

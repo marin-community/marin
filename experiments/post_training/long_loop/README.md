@@ -65,6 +65,13 @@ source lineage, and payload inventory in an `adopted_sft` file. Reference that f
 by path and SHA-256 in the run spec. Use a fresh runtime version. Missing or changed
 checkpoint evidence fails the adoption stage; it never starts a replacement SFT.
 
+To reuse a completed HF handoff, also supply an `adopted_handoff` file pin with
+its `uri`, `source_checkpoint` and `files` (URI/SHA-256 pairs for the committed
+export manifest, request, config, tokenizer and index). The graph verifies these
+bindings and adopts that export instead of running conversion again. CP training
+requires sample packing. Preflight runs both strict composition and SkyRL's
+runtime configuration validator before allocation.
+
 ```bash
 uv run python -m experiments.post_training.long_loop \
   --spec /absolute/path/to/continuation-spec/round1.yaml \

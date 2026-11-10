@@ -94,13 +94,26 @@ def test_rl_smoke_stops_before_eval_and_never_replays_sft(monkeypatch):
 
 def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    monkeypatch.setenv("WANDB_API_KEY", "offline-validation-fixture")
     resolved = resolve_spec(SPEC, smoke=True)
     # Isolate graph wiring; this does not waive the live artifact-admission checks.
     resolved["blockers"] = []
-    resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}
+    resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft", "step": 746}
+    resolved["adopted_handoff"] = {
+        "uri": "s3://test/verified-handoff",
+        "source_checkpoint": "s3://test/committed-sft/checkpoints/step-746",
+        "files": [],
+    }
     terminal = build_spec_graph(resolved, "2026.11.10.1", through="archive")
     names = [step.name for step in graph_handles([terminal])]
     validate_graph(terminal, tmp_path / "full-graph", "s3://marin-us-east-02a/marin/")
     assert "long-loop/report" in names
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)
+    handoff = next(step for step in graph_handles([terminal]) if step.name.endswith("/sft-handoff"))
+    assert handoff.adopt_source == "s3://test/verified-handoff"
+    assert any(step.name.endswith("/verify-handoff") for step in handoff.deps)
+    resolved["rl"]["config"]["trainer"]["use_sample_packing"] = False
+    invalid = build_spec_graph(resolved, "2026.11.10.2", through="rl")
+    with pytest.raises(ValueError, match="context parallel is only supported with sample packing"):
+        validate_graph(invalid, tmp_path / "invalid", "s3://marin-us-east-02a/marin/")

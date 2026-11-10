@@ -14,7 +14,7 @@ from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecution, SkyRLRolePlan
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
@@ -121,19 +121,37 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     if through == "sft":
         return replace(trained, runtime_args={**trained.runtime_args, "skyrl_execution": coordinator})
     tokenizer = resolved["tokenizer"]
-    exported = timed(
-        apply(
-            f"{name}/sft-handoff",
-            remote(export_sft, resources=resources["export"], env_vars={"JAX_PLATFORMS": "cpu"}),
-            version=version,
-            output=OUT,
-            trained=trained,
-            model=recipe["model"],
-            source_revision=resolved["marin_revision"],
-            tokenizer_uri=tokenizer["uri"],
-            context_limit=tokenizer["context_limit"],
+    handoff = resolved.get("adopted_handoff")
+    if handoff is not None:
+        if sft_pin is None or handoff["source_checkpoint"] != prefix_join(
+            sft_pin["uri"], f"checkpoints/step-{sft_pin['step']}"
+        ):
+            raise ValueError("Adopted handoff must bind the selected SFT checkpoint")
+        exported = ArtifactStep.adopt(f"{name}/sft-handoff", version, handoff["uri"], config=handoff)
+        checked_handoff = timed(
+            apply(
+                f"{name}/verify-handoff",
+                remote(verify_inputs, resources=resources["inputs"]),
+                version=version,
+                output=OUT,
+                manifests={"handoff": handoff},
+            )
         )
-    )
+        exported = replace(exported, deps=(*exported.deps, trained, checked_handoff))
+    else:
+        exported = timed(
+            apply(
+                f"{name}/sft-handoff",
+                remote(export_sft, resources=resources["export"], env_vars={"JAX_PLATFORMS": "cpu"}),
+                version=version,
+                output=OUT,
+                trained=trained,
+                model=recipe["model"],
+                source_revision=resolved["marin_revision"],
+                tokenizer_uri=tokenizer["uri"],
+                context_limit=tokenizer["context_limit"],
+            )
+        )
     endpoint = timed(
         apply(
             f"{name}/endpoint",
