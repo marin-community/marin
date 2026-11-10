@@ -992,6 +992,22 @@ def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
     assert broker.request_lease_timeout_seconds == 3420
 
 
+def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
+    monkeypatch.setenv("TEST_PARALLEL_KEY", "parallel-key")
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--secret",
+        "PARALLEL_API_KEY",
+        "env:TEST_PARALLEL_KEY",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.submit.call_args.kwargs["environment"].secrets == {"PARALLEL_API_KEY": "parallel-key"}
+    assert "parallel-key" not in repr(services[0])
+
+
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
     config = tmp_path / "metrics.toml"
     config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')
@@ -1169,7 +1185,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming_without_tool_catalog(
             assert page.status_code == 200
             assert "marin · serve" in page.text
 
-            assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
+            assert requests.get(f"{base}/info", timeout=10).json() == {**dataclasses.asdict(info), "web_search": False}
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
             assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text

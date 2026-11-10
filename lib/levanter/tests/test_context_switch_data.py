@@ -301,6 +301,13 @@ def test_mixture_start_step_starts_each_source_at_its_first_shuffled_sequence(tm
     assert _step_tokens(config, NEW_BATCH, 1000, 1020) == _step_tokens(unstarted, NEW_BATCH, 0, 20)
 
 
+def test_mixture_start_step_counts_stage_steps_from_the_start(tmp_path):
+    staged = _cached_config(tmp_path, NEW_SEQ, stage_step=8)
+    started = dataclasses.replace(staged, mixture_start_step=1000)
+
+    assert _step_tokens(started, NEW_BATCH, 1000, 1020) == _step_tokens(staged, NEW_BATCH, 0, 20)
+
+
 def test_mixture_start_step_rejects_a_restore_before_the_start(tmp_path):
     config = _started_config(tmp_path, start_step=1000)
 

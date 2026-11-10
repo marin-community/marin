@@ -10,7 +10,8 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
   (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
-  1.66, times 1.108 on the global layers (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), sliding window 2048, and every
+  1.66 (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), with global-layer queries past 65536 keys scaled by
+  (1 + 0.1 ln(n/65536))^2, up to 2.15 at 262K, sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
   shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are
@@ -48,7 +49,8 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Inference export
 
-Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. The device
+Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Neither exporter accepts a model with log scaling,
+so the current run's 262K checkpoints cannot be exported yet. The device
 exporter below remains a byte-parity reference and supports checkpoint layouts
 handled by the native loader, including flat checkpoints.
 
@@ -205,6 +207,14 @@ paths = hero_checkpoint_paths()
 The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
 Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
 
+The current run is `hero-lce-log65536sq-step390k`. It trained the 262K extension with log floor 65536 squared, the hero's
+262K recipe (see [Context-length switches](#context-length-switches)), and ended at
+`s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491`, the starting point
+for downstream training. The comparison against a global 1.84 arm is in the
+[#8435 result](https://github.com/marin-community/marin/issues/8435#issuecomment-6748198431) and
+[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Inference export and the Hugging Face
+upload refuse log scaling, so they cannot convert this run's checkpoints yet.
+
 Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
 for preflight, the 200-step trial, and rollback. `current_run.py` records the
 current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
@@ -283,14 +293,14 @@ both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE
 `hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
 rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
 (see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
-only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor` on
-`launch_diagnostics.py`, the only launcher with that flag.
-`qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor` adds a
+only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor`,
+`--log-scaling-alpha` and `--log-scaling-power` on `launch_diagnostics.py`, the only launcher with those flags.
+`qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor`, `log_scaling_alpha` and `log_scaling_power`, which must be set together, add a
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
-keys in its document is multiplied by `1 + 0.1 * ln(max(n / log_scaling_n_floor, 1))`, so queries within
-the floor are unchanged. At the end of a 262K document, a floor of 65536 gives 1.139 and a floor of 128000
-gives 1.072. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
-Hero exports and upload, refuses this field instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
+keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
+the floor are unchanged. At the end of a 262K document, a floor of 65536 gives `1 + 1.386 * log_scaling_alpha` and a floor of 128000
+gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
+Hero exports and upload, refuses log scaling instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
@@ -423,8 +433,11 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default: the hero's 1.108, which gives 1.84 from 1.66) |
-| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `1 + 0.1 * ln(max(n / this value, 1))`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default 1) |
+| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `(1 + alpha * ln(max(n / this value, 1))) ** power`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
+| `--log-scaling-alpha` | the slope `alpha` of that scale; unset keeps the hero's 0.1 |
+| `--log-scaling-power` | raises that scale to this exponent; unset keeps the hero's 2 |
+| `--no-log-scaling` | turns the hero's log scaling off, for a control arm such as global 1.84 (`--qk-mult-long-scale 1.108`); excludes the other log scaling options |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
@@ -651,6 +664,46 @@ python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
 
 Submit a rung through the Marin Iris controller as with the launchers above, swapping the module and
 passing `--size`. Runs report to W&B group `moe-hero-ep-scaling-ladder`.
+
+### Full-model SFT
+
+`launch_hero_sft.py` continues a hero checkpoint on the SFT recipe of
+`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05`. It reads the CoreWeave copies of the SFT
+stores listed in `hero_sft_stores_2026_09_29.json`, with replay from the hero's 262K Harrier mix,
+one epoch per store. The run resumes the checkpoint's optimizer state. At the start step, it reseeds
+the seven chat special-token columns of the LM head from single-token anchors.
+
+| Option | Meaning |
+| --- | --- |
+| `--initialize-from-checkpoint` | Complete checkpoint to continue; its `metadata.json` step is the start step |
+| `--muon-lr`, `--adam-lr` | Peak MuonH/AdamH and Adam rates: constant, then linear decay to 0.1× over the final 10% |
+| `--max-grad-norm` | Global gradient-norm clip, or `none` |
+| `--replay-fraction` | Target replay share of each mixture block |
+| `--dp-racks` | Data-parallel racks, 16 sequences each |
+| `--router-bias` | `frozen` (default) keeps the restored router bias; `update` keeps quantile balancing on |
+| `--capacity-factor` | Routed expert capacity per shard; the hero trained at 1.5 |
+| `--stop-after-steps` | Stop after this many updates; unset runs the full epoch |
+| `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
+| `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
+
+Every option above except `--router-bias` and the last three is required. `GrugTrainerConfig`
+gains `router_bias_mode` and `special_tokens` (`SpecialTokenInit`); their defaults leave
+pretraining unchanged.
+
+Print the plan for a one-rack smoke test:
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_hero_sft \
+  --run-id hero-sft-smoke \
+  --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
+  --dp-racks 1 --capacity-factor 1.5 --stop-after-steps 20 --eval-every 393511 \
+  --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
+  --version dev
+```
+
+Submit it through the Marin Iris controller as with
+[Bounded diagnostics](#bounded-diagnostics). Runs report to W&B project `marin_moe_sft`.
 
 ## Result Record
 
