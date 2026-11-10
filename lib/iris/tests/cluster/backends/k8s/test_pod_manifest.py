@@ -470,6 +470,35 @@ def test_build_pod_manifest_gpu():
     assert "rdma/ib" not in limits
 
 
+def test_host_network_tasks_on_one_node_reserve_distinct_service_ports():
+    manifests = []
+    for rank in (0, 1):
+        request = make_run_req(f"/ray-gang/{rank}")
+        request.ports.extend(["ray_head", "ray_client", "ray_object_manager"])
+        manifests.append(_build_pod_manifest(request, pod_config(host_network=True)))
+
+    allocations = []
+    for manifest in manifests:
+        task = manifest["spec"]["containers"][0]
+        env = {entry["name"]: entry["value"] for entry in task["env"] if "value" in entry}
+        ports = {entry["hostPort"] for entry in task["ports"]}
+        assert manifest["spec"]["hostNetwork"] is True
+        assert ports == {
+            int(env[f"IRIS_PORT_{name.upper()}"]) for name in ("ray_head", "ray_client", "ray_object_manager")
+        }
+        assert len(ports) == 3
+        allocations.append(ports)
+    assert allocations[0].isdisjoint(allocations[1])
+
+
+def test_host_network_port_block_does_not_claim_kubelet():
+    request = make_run_req("/job/940")
+    request.ports.extend(f"service_{i:02}" for i in range(11))
+    manifest = _build_pod_manifest(request, pod_config(host_network=True))
+    host_ports = {port["hostPort"] for port in manifest["spec"]["containers"][0]["ports"]}
+    assert 10250 not in host_ports
+
+
 def test_build_pod_manifest_gpu_host_network_requests_rdma():
     req = make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
