@@ -78,6 +78,7 @@ from .metrics import (
     build_panel,
     dashboard_measurements,
     display_status,
+    in_cohort,
     panel_request,
     record_headline,
 )
@@ -476,8 +477,7 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
-        if request.cohort_version is not None:
-            records = [record for record in records if record.version == request.cohort_version]
+        records = [record for record in records if in_cohort(record, request)]
         archived = self.archived_models()
         if archived and not include_archived:
             records = [record for record in records if record.model.name not in archived]
@@ -1302,10 +1302,9 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
-    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=None if cohort == "all" else cohort,
+        cohort=params.get("cohort") or SEPTEMBER_24_VERSION,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),

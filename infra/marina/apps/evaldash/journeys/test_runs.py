@@ -234,6 +234,15 @@ def test_models_from_different_cohorts_compare_behind_the_mixed_settings_warning
     expect(journey.page.get_by_role("button", name="Remove qwen3-8b", exact=True)).to_be_visible()
 
 
+def test_unversioned_runs_have_their_own_cohort_entry(journey: Journey) -> None:
+    journey.visit("/?cohort=unversioned")
+    cohort = journey.page.locator("label").filter(has_text="Cohort").locator("select")
+    expect(cohort).to_have_value("unversioned")
+    journey.sees("Runs launched without a version label")
+    expect(journey.page.locator("tr").filter(has_text="llama3-8b")).to_have_count(2)
+    expect(journey.page.locator("tr").filter(has_text="snowball")).to_have_count(0)
+
+
 def test_a_cross_cohort_comparison_names_each_cell_cohort_and_links_its_run(journey: Journey) -> None:
     comparison = cast(dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,qwen3-8b"))
     row = next(row for row in comparison["rows"] if len(row["cells"]) == 2)
