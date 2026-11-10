@@ -716,8 +716,17 @@ python -m experiments.grug.moe_hero_ep.expert_placement \
   --out experiments/grug/moe_hero_ep/hero_sft_expert_placement_step393491.json
 ```
 
-`hero_sft_expert_placement_step393491.json` is that placement. Built from v2's first 5 steps, the same rule
-projects 0.8% drops on v2's other 20 steps at capacity factor 1.5, and 0.13% at 2.0.
+`hero_sft_expert_placement_step393491.json` is that placement, built from all 25 steps of v2. Held-out
+scoring on v2 shows how many steps a placement needs: built from 5 steps, a placement drops 0.71% of
+assignments on v2's last 8 steps at capacity factor 1.5 (0.10% at 2.0). The per-step oracle drops 0.47%, and
+one step's placement drops 0.94%. On Snowball 10.05's full 4,750-step frozen-bias SFT, a placement built from
+the first steps stays within 0.5 points of the per-step oracle through the end of the epoch.
+
+A placed run writes its checkpoints under `expert-placement-<fingerprint>/` below its output path or
+`--checkpoint-root`. A relaunch with another placement, or none, starts again from the source checkpoint
+instead of resuming checkpoints whose experts are in a different order. Tools that pair experts across
+checkpoints, such as weight merging against the pretraining checkpoint, must first apply
+`ExpertPlacement.inverse()`.
 
 Print the plan for a one-rack smoke test:
 

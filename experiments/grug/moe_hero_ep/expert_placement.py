@@ -16,6 +16,7 @@ routing histograms (`train/router/layer_{i}/routing_hist/histogram`).
 """
 
 import dataclasses
+import hashlib
 import json
 import logging
 from collections.abc import Sequence
@@ -66,6 +67,11 @@ class ExpertPlacement:
     @property
     def num_experts(self) -> int:
         return len(self.order[0])
+
+    @property
+    def fingerprint(self) -> str:
+        """Short hash of the order: names the checkpoints a placed run writes."""
+        return hashlib.sha256(json.dumps(self.order).encode()).hexdigest()[:12]
 
     def inverse(self) -> "ExpertPlacement":
         """The placement that restores the source checkpoint's expert order.

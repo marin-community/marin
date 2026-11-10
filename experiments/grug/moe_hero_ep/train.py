@@ -1310,6 +1310,41 @@ def permute_experts(state: GrugTrainState, placement: ExpertPlacement) -> GrugTr
     )
 
 
+def _validate_expert_placement(placement: ExpertPlacement, config: GrugRunConfig) -> None:
+    if config.model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+        raise ValueError(f"expert placement balances {RAGGED_MOE_IMPLEMENTATION} capacity blocks only")
+    placement.validate_for(
+        num_layers=config.model.num_layers,
+        num_experts=config.model.num_experts,
+        expert_axis_size=config.trainer.expert_axis_size,
+    )
+
+
+def _place_restored_experts(
+    state: GrugTrainState, placement: ExpertPlacement, *, loaded_checkpoint: str
+) -> GrugTrainState:
+    """Place the experts of a restored source checkpoint; the run's own saves are already placed.
+
+    The launcher keeps a placed run's checkpoints under a path named by the placement's fingerprint, so a save
+    restored here was written under this same placement.
+    """
+    if not placement.permutes(loaded_checkpoint):
+        logger.info(
+            "Restored %s, not the placement source %s; its experts are already placed",
+            loaded_checkpoint,
+            placement.source_checkpoint,
+        )
+        return state
+    placed = permute_experts(state, placement)
+    logger.info(
+        "Placed routed experts by %s (placement %s) on %d-expert capacity blocks",
+        placement.loads_from,
+        placement.fingerprint,
+        placement.block_experts,
+    )
+    return placed
+
+
 def _count_expert_leaves(tree, num_experts: int) -> int:
     return sum(
         _expert_axis(path, leaf, num_experts) is not None
@@ -1413,13 +1448,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         expert_placement = config.trainer.expert_placement
         if expert_placement is not None:
-            if config.model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
-                raise ValueError(f"expert placement balances {RAGGED_MOE_IMPLEMENTATION} capacity blocks only")
-            expert_placement.validate_for(
-                num_layers=config.model.num_layers,
-                num_experts=config.model.num_experts,
-                expert_axis_size=config.trainer.expert_axis_size,
-            )
+            _validate_expert_placement(expert_placement, config)
         # Restore tries candidates newest first and returns the first that loads, so the last one it asked
         # a template for is the one it loaded.
         attempted_candidates: list[str] = []
@@ -1442,20 +1471,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if released_initial_state and restored_nothing:
             state = _init_state(model_key)
         if expert_placement is not None and not restored_nothing and attempted_candidates:
-            # Only the source checkpoint is in the old order; the run's own saves are already placed.
-            if expert_placement.permutes(attempted_candidates[-1]):
-                state = permute_experts(state, expert_placement)
-                logger.info(
-                    "Placed routed experts by %s on %d-expert capacity blocks",
-                    expert_placement.loads_from,
-                    expert_placement.block_experts,
-                )
-            else:
-                logger.info(
-                    "Restored %s, not the placement source %s; treating its experts as already placed",
-                    attempted_candidates[-1],
-                    expert_placement.source_checkpoint,
-                )
+            state = _place_restored_experts(state, expert_placement, loaded_checkpoint=attempted_candidates[-1])
         special_tokens = config.trainer.special_tokens
         # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
         if special_tokens is not None and int(state.step) == special_tokens.start_step:

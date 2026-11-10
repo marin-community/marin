@@ -425,17 +425,21 @@ def build_sft_run(
     )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
+        # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
+        # placement, or none, cannot resume checkpoints whose experts are in a different order.
+        output_path = ctx.output_path if expert_placement is None else _placement_path(ctx.output_path, expert_placement)
         if checkpoint_root is None:
-            permanent_path = prefix_join(ctx.output_path, "checkpoints")
+            permanent_path = prefix_join(output_path, "checkpoints")
             temporary_path = temporary_checkpoint_base_path(
-                ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
             resume_paths = checkpoint_resume_paths(
-                ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
+                output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS, temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX
             )
         else:
-            permanent_path = prefix_join(checkpoint_root, "checkpoints")
-            temporary_path = prefix_join(checkpoint_root, "resume")
+            root = checkpoint_root if expert_placement is None else _placement_path(checkpoint_root, expert_placement)
+            permanent_path = prefix_join(root, "checkpoints")
+            temporary_path = prefix_join(root, "resume")
             resume_paths = [temporary_path, permanent_path]
         trainer = hero_trainer_config(
             run_id=run_id,
@@ -524,6 +528,10 @@ def build_sft_run(
         deps=(HARRIER_MIX_2026_08_18_STORE, length_statistics, *validation),
         runtime_args={"train_resources": train_resources},
     )
+
+
+def _placement_path(base: str, placement: ExpertPlacement) -> str:
+    return prefix_join(base, f"expert-placement-{placement.fingerprint}")
 
 
 def _grad_norm(value: str) -> float | None:
