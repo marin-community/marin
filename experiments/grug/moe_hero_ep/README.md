@@ -49,8 +49,11 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 
 ## Inference export
 
-Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Neither exporter accepts a model with log scaling,
-so the current run's 262K checkpoints cannot be exported yet. The device
+Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Every export writes
+`grugmoe_artifact_schema_version` 3 with `log_scaling_n_floor`, `log_scaling_alpha` and `log_scaling_power` in
+`config.json`, null when log scaling is off. Serving and training stacks that predate schema 3, including the pinned
+Marin vLLM wheel and SkyRL, reject these exports rather than apply only the fixed per-layer scale. Exports written
+before schema 3 keep their schema-2 configuration. The device
 exporter below remains a byte-parity reference and supports checkpoint layouts
 handled by the native loader, including flat checkpoints.
 
@@ -212,8 +215,8 @@ The current run is `hero-lce-log65536sq-step390k`. It trained the 262K extension
 `s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491`, the starting point
 for downstream training. The comparison against a global 1.84 arm is in the
 [#8435 result](https://github.com/marin-community/marin/issues/8435#issuecomment-6748198431) and
-[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Inference export and the Hugging Face
-upload refuse log scaling, so they cannot convert this run's checkpoints yet.
+[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Its exports carry log scaling in
+`config.json` (see [Inference export](#inference-export)); serving them needs a vLLM Grug model that applies it.
 
 Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
 for preflight, the 200-step trial, and rollback. `current_run.py` records the
@@ -299,8 +302,8 @@ only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-sca
 position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
 keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
 the floor are unchanged. At the end of a 262K document, a floor of 65536 gives `1 + 1.386 * log_scaling_alpha` and a floor of 128000
-gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. The vLLM and SkyRL Grug models apply only a fixed scale per layer, so `to_hf_config`, and with it the
-Hero exports and upload, refuses log scaling instead of serving the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
+gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. `to_hf_config` writes the three fields with artifact schema 3, so a serving or training stack that applies only a
+fixed scale per layer rejects the export instead of running the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
 data seed, component order, and token store unchanged. The QK and capacity values need measured
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
