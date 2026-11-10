@@ -226,7 +226,7 @@ def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, mon
 
 class _ClosedTable(FakeStatsTable):
     def write(self, rows) -> None:
-        raise RuntimeError("Table(iris.controller_db.jobs) is closed")
+        raise RuntimeError("Table(iris.controller_db__jobs) is closed")
 
 
 def test_failed_write_commits_and_runs_later_post_commit_hooks(state):

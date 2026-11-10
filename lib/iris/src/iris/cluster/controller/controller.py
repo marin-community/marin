@@ -346,7 +346,7 @@ class ControllerConfig:
     cluster_id: str = field(kw_only=True)
     """This cluster's real identity (from the cluster config ``name``). Required.
 
-    Written as ``cluster`` on the controller's ``iris.controller_db.*`` Finelog rows
+    Written as ``cluster`` on the controller's ``iris.controller_db__*`` Finelog rows
     when its Finelog does not forward (see ``finelog_forwarding_cluster``).
     Sent as the ``requester_id`` on each ``FederationSync``, and the tag
     a minted capability URL carries so a federation parent can relay it back here."""

@@ -75,7 +75,7 @@ class LogStack:
     worker_stats_table: Table
     # iris.task_state rows from the controller's periodic per-root-job aggregate.
     task_state_table: Table
-    # iris.controller_db.*: durable copies of the controller DB's jobs, job_config, tasks and task_attempts.
+    # iris.controller_db__*: durable copies of the controller DB's jobs, job_config, tasks and task_attempts.
     job_table: Table
     job_config_table: Table
     job_task_table: Table
@@ -83,7 +83,7 @@ class LogStack:
     server: Any = None
 
     def controller_row_tables(self, cluster: str) -> ControllerRowTables:
-        """The ``iris.controller_db.*`` tables, writing ``cluster`` (see ``controller_rows.row_cluster``)."""
+        """The ``iris.controller_db__*`` tables, writing ``cluster`` (see ``controller_rows.row_cluster``)."""
         return ControllerRowTables(
             cluster=cluster,
             job_table=self.job_table,

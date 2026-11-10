@@ -1,6 +1,6 @@
 # Controller rows in Finelog
 
-The `iris.controller_db.*` namespaces are durable copies of the controller DB's
+The `iris.controller_db__*` namespaces are durable copies of the controller DB's
 tables of the same names: `jobs`, `job_config`, `tasks` and `task_attempts`. The
 controller deletes those rows a few days after a job ends. The other `iris.*`
 namespaces, such as `iris.task` and `iris.task_state`, are measurements and
@@ -23,13 +23,13 @@ changed columns as redacted, never as the controller's own values:
 
 | Column | Differs from the controller DB |
 | --- | --- |
-| `iris.controller_db.jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
-| `iris.controller_db.job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, **names only** (below). Environment variables and secrets are not copied, neither names nor values |
-| `iris.controller_db.job_config.entrypoint_json` | The command and setup commands, **names only** (below). Workdir file contents are never stored |
-| `iris.controller_db.job_config.submit_argv_json` | The submitter's command line, **names only** (below) |
-| `iris.controller_db.job_config.accelerator_*` | Added: the device request flattened (below) |
-| `iris.controller_db.tasks.placement` | The DB's `tasks.cluster`, as for jobs |
-| `iris.controller_db.tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
+| `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
+| `iris.controller_db__job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, **names only** (below). Environment variables and secrets are not copied, neither names nor values |
+| `iris.controller_db__job_config.entrypoint_json` | The command and setup commands, **names only** (below). Workdir file contents are never stored |
+| `iris.controller_db__job_config.submit_argv_json` | The submitter's command line, **names only** (below) |
+| `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
+| `iris.controller_db__tasks.placement` | The DB's `tasks.cluster`, as for jobs |
+| `iris.controller_db__tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
 
 **Names only:** command lines and scripts keep only command words, flag names
 (`--lr`, `-e`, cut at `=` or after a short flag's letter) and assignment names
@@ -51,7 +51,7 @@ a scheduler or Kueue message), stay readable, with token-like strings redacted. 
 best-effort, not names-only: an error can still echo a short value or URL from
 a command.
 
-**The one place the copy is not every change:** an `iris.controller_db.tasks`
+**The one place the copy is not every change:** an `iris.controller_db__tasks`
 row is written at submit and when the task's state, current attempt, current
 worker, error or exit code changes. A change to any other column alone
 (`status_message`, `container_id`, `current_worker_address`, `backend_id`)
@@ -78,7 +78,7 @@ run on two clusters at once. On the hub, where this query is meant to run,
 
 ```sql
 SELECT a.attempt_uid, max(t.memory_peak_mb) AS peak_memory_mb
-FROM "iris.controller_db.task_attempts" a
+FROM "iris.controller_db__task_attempts" a
 JOIN "iris.task" t
   ON COALESCE(NULLIF(t.cluster, ''), 'marin') = a.cluster
  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id
@@ -88,13 +88,13 @@ WHERE a.root_job_id = '/user/job' AND a.state = 'TASK_STATE_SUCCEEDED'
 GROUP BY a.attempt_uid;
 ```
 
-`iris.controller_db.job_config` has one row per job, written at submit, with the requested
+`iris.controller_db__job_config` has one row per job, written at submit, with the requested
 resources. `res_device_json` is the raw device request. Three columns flatten
 it: `accelerator_kind` (`gpu` or `tpu`), `accelerator_type` (for example `H100`
 or `v5p-64`) and `accelerators_per_task`, counted as the scheduler counts it. A
 CPU-only job has NULL, NULL and 0; test `accelerator_kind IS NULL` for
 CPU-only, because a TPU request without a count also has 0. The count is per
-task; multiply by `iris.controller_db.jobs.num_tasks` for the whole job. GPU-hours per root
+task; multiply by `iris.controller_db__jobs.num_tasks` for the whole job. GPU-hours per root
 job over the last 7 days, from each attempt's final row. The config side has a
 longer window, because a config row is written at submit and a long job may
 have started weeks before its attempts finished:
@@ -104,10 +104,10 @@ SELECT a.root_job_id, c.accelerator_type,
        sum(c.accelerators_per_task * (to_unixtime(a.finished_at) - to_unixtime(a.started_at))) / 3600.0 AS accelerator_hours
 FROM (
   SELECT *, row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn
-  FROM "iris.controller_db.task_attempts"
+  FROM "iris.controller_db__task_attempts"
   WHERE ts >= now() - INTERVAL '7 days'
 ) a
-JOIN "iris.controller_db.job_config" c
+JOIN "iris.controller_db__job_config" c
   ON c.cluster = a.cluster AND c.root_job_id = a.root_job_id
  AND c.root_submitted_at_ms = a.root_submitted_at_ms
  AND c.job_id = a.job_id AND c.submitted_at_ms = a.submitted_at_ms
@@ -118,7 +118,7 @@ GROUP BY a.root_job_id, c.accelerator_type
 ORDER BY accelerator_hours DESC;
 ```
 
-`iris.controller_db.jobs.tags` is reserved for submit-time job tags as a JSON object
+`iris.controller_db__jobs.tags` is reserved for submit-time job tags as a JSON object
 (`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
 submit.
 
@@ -137,7 +137,7 @@ attempt of a job:
 ```sql
 SELECT * FROM (
   SELECT *, row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn
-  FROM "iris.controller_db.task_attempts"
+  FROM "iris.controller_db__task_attempts"
   WHERE root_job_id = '/user/job' AND ts >= now() - INTERVAL '7 days'
 ) WHERE rn = 1;
 ```

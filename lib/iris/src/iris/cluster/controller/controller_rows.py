@@ -7,7 +7,7 @@ The controller DB deletes terminal jobs after a few days. A write path that
 changes a job, task or attempt marks its id here. Just before the transaction
 commits, the marked rows are read back in batches, so each row is the entity's
 final state in that transaction; after commit they are written to the
-``iris.controller_db.*`` namespaces, the same post-commit path ``iris.task_event``
+``iris.controller_db__*`` namespaces, the same post-commit path ``iris.task_event``
 uses. A rolled-back transaction writes nothing.
 
 Only work this controller executes is written: rows for jobs whose ``cluster`` is
@@ -146,7 +146,7 @@ def record_job_changes(cur: RowCursor, job_ids: Iterable[JobName]) -> None:
 def record_job_submit(cur: RowCursor, job_id: JobName) -> None:
     """Mark a just-submitted job; its ``job_config`` row is written too.
 
-    Submit is the one place a job's request is written, so ``iris.controller_db.job_config``
+    Submit is the one place a job's request is written, so ``iris.controller_db__job_config``
     gets exactly one row per job.
     """
     marked = _marked(cur)
@@ -207,7 +207,7 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
 
 
 class _Accelerator(NamedTuple):
-    """``iris.controller_db.job_config``'s flattened device columns, counted as the scheduler counts them."""
+    """``iris.controller_db__job_config``'s flattened device columns, counted as the scheduler counts them."""
 
     kind: str | None
     type: str | None

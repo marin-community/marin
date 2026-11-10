@@ -23,7 +23,7 @@ from here; ``LogStack`` resolves every table from this catalog.
   the autoscaler).
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
-- ``iris.controller_db.{jobs,job_config,tasks,task_attempts}`` — durable copies of
+- ``iris.controller_db__{jobs,job_config,tasks,task_attempts}`` — durable copies of
   the controller DB tables of the same names: one ``job_config`` row per job, at
   submit, and one job, task or attempt row per change, written by the controller
   that executes the work (producer: ``iris.cluster.controller.controller_rows``).
@@ -46,10 +46,10 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
-JOB_NAMESPACE = "iris.controller_db.jobs"
-JOB_CONFIG_NAMESPACE = "iris.controller_db.job_config"
-TASK_ATTEMPT_NAMESPACE = "iris.controller_db.task_attempts"
-JOB_TASK_NAMESPACE = "iris.controller_db.tasks"
+JOB_NAMESPACE = "iris.controller_db__jobs"
+JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
+TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
+JOB_TASK_NAMESPACE = "iris.controller_db__tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -77,7 +77,7 @@ TASK_EVENT_STORAGE_POLICY = StoragePolicy(
 )
 
 
-# The iris.controller_db.* namespaces outlive the controller DB's 7-day
+# The iris.controller_db__* namespaces outlive the controller DB's 7-day
 # window. Their history stays in the archive (remote retention is retain_forever);
 # these policies only bound the hub's local copy, and older segments are read
 # back from the archive.
@@ -302,7 +302,7 @@ class IrisJobConfig:
     res_disk_bytes: int
     res_device_json: str | None
     # Flattened from res_device_json: "gpu" or "tpu", the variant (e.g. "H100",
-    # "v5p-64") and the count per task, which iris.controller_db.jobs.num_tasks multiplies for the
+    # "v5p-64") and the count per task, which iris.controller_db__jobs.num_tasks multiplies for the
     # whole job. A CPU-only job has NULL, NULL and 0.
     accelerator_kind: str | None
     accelerator_type: str | None
@@ -377,7 +377,7 @@ class IrisJobTask:
     current_worker_id: str | None
     current_worker_address: str | None
     backend_id: str
-    # The controller DB's tasks.cluster, named as on iris.controller_db.jobs.
+    # The controller DB's tasks.cluster, named as on iris.controller_db__jobs.
     placement: str
     ts: datetime
 
@@ -390,7 +390,7 @@ class IrisTaskAttempt:
     when a job name is reused, so a join to ``iris.task_event`` uses its
     ``attempt_uid``, and a join to ``iris.task`` (which has none) also needs
     ``ts`` between ``started_at`` and ``finished_at``; ``(cluster, root_job_id,
-    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.controller_db.jobs``. ``node_name`` (Kubernetes)
+    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.controller_db__jobs``. ``node_name`` (Kubernetes)
     or ``worker_id`` (worker VMs) places the attempt on a machine.
     """
 
