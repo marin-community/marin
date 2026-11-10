@@ -130,7 +130,7 @@ def test_resolve_model_path_passthrough(model, ttl_days):
 def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
     observed: list[tuple[str, int, str]] = []
 
-    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str) -> str:
+    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str, cache_mode) -> str:
         observed.append((model, cache_ttl_days, cache_prefix))
         return "gs://cache/pinned-model"
 

@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -100,12 +101,20 @@ _CAPABILITY_TTL = Duration.from_hours(24 * 7)
 _BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
+class InferenceStartupPhase(StrEnum):
+    PREPARATION = "preparation"
+    SERVING = "serving"
+
+
 class RemoteInferenceStartupError(RuntimeError):
     """Remote inference failed before yielding a usable endpoint."""
 
-    def __init__(self, message: str, jobs: tuple[JobHandle, ...]):
+    def __init__(
+        self, message: str, jobs: tuple[JobHandle, ...], *, phase: InferenceStartupPhase = InferenceStartupPhase.SERVING
+    ):
         super().__init__(message)
         self.jobs = jobs
+        self.phase = phase
 
 
 @dataclass(frozen=True)
@@ -752,7 +761,7 @@ def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInference
             config.model, config.engine, config.iris, client=current_client(), environment=environment
         )
     except ModelPreparationError as exc:
-        raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs) from exc
+        raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs, phase=InferenceStartupPhase.PREPARATION) from exc
     return replace(config, model=model, engine=engine)
 
 

@@ -3,13 +3,17 @@
 
 """remote_inference mirrors uncached Hugging Face weights on CPU before reserving accelerators."""
 
-from contextlib import contextmanager
+import os
+from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 
 import marin.inference.iris as iris_module
+import marin.inference.model_cache as cache_module
 import pytest
 from fray.types import CpuConfig, JobStatus, ResourceConfig, create_environment
 from levanter.model_cache import DEFAULT_COMPLETE_MARKER
+from marin.evaluation.runner import _inference_session
 from marin.inference.config import (
     IrisConfig,
     RemoteInferenceConfig,
@@ -19,8 +23,7 @@ from marin.inference.config import (
     SpeculativeServingConfig,
     VllmEngineConfig,
 )
-from marin.inference.iris import RemoteInferenceStartupError, remote_inference
-from marin.inference.model_cache import model_cache_entry
+from marin.inference.iris import InferenceStartupPhase, RemoteInferenceStartupError, remote_inference
 from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.storage_path import StoragePath
 
@@ -31,23 +34,25 @@ DRAFT_REVISION = "b" * 40
 class FakePrepareJob:
     """Resolves the cache entry when it runs, under the prefix of the cluster it runs on."""
 
-    def __init__(self, request, events: list[str], fail: bool, worker_prefix: str):
+    def __init__(self, request, state):
         self.job_id = f"/prepare/{request.name}"
-        self.args = request.entrypoint.callable_entrypoint.args
-        self.events = events
-        self.fail = fail
-        self.worker_prefix = worker_prefix
+        self.entrypoint = request.entrypoint.callable_entrypoint
+        self.state = state
+        self.events = state.events
+        self.result = None
 
     def status(self) -> JobStatus:
-        if self.fail:
-            return JobStatus.FAILED
-        repo, revision, ttl = self.args
-        with pytest.MonkeyPatch.context() as env:
-            env.setenv("MARIN_PREFIX", self.worker_prefix)
-            marker = _marker(repo, revision, ttl)
-        marker.parent.mkdirs()
-        marker.write_text("{}")
-        return JobStatus.SUCCEEDED
+        if self.state.timeout_prepare:
+            raise TimeoutError("prepare deadline exceeded")
+        if self.result is None:
+            with pytest.MonkeyPatch.context() as env:
+                env.setenv("MARIN_PREFIX", self.state.worker_prefix)
+                try:
+                    self.entrypoint.callable(*self.entrypoint.args)
+                    self.result = JobStatus.SUCCEEDED
+                except OSError:
+                    self.result = JobStatus.FAILED
+        return self.result
 
     def terminate(self) -> None:
         self.events.append("prepare stopped")
@@ -69,15 +74,33 @@ def serving(monkeypatch, tmp_path):
     """Record prepare submissions and the config the accelerator job would receive."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
     state = SimpleNamespace(
-        events=[], requests=[], served=[], fail_prepare=False, fail_submit=False, worker_prefix=str(tmp_path / "cache")
+        events=[],
+        requests=[],
+        served=[],
+        downloads=[],
+        fail_prepare=False,
+        fail_submit=False,
+        timeout_prepare=False,
+        worker_prefix=str(tmp_path / "worker-cache"),
+        coordinator_cluster="other-cluster",
     )
+
+    def stream(fs, dest, model_id, revision, complete_marker):
+        if state.fail_prepare:
+            raise OSError("snapshot download failed")
+        state.downloads.append((model_id, revision, dest))
+        fs.makedirs(dest, exist_ok=True)
+        with fs.open(f"{dest}/config.json", "w") as config:
+            config.write("{}")
+
+    monkeypatch.setattr("levanter.model_cache._stream_hf_snapshot", stream)
 
     def submit(request):
         state.events.append("prepare")
         state.requests.append(request)
         if state.fail_submit:
             raise RuntimeError("Iris submission failed")
-        return FakePrepareJob(request, state.events, state.fail_prepare, state.worker_prefix)
+        return FakePrepareJob(request, state)
 
     @contextmanager
     def start_direct(config):
@@ -85,19 +108,35 @@ def serving(monkeypatch, tmp_path):
         state.served.append(config)
         yield SimpleNamespace(jobs=())
 
-    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        iris_module,
+        "get_job_info",
+        lambda: SimpleNamespace(worker_region="us-east1", constraints=[], task_id="/test/coordinator/0"),
+    )
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                task_status=lambda _task: SimpleNamespace(execution_cluster_id=state.coordinator_cluster)
+            )
+        ),
+    )
+    monkeypatch.setattr(cache_module, "get_job_info", iris_module.get_job_info)
+    monkeypatch.setattr(cache_module, "iris_ctx", iris_module.iris_ctx)
     monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=submit))
     monkeypatch.setattr(iris_module, "_start_direct_inference", start_direct)
     return state
 
 
-def _marker(model: str, revision: str | None = None, ttl: int = 14) -> StoragePath:
-    entry = model_cache_entry(model, ttl, revision)
-    assert entry is not None
-    return StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
+def _seed(model: str, revision: str, ttl: int = 14) -> StoragePath:
+    return StoragePath(resolve_model_path(model, ttl, revision)) / DEFAULT_COMPLETE_MARKER
 
 
-def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving):
+@pytest.mark.parametrize("same_cluster", [False, True])
+def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monkeypatch, same_cluster):
+    if same_cluster:
+        serving.coordinator_cluster = "cw-rno2a"
     with remote_inference(_config(REVISION)):
         pass
 
@@ -110,26 +149,47 @@ def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving):
     (served,) = serving.served
     assert served.model.revision == REVISION
     assert served.model.model_id == "org/candidate"
-    # The accelerator worker resolves the same entry the prepare job populated: a cache hit, no download.
-    resolved = resolve_model_path(served.model.weights, served.iris.cache_ttl_days, served.model.revision)
-    assert (StoragePath(resolved) / DEFAULT_COMPLETE_MARKER).exists()
-
-
-def test_prepare_job_resolves_the_cache_where_the_worker_runs(serving, monkeypatch, tmp_path):
-    # The coordinator's storage prefix differs from the serving cluster's (cross-cluster serving).
-    serving.worker_prefix = str(tmp_path / "serving-cluster")
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "coordinator-cluster"))
-
-    with remote_inference(_config(REVISION)):
-        pass
-
-    (served,) = serving.served
+    assert request.max_retries_failure == 1
+    assert len(serving.downloads) == 1
     monkeypatch.setenv("MARIN_PREFIX", serving.worker_prefix)
+    # The worker resolves the real job's output, without a second download.
     resolved = resolve_model_path(served.model.weights, served.iris.cache_ttl_days, served.model.revision)
     assert (StoragePath(resolved) / DEFAULT_COMPLETE_MARKER).exists()
+    assert len(serving.downloads) == 1
 
 
-def test_speculative_draft_model_is_mirrored_and_pinned(serving):
+@pytest.mark.parametrize(
+    "same_cluster,regions",
+    [
+        (True, ["us-east1"]),
+        (False, ["us-east1"]),
+        (True, ["us-west1"]),
+        (True, ["*"]),
+    ],
+)
+def test_warm_coordinator_only_skips_prepare_for_the_same_placement(serving, monkeypatch, same_cluster, regions):
+    _seed("org/candidate", REVISION)
+    serving.downloads.clear()
+    if same_cluster:
+        serving.coordinator_cluster = "cw-rno2a"
+    config = _config(REVISION)
+    config = replace(
+        config, iris=replace(config.iris, worker_resources=replace(config.iris.worker_resources, regions=regions))
+    )
+    colocated = same_cluster and regions == ["us-east1"]
+    if colocated:
+        # The actual prefix remains the coordinator prefix for a colocated worker.
+        serving.worker_prefix = os.environ["MARIN_PREFIX"]
+    with remote_inference(config):
+        pass
+    assert serving.events == (["gpu"] if colocated else ["prepare", "gpu"])
+    assert len(serving.downloads) == (0 if colocated else 1)
+    monkeypatch.setenv("MARIN_PREFIX", serving.worker_prefix)
+    assert _seed("org/candidate", REVISION).exists()
+    assert len(serving.downloads) == (0 if colocated else 1)
+
+
+def test_speculative_draft_model_is_mirrored_and_pinned(serving, monkeypatch):
     draft = SpeculativeServingConfig(
         method=SpeculativeMethod.EAGLE3,
         model=ResolvedModelLocator(uri=f"org/draft@{DRAFT_REVISION}", identity="draft"),
@@ -140,7 +200,9 @@ def test_speculative_draft_model_is_mirrored_and_pinned(serving):
         pass
 
     assert serving.events == ["prepare", "prepare", "gpu"]
-    assert _marker("org/draft", DRAFT_REVISION).exists()
+    monkeypatch.setenv("MARIN_PREFIX", serving.worker_prefix)
+    assert _seed("org/draft", DRAFT_REVISION).exists()
+    assert len(serving.downloads) == 2
     (served,) = serving.served
     assert served.engine.speculative.model.uri == f"org/draft@{DRAFT_REVISION}"
 
@@ -170,3 +232,32 @@ def test_prepare_failure_never_reserves_accelerators(serving, monkeypatch, failu
         assert serving.events == ["prepare", "prepare stopped"]
     else:
         assert exc_info.value.jobs == ()
+
+
+def test_prepare_timeout_is_not_retried_as_a_serving_readiness_timeout(serving):
+    serving.timeout_prepare = True
+    config = _config(REVISION)
+    config = replace(config, iris=replace(config.iris, max_retries_failure=1))
+    with ExitStack() as stack, pytest.raises(RemoteInferenceStartupError) as caught:
+        _inference_session(stack, config)
+    assert caught.value.phase is InferenceStartupPhase.PREPARATION
+    assert isinstance(caught.value.__cause__.__cause__, TimeoutError)
+    assert serving.events == ["prepare", "prepare stopped"]
+    assert len(serving.requests) == 1
+
+
+@pytest.mark.parametrize("device", ["gpu", "tpu"])
+def test_unpinned_gpu_skips_preparation_but_tpu_keeps_it(serving, caplog, device):
+    config = _config(REVISION)
+    resources = (
+        ResourceConfig.with_gpu("H100", count=1, regions=["us-east1"])
+        if device == "gpu"
+        else ResourceConfig.with_tpu("v4-8", regions=["us-east1"])
+    )
+    config = replace(config, iris=replace(config.iris, worker_resources=resources))
+    with remote_inference(config):
+        pass
+    assert serving.events == (["gpu"] if device == "gpu" else ["prepare", "gpu"])
+    assert len(serving.downloads) == (0 if device == "gpu" else 1)
+    if device == "gpu":
+        assert "Skipping CPU model preparation for unpinned GPU placement" in caplog.text

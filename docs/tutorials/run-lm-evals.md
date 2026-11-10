@@ -370,9 +370,16 @@ does not depend on the web server's thread-pool size.
 
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
 a record for that eval; other steps continue. For a Hugging Face model with caching enabled,
-`remote_inference` runs a CPU job on the serving cluster that mirrors an uncached checkpoint into
-that cluster's cache before reserving GPUs or TPUs. A cached checkpoint makes the job return at once. The prepare job can run for up to four hours and receives the serving
-worker's environment, including `HF_TOKEN` when the launch environment provides it. A preparation or
+`remote_inference` checks the completion marker in-process when the coordinator and serving
+workers share a cluster and region. A hit skips CPU preparation. A miss, or a different or
+unrestricted serving placement, submits a CPU job on the serving cluster before reserving
+GPUs or TPUs. Both paths use the worker's model resolver. The job receives the serving
+worker's environment, including `HF_TOKEN`, and gets one retry for a failure. Preparation
+has one four-hour wait budget; a preparation timeout does not trigger a serving-startup retry.
+With different cache prefixes or unrestricted multi-region placement, preparation can warm a
+cache the serving worker cannot use, and that worker may still download on an accelerator.
+Candidate and hosted-judge preparation are separate: cold judge preparation can hold already
+reserved candidate accelerators. A preparation or
 server startup failure marks every pending eval as an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
 with the same `--run-id`. The launcher derives the same eval identities, skips completed steps,
 and keeps unfinished evals in their existing FineStore archives. Evalchemy restores completed

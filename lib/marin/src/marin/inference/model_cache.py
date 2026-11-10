@@ -8,17 +8,19 @@ import uuid
 from dataclasses import dataclass, replace
 
 from fray.client import Client, JobHandle, wait_all
-from fray.types import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
-from levanter.model_cache import HfModelCacheEntry, cache_hf_model, hf_model_cache_entry
+from fray.types import Entrypoint, EnvironmentConfig, GpuConfig, JobRequest, ResourceConfig
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.constraints import WellKnownAttribute, region_constraint
+from levanter.model_cache import CacheMode, resolve_hf_model_ref
 from rigging.timing import Duration
 
 from marin.inference.config import InferenceEngineConfig, IrisConfig, ServedModelConfig, VllmEngineConfig
+from marin.inference.model_preparation import resolve_model_path
 
 logger = logging.getLogger(__name__)
 
-MODEL_CACHE_PREFIX = "quick-serve-models"
-_PREPARE_JOB_TIMEOUT_HOURS = 4
-_PREPARE_WAIT_TIMEOUT = 8 * 3600
+_PREPARE_TIMEOUT = Duration.from_hours(4)
 _PREPARE_CPU = 4
 _PREPARE_RAM = "8g"
 _PREPARE_DISK = "40g"
@@ -28,7 +30,7 @@ _PREPARE_DISK = "40g"
 class _PinnedModels:
     model: ServedModelConfig
     engine: InferenceEngineConfig
-    entries: tuple[HfModelCacheEntry, ...]
+    entries: tuple[str, ...]
 
 
 class ModelPreparationError(RuntimeError):
@@ -37,25 +39,6 @@ class ModelPreparationError(RuntimeError):
     def __init__(self, message: str, jobs: tuple[JobHandle, ...]):
         super().__init__(message)
         self.jobs = jobs
-
-
-def model_cache_entry(model: str, cache_ttl_days: int, revision: str | None = None) -> HfModelCacheEntry | None:
-    """Return the serving cache entry without downloading model weights."""
-    if revision is not None:
-        model = f"{model}@{revision}"
-    return hf_model_cache_entry(model, cache_ttl_days=cache_ttl_days, cache_prefix=MODEL_CACHE_PREFIX)
-
-
-def populate_model_cache(repo: str, revision: str, cache_ttl_days: int) -> str:
-    """Mirror ``repo@revision`` into the serving cache of the storage this process runs against.
-
-    The cache path depends on the process's storage prefix. Returns immediately when the entry
-    is already complete.
-    """
-    entry = model_cache_entry(repo, cache_ttl_days, revision)
-    if entry is None:
-        raise ValueError(f"{repo}@{revision} is not a cacheable Hugging Face model (cache_ttl_days={cache_ttl_days})")
-    return cache_hf_model(entry.path, entry.repo, revision=entry.revision)
 
 
 def prepare_hf_models(
@@ -68,8 +51,8 @@ def prepare_hf_models(
 ) -> tuple[ServedModelConfig, InferenceEngineConfig]:
     """Pin Hugging Face models to commits and fill their serving cache from CPU jobs.
 
-    Covers the served model and a vLLM speculative draft model. Each model gets one CPU job using
-    the region and target cluster constraints in ``iris.worker_resources``. Call it before submitting
+    Covers the served model and a vLLM speculative draft model. A colocated coordinator checks
+    the completion marker first; misses get CPU jobs at the serving placement. Call it before submitting
     accelerator jobs and serve the returned configs. Other models, and any model when caching is
     disabled, pass through unchanged.
 
@@ -81,13 +64,26 @@ def prepare_hf_models(
         pinned = _pinned_models(model, engine, iris.cache_ttl_days)
     except Exception as exc:
         raise ModelPreparationError(f"Model cache preparation failed: {exc}", jobs=()) from exc
+    if (
+        pinned.entries
+        and isinstance(iris.worker_resources.device, GpuConfig)
+        and not iris.worker_resources.target_cluster
+    ):
+        logger.warning(
+            "Skipping CPU model preparation for unpinned GPU placement: serving may auto-federate "
+            "while the CPU job stays local. Set target_cluster to prepare the serving cache."
+        )
+        return pinned.model, pinned.engine
     jobs: list[JobHandle] = []
     try:
+        check_local = bool(pinned.entries) and _coordinator_matches_serving_placement(iris.worker_resources)
         for entry in pinned.entries:
+            if check_local and resolve_model_path(entry, iris.cache_ttl_days, cache_mode=CacheMode.READ_ONLY) != entry:
+                continue
             job = client.submit(_prepare_job_request(entry, iris, environment))
-            logger.info("preparing %s@%s in job %s", entry.repo, entry.revision, job.job_id)
+            logger.info("preparing %s in job %s", entry, job.job_id)
             jobs.append(job)
-        wait_all(jobs, timeout=_PREPARE_WAIT_TIMEOUT)
+        wait_all(jobs, timeout=_PREPARE_TIMEOUT.to_seconds())
     except BaseException as exc:
         # Includes KeyboardInterrupt, so an interactive caller does not leave mirror jobs running.
         for job in jobs:
@@ -102,28 +98,29 @@ def prepare_hf_models(
 
 
 def _pinned_models(model: ServedModelConfig, engine: InferenceEngineConfig, cache_ttl_days: int) -> _PinnedModels:
-    entries: list[HfModelCacheEntry] = []
-    model_entry = model_cache_entry(model.weights, cache_ttl_days, model.revision)
-    if model_entry is not None:
-        entries.append(model_entry)
-        model = replace(model, weights=model_entry.repo, revision=model_entry.revision, api_model=model.model_id)
+    if cache_ttl_days <= 0:
+        return _PinnedModels(model, engine, ())
+    entries: list[str] = []
+    pinned = resolve_hf_model_ref(f"{model.weights}@{model.revision}" if model.revision else model.weights)
+    if pinned is not None:
+        entries.append(pinned)
+        repo, _, revision = pinned.partition("@")
+        model = replace(model, weights=repo, revision=revision, api_model=model.model_id)
     if isinstance(engine, VllmEngineConfig) and engine.speculative is not None:
         speculative = engine.speculative
-        draft_entry = model_cache_entry(speculative.model.uri, cache_ttl_days)
-        if draft_entry is not None:
-            entries.append(draft_entry)
-            draft_model = replace(speculative.model, uri=f"{draft_entry.repo}@{draft_entry.revision}")
+        pinned_draft = resolve_hf_model_ref(speculative.model.uri)
+        if pinned_draft is not None:
+            entries.append(pinned_draft)
+            draft_model = replace(speculative.model, uri=pinned_draft)
             engine = replace(engine, speculative=replace(speculative, model=draft_model))
-    return _PinnedModels(model, engine, tuple(entries))
+    return _PinnedModels(model, engine, tuple(dict.fromkeys(entries)))
 
 
-def _prepare_job_request(entry: HfModelCacheEntry, iris: IrisConfig, environment: EnvironmentConfig) -> JobRequest:
+def _prepare_job_request(entry: str, iris: IrisConfig, environment: EnvironmentConfig) -> JobRequest:
     worker_resources = iris.worker_resources
     return JobRequest(
         name=f"prepare-model-{uuid.uuid4().hex}",
-        entrypoint=Entrypoint.from_callable(
-            populate_model_cache, args=(entry.repo, entry.revision, iris.cache_ttl_days)
-        ),
+        entrypoint=Entrypoint.from_callable(resolve_model_path, args=(entry, iris.cache_ttl_days)),
         resources=ResourceConfig.with_cpu(
             cpu=_PREPARE_CPU,
             ram=_PREPARE_RAM,
@@ -134,5 +131,23 @@ def _prepare_job_request(entry: HfModelCacheEntry, iris: IrisConfig, environment
         ),
         environment=environment,
         priority=iris.priority,
-        timeout=Duration.from_hours(_PREPARE_JOB_TIMEOUT_HOURS),
+        timeout=_PREPARE_TIMEOUT,
+        max_retries_failure=1,
     )
+
+
+def _coordinator_matches_serving_placement(resources: ResourceConfig) -> bool:
+    info = get_job_info()
+    if info is None or info.worker_region is None:
+        return False
+    if resources.regions:
+        if list(resources.regions) != [info.worker_region]:
+            return False
+    else:
+        # Unset children inherit parent constraints, or the parent's physical region.
+        expected = region_constraint([info.worker_region])
+        if any(c.key == WellKnownAttribute.REGION and c != expected for c in info.constraints):
+            return False
+    if resources.target_cluster is None:
+        return True
+    return iris_ctx().client.task_status(info.task_id).execution_cluster_id == resources.target_cluster
