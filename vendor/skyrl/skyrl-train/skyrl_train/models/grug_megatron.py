@@ -50,7 +50,7 @@ from megatron.core.transformer.utils import make_sharded_tensors_for_checkpoint,
 from megatron.core.typed_torch import apply_module
 from torch import nn
 
-from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_document_positions
+from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_visible_keys
 from skyrl_train.models.megatron_router_replay import RouterScoreType
 from skyrl_train.models.grug_shortconv import causal_short_conv
 from skyrl_train.models.grug_moe import (
@@ -249,13 +249,13 @@ class GrugSelfAttention(SelfAttention):
         cp_group = self.pg_collection.cp
         if is_thd:
             cu_seqlens = _first_present(packed_seq_params.cu_seqlens_q_padded, packed_seq_params.cu_seqlens_q)
-            positions = thd_document_positions(cu_seqlens, query.shape[0], cp_group.size(), cp_group.rank())
+            visible_keys = thd_visible_keys(cu_seqlens, query.shape[0], cp_group.size(), cp_group.rank())
         else:
             # Unpacked rows start at their first token once the trainer removes left padding.
-            positions = torch.arange(query.shape[0], device=query.device)[:, None]
+            visible_keys = torch.arange(1, query.shape[0] + 1, device=query.device)[:, None]
         config = self.config
         factor = grug_log_scaling_factor(
-            positions + 1, config.grug_log_scaling_n_floor, config.grug_log_scaling_alpha, config.grug_log_scaling_power
+            visible_keys, config.grug_log_scaling_n_floor, config.grug_log_scaling_alpha, config.grug_log_scaling_power
         )
         return factor[..., None, None]
 

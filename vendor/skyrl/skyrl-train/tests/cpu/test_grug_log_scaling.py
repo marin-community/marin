@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from skyrl_train.models.grug_log_scaling import thd_document_positions
+from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_visible_keys
 from skyrl_train.models.grug_moe import GrugMoeConfig
 from tests.cpu.util import stub_megatron_modules
 
@@ -11,28 +11,37 @@ HERO_LOG_SCALING = dict(log_scaling_n_floor=65536, log_scaling_alpha=0.1, log_sc
 
 
 @pytest.mark.parametrize("cp_size", [1, 2, 4])
-def test_positions_restart_per_document_on_every_cp_rank(monkeypatch, cp_size):
+def test_visible_keys_restart_per_document_on_every_cp_rank(monkeypatch, cp_size):
     stub_megatron_modules()
     # Megatron is optional in CPU CI; import its packing utilities after installing the stubs.
     from skyrl_train.distributed.megatron import megatron_utils  # noqa: PLC0415
 
-    # Rows are documents with left and right padding; each valid token holds its position in the document.
+    # Rows are documents with left and right padding; each valid token holds the keys it sees in its document.
     attention_mask = torch.tensor(
         [[0, 0, 1, 1, 1, 1, 1, 0], [1, 1, 1, 0, 0, 0, 0, 0], [0, 1, 1, 1, 1, 1, 1, 1]], dtype=torch.bool
     )
-    positions = (attention_mask.long().cumsum(-1) - 1).clamp(min=0)
+    visible_keys = attention_mask.long().cumsum(-1)
     monkeypatch.setattr(megatron_utils.mpu, "get_tensor_model_parallel_world_size", lambda: 1, raising=False)
     monkeypatch.setattr(megatron_utils.mpu, "get_context_parallel_world_size", lambda: cp_size, raising=False)
     for rank in range(cp_size):
         monkeypatch.setattr(megatron_utils.mpu, "get_context_parallel_rank", lambda: rank, raising=False)
-        packed_positions, params = megatron_utils.preprocess_packed_seqs(positions, attention_mask)
+        packed_keys, params = megatron_utils.preprocess_packed_seqs(visible_keys, attention_mask)
         packed_valid, _ = megatron_utils.preprocess_packed_seqs(attention_mask.long(), attention_mask)
         valid = packed_valid[0].bool()
 
-        actual = thd_document_positions(params.cu_seqlens_q_padded, packed_positions.shape[1], cp_size, rank)
+        actual = thd_visible_keys(params.cu_seqlens_q_padded, packed_keys.shape[1], cp_size, rank)
 
         assert valid.any()
-        assert actual[valid].tolist() == packed_positions[0, valid].tolist()
+        assert actual[valid].tolist() == packed_keys[0, valid].tolist()
+
+
+def test_hero_log_scaling_factor_is_one_through_the_floor_and_1_296_at_262144_keys():
+    visible_keys = torch.tensor([1, 65536, 65537, 131072, 262144])
+
+    factor = grug_log_scaling_factor(visible_keys, 65536, 0.1, 2.0)
+
+    expected = torch.tensor([1.0, 1.0, 1.0000030517, 1.1434339663, 1.2964769928])
+    torch.testing.assert_close(factor, expected, rtol=1e-6, atol=0)
 
 
 @pytest.mark.parametrize(
