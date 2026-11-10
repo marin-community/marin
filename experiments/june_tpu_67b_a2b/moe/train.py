@@ -100,6 +100,12 @@ class GrugTrainerConfig:
     collective that never times out, and without this the job sits until its scheduler time limit. None disables
     it."""
 
+    carry_compute_params: bool = False
+    """Carry a compute-dtype copy of the parameters in the train state, written next to the optimizer update, and
+    differentiate with respect to it. Saves re-reading and casting every float32 parameter at the start of each step
+    (the update already reads them), for one extra compute-dtype copy of the parameters in memory. The gradients are
+    the same: the cast's transpose is the cast of the compute-dtype gradient back to the parameter dtype."""
+
     qb_sync_interval: int = 0
     """With per-node QB balancing (``GrugModelConfig.qb_balance="per_node"``): every this many steps, replace each
     node's QB thresholds by the mean over nodes, so the nodes' router biases cannot drift apart. 0 never averages."""
@@ -290,6 +296,7 @@ class GrugTrainState:
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
+    compute_params: Transformer | None = None  # mp.cast_to_compute(params), see carry_compute_params
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -297,17 +304,20 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     new_biases = -qb_betas
     new_biases = new_biases - jnp.mean(new_biases, axis=-1, keepdims=True)
     if model.stacked_blocks is not None:
+        # In the dtype of the model's biases, so that the compute-dtype copy keeps its dtype.
+        old_biases = model.stacked_blocks.stacked.mlp.router_bias
         return eqx.tree_at(
             lambda t: t.stacked_blocks.stacked.mlp.router_bias,
             model,
-            new_biases,
+            new_biases.astype(old_biases.dtype),
         )
     assert model.blocks is not None
     new_blocks = list(model.blocks)
     for i, block in enumerate(model.blocks):
         if not isinstance(block, Block) or block.mlp is None:
             continue
-        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_biases[i])
+        bias = new_biases[i].astype(block.mlp.router_bias.dtype)
+        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, bias)
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
@@ -319,6 +329,7 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None,
+    carry_compute_params: bool = False,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     if params.blocks is not None:
@@ -331,6 +342,7 @@ def initial_state(
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=_initial_qb_betas(model_config, num_moe_layers),
+        compute_params=mp.cast_to_compute(params) if carry_compute_params else None,
     )
 
 
@@ -407,8 +419,7 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
-        def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
+        def loss_fn(compute_params):
             return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
@@ -418,7 +429,14 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        if state.compute_params is None:
+            (loss, summarized_metrics), grads = jax.value_and_grad(
+                lambda params: loss_fn(mp.cast_to_compute(params)), has_aux=True
+            )(qb_params)
+        else:
+            qb_compute_params = _apply_qb_betas(state.compute_params, state.pending_qb_betas)
+            (loss, summarized_metrics), compute_grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_compute_params)
+            grads = mp.cast_to_param(compute_grads)
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
@@ -474,6 +492,7 @@ def _make_train_step(
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=pending_qb_betas,
+            compute_params=None if state.compute_params is None else mp.cast_to_compute(params),
         )
 
         return next_state, metrics, watch_stats
@@ -572,6 +591,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+                carry_compute_params=config.trainer.carry_compute_params,
             )
 
         state = _init_state(model_key)
@@ -606,6 +626,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 initialize_from=trainer.initialize_from,
             )
 
+        if state.compute_params is not None:
+            # Rebuilt from the (possibly restored) parameters, so it never comes from a checkpoint.
+            state = dataclasses.replace(state, compute_params=jax.jit(trainer.mp.cast_to_compute)(state.params))
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)

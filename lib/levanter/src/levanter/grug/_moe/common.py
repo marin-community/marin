@@ -129,6 +129,9 @@ _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
 _CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
 _CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+# Integer routing state (slots, picked positions, group sizes): a few MB per layer, but recomputing it in backward
+# re-runs its scatters and cumsums.
+_CHECKPOINT_ROUTING = "grug_moe_routing"
 
 # Checkpoint names every MoE backend tags on its dispatch tensors. A remat
 # policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -139,6 +142,7 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
+    _CHECKPOINT_ROUTING,
 )
 
 

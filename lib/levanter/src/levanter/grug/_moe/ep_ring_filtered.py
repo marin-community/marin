@@ -30,6 +30,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_ROUTING,
     _scaled_capacity,
     CapacityDrops,
 )
@@ -195,6 +196,7 @@ def _moe_mlp_ep_ring_filtered_local(
         # Per send row: the token's combine weights and local expert ids on that destination.
         slot_valid = source < tokens
         safe_source = jnp.minimum(source, tokens - 1)
+        slot, safe_source, slot_valid = tree_checkpoint_name((slot, safe_source, slot_valid), _CHECKPOINT_ROUTING)
         slot_destination = jnp.arange(send_rows, dtype=jnp.int32) // pair_capacity
         slot_selected = selected[safe_source]
         on_destination = slot_valid[:, None] & (slot_selected // local_experts == slot_destination[:, None])
@@ -242,6 +244,9 @@ def _moe_mlp_ep_ring_filtered_local(
         dispatch_row = jnp.where(dispatch_valid, picked // topk, send_rows)
         # position[r, j]: the dispatch row of received row r's j-th assignment, or the sentinel.
         position = _assignment_sources(picked, send_size=received_assignments).reshape(send_rows, topk)
+        group_sizes, picked, dispatch_valid, dispatch_row, position = tree_checkpoint_name(
+            (group_sizes, picked, dispatch_valid, dispatch_row, position), _CHECKPOINT_ROUTING
+        )
 
         x_dispatch = _dispatch_rows(received_x, jnp.minimum(dispatch_row, send_rows - 1), dispatch_valid, position)
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
