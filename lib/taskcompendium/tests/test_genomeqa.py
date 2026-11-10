@@ -96,7 +96,6 @@ def test_source_conversion_preserves_question_and_private_grading_inputs(tmp_pat
     )
     assert not task.resources.worker
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
-    config = json.loads(private["config.json"])
     for resource_path, content in private.items():
         target = tmp_path / resource_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -113,10 +112,9 @@ def test_source_conversion_preserves_question_and_private_grading_inputs(tmp_pat
         text=True,
         check=True,
     )
-    assert json.loads(completed.stdout)["reward"] == 1
-    verdict = score("genomeqa", config, "### Answer\nB")
-    assert verdict.reward == 1
-    assert verdict.detail["metric_weights"] == {"genomeqa_macro": 5}
+    verdict = json.loads(completed.stdout)
+    assert verdict["reward"] == 1
+    assert verdict["detail"]["metric_weights"] == {"genomeqa_macro": 5}
     assert source.genomeqa_item(task).groups == {"subtask": "6_motif", "format": "binary", "cell": "6_motif/binary"}
 
 
