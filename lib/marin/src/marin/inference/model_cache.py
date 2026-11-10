@@ -5,7 +5,7 @@
 
 import logging
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from fray.client import Client, JobHandle, wait_all
 from fray.types import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig
@@ -22,6 +22,13 @@ _PREPARE_WAIT_TIMEOUT = 8 * 3600
 _PREPARE_CPU = 4
 _PREPARE_RAM = "8g"
 _PREPARE_DISK = "40g"
+
+
+@dataclass(frozen=True)
+class _PinnedModels:
+    model: ServedModelConfig
+    engine: InferenceEngineConfig
+    entries: tuple[HfModelCacheEntry, ...]
 
 
 class ModelPreparationError(RuntimeError):
@@ -72,12 +79,12 @@ def prepare_hf_models(
             jobs are terminated first.
     """
     try:
-        model, engine, entries = _pinned_models(model, engine, iris.cache_ttl_days)
+        pinned = _pinned_models(model, engine, iris.cache_ttl_days)
     except Exception as exc:
         raise ModelPreparationError(f"Model cache preparation failed: {exc}", jobs=()) from exc
     jobs: list[JobHandle] = []
     try:
-        for entry in entries:
+        for entry in pinned.entries:
             job = client.submit(_prepare_job_request(entry, iris, environment))
             logger.info("preparing %s@%s in job %s", entry.repo, entry.revision, job.job_id)
             jobs.append(job)
@@ -92,12 +99,10 @@ def prepare_hf_models(
         if not isinstance(exc, Exception):
             raise
         raise ModelPreparationError(f"Model cache preparation failed: {exc}", jobs=tuple(jobs)) from exc
-    return model, engine
+    return pinned.model, pinned.engine
 
 
-def _pinned_models(
-    model: ServedModelConfig, engine: InferenceEngineConfig, cache_ttl_days: int
-) -> tuple[ServedModelConfig, InferenceEngineConfig, list[HfModelCacheEntry]]:
+def _pinned_models(model: ServedModelConfig, engine: InferenceEngineConfig, cache_ttl_days: int) -> _PinnedModels:
     entries: list[HfModelCacheEntry] = []
     model_entry = model_cache_entry(model.weights, cache_ttl_days, model.revision)
     if model_entry is not None:
@@ -110,7 +115,7 @@ def _pinned_models(
             entries.append(draft_entry)
             draft_model = replace(speculative.model, uri=f"{draft_entry.repo}@{draft_entry.revision}")
             engine = replace(engine, speculative=replace(speculative, model=draft_model))
-    return model, engine, entries
+    return _PinnedModels(model, engine, tuple(entries))
 
 
 def _prepare_job_request(entry: HfModelCacheEntry, iris: IrisConfig, environment: EnvironmentConfig) -> JobRequest:

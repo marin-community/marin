@@ -97,7 +97,6 @@ _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
-# The CPU job that mirrors uncached Hugging Face weights before accelerators are reserved.
 _BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
