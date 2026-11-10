@@ -1,0 +1,14 @@
+{
+  "notebook_sha256": "86ed722e4fa22824ff4d11f0553e7790f6f49ff0650eddd8dd1af5df14d1ed5c",
+  "notebook_name": "w_v06_slr0.015_randrand_muonh_switch_qwen3_130m.ipynb",
+  "source_cells": [
+    10,
+    13
+  ],
+  "torch_version": "2.9.1+cu128",
+  "fixture_sha256": "6a019da1d619b79b44a77a8fa061ff356d88e34f2fb2921b675084437c9b95a6",
+  "updates": 1450,
+  "purpose": "Unmodified notebook optimizer, shared Gaussian sketches; production switch boundaries and partial latch",
+  "final_blend": 0.8000000083693244,
+  "final_cosine_ema": 0.1675217471673469
+}

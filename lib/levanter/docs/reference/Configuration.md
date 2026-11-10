@@ -470,7 +470,7 @@ and full Paloma C4 English validation cache, tokenized with
 downloaded or retokenized by this entrypoint. `--optimizer-config PATH` accepts
 an explicit Levanter optimizer YAML to run a baseline on the same architecture.
 
-Both recipes train for 4,959 updates of 128 sequences of length 4,096,
+The `pr6301` and `hybrid` recipes train for 4,959 updates of 128 sequences of length 4,096,
 with FP32 parameters and BF16 computation, model seed 0, data seed 42,
 linear permutation shuffling, and EOS-separated attention. Evaluation uses
 all validation batches every 1,000 updates and at the end; `--eval-every 200`
@@ -485,6 +485,107 @@ BPB. The recipes preserve benchmark geometry and evaluation intent on current
 Levanter, not bitwise equivalence to an old trainer revision. Evaluate a fresh
 baseline with the same recipe, caches and software revision, and report quality,
 throughput and peak memory. Full accelerator validation remains necessary.
+
+#### RandRAND/MuonH adaptive blend
+
+`--recipe randrand_muon_hybrid` selects `optimizer.type: randrand_muon_hybrid`
+and the hybrid-normalized Qwen3 model. The existing `pr6301` and `hybrid`
+recipes retain their settings. This third recipe reproduces the optimizer
+computation and settings supplied in `w_v06_slr0.015`:
+
+| Route | Algorithm | Peak LR | Betas | WD |
+|---|---|---|---|---|
+| Body matrices | RandRAND candidate | 0.006 | (0.95, 0.95) | 0.0303 |
+| Body matrices | MuonH candidate | 0.015 relative step | Momentum 0.95, Nesterov | 0 |
+| Embedding | AdamW | 0.1 | (0.9, 0.98) | 0 |
+| Vectors, including output RMSNorm gains | AdamW | 0.06 | (0.9, 0.98) | 0 |
+| Head | AdamW | 0.006 | (0.9, 0.98) | 0 |
+
+RandRAND uses paired projection with rank 32, sketch 64 plus 8 oversampling,
+K=25 selected left/right eigenvector pairs, Gram EMA beta 0.95, a first refresh before update 101, and subsequent
+refreshes every 10 updates. The complement boost is 5 and low-rank correction
+is disabled: remove those pairs from the Adam direction and multiply the
+remaining direction by 5. Decoupled decay also uses 5 times the scheduled
+base matrix LR after update 100. Matrix Adam epsilon is 1e-8; auxiliary epsilon is 1e-15. Clip each of three gradient buckets (matrices, embedding plus vectors, head)
+at norm 1. All LRs share a 1,000-step linear warmup from zero, followed by
+cosine decay to zero over the 4,959-update horizon.
+The new recipe uses model seed 42 to match the supplied notebook; the two
+existing recipes retain model seed 0. Data seed remains 42 for all recipes.
+The notebook's PyTorch initialization and sampling still differ from Levanter.
+
+For each body matrix, both candidate weights start from the current weights
+W. RandRAND produces W_RR, including its boosted decoupled decay. MuonH
+produces W_MH using five Newton–Schulz iterations (NS5) with FP32 coefficients (3.4445, -4.7750, 2.0315),
+normalization epsilon 1e-5, and no shape scaling. Its Hyperball retraction
+preserves the Frobenius norm of W at that update, rather than the initialization
+norm. If D is the NS5 direction, r is the current Frobenius norm of W, and
+s is the shared LR multiplier, form `P = W - 0.015*s*r*D/max(norm(D),1e-10)`
+and `W_MH = r*P/max(norm(P),1e-10)`. Muon momentum accumulates from update 1; it is not reset at the switch.
+The applied weights are `(1-a) * W_RR + a * W_MH`. Embedding, vectors and head
+remain AdamW throughout; the head does not use AdamH.
+
+The global cosine c compares the current clipped gradient with the previous
+actual applied update `W_before - W_after`, pooled over all body matrices.
+The blend a is zero through update 1000. Its cosine EMA e has beta 0.98 and initializes on the first valid cosine. Beginning
+at update 1001, `target = clip((0-e)/0.05, 0, 1)` and
+`a = min(max(a_previous, target), a_previous + 1/400)`. The blend never
+decreases. A zero previous update leaves the EMA unchanged. RandRAND state,
+basis refreshes and updates continue after blending begins, even if a reaches
+one; this recipe does not implement a hard handoff.
+
+The supplied notebook records local FineWeb-Edu holdout cross-entropy
+(nats/token, 32 fixed batches) of 3.276339 at step 4800,
+3.275633 at step 4959, and Paloma BPB 1.165051. It reports a blend near 0.9811
+from approximately step 1400 onward; this value is an observed outcome, not a
+fixed setting. These are collaborator-reported single-run PyTorch results,
+not completed Marin measurements of this new recipe. The source file is `w_v06_slr0.015_randrand_muonh_switch_qwen3_130m.ipynb`,
+supplied privately for this evaluation and not bundled in Marin. Its
+SHA-256 is `86ed722e4fa22824ff4d11f0553e7790f6f49ff0650eddd8dd1af5df14d1ed5c`.
+The notebook was run with PyTorch 2.11.0; the independent CPU numerical fixture
+was generated from its unchanged optimizer cells using PyTorch 2.9.1; see
+`lib/levanter/tests/data/randrand/switch_reference.json` for provenance and
+`lib/levanter/tests/test_randrand_muon_hybrid.py` for the replay.
+
+The runtime needs no Torch. Checkpoints include the Muon momentum, previous
+applied updates, cosine EMA, blend weight and the complete RandRAND state.
+Large momentum/update buffers retain named axes for sharding. Trainer logs
+`optim/switch/blend`, `cosine`, `cosine_ema`, `initialized`, `matrix_norm`, and
+`matrix_norm_over_init` under the same `optim/switch/` prefix. The norm is
+pooled across body matrices, not the notebook's median per-matrix norm ratio.
+A cosine with no valid denominator is logged as zero; `initialized` indicates
+whether the cosine EMA has received any valid observation.
+
+Run with `--recipe randrand_muon_hybrid --eval-every 200` and the same cache,
+output and `--run` arguments shown above. Use a fresh MuonH comparison on this
+same model, seed, cache and budget, using the MuonH 130M sweep configuration
+linked below as the baseline reference. An `--optimizer-config` baseline override
+preserves the selected recipe's model and seed. Report final C4 BPB, throughput
+and memory; the blend keeps both algorithms' work and adds momentum/update
+buffers, so it carries no claim of lower cost than MuonH.
+
+#### Hybrid-normalization model reference
+
+The reference is Marin's historical MuonH Qwen3 scaling configuration at
+commit `2d6290a99cd2e51ea4fda7108731b203a54dad54`:
+[`_to_qwen3_from_llama` explicitly sets `hybrid_norm=True`](https://github.com/marin-community/marin/blob/2d6290a99cd2e51ea4fda7108731b203a54dad54/experiments/speedrun/muonh_qwen3_scaling/muonh_sweep.py#L55-L80).
+Its 130M entry selects the `llama_150m` dimensions and converts them to Qwen3.
+This historical experiment was removed from current main; the model option
+remains implemented in Levanter.
+
+At implementation reference commit `e8eeba00da7aefd98b31620ad8d938e1d442d52d`,
+[`Qwen3LMHeadModel` constructs `LlamaTransformer`](https://github.com/marin-community/marin/blob/e8eeba00da7aefd98b31620ad8d938e1d442d52d/lib/levanter/src/levanter/models/qwen.py#L384-L399),
+and [`LlamaDecoderLayer`](https://github.com/marin-community/marin/blob/e8eeba00da7aefd98b31620ad8d938e1d442d52d/lib/levanter/src/levanter/models/llama.py#L297-L347)
+adds a learned RMSNorm to each attention and MLP output before residual addition.
+The existing pre-attention/pre-MLP norms remain present. QK normalization remains
+present in both standard and hybrid-normalized Qwen3.
+
+The concrete model is six layers, width 512, MLP width 1792, eight query and
+KV heads of dimension 64, context 4096, untied vocabulary 128256, RoPE theta
+10000, and RMSNorm epsilon 1e-5. Hybrid normalization adds 12 vectors of length
+512 (6,144 parameters): total 154,154,240 versus standard 154,148,096. The
+historical benchmark calls this size "130M". Here "hybrid normalization"
+identifies this architecture option; "RandRAND/MuonH blend" identifies the
+optimizer and does not define a new model architecture.
 
 ### Standard Options
 

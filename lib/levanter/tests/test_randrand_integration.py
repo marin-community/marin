@@ -19,6 +19,7 @@ from levanter.optim.config import OptimizerConfig
 from levanter.checkpoint import save_checkpoint, load_checkpoint
 
 from levanter.optim.randrand import RandRANDConfig, parameter_layout, _pack, _unpack
+from levanter.optim.randrand_muon_hybrid import RandRANDMuonHybridConfig, MuonBlendConfig
 
 
 def tiny_model(*, scan_layers=True):
@@ -55,9 +56,12 @@ def test_axis_roundtrip_and_full_attention_projections(scan_layers):
     assert shapes.count((16, 32)) == 2
 
 
-def test_configured_qwen_updates_resume_from_native_checkpoint(tmp_path):
-    config = RandRANDConfig(
-        rank=2, rank_sketch=3, pair_k=1, min_dim_for_deflation=1, randrand_warmup=2, basis_every=2, warmup=2
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_configured_qwen_updates_resume_from_native_checkpoint(tmp_path, hybrid):
+    constructor = RandRANDMuonHybridConfig if hybrid else RandRANDConfig
+    extra = dict(switch=MuonBlendConfig(min_step=2, threshold=1.0, ramp=4)) if hybrid else {}
+    config = constructor(
+        **extra, rank=2, rank_sketch=3, pair_k=1, min_dim_for_deflation=1, randrand_warmup=2, basis_every=2, warmup=2
     )
     assert draccus.decode(OptimizerConfig, draccus.encode(config, OptimizerConfig)) == config
     model = tiny_model()
@@ -88,17 +92,22 @@ def test_configured_qwen_updates_resume_from_native_checkpoint(tmp_path):
     b = train_step(resumed["params"], resumed["state"])
     for x, y in zip(jax.tree.leaves(a), jax.tree.leaves(b), strict=True):
         np.testing.assert_array_equal(x, y)
-    assert int(a[1].count) == 5
+    assert int(a[1].randrand.count if hybrid else a[1].count) == 5
+    if hybrid:
+        assert 0 < float(a[1].blend.weight) <= 1
     assert all(np.isfinite(x).all() for x in jax.tree.leaves(a))
 
 
 @pytest.mark.multidevice
-def test_named_jit_shards_adam_buffers_and_preserves_updates():
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_named_jit_shards_adam_buffers_and_preserves_updates(hybrid):
     if len(jax.devices()) < 2:
         pytest.skip("Run with two CPU devices or multiple accelerators for the sharding check")
     mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:2]), ("data",))
-    config = RandRANDConfig(
-        rank=2, rank_sketch=3, pair_k=1, min_dim_for_deflation=1, randrand_warmup=2, basis_every=2, warmup=2
+    constructor = RandRANDMuonHybridConfig if hybrid else RandRANDConfig
+    extra = dict(switch=MuonBlendConfig(min_step=1, threshold=1.0, ramp=2)) if hybrid else {}
+    config = constructor(
+        **extra, rank=2, rank_sketch=3, pair_k=1, min_dim_for_deflation=1, randrand_warmup=2, basis_every=2, warmup=2
     )
     params = eqx.filter(tiny_model(), eqx.is_inexact_array)
     tx = config.build(10)
@@ -113,12 +122,23 @@ def test_named_jit_shards_adam_buffers_and_preserves_updates():
     with jax.set_mesh(mesh):
         distributed_p = hax.shard(params, {"embed": "data"})
         distributed_s = hax.shard(state, {"embed": "data"})
-        assert any(not a.sharding.is_fully_replicated for a in jax.tree.leaves(distributed_s.first))
+        assert any(
+            not a.sharding.is_fully_replicated
+            for a in jax.tree.leaves(distributed_s.randrand.first if hybrid else distributed_s.first)
+        )
         for i in range(4):
             grads = jax.tree.map(lambda p, i=i: jnp.sin(p + jnp.float32(i)), params)
             params, state = ordinary(params, state, grads)
             distributed_p, distributed_s = mapped(distributed_p, distributed_s, hax.shard(grads, {"embed": "data"}))
         for a, b in zip(jax.tree.leaves(params), jax.tree.leaves(distributed_p), strict=True):
             np.testing.assert_allclose(a, b, atol=1e-5, rtol=1e-5)
-        assert int(distributed_s.count) == 4
-        assert any(not a.sharding.is_fully_replicated for a in jax.tree.leaves(distributed_s.first))
+        assert int(distributed_s.randrand.count if hybrid else distributed_s.count) == 4
+        if hybrid:
+            assert float(distributed_s.blend.weight) > 0
+            for buffers in (distributed_s.momentum, distributed_s.previous_update):
+                assert any(not a.sharding.is_fully_replicated for a in jax.tree.leaves(buffers))
+            np.testing.assert_allclose(distributed_s.blend.weight, state.blend.weight, atol=1e-5, rtol=1e-5)
+        assert any(
+            not a.sharding.is_fully_replicated
+            for a in jax.tree.leaves(distributed_s.randrand.first if hybrid else distributed_s.first)
+        )

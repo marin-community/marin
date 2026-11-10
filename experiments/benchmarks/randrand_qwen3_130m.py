@@ -21,23 +21,27 @@ from levanter.main.train_lm import main as train_main
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.randrand import RandRANDConfig
+from levanter.optim.randrand_muon_hybrid import RandRANDMuonHybridConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 
-class Architecture(StrEnum):
+class Recipe(StrEnum):
     PR6301 = "pr6301"
     HYBRID = "hybrid"
+    RANDRAND_MUON_HYBRID = "randrand_muon_hybrid"
 
 
-def optimizer_config(architecture: Architecture) -> RandRANDConfig:
-    """Pair each architecture with the best recorded local RandRAND settings."""
-    if architecture == Architecture.PR6301:
+def optimizer_config(recipe: Recipe) -> RandRANDConfig:
+    """Pair each recipe with the best recorded local RandRAND settings."""
+    if recipe == Recipe.PR6301:
         return RandRANDConfig(learning_rate=0.006, embed_lr=0.6, vector_lr=0.006)
+    if recipe == Recipe.RANDRAND_MUON_HYBRID:
+        return RandRANDMuonHybridConfig()
     return RandRANDConfig()
 
 
-def model_config(architecture: Architecture) -> Qwen3Config:
+def model_config(recipe: Recipe) -> Qwen3Config:
     """Construct the historical size with an explicit normalization choice."""
     return Qwen3Config(
         max_seq_len=4096,
@@ -46,7 +50,7 @@ def model_config(architecture: Architecture) -> Qwen3Config:
         num_layers=6,
         num_heads=8,
         num_kv_heads=8,
-        hybrid_norm=architecture == Architecture.HYBRID,
+        hybrid_norm=recipe != Recipe.PR6301,
         use_qk_norm=False,
         input_embedding_norm=False,
         tie_word_embeddings=False,
@@ -60,7 +64,7 @@ def model_config(architecture: Architecture) -> Qwen3Config:
 
 def build_config(
     *,
-    architecture: Architecture,
+    recipe: Recipe,
     train_cache: str,
     c4_cache: str,
     output_path: str,
@@ -85,16 +89,16 @@ def build_config(
         train_weights={"fineweb_edu": 1.0, "paloma/c4_en": 0.0},
     )
     return TrainLmConfig(
-        model=model_config(architecture),
+        model=model_config(recipe),
         train_seq_len=4096,
         data=data,
         data_seed=42,
-        optimizer=optimizer_config(architecture) if optimizer is None else optimizer,
+        optimizer=optimizer_config(recipe) if optimizer is None else optimizer,
         z_loss_weight=0.0,
         hf_save_path=None,
         trainer=TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=42 if recipe == Recipe.RANDRAND_MUON_HYBRID else 0,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=128,
             num_train_steps=4959,
@@ -111,11 +115,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--recipe",
-        dest="architecture",
-        type=Architecture,
-        choices=list(Architecture),
+        dest="recipe",
+        type=Recipe,
+        choices=list(Recipe),
         required=True,
-        help="Architecture AND corresponding best-run optimizer settings: pr6301 or hybrid",
+        help="Recipe AND corresponding best-run optimizer settings: pr6301, hybrid, or randrand_muon_hybrid",
     )
     parser.add_argument("--train-cache", required=True)
     parser.add_argument("--c4-cache", required=True)
@@ -132,7 +136,7 @@ def main() -> None:
         else None
     )
     config = build_config(
-        architecture=args.architecture,
+        recipe=args.recipe,
         train_cache=args.train_cache,
         c4_cache=args.c4_cache,
         output_path=args.output_path,
