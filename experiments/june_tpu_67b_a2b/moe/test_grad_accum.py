@@ -213,3 +213,38 @@ def test_qb_thresholds_are_the_mean_over_microbatches():
             )
             assert jax.typeof(state.pending_qb_betas).sharding.spec == june_train.qb_betas_spec(cfg), qb_balance
             np.testing.assert_allclose(state.pending_qb_betas, expected, rtol=1e-6, atol=1e-7, err_msg=qb_balance)
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.multidevice
+def test_per_node_qb_thresholds_weight_each_group_by_its_own_valid_tokens():
+    # Padding spread unevenly over the groups: microbatch 1 of 4 holds rows 1, 5, 9, ..., two per group of the
+    # replica_dcn=2 x data=2 groups, and group 0's (rows 1 and 5) are all padding. Each group's thresholds are the mean
+    # of the microbatches' weighted by that group's valid tokens, so microbatch 1 adds nothing to group 0's.
+    with use_cpu_devices(8):
+        policy = jmp.get_policy("f32")
+        cfg = dataclasses.replace(BASE, qb_balance="per_node")
+        mesh = _meshes()["replica2_data2_expert2"]
+        k, groups = 4, 4
+        segment_ids = SEGMENT_IDS.copy()
+        segment_ids[[1, 5]] = -1
+
+        def batch(rows):
+            ids = segment_ids[rows]
+            return Batch(
+                TOKENS[rows],
+                np.where(ids >= 0, LOSS_WEIGHT[rows], 0),
+                AttentionMask(is_causal=True, segment_ids=(ids, ids)),
+            )
+
+        state, _ = step(cfg, mesh, policy, microbatches=k, batch=batch(slice(None)))
+        betas, valid = [], []
+        for i in range(k):
+            rows = slice(i, None, k)
+            betas.append(step(cfg, mesh, policy, microbatches=1, batch=batch(rows))[0].pending_qb_betas)
+            valid.append(np.sum(segment_ids[rows] >= 0, axis=1).reshape(groups, -1).sum(axis=1))
+        betas, valid = np.stack(betas), np.stack(valid).astype(np.float64)
+        assert valid[1, 0] == 0 and np.all(np.abs(betas[1, :, 0]) == 0)
+        shares = valid / valid.sum(axis=0)
+        expected = np.sum(shares[:, None, :, None] * betas, axis=0)
+        np.testing.assert_allclose(state.pending_qb_betas, expected, rtol=1e-6, atol=1e-7)
