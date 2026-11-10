@@ -24,10 +24,8 @@ from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, 
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     MISSING_CONFIG_VALUE,
-    RESOLVED_LAUNCH_FILENAME,
     ArtifactDataSource,
     MegatronGeometry,
     SkyRLRolePlan,
@@ -36,13 +34,12 @@ from marin.rl.skyrl import (
     role_plan_config_values,
     set_config_value,
 )
+from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from marin.training.training import LevanterCheckpoint
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
-from rolloutengine.models import TASK_TIMING_KEYS
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
 from experiments.post_training.task_curation.inventory import (
@@ -71,14 +68,6 @@ DEFAULT_TEST_PANEL_NAME = "snowball-test-panel"
 DEFAULT_TEST_PANEL_VERSION = "2026.11.06.1"
 EVAL_REPLY_TOKENS = 8192
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
-GRAFANA_SPEED_PANELS = (
-    ("response_tokens", 3),
-    ("rollout_wait", 102),
-    ("step_composition", 121),
-    ("vllm_throughput", 109),
-)
-GRAFANA_LEARNING_PANELS = (("reward", 22), ("evaluation", 23), ("loss_and_kl", 24))
-GRAFANA_MISMATCH_PANEL = ("logprob_mismatch", 54)
 
 
 class Focus(StrEnum):
@@ -164,7 +153,6 @@ class Preset:
     checkpoint_every: int | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
-    reported: tuple[Metric, ...] = ()
     gaps: tuple[Gap, ...] = ()
     budget: str = "hours to days"
 
@@ -197,47 +185,39 @@ def setting_leaves(setting: Setting) -> tuple[Setting, ...]:
     return (setting,)
 
 
-def read_text(path: str | StoragePath) -> str:
-    return StoragePath(str(path)).read_text()
+def evaluation_callbacks(evaluation: Evaluation, *, updates: int) -> list[dict]:
+    return [
+        {
+            "type": "evaluation",
+            "eval_steps": evaluation.every or updates + 1,
+            "eval_before_train": evaluation.at_start,
+            "eval_on_train_end": not evaluation.every or updates % evaluation.every != 0,
+        }
+    ]
 
 
-def exists(path: str | StoragePath) -> bool:
-    return StoragePath(str(path)).exists()
-
-
-class PanelEvaluator:
-    def callbacks(self, evaluation: Evaluation, *, updates: int) -> list[dict]:
-        return [
-            {
-                "type": "evaluation",
-                "eval_steps": evaluation.every or updates + 1,
-                "eval_before_train": evaluation.at_start,
-                "eval_on_train_end": not evaluation.every or updates % evaluation.every != 0,
-            }
-        ]
-
-    def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
-        if evaluation.sample is not None:
-            tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"])
-        config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
-        sampling = (
-            {
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "logprobs": None,
-                "ignore_eos": False,
-                "max_generate_length": EVAL_REPLY_TOKENS,
-            }
-            if evaluation.answers == 1
-            else {
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "logprobs": None,
-                "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
-            }
-        )
-        config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
-        return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
+def configure_evaluation(evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
+    if evaluation.sample is not None:
+        tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"])
+    config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
+    sampling = (
+        {
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "logprobs": None,
+            "ignore_eos": False,
+            "max_generate_length": EVAL_REPLY_TOKENS,
+        }
+        if evaluation.answers == 1
+        else {
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "logprobs": None,
+            "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
+        }
+    )
+    config["generator"].update(eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling)
+    return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
 _TEST_PANEL = f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}"
@@ -325,78 +305,6 @@ _GAPS = (
     Gap.NO_IMAGE_SANDBOX,
 )
 _PANEL = EVALUATIONS["test_panel_100"]
-_TIMER_REPORTS = tuple(
-    Metric(f"{phase}/{statistic}", False)
-    for phase in sorted(TASK_TIMING_KEYS)
-    for statistic in ("mean", "p50", "p95", "max")
-)
-_MISMATCH_REPORTS = tuple(
-    Metric(f"policy/mismatch/staleness0/{name}", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN)
-    for name in (
-        "log_ratio_abs_mean",
-        "log_ratio_abs_p99",
-        "log_ratio_abs_p999",
-        "frac_outside_0_5_2",
-        "pos_first256/log_ratio_abs_mean",
-        "pos_last256/log_ratio_abs_mean",
-        "pos_middle/log_ratio_abs_mean",
-    )
-)
-_TRAINING_REPORTS = (
-    *_TIMER_REPORTS,
-    *_MISMATCH_REPORTS,
-    *(
-        Metric(key, higher)
-        for key, higher in (
-            ("loss/avg_final_rewards", True),
-            ("policy/policy_entropy", True),
-            ("policy/raw_grad_norm", False),
-            ("policy/ppo_clip_ratio", False),
-            ("policy/ppo_clip_ratio_low", False),
-            ("policy/ppo_clip_ratio_high", False),
-            ("reward/zero_std_group_fraction", False),
-            ("generate/avg_num_tokens", False),
-            ("generate/max_num_tokens", False),
-            ("generate/failed_trajectory_fraction", False),
-        )
-    ),
-)
-_SPEED_REPORTS = (
-    *_TIMER_REPORTS,
-    *_MISMATCH_REPORTS,
-    *(
-        Metric(f"timing/step_wall/{phase}", False)
-        for phase in (
-            "group_admission",
-            "batch_assembly",
-            "training_preparation",
-            "advantages",
-            "policy_training",
-            "group_bookkeeping",
-            "weight_sync",
-            "step_end_bookkeeping",
-            "checkpoint_work",
-            "evaluation",
-            "unaccounted",
-        )
-    ),
-    Metric("vllm/median_generation_throughput", True),
-    Metric("vllm/latency_ttft_mean", False),
-    Metric("startup/init_weight_sync_state", False),
-    Metric("startup/load_checkpoints", False),
-)
-_ASYNC_SPEED_REPORTS = (
-    *_SPEED_REPORTS,
-    *(Metric(f"async/staleness_{statistic}", False) for statistic in ("mean", "max", "ratio")),
-    *(
-        Metric(f"policy/mismatch/pooled/{statistic}", False)
-        for statistic in ("kl_k3", "log_ratio_abs_mean", "log_ratio_abs_p99", "log_ratio_abs_p999")
-    ),
-    *(
-        Metric(f"policy/mismatch/{bucket}/selected_tokens", bucket == "staleness0")
-        for bucket in ("staleness0", "staleness1", "staleness2", "staleness3", "staleness4-7", "staleness8+")
-    ),
-)
 _LEARNING_MEDIUM = Preset(
     focus=Focus.LEARNING,
     duration=Duration.MEDIUM,
@@ -406,20 +314,8 @@ _LEARNING_MEDIUM = Preset(
     evaluations=(replace(EVALUATIONS["test_panel"], at_start=True),),
     guards=(Metric("test_panel/family_mean", True),),
     objectives=(Metric("test_panel/family_mean", True), Metric("test_panel/family_mean/gain_per_h100_hour", True)),
-    reported=(*_TRAINING_REPORTS, Metric("test_panel/mean", True)),
     gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
-)
-_LEARNING_LONG = replace(
-    _LEARNING_MEDIUM,
-    duration=Duration.LONG,
-    objectives=(Metric("test_panel/family_mean", True), Metric("test_panel_100/family_mean/gain_per_h100_hour", True)),
-    recipe=_ASYNC_P40,
-    updates=100,
-    measured=range(91, 101),
-    evaluations=(replace(_PANEL, every=25, at_start=True), EVALUATIONS["test_panel"]),
-    reported=(*_LEARNING_MEDIUM.reported, Metric("test_panel_100/mean", True)),
-    budget="about 4 h; about 160 H100-h (estimate)",
 )
 PRESETS = MappingProxyType(
     {
@@ -434,13 +330,6 @@ PRESETS = MappingProxyType(
                 measured=range(1),
                 evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["test_panel"]),
                 guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("test_panel/family_mean", True)),
-                reported=(
-                    *_TIMER_REPORTS,
-                    Metric(GENERATE_WALL_SECONDS_METRIC, False),
-                    Metric("generate/response_tokens", True),
-                    Metric("generate/vllm/latency_ttft_mean", False),
-                    Metric("generate/vllm/peak_gpu_cache_usage_perc", False),
-                ),
                 gaps=_GAPS,
                 budget="14-17 min; 2 H100-h",
             ),
@@ -453,14 +342,6 @@ PRESETS = MappingProxyType(
                 measured=range(1),
                 evaluations=(EVALUATIONS["screen-256x4"],),
                 guards=(Metric("screen-256x4/mixed_fraction", True),),
-                reported=(
-                    *_TIMER_REPORTS,
-                    Metric("screen-256x4/mean", True),
-                    Metric("screen-256x4/all_right_fraction", False),
-                    Metric("screen-256x4/all_wrong_fraction", False),
-                    Metric("screen-256x4/scored_fraction", True),
-                    Metric("generate/prompts_dropped_too_long", False),
-                ),
                 gaps=_GAPS,
                 budget="10-15 min; 2 H100-h",
             ),
@@ -479,35 +360,25 @@ PRESETS = MappingProxyType(
                     Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
-                reported=_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
                 budget="35-40 min; 25 H100-h",
             ),
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
-                objectives=(
-                    Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
-                    Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
-                    Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
-                ),
+                objectives=(Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),),
                 recipe=_ASYNC_P40,
                 updates=20,
                 measured=range(3, 21),
                 guards=(
                     Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
-                    Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
-                    Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
-                reported=_ASYNC_SPEED_REPORTS,
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
                 budget="45-75 min; 30-50 H100-h",
             ),
             _LEARNING_MEDIUM,
             replace(_LEARNING_MEDIUM, focus=Focus.DATA),
-            _LEARNING_LONG,
-            replace(_LEARNING_LONG, focus=Focus.DATA),
             Preset(
                 focus=Focus.TRAIN,
                 duration=Duration.LONG,
@@ -516,7 +387,6 @@ PRESETS = MappingProxyType(
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
-                reported=_TIMER_REPORTS,
                 gaps=_GAPS,
             ),
         )
@@ -534,7 +404,7 @@ def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate
 
 
 def gated(preset: Preset) -> bool:
-    return preset.name in PRESETS and preset.focus != Focus.TRAIN
+    return preset.focus != Focus.TRAIN
 
 
 def run_tree_hash(name: str) -> str:
@@ -542,7 +412,7 @@ def run_tree_hash(name: str) -> str:
 
 
 def selection_summary(selection: ArtifactStep) -> dict:
-    return json.loads(read_text(StoragePath(selection.path()) / SUMMARY_FILENAME))
+    return json.loads((StoragePath(selection.path()) / SUMMARY_FILENAME).read_text())
 
 
 def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
@@ -617,7 +487,7 @@ def apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
     key = setting.key
     owners = {
         "choose the preset's role plan": key.startswith("entrypoint"),
-        "use --resume-from for checkpoint continuity": key.startswith("trainer.resume_mode"),
+        "checkpoint resume mode is fixed by the preset": key.startswith("trainer.resume_mode"),
         "choose network transport in Layout": key.startswith("extra_env.NCCL_"),
         "choose role geometry with Layout.role_plan": (
             key.startswith(("trainer.placement", "generator.inference_engine_", "generator.num_inference_engines"))
@@ -627,7 +497,7 @@ def apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
             ("generator.trajectory_retention", "trainer.max_ckpts_to_keep")
         ),
         "choose the preset's Layout": key.startswith("generator.run_engines_locally"),
-        "choose evaluations with --eval on train-long or the preset's evaluations": key.startswith(
+        "evaluation requests are fixed by the preset": key.startswith(
             ("trainer.callbacks", "trainer.eval_", "generator.eval_")
         ),
         "set checkpoint frequency in the preset": key.startswith(("trainer.ckpt_interval", "trainer.hf_save_interval")),
@@ -694,7 +564,7 @@ def grafana_links(
     started_ms: int,
     finished_ms: int | None,
 ) -> dict[str, str]:
-    """Build dashboard and preset-panel links for a native run; an unfinished run links through now."""
+    """Link to the native run in the RL dashboard, through now for an unfinished run."""
     query = urlencode(
         {
             "orgId": 1,
@@ -709,15 +579,7 @@ def grafana_links(
         },
         safe="$",
     )
-    url = f"{GRAFANA_URL}?{query}"
-    panels = (
-        GRAFANA_SPEED_PANELS
-        if preset.focus == Focus.SPEED
-        else GRAFANA_LEARNING_PANELS if preset.focus in (Focus.LEARNING, Focus.DATA) else ()
-    )
-    if any(metric.key.startswith("policy/mismatch/") for metric in preset.guards):
-        panels = (*panels, GRAFANA_MISMATCH_PANEL)
-    return {"run": url, **{name: f"{url}&viewPanel={panel}" for name, panel in panels}}
+    return {"run": f"{GRAFANA_URL}?{query}"}
 
 
 def artifact_prefix(cluster: str) -> str:
@@ -726,7 +588,7 @@ def artifact_prefix(cluster: str) -> str:
 
 
 def artifact_record(path: str) -> ArtifactRecord:
-    return ArtifactRecord.model_validate_json(read_text(StoragePath(path) / RECORD_FILENAME))
+    return ArtifactRecord.model_validate_json((StoragePath(path) / RECORD_FILENAME).read_text())
 
 
 def selection_artifact(value: str) -> ArtifactStep:
@@ -743,10 +605,10 @@ def published_artifact(value: str) -> ArtifactStep:
     if is_mutable_version(version):
         raise click.BadParameter("use an immutable artifact version instead of dev")
     root = str(StoragePath(artifact_prefix(P40.cluster)) / name / version)
-    if exists(StoragePath(root) / RESOLVED_LAUNCH_FILENAME):
+    if (StoragePath(root) / RESOLVED_LAUNCH_FILENAME).exists():
         return ArtifactStep.adopt(name, version, root, kind=SkyRLRun)
     path = StoragePath(root) / RECORD_FILENAME
-    if exists(path):
+    if path.exists():
         record = artifact_record(root)
         kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
         return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
@@ -755,10 +617,6 @@ def published_artifact(value: str) -> ArtifactStep:
 
 def control_name(preset: str, commit: str, replicate: int) -> str:
     return f"{RUN_PREFIX}/control/{preset}-{commit}-r{replicate}"
-
-
-def guards_evaluation(evaluation: Evaluation, metric: Metric) -> bool:
-    return metric.key.startswith(evaluation.name + "/")
 
 
 def run_path(cluster: str, name: str, version: str) -> str:
@@ -770,7 +628,7 @@ def panel_evaluation(preset: Preset) -> Evaluation | None:
         (
             evaluation
             for evaluation in preset.evaluations
-            if any(guards_evaluation(evaluation, metric) for metric in preset.guards)
+            if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
         ),
         None,
     )
@@ -783,120 +641,3 @@ def utc_millis(value: str) -> int:
 
 EXIT_CODES = {"pass": 0, "fail": 1, "invalid": 2, None: 3}
 REFUSAL_EXIT_CODE = 4
-
-
-class SnowballCommand(click.Command):
-    def make_context(self, *args, **kwargs):
-        try:
-            return super().make_context(*args, **kwargs)
-        except click.UsageError as error:
-            error.exit_code = REFUSAL_EXIT_CODE
-            raise
-
-    def invoke(self, context):
-        configure_coreweave_s3()
-        try:
-            return super().invoke(context)
-        except click.UsageError as error:
-            error.exit_code = REFUSAL_EXIT_CODE
-            raise
-
-
-def run_command(*, help_text: str | None = None):
-    def decorate(function):
-        options = (
-            click.option(
-                "--preset",
-                "preset_name",
-                required=True,
-                type=click.Choice(sorted(PRESETS)),
-                help="Experiment to run; the table above says which preset fits a change.",
-            ),
-            click.option(
-                "--set",
-                "settings",
-                multiple=True,
-                metavar="KEY=VALUE",
-                help="Change one key of the composed SkyRL config: a dotted key and a YAML value, for example "
-                "trainer.algorithm.advantage_estimator=grpo. Use +KEY=VALUE for a key the base config lacks. "
-                "Repeatable. Keys the preset owns (placement, data, evaluation, measurement) are refused with the "
-                "reason; data presets accept none. Code changes need no flag: the run name includes the source "
-                "tree hash.",
-            ),
-            click.option(
-                "--require",
-                "requirements",
-                multiple=True,
-                metavar="KEY<=|>=BOUND",
-                help="Add a condition the gate checks on a metric key; the examples above show two. With a "
-                "number, every candidate replicate must meet the bound. With control, the candidate mean must not "
-                "be worse than the controls' beyond tolerance. Repeatable; gated presets only, not with --control. "
-                "A training metric the controls never recorded is refused before launch.",
-            ),
-            click.option(
-                "--baseline",
-                "baselines",
-                multiple=True,
-                metavar="NAME@VERSION",
-                help="Compare with earlier finished runs; the verdict still uses pinned controls. Repeatable.",
-            ),
-            click.option(
-                "--tasks",
-                "tasks_name",
-                metavar="NAME@VERSION",
-                help="Curated task selection at an immutable version. Required by data presets, whose selection "
-                "must hold out the same panel as the default; train-long defaults "
-                "to the pinned snowball-100k.",
-            ),
-            click.option(
-                "--init",
-                "init_name",
-                metavar="NAME@VERSION",
-                help="Initial weights: a published model artifact, or a finished train-long run (its HF export). "
-                "learning presets and train-long only. The initial weights are evaluated too, so the report shows "
-                "the gain.",
-            ),
-            click.option(
-                "--keep-weights",
-                is_flag=True,
-                help="Keep a learning or data candidate's final HF weights. "
-                "Learning controls and train-long keep them automatically.",
-            ),
-            click.option(
-                "--resume-from",
-                "resume_name",
-                metavar="NAME[@VERSION]",
-                help="Continue an earlier train-long run's checkpoints and optimizer state under a new run name. "
-                "train-long only.",
-            ),
-            click.option(
-                "--eval",
-                "evaluations",
-                multiple=True,
-                type=click.Choice(sorted(EVALUATIONS)),
-                help="Train-long evaluation requests; repeatable. "
-                "The default 100-task panel runs before training and every 10 updates. "
-                "A second native panel is refused.",
-            ),
-            click.option(
-                "--replicates",
-                type=click.IntRange(1, 5),
-                default=1,
-                show_default=True,
-                help="Identical copies of a gated preset, sharing one seed. The gate compares their "
-                "mean with the controls; more copies narrow the tolerance. Not for train-long.",
-            ),
-            click.option(
-                "--control",
-                is_flag=True,
-                help="Run the preset's control replicates from a clean checkout with only its pinned default "
-                "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --eval, --require, "
-                "--keep-weights and data-medium/data-long, which use the corresponding learning preset's controls.",
-            ),
-        )
-        command = rl_build_options(function)
-        for option in reversed(options):
-            command = option(command)
-        return click.command(cls=SnowballCommand, help=help_text)(command)
-
-    return decorate

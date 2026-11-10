@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from marin.rl.skyrl import named_evaluation_profiles, read_skyrl_launch_config
+from marin.rl.skyrl_records import read_skyrl_launch_config
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
@@ -33,7 +33,6 @@ EVAL_SCORE_SCHEMA = pa.schema(
         ("scored", pa.bool_()),
     ]
 )
-PASS_RATES_FILENAME = "pass_rates.parquet"
 TRAIN_STEM = PurePosixPath(TRAIN_FILENAME).stem
 
 
@@ -68,7 +67,7 @@ def _evaluation_answers(dump_root: StoragePath) -> list[EvaluationAnswer]:
             if PurePosixPath(str(path)).name != "aggregated_results.jsonl":
                 answers.extend(
                     EvaluationAnswer(step, path, json.loads(line))
-                    for line in presets.read_text(path).split("\n")
+                    for line in path.read_text().split("\n")
                     if line.strip()
                 )
     return answers
@@ -118,7 +117,16 @@ def evaluation_protocol(launch: dict, name: str) -> dict:
     sampling = deepcopy(generator["eval_sampling_params"])
     samples = generator["eval_n_samples_per_prompt"]
     if name in launch["inputs"].get("evaluation_data", {}):
-        profile = named_evaluation_profiles(config).get(name)
+        profile = next(
+            (
+                profile
+                for callback in config["trainer"]["callbacks"]
+                if callback["type"] == "evaluation"
+                for key, profile in (callback.get("additional_evaluations") or {}).items()
+                if key == name
+            ),
+            None,
+        )
         if profile is None:
             raise InvalidComparison(f"expected one recorded evaluation profile for {name}")
         sampling.update(profile.get("sampling_params") or {})
@@ -183,28 +191,19 @@ def panel_scores(
     return pa.Table.from_pylist(rows, schema=EVAL_SCORE_SCHEMA)
 
 
-def score_slices(scores: pa.Table, rates: pa.Table | None = None) -> dict[str, list[dict]]:
-    pass_rates = (
-        {row["task_id"]: row["passed"] / row["samples"] for row in rates.to_pylist()} if rates is not None else {}
-    )
+def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
     groups = defaultdict(list)
     for row in scores.to_pylist():
         if not row["scored"]:
             continue
         evaluation = row["evaluation"]
         keys = [f"{evaluation}/mean"]
-        rate = pass_rates.get(row["item"])
-        band = "hard" if rate is not None and rate < 0.1 else "easy" if rate is not None and rate > 0.7 else "learnable"
         for column in ("family", "aaii_category", "agentic"):
             value = row[column]
             if value is not None:
                 value = str(value).lower() if column == "agentic" else value
                 key = f"{evaluation}/{column}/{value}"
                 keys.append(key + "/mean")
-                if rate is not None and column != "agentic":
-                    keys.append(f"{key}/difficulty/{band}/mean")
-        if rate is not None:
-            keys.append(f"{evaluation}/difficulty/{band}/mean")
         for key in keys:
             groups[key].append(row)
     for evaluation in {key.split("/", 1)[0] for key in groups}:
@@ -215,12 +214,12 @@ def score_slices(scores: pa.Table, rates: pa.Table | None = None) -> dict[str, l
     return dict(groups)
 
 
-def evaluation_statistics(scores: pa.Table, rates: pa.Table | None = None) -> dict[str, float]:
+def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
     sessions = defaultdict(list)
     for row in scores.to_pylist():
         sessions[row["evaluation"]].append(row)
     result = {}
-    for key, rows in score_slices(scores, rates).items():
+    for key, rows in score_slices(scores).items():
         tasks = defaultdict(list)
         for row in rows:
             tasks[row["item"]].append(row["score"])
@@ -253,21 +252,3 @@ def evaluation_statistics(scores: pa.Table, rates: pa.Table | None = None) -> di
         if families:
             result[f"{evaluation}/family_mean"] = math.fsum(families) / len(families)
     return result
-
-
-def read_pass_rates(path: str) -> pa.Table:
-    fs, key = filesystem_for(str(StoragePath(path) / PASS_RATES_FILENAME))
-    with fs.open(key, "rb") as stream:
-        table = pq.read_table(stream)
-    rows = table.to_pylist()
-    ids = {row["task_id"] for row in rows}
-    if len(rows) != len(ids) or any(
-        row["model_revision"] != presets.MODEL_REVISION
-        or row["samples"] < 1
-        or not 0 <= row["passed"] <= row["samples"]
-        or not math.isfinite(row["mean_score"])
-        or not 0 <= row["mean_score"] <= 1
-        for row in rows
-    ):
-        raise InvalidComparison("pass-rate artifact has invalid initializer scores, samples or task IDs")
-    return table

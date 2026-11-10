@@ -771,6 +771,11 @@ def classify(
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
 
+        if filepath.startswith(("vendor/skyrl/cloud/iris/", "vendor/skyrl/skyrl-train/skyrl_train/config/")):
+            owner = "experiments/post_training/snowball_tests/test_snowball_rl.py"
+            if (repo_root / owner).exists():
+                direct_tests["marin"].append(owner)
+
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
         # import graph, so force-select the owning scope and mark it for a source
