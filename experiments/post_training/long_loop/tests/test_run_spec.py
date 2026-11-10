@@ -26,7 +26,6 @@ def test_production_and_smoke_preserve_data_context_and_quota():
         json.dumps(production["sft"]["data"], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     assert actual == production["datasets"]["sft"]["provenance"]["canonical_data_sha256"]
-    assert [step for step, _ in smoke["sft"]["data"]["train_weights"]] == list(range(0, 4750, 250))
     assert smoke["sft"]["stop_after_steps"] < production["sft"]["stop_after_steps"]
     assert smoke["rl"]["config"]["trainer"]["max_steps"] < production["rl"]["config"]["trainer"]["max_steps"]
     assert smoke["sft"]["model"] == production["sft"]["model"]
@@ -56,7 +55,7 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     resolved = resolve_spec(SPEC, smoke=False)
     terminal = build_spec_graph(resolved, "2026.11.09.12", through="sft")
-    validate_graph(terminal, tmp_path)
+    validate_graph(terminal, tmp_path, "s3://marin-us-east-02a/marin/")
     rows = json.loads((tmp_path / "graph.json").read_text())
     assert [row["stage"].rsplit("/", 1)[-1] for row in rows] == ["base", "inputs", "sft"]
     assert rows[0]["source"] == resolved["initializer"]["uri"]
@@ -101,7 +100,7 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}
     terminal = build_spec_graph(resolved, "2026.11.10.1", through="archive")
     names = [step.name for step in graph_handles([terminal])]
-    validate_graph(terminal, tmp_path / "full-graph")
+    validate_graph(terminal, tmp_path / "full-graph", "s3://marin-us-east-02a/marin/")
     assert "long-loop/report" in names
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)

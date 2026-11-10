@@ -26,14 +26,14 @@ from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blo
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 
-def validate_graph(terminal: ArtifactStep, directory: Path) -> None:
+def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str) -> None:
     rows = []
     for step in graph_handles([terminal]):
         if step.adopt_source:
             rows.append({"stage": step.name, "status": "adopted", "source": step.adopt_source})
             continue
         context = StepContext.for_run(
-            step.path(), os.environ["MARIN_PREFIX"], runtime_args=step.runtime_args, deps=step.deps
+            step.path(artifact_prefix), artifact_prefix, runtime_args=step.runtime_args, deps=step.deps
         )
         # Future checkpoint selection is unavailable before training. Use the
         # builder's identity branch, retaining actual runtime config and paths.
@@ -77,7 +77,7 @@ def main(spec: Path, smoke: bool, through: str, validation_output: Path) -> Arti
     require_secret("HF_TOKEN")
     version = resolve_version(resolved["name"], None)
     terminal = build_spec_graph(resolved, version, through=through)
-    validate_graph(terminal, validation_output / version)
+    validate_graph(terminal, validation_output / version, os.environ["MARIN_PREFIX"])
     return terminal
 
 

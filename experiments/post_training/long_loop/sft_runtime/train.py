@@ -559,13 +559,7 @@ def build_train_loader(
 
 
 def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
-
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
-    """
+    """Preserve array partition specs on a mesh with the same named axes."""
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
@@ -579,13 +573,7 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
 def _to_dropless_local(
     model: Transformer, *, implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
 ) -> Transformer:
-    """Swap the scanned block's MoE expert backend to the selected dropless local path.
-
-    ``implementation``/``expert_chunks`` are static fields shared across the whole stacked block,
-    so one replacement covers every layer. The forward reads ``self.expert_mlp.implementation``
-    (not the model config), so this alone routes the eval dropless. Must run on an expert-collapsed
-    mesh: the local backend raises when the mesh expert axis is larger than one.
-    """
+    """Select a local dropless expert backend; requires a size-one expert mesh."""
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
     dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
