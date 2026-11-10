@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from dataclasses import asdict
 import hashlib
+import json
 from pathlib import Path
 import shutil
 
@@ -383,3 +384,67 @@ def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
     assert len(set(paths)) == 1
     assert (paths[0] / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
     assert Path(huggingface_hub.snapshot_download("org/policy", revision="main", local_files_only=True)) == paths[0]
+
+
+def test_shared_snapshot_keeps_tokenizers_and_templates_and_repairs_truncated_weights(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _write_tokenizer(source)
+    (source / "config.json").write_text("{}")
+    weights = save({"weight": np.arange(4, dtype=np.float32)})
+    (source / "model.safetensors").write_bytes(weights)
+    snapshot = HuggingFaceSnapshot(
+        fsspec.filesystem("file"),
+        str(source),
+        tuple(
+            HuggingFaceSnapshotFile(path.name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in source.iterdir()
+        ),
+    )
+    embedded = tmp_path / "embedded"
+    embedded_manifest = publish_hugging_face_snapshot(snapshot, str(embedded), model_id="org/model", revision="a" * 40)
+    model_only = tmp_path / "model-only"
+    model_manifest = publish_hugging_face_snapshot(
+        HuggingFaceSnapshot(
+            snapshot.filesystem,
+            snapshot.root,
+            tuple(entry for entry in snapshot.files if not entry.path.startswith("tokenizer")),
+        ),
+        str(model_only),
+        model_id="org/model",
+        revision="a" * 40,
+        tokenizer_mode="policy",
+    )
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
+    full = HuggingFaceModelCache("org/model", "a" * 40, str(embedded), embedded_manifest.identity)
+    partial = HuggingFaceModelCache("org/model", "a" * 40, str(model_only), model_manifest.identity)
+    node = task_runtime.stage_model(full)
+    shard = node / "model.safetensors"
+    inode = shard.stat().st_ino
+    template = tmp_path / "template.jinja"
+    template.write_text("{{ messages[0]['content'] }}")
+    task_runtime.apply_policy_chat_template(str(node), str(template))
+    tokenizer_bytes = (node / "tokenizer.json").read_bytes()
+    for locator in (partial, full):
+        assert task_runtime.stage_model(locator) == node
+        assert (node / "tokenizer.json").read_bytes() == tokenizer_bytes
+        assert json.loads((node / "tokenizer_config.json").read_text())["chat_template"] == template.read_text()
+        assert (node / "chat_template.jinja").read_text() == template.read_text()
+        assert (node / "tokenizer_config.json.plainbak").is_file()
+        assert shard.stat().st_ino == inode
+    assert AutoTokenizer.from_pretrained(node, local_files_only=True).encode("hello world") == [1, 2]
+    truncated = weights[:8]
+    shard.write_bytes(truncated)
+    original_get = snapshot.filesystem.get_file
+    copies = []
+
+    def copy_without_overwriting_live_file(remote, local, **kwargs):
+        copies.append(remote)
+        assert shard.read_bytes() == truncated
+        original_get(remote, local, **kwargs)
+        assert shard.read_bytes() == truncated
+
+    monkeypatch.setattr(snapshot.filesystem, "get_file", copy_without_overwriting_live_file)
+    assert task_runtime.stage_model(full) == node
+    assert shard.read_bytes() == weights
+    assert shard.stat().st_ino != inode
+    assert copies == [str(embedded / "model.safetensors")]

@@ -53,10 +53,10 @@ from cloud.iris.artifacts import (
     ArtifactSource,
     FileEntry,
     atomic_directory_update,
+    copy_file_inventory,
     file_inventory,
     fs_and_path,
     materialize,
-    materialize_inventory,
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
@@ -286,7 +286,22 @@ def stage_model(model: HuggingFaceModelCache) -> Path:
         # Lock the materializer's existence check and install, plus the ref update.
         cache_root.mkdir(parents=True, exist_ok=True)
         with FileLock(str(cache_root / ".stage.lock")):
-            materialize_inventory(ArtifactSource(model.uri, model.identity, str(local_path)), filesystem, inventory)
+            # A snapshot is shared across tokenizer variants and running jobs.
+            # Keep its existing metadata/template edits and add files atomically.
+            missing = tuple(
+                (source, entry)
+                for source, entry in inventory
+                if not (local_path / entry.path).is_file()
+                or (entry.path.endswith(".safetensors") and (local_path / entry.path).stat().st_size != entry.size)
+            )
+            if missing:
+                with tempfile.TemporaryDirectory(prefix=".hf-stage-", dir=cache_root) as temporary:
+                    staging = Path(temporary) / "snapshot"
+                    copy_file_inventory(filesystem, missing, staging)
+                    for _, entry in missing:
+                        destination = local_path / entry.path
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(staging / entry.path, destination)
             if model.revision != manifest.revision:
                 refs = (cache_root / "refs").resolve()
                 ref = (refs / model.revision).resolve()
