@@ -31,26 +31,32 @@ changed columns as redacted, never as the controller's own values:
 | `iris.controller_db.tasks.placement` | The DB's `tasks.cluster`, as for jobs |
 | `iris.controller_db.tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
 
-**Names only:** command lines and scripts keep only the command words (the
-first word, and the first after `&&`, `||`, `;`, `|`, `&` or `--`), flag names
+**Names only:** command lines and scripts keep only command words, flag names
 (`--lr`, `-e`, cut at `=` or after a short flag's letter) and assignment names
-(`NAME=`). Every value, positional argument and quoted string, including a whole
-`bash -c "..."` body, is `<redacted>`. A script line that does not parse is
-`<unparsed>`. So `python train.py --hf-token X --lr 3e-4` is stored as
+(`NAME=`). A command word is the first token of a statement (the line, or after
+`&&`, `||`, `;`, `|` or `&`) that is neither a flag nor an assignment, and it is
+kept only if it looks like a program name (`python`, `./run.sh`) with no
+token-like string in it. Every value, positional argument and quoted string,
+including a whole `bash -c "..."` body and everything after `--`, is
+`<redacted>`. Backslash-continued lines are joined first, every line of a
+heredoc body is `<redacted>`, and a line that does not parse is `<unparsed>`. In
+`submit_argv_json`, the user command after the first `--` starts a new command
+word. So `python train.py --hf-token X --lr 3e-4` is stored as
 `python <redacted> --hf-token <redacted> --lr <redacted>`.
 
 **Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as
-a scheduler or Kueue message), stay readable, with token-like strings redacted.
-They can still echo a short value from a command.
+a scheduler or Kueue message), stay readable, with token-like strings redacted. That redaction is
+best-effort, not names-only: an error can still echo a short value or URL from
+a command.
 
 **The one place the copy is not every change:** an `iris.controller_db.tasks`
 row is written at submit and when the task's state, current attempt, current
-worker, error or exit code changes. A change to `status_message`,
-`container_id` or `current_worker_address` alone writes no row, because
-Kubernetes rewrites the pending reason on every reconcile. So pending-reason
-history is kept only at those trigger points; each row holds the reason as of
-its change.
+worker, error or exit code changes. A change to any other column alone
+(`status_message`, `container_id`, `current_worker_address`, `backend_id`)
+writes no row, because Kubernetes rewrites the pending reason on every
+reconcile. So those columns hold their value as of the row's change, and
+pending-reason history is kept only at those trigger points.
 
 Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
 submitted_at_ms)`, because job ids are reused after a job ends, and a live

@@ -455,3 +455,19 @@ def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
             now=Timestamp.now(),
         )
     assert len(rows.tasks) == written
+
+
+def test_removing_a_worker_writes_the_task_rows_that_pointed_at_it(state):
+    rows = _attach(state, "marin")
+    worker_id = register_worker(state, "w1", "w1:1", make_worker_metadata())
+    task = submit_job(state, "train", make_job_request("train"))[0]
+    _run_on_node(state, task, worker_id, "node-a")
+    written = len(rows.tasks)
+
+    with state._db.transaction() as cur:
+        writes.remove_worker(cur, worker_id, state._health)
+
+    new = rows.tasks[written:]
+    assert [(t.task_id, t.state, t.current_worker_id) for t in new] == [
+        (task.task_id.to_wire(), "TASK_STATE_RUNNING", None)
+    ]

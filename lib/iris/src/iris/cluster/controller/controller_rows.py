@@ -42,7 +42,7 @@ from sqlalchemy.engine.cursor import CursorResult
 from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
-from iris.cluster.redaction import names_only_argv, names_only_script
+from iris.cluster.redaction import names_only_argv, names_only_script, names_only_submit_argv
 from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
@@ -332,7 +332,7 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     name=r.name,
                     setup_scripts_json=_setup_scripts_json(r.environment_json),
                     entrypoint_json=_redacted_entrypoint_json(r.entrypoint_json),
-                    submit_argv_json=json.dumps(names_only_argv(list(r.submit_argv_json))),
+                    submit_argv_json=json.dumps(names_only_submit_argv(list(r.submit_argv_json))),
                     bundle_id=r.bundle_id,
                     ports_json=json.dumps(list(r.ports_json)),
                     fail_if_exists=bool(r.fail_if_exists),

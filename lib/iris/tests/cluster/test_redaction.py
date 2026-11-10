@@ -16,6 +16,7 @@ from iris.cluster.redaction import (
     REDACTED_VALUE,
     names_only_argv,
     names_only_script,
+    names_only_submit_argv,
     redact_submit_argv,
 )
 
@@ -183,7 +184,7 @@ def test_names_only_argv_on_an_iris_submit_line():
     argv = ["iris", "job", "run", "-e", "SERVICE_URL", "made-up-6", "--secret", "SERVICE_KEY", "made-up-7"]
     argv += ["--", "python", "t.py"]
 
-    assert names_only_argv(argv) == ["iris", R, R, "-e", R, R, "--secret", R, R, "--", "python", R]
+    assert names_only_submit_argv(argv) == ["iris", R, R, "-e", R, R, "--secret", R, R, "--", "python", R]
 
 
 def test_names_only_script_keeps_command_words_after_separators_and_assignment_names():
@@ -219,6 +220,8 @@ _MADE_UP_SECRETS = [
         ["tool", "-p{s}"],
         ["env", "HF_TOKEN={s}", "python", "t.py"],
         ["bash", "-c", "login --token {s} && run"],
+        ["login", "--", "{s}"],
+        ["-p", "{s}"],
     ],
 )
 def test_no_value_survives_names_only_redaction(shape, secret):
@@ -226,3 +229,53 @@ def test_no_value_survives_names_only_redaction(shape, secret):
 
     for redacted in (names_only_argv(argv), names_only_script(" ".join(f"'{part}'" for part in argv)).split(" ")):
         assert not any(secret in token for token in redacted)
+
+
+def test_names_only_script_redacts_heredoc_bodies():
+    script = (
+        "cat > ~/.cache/hf_token <<EOF\nmade-up-heredoc-secret\nEOF\n"
+        "cat <<-'PEM' > key\n\tmade-up-pem-line\n\tPEM\nuv sync"
+    )
+
+    stored = names_only_script(script)
+
+    assert "made-up" not in stored
+    assert stored.splitlines()[1] == R
+    assert stored.splitlines()[-1] == f"uv {R}"
+
+
+def test_names_only_script_joins_continued_lines():
+    script = (
+        "docker login \\\n  -u made-up-user \\\n  -p made-up-continued-secret\n"
+        "export HF_TOKEN=\\\n  made-up-split-secret"
+    )
+
+    assert names_only_script(script) == f"docker {R} -u {R} -p {R}\nexport HF_TOKEN= {R}"
+
+
+def test_names_only_flag_first_and_double_dash_end_the_command_word():
+    assert names_only_script("-p made-up-flag-first") == f"-p {R}"
+    assert names_only_script("huggingface-cli login -- made-up-after-dashes") == f"huggingface-cli {R} -- {R}"
+    assert names_only_argv(["python", "t.py", "--", "made-up-after-dashes"]) == ["python", R, "--", R]
+
+
+def test_names_only_keeps_a_command_word_only_if_it_looks_like_a_program():
+    assert names_only_argv(["https://user:made-up-pw@x.example/run", "a"]) == [R, R]
+    assert names_only_argv(["./run.sh", "a"]) == ["./run.sh", R]
+
+
+_SCRIPT_SHAPES = [
+    "cat > f <<EOF\n{s}\nEOF",
+    "cat <<-'END'\n\t{s}\n\tEND",
+    "docker login \\\n  -u user \\\n  -p {s}",
+    "export HF_TOKEN=\\\n  {s}",
+    "-p {s}",
+    "huggingface-cli login -- {s}",
+    "pip install --index-url {s} x",
+]
+
+
+@pytest.mark.parametrize("secret", _MADE_UP_SECRETS)
+@pytest.mark.parametrize("shape", _SCRIPT_SHAPES)
+def test_no_value_survives_names_only_script_shapes(shape, secret):
+    assert secret not in names_only_script(shape.format(s=secret))

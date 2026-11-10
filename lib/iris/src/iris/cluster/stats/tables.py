@@ -343,9 +343,10 @@ class IrisJobTask:
 
     Written at submit and whenever the task's state, current attempt, current
     worker, error or exit code changes. Unlike the other controller rows, a change
-    to ``status_message``, ``container_id`` or ``current_worker_address`` alone
-    writes no row: Kubernetes rewrites the pending reason on every reconcile, so
-    those columns hold their value as of the task's last written change.
+    to any other column alone writes no row: Kubernetes rewrites the pending
+    reason (``status_message``) on every reconcile. So every column other than
+    those five (``status_message``, ``container_id``, ``current_worker_address``,
+    ``backend_id``, ...) holds its value as of the task's last written change.
     """
 
     key_column: ClassVar[str] = "task_id"
