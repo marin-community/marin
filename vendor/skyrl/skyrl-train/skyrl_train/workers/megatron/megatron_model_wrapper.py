@@ -215,8 +215,7 @@ class MegatronModelWrapper:
         """Return chosen [batch, response] and candidate [batch, response, K] scores.
 
         Logits already include the scoring temperature. Candidate rows align with the
-        original padded response suffix; IDs index the vocabulary. Row identities
-        follow model packing; CP sums logit deltas while each rank keeps its local gradients.
+        original padded response suffix; IDs index the vocabulary.
         """
         chosen = self._token_logprobs(logits, sequences, attention_mask.to(bool), packed_seq_params)[:, -num_actions:]
         selected = None
