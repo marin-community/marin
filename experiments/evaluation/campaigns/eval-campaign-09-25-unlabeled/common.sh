@@ -369,6 +369,7 @@ fallbacks = {
     "IFM/K2-Horizon-MoVA-36B-A4B": {"reasoning_effort": "low"},
     "Aleph-Alpha/Kolibri-1": {"reasoning_effort": "none"},
     "zai-org/GLM-4.7-Flash": {"enable_thinking": False},
+    "meta-models/Muse-Glimmer-30B": {"reasoning_strength": "low"},
 }
 for model_path in models.glob("*.yaml"):
     model = load_model_config(model_path)

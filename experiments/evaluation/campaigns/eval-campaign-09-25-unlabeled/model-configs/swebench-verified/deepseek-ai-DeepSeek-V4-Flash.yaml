@@ -1,0 +1,25 @@
+# DeepSeek-V4-Flash (April 2026): 284B-A13B MoE, 160 GB as released (FP8 weights, FP4 experts).
+# No Jinja template ships with the model; the vLLM fork selects its deepseek_v4 renderer from the
+# architecture. That renderer honors enable_thinking and defaults to thinking at high effort.
+# Parsers are the fork's deepseek_v4 reasoning and tool parsers.
+name: deepseek-ai-DeepSeek-V4-Flash
+location: deepseek-ai/DeepSeek-V4-Flash
+revision: 60d8d70770c6776ff598c94bb586a859a38244f1
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 131072
+  tool_call_parser: deepseek_v4
+  reasoning_parser: deepseek_v4
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+# Benchmark configs select thinking mode explicitly. Model-default benchmarks retain the native
+# renderer behavior.
+generation:
+  max_gen_toks: 16384

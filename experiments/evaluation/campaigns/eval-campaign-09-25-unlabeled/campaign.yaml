@@ -157,3 +157,12 @@ model_config_overrides:
 
   open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
     swebench-verified: model-configs/swebench-verified/open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38.yaml
+  nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16:
+    swebench-verified: model-configs/swebench-verified/nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16.yaml
+    tau3-pi: model-configs/tau3/nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16.yaml
+  meta-models-Muse-Glimmer-30B:
+    swebench-verified: model-configs/swebench-verified/meta-models-Muse-Glimmer-30B.yaml
+    tau3-pi: model-configs/tau3/meta-models-Muse-Glimmer-30B.yaml
+  deepseek-ai-DeepSeek-V4-Flash:
+    swebench-verified: model-configs/swebench-verified/deepseek-ai-DeepSeek-V4-Flash.yaml
+    tau3-pi: model-configs/tau3/deepseek-ai-DeepSeek-V4-Flash.yaml

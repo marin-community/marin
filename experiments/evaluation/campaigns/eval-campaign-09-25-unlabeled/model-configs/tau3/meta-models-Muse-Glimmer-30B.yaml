@@ -1,0 +1,27 @@
+# tau3-pi-only serving override: 131072 context, 32768 per-turn output.
+# Muse Glimmer 30B: dense multimodal model with a perception encoder, 60 GB bf16, 131k context.
+# The template cannot disable reasoning; it renders `Reasoning strength: <value>` from the
+# reasoning_strength kwarg (low/medium/high/xhigh, default high). Thinking-off benchmarks use low,
+# the lowest available setting. Parsers are the fork's muse_glimmer reasoning and tool parsers.
+name: meta-models-Muse-Glimmer-30B
+location: meta-models/Muse-Glimmer-30B
+revision: cec94fcfd6512f2cfe708138c32533b346ea4f69
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_strength: low
+  max_gen_toks: 32768
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 131072
+  tool_call_parser: muse_glimmer
+  reasoning_parser: muse_glimmer
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+# Model-default and thinking-on benchmarks use the template's default reasoning strength (high).
