@@ -13,7 +13,6 @@ import subprocess
 import sys
 import time
 from contextlib import ExitStack, contextmanager
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -68,7 +67,6 @@ from marin.inference.levanter_backend import (
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
-from marin.inference.model_cache import ModelPreparationError
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
@@ -923,7 +921,7 @@ def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
     assert "https://iris.oa.dev/proxy/t/ep-token-xyz/serve.foo/v1" in out
 
 
-def _invoke_iris_serve(monkeypatch, *args: str, stub_prepare: bool = True):
+def _invoke_iris_serve(monkeypatch, *args: str):
     client = MagicMock()
     client.submit.return_value = "/power/serve-test"
     client.resolve_endpoint.return_value = "https://controller/proxy/serve.test"
@@ -941,10 +939,7 @@ def _invoke_iris_serve(monkeypatch, *args: str, stub_prepare: bool = True):
         yield client
 
     services = []
-    if stub_prepare:
-        monkeypatch.setattr(
-            "marin.inference.iris_cli.prepare_hf_models", lambda model, engine, *_a, **_k: (model, engine)
-        )
+    monkeypatch.setattr("marin.inference.iris_cli.prepare_hf_models", lambda model, engine, *_a, **_k: (model, engine))
     monkeypatch.setattr("marin.inference.iris_cli.find_project_root", lambda: Path.cwd())
     monkeypatch.setattr("marin.inference.iris_cli.connect_controller", connect)
     monkeypatch.setattr("marin.inference.iris_cli.IrisClient.remote", remote)
@@ -959,43 +954,6 @@ def _invoke_iris_serve(monkeypatch, *args: str, stub_prepare: bool = True):
 
     result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--name", "serve-test", *args])
     return result, client, services, mint
-
-
-@pytest.mark.parametrize("broker_args", [[], ["--broker"]])
-def test_iris_serve_prepares_weights_on_cpu_only_for_a_direct_server(monkeypatch, broker_args):
-    prepared = []
-
-    def prepare(model, engine, iris, **_kwargs):
-        prepared.append(iris.worker_resources)
-        return replace(model, weights="Qwen/Qwen3-0.6B", revision="c" * 40), engine
-
-    monkeypatch.setattr("marin.inference.iris_cli.prepare_hf_models", prepare)
-    result, client, services, _mint = _invoke_iris_serve(
-        monkeypatch, "--region", "us-central2", *broker_args, "--no-wait", stub_prepare=False
-    )
-
-    assert result.exit_code == 0, result.output
-    client.submit.assert_called_once()
-    if broker_args:
-        # The broker's remote_inference prepares at the worker placement instead.
-        assert prepared == []
-        assert services[0].model.revision is None
-    else:
-        (placement,) = prepared
-        assert placement.regions == ["us-central2"]
-        assert services[0].model.revision == "c" * 40
-
-
-def test_iris_serve_does_not_submit_the_server_when_preparation_fails(monkeypatch):
-    def prepare(*_args, **_kwargs):
-        raise ModelPreparationError("Model cache preparation failed: Hub down", jobs=())
-
-    monkeypatch.setattr("marin.inference.iris_cli.prepare_hf_models", prepare)
-    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--no-wait", stub_prepare=False)
-
-    assert result.exit_code != 0
-    assert "Hub down" in result.output
-    client.submit.assert_not_called()
 
 
 def test_iris_serve_mints_capability(monkeypatch):

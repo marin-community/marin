@@ -662,8 +662,6 @@ def main(
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
-            # A brokered service prepares inside remote_inference; a direct server loads on its own
-            # accelerators, so fill the cache from CPU jobs at the same placement first.
             if not brokered:
                 service = _prepared_direct_service(service, submission_resources, workspace_dir, client)
             job = client.submit(

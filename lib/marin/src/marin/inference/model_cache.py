@@ -49,9 +49,8 @@ def model_cache_entry(model: str, cache_ttl_days: int, revision: str | None = No
 def populate_model_cache(repo: str, revision: str, cache_ttl_days: int) -> str:
     """Mirror ``repo@revision`` into the serving cache of the storage this process runs against.
 
-    Run it at the serving placement: the cache path depends on the ambient storage prefix, so a
-    coordinator on another cluster would pick a different bucket than the accelerator worker.
-    Returns immediately when the entry is already complete.
+    The cache path depends on the process's storage prefix. Returns immediately when the entry
+    is already complete.
     """
     entry = model_cache_entry(repo, cache_ttl_days, revision)
     if entry is None:
@@ -69,10 +68,10 @@ def prepare_hf_models(
 ) -> tuple[ServedModelConfig, InferenceEngineConfig]:
     """Pin Hugging Face models to commits and fill their serving cache from CPU jobs.
 
-    Covers the served model and a vLLM speculative draft model. Each model gets one CPU job placed
-    like ``iris.worker_resources`` (regions and target cluster), so it resolves the same cache entry
-    the accelerator workers will. Call it before submitting accelerator jobs and serve the returned
-    configs. Other models, and any model when caching is disabled, pass through unchanged.
+    Covers the served model and a vLLM speculative draft model. Each model gets one CPU job using
+    the region and target cluster constraints in ``iris.worker_resources``. Call it before submitting
+    accelerator jobs and serve the returned configs. Other models, and any model when caching is
+    disabled, pass through unchanged.
 
     Raises:
         ModelPreparationError: resolving a revision, submitting, or a prepare job failed. Submitted
