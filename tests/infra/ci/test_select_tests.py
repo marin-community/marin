@@ -149,6 +149,7 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
         (
             path,
             [
+                "experiments/post_training/curriculum_rl/test_launch.py",
                 "experiments/post_training/snowball_tests/test_snowball_rl.py",
                 "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
             ],
@@ -179,6 +180,9 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
         tmp_path,
         "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
         "def test_native_protocol():\n    pass\n",
+    )
+    write(
+        tmp_path, "experiments/post_training/curriculum_rl/test_launch.py", "def test_native_allocation():\n    pass\n"
     )
     selection = select_tests([changed_file], tmp_path)
 

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 from marin.execution.lazy import StepContext
 
@@ -52,6 +53,7 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
         paths.append(str(path))
     run_native = native_json()
     rows = run_native(COMPOSE_LAUNCHES, paths)
+    assert rows
     assert [{key: row[key] for key in ("profile", "strategy")} for row in rows] == [
         {"profile": "megatron", "strategy": "megatron"}
     ] * len(arms)
