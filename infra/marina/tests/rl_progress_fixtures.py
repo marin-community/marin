@@ -4,18 +4,21 @@
 from pathlib import Path
 from uuid import UUID
 
-from marina.applets import AppletStore, package_applet, read_applet_package
-from marina.database_setup import ensure_applet_provisioning
-from marina.db import UrlDatabase
-from marina.server import MarinaConfig, create_app
-from marina.testing import isolated_database
-from starlette.testclient import TestClient
+import pytest
 
 
-def rl_progress_client(tmp_path, database_url, monkeypatch):
+@pytest.fixture
+def rl_progress_client(tmp_path, monkeypatch):
+    from marina.applets import AppletStore, package_applet, read_applet_package  # noqa: PLC0415
+    from marina.database_setup import ensure_applet_provisioning  # noqa: PLC0415
+    from marina.db import UrlDatabase  # noqa: PLC0415
+    from marina.server import MarinaConfig, create_app  # noqa: PLC0415
+    from marina.testing import test_database  # noqa: PLC0415
+    from starlette.testclient import TestClient  # noqa: PLC0415
+
     from experiments.post_training import publish_rl_progress as publication  # noqa: PLC0415
 
-    with isolated_database(database_url) as local_url:
+    with test_database() as local_url:
         database = UrlDatabase(local_url)
         store = AppletStore(database)
         ensure_applet_provisioning(store.engine)
@@ -26,7 +29,6 @@ def rl_progress_client(tmp_path, database_url, monkeypatch):
             create_app(MarinaConfig(data_root=str(tmp_path), iap_audience=None, database=database)),
             client=("127.0.0.1", 40000),
         )
-        query_path = f"/a/{publication.APPLET_ID}/query"
 
         def request(origin, method, path, *, json_body=None, **kwargs):
             response = client.request(method, path, json=json_body)
@@ -34,18 +36,6 @@ def rl_progress_client(tmp_path, database_url, monkeypatch):
             return response.json()
 
         monkeypatch.setattr("marina.client.marina_request", request)
-        request(
-            "http://localhost",
-            "POST",
-            query_path,
-            json_body={
-                "sql": (
-                    "CREATE TABLE rl_runs (run_id text, attempt_id text, record jsonb NOT NULL, "
-                    "imported_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (run_id, attempt_id))"
-                ),
-                "parameters": {},
-            },
-        )
         try:
             yield client, request
         finally:

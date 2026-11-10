@@ -109,22 +109,19 @@ def applet_query(
     service_url: str,
     applet_id: str,
     *,
-    authenticated_url: str | None = None,
     session: requests.Session | None = None,
     token_provider: TokenProvider | None = None,
 ) -> AppletQuery:
-    """Return a SQL client with shared transport and token refresh; reuse a known authenticated URL."""
-    if authenticated_url is None:
-        details = marina_request(
-            service_url,
-            "GET",
-            f"/api/marina/applets/{applet_id}",
-            session=session,
-            token_provider=token_provider,
-        )
-        assert isinstance(details, dict)
-        authenticated_url = details["authenticated_url"]
-    origin = applet_origin(service_url, authenticated_url)
+    """Return a SQL client with shared transport and token refresh."""
+    details = marina_request(
+        service_url,
+        "GET",
+        f"/api/marina/applets/{applet_id}",
+        session=session,
+        token_provider=token_provider,
+    )
+    assert isinstance(details, dict)
+    origin = applet_origin(service_url, details["authenticated_url"])
 
     def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         result = marina_request(

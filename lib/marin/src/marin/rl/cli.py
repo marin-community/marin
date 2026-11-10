@@ -8,8 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -18,7 +17,6 @@ import click
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
-from iris.client.client import IrisClient
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -29,7 +27,7 @@ from rigging.timing import Duration
 from marin.execution.lazy import ArtifactStep, run
 from marin.execution.remote import sanitize_job_name
 from marin.experiment.cli import BuildResult, build_options_with_runner, graph_handles
-from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG, IrisSkyRLExecution
+from marin.rl.skyrl import IrisSkyRLExecution
 
 _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
@@ -154,7 +152,7 @@ def submit_or_run(
         workspace,
         coordinator_env,
     )
-    with iris_client(config_file=Path(cluster_config), workspace=workspace) as client:
+    with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as client:
         handle = FrayIrisClient.from_iris_client(client).submit(request, adopt_existing=False)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
     return JobName.from_wire(handle.job_id)
@@ -169,16 +167,3 @@ def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
         submit_or_run(module_name, handles, max_concurrent, os.environ)
 
     return build_options_with_runner(fn, runner)
-
-
-@contextmanager
-def iris_client(*, config_file: Path | None = None, workspace: Path | None = None) -> Iterator[IrisClient]:
-    info = get_job_info()
-    if info is not None and info.controller_address:
-        with IrisClient.in_cluster(info.controller_address) as client:
-            yield client
-    else:
-        with open_iris_client(
-            config_file=config_file or Path(IRIS_HUB_CLUSTER_CONFIG), workspace=workspace or find_project_root()
-        ) as client:
-            yield client

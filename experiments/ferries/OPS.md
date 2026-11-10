@@ -8,7 +8,7 @@ Datakit DAG (`experiments/datakit/reference_pipeline.py`) through
 |---|---|---|---|---|
 | 1 | `datakit_ferry.py` | FineWeb-Edu `sample/10BT` | us-west4 | `marin-canary-datakit-tier1.yaml` (daily) |
 | 2 | `datakit_tier2_skewed_ferry.py` | skewed synthetic, 46 GiB | us-west4 | `marin-canary-datakit-tier2.yaml` (daily) |
-| 3 | `datakit_nemotron_ferry.py` | Nemotron-CC high, 1,000 files | europe-west4 | `marin-canary-datakit-tier3.yaml` (weekly) |
+| 3 | `datakit_nemotron_ferry.py` | Nemotron-CC v1 normalized `hq_actual`, 1,600 files | europe-west4 | `marin-canary-datakit-tier3.yaml` (weekly) |
 
 The commands below are for manual runs.
 
@@ -22,6 +22,10 @@ present in the region where the ferry runs:
 
 Both are present in `gs://marin-us-west4` and `gs://marin-eu-west4`. To run a
 ferry in a different region, copy them there first. They are about 250 MB in total.
+
+Tier 3 also reads the normalized Nemotron-CC v1 split at
+`gs://marin-eu-west4/normalized/nemotron_v1/hq_actual_d6502d2c`. The ferry fails
+before the DAG starts if that split is incomplete; it never rebuilds the split.
 
 ## Submit
 

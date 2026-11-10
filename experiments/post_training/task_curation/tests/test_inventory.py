@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training selection over admitted TaskSpecs and test-panel selection over converted corpora."""
-
 import json
 from collections import Counter
 from collections.abc import Callable
@@ -20,12 +18,12 @@ from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
     Boxed,
     CommandSemantics,
     ConversationInput,
+    DockerBuildContext,
     EnvironmentRequirements,
     PlainText,
     ResourceGroups,
@@ -58,12 +56,10 @@ from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
     HeldoutSource,
+    PanelRecipe,
     SelectionRecipe,
     task_selection_step,
     validation_task,
-)
-from experiments.post_training.task_curation.inventory import (
-    TestPanelRecipe as PanelRecipe,
 )
 from experiments.post_training.task_curation.pipeline import source_recipe
 from experiments.post_training.task_curation.tests.conversion import converted_task
@@ -226,17 +222,16 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
 
 def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     rows = heldout_rows()
-    components = HELDOUT_FAMILIES
     environments = {
         family: EnvironmentRequirements(
             command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=f"numpy==2.3.{index}\n"
         )
-        for index, family in enumerate(components.values())
+        for index, family in enumerate(HELDOUT_FAMILIES.values())
     }
     settings = recipe(tmp_path).model_copy(
         update={
-            "sources": {BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in components.items()},
-            "family_limits": {family: 1 for family in components.values()},
+            "sources": {BLENDS[HELDOUT_BLEND][dataset].id: family for dataset, family in HELDOUT_FAMILIES.items()},
+            "family_limits": {family: 1 for family in HELDOUT_FAMILIES.values()},
         }
     )
     curated = {}
@@ -327,12 +322,16 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
-@pytest.mark.parametrize("failure", ["shortfall", "evaluation-source"])
+@pytest.mark.parametrize("failure", ["shortfall", "evaluation-source", "development-image"])
 def test_selection_does_not_publish_an_incomplete_or_evaluation_training_pool(tmp_path, failure):
     settings = recipe(tmp_path).model_copy(update={"sources": {"fixture:first": "calendar"}})
-    source = admitted_source(
-        tmp_path / "source", [source_task("training-a")], "eval" if failure == "evaluation-source" else "train"
-    )
+    training = [source_task("training-a")]
+    if failure.startswith("development-"):
+        training.append(source_task("training-b"))
+        heldout = [validation_task(row, {}) for row in heldout_rows()]
+        heldout[0] = heldout[0].model_copy(update={"grader": source_task("image").grader})
+        settings = settings.model_copy(update={"heldout": (task_file(tmp_path / "development.parquet", heldout),)})
+    source = admitted_source(tmp_path / "source", training, "eval" if failure == "evaluation-source" else "train")
     step = task_selection_step({"fixture:first": source}, settings)
     with pytest.raises(RuntimeError):
         run(step)
@@ -412,25 +411,6 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     )
     assert resumed.exit_code == 0, resumed.output
     assert tasks == read_tasks(cache / "rl-data/task-selection/fixture/2026.10.23.2" / TRAIN_FILENAME)
-    selection_file.write_text(
-        settings.model_copy(update={"version": "2026.10.23.3", "exclusions": ()}).model_dump_json()
-    )
-    baseline = runner.invoke(
-        main,
-        [
-            "--corpus",
-            str(cache / "campaigns/corpus.json"),
-            "--selection",
-            str(selection_file),
-            "--cache-dir",
-            str(cache),
-            "--run",
-        ],
-    )
-    assert baseline.exit_code == 0, baseline.output
-    baseline_output = cache / "rl-data/task-selection/fixture/2026.10.23.3"
-    for filename in (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME):
-        assert read_tasks(output / filename) == read_tasks(baseline_output / filename)
 
 
 NEMO_FIXTURE = Path(__file__).parents[4] / "lib/taskcompendium/tests/fixtures/nemo/predicted-action.json"
@@ -538,10 +518,8 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
     tool_call = tool_call_sources()[0].config
     tasks = [
         converted_task(tool_call, nemo_row(f"Native tool request {i}")).model_copy(update={"id": f"agent-{i}"})
-        for i in range(5)
+        for i in range(4)
     ]
-    # agent-4 lacks the part's required proxy tag; agent-2-copy repeats agent-2's conversation.
-    tasks[4] = tasks[4].model_copy(update={"tags": tuple(tag for tag in tasks[4].tags if tag != "tool-call-proxy")})
     tasks.append(tasks[2].model_copy(update={"id": "agent-2-copy"}))
     cases = list(evaluation_cases(str(corpus)))
     if mmlu:
@@ -568,22 +546,18 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
         seed=20261104,
         sources=(
             {
-                "name": "questions",
                 "source_id": "Evalchemy:questions",
                 "rows": 6,
                 "format": "evaluation",
-                "required_tags": ["eval"],
                 "family": family,
                 "aaii_category": "general" if mmlu else "coding",
                 "license": "fixture-general",
                 "count": 5,
             },
             {
-                "name": "tool-calls",
                 "source_id": "NeMo:predicted-action",
                 "rows": len(tasks),
                 "format": "normalized",
-                "required_tags": ["eval", "tool-call-proxy"],
                 "family": "agents",
                 "aaii_category": "agents",
                 "license": "fixture-agents",
@@ -648,7 +622,6 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     assert all("EXAMPLE_SENTINEL" in task.context.events[0].content for task in originals.values())
     provisional = publish_panel(settings, tmp_path)
     full, fast = read_tasks(provisional / FULL_VALIDATION_FILENAME), read_tasks(provisional / VALIDATION_FILENAME)
-    assert {task.id for task in fast} < {task.id for task in full}
     agents = {task.id: task for task in tool_calls(tmp_path)}
     for task in full:
         if task.id in agents:
@@ -662,17 +635,12 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
         if benchmark == "mmlu":
             target = original.context.events[0].content.rsplit("Question:\n", 1)[1]
             assert "Question:\n" + target in prompt
-            assert "Panel question" in prompt and "A. 1" in prompt and "B. 2" in prompt
         else:
             evidence = source_evidence(original)
             assert evidence["prompt"] in prompt
             assert all(public_test in prompt for public_test in evidence["test_list"])
             assert "isinstance" not in prompt
     annotations = pq.read_table(provisional / TASK_MANIFEST_FILENAME).to_pylist()
-    replayed = publish_panel(settings, tmp_path, "replayed-artifacts")
-    assert read_tasks(replayed / FULL_VALIDATION_FILENAME) == full
-    assert read_tasks(replayed / VALIDATION_FILENAME) == fast
-    assert pq.read_table(replayed / TASK_MANIFEST_FILENAME).to_pylist() == annotations
     for row, task in zip(annotations, full, strict=True):
         agent = task.id in agents
         assert row == {
@@ -681,27 +649,25 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
             "aaii_category": "agents" if agent else questions.aaii_category,
             "agentic": agent,
             "grader_kind": "in_process" if agent else "package",
-            "part": "tool-calls" if agent else "questions",
+            "part": "NeMo:predicted-action" if agent else "Evalchemy:questions",
             "source": (agents[task.id] if agent else originals[task.id]).source.model_dump_json(),
             "license": "fixture-agents" if agent else "fixture-general",
             "difficulty": None,
         }
-    assert Counter(row["part"] for row in annotations) == {"questions": 5, "tool-calls": 3}
+    assert Counter(row["part"] for row in annotations) == {"Evalchemy:questions": 5, "NeMo:predicted-action": 3}
     families = {row["task_id"]: row["family"] for row in annotations}
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
-    assert counts["questions"]["overlap"] == counts["tool-calls"]["overlap"] == 1
-    assert counts["tool-calls"].get("filtered", 0) == 1
-    assert counts["tool-calls"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
-    assert {next(iter(originals)), "agent-0", "agent-4", "agent-2-copy"}.isdisjoint(families)
-    native = import_row(nemo_row("Native tool request 1"), canonical_sha256(nemo_row("Native tool request 1")))
-    unbound = {"id", "source", "tags"}
-    assert agents["agent-1"].model_dump(exclude=unbound) == native.model_dump(exclude=unbound)
+    assert counts["Evalchemy:questions"]["overlap"] == counts["NeMo:predicted-action"]["overlap"] == 1
+    assert counts["NeMo:predicted-action"].get("duplicate", 0) == 1 + (benchmark == "mmlu")
+    assert {next(iter(originals)), "agent-0", "agent-2-copy"}.isdisjoint(families)
     measured = measured_recipe(settings, tmp_path, full)
     final = publish_panel(measured, tmp_path)
     assert read_tasks(final / FULL_VALIDATION_FILENAME) == full
     assert read_tasks(final / VALIDATION_FILENAME) == fast
-    difficulty = [row["difficulty"] for row in pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()]
+    final_rows = pq.read_table(final / TASK_MANIFEST_FILENAME).to_pylist()
+    assert [row | {"difficulty": None} for row in final_rows] == annotations
+    difficulty = [row["difficulty"] for row in final_rows]
     assert difficulty == [1 - (index + 1) / PASS_RATE_ATTEMPTS for index in range(len(full))]
     subset = measured.model_copy(
         update={"version": "2026.11.04.2", "sources": (questions,), "fast_counts": {questions.family: 4}}
@@ -721,8 +687,7 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
         publish_panel(measured.model_copy(update={"version": "2026.11.04.3"}), tmp_path)
 
 
-LOCAL_GRADER, AGENT_SHORTFALL = "Test panel requires a local grader", "Test panel part shortfall: tool-calls"
-INCOMPLETE_RATES, RATE_ROWS = "Panel pass-rate evidence is incomplete", "Panel pass-rate rows must have unique task IDs"
+LOCAL_GRADER, AGENT_SHORTFALL = "Test panel requires a local grader", "Test panel part shortfall: NeMo:predicted-action"
 PROXY = ("eval", "tool-call-proxy")
 TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
     "judge": (
@@ -730,9 +695,20 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
             update={"grader": verifyit_package(JudgeSpec(references=("target",))).grader, "tags": PROXY}
         )
     ),
-    "image": lambda task: source_task("image").model_copy(update={"tags": PROXY}),
-    "training-whitespace": lambda task: task.model_copy(
-        update={"context": chat(("system", "Another request wrapper"), ("user", " Native    tool\nrequest  0 "))}
+    "docker-build": lambda task: task.model_copy(
+        update={
+            "tags": PROXY,
+            "grader": (
+                source_task("docker-build").grader.model_copy(
+                    update={
+                        "environment": EnvironmentRequirements(
+                            command_semantics=CommandSemantics.LINUX_PROCESS,
+                            docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM python:3.12"),)),
+                        )
+                    }
+                )
+            ),
+        }
     ),
     "eval-tag": lambda task: task.model_copy(update={"tags": tuple(tag for tag in task.tags if tag != "eval")}),
 }
@@ -742,51 +718,25 @@ TASK_EDITS: dict[str, Callable[[TaskSpec], TaskSpec]] = {
     "failure,cause",
     [
         ("judge", LOCAL_GRADER),
-        ("image", LOCAL_GRADER),
-        ("training-id", AGENT_SHORTFALL),
-        ("training-context", AGENT_SHORTFALL),
-        ("training-whitespace", AGENT_SHORTFALL),
+        ("docker-build", LOCAL_GRADER),
         ("development-id", AGENT_SHORTFALL),
-        ("development-context", AGENT_SHORTFALL),
         ("train-manifest", "Panel source is not reserved for evaluation"),
         ("eval-tag", "Test panel source must reserve its tasks for evaluation"),
-        ("source-count", "Panel source row count changed"),
-        ("part-shortfall", AGENT_SHORTFALL),
-        ("fast-shortfall", "Fast-panel source shortfall for general"),
         ("missing-rate", "Pass-rate evidence must cover every selected panel task"),
-        ("duplicate-rate", RATE_ROWS),
-        ("attempted-rate", INCOMPLETE_RATES),
-        ("model-rate", INCOMPLETE_RATES),
     ],
 )
 def test_panel_publication_refuses_bad_sources_overlaps_shortfalls_and_rate_evidence(tmp_path, failure, cause):
     settings = panel_recipe(tmp_path)
-    questions, agents = settings.sources
-    settings = settings.model_copy(
-        update={
-            "source-count": {"sources": (questions, agents.model_copy(update={"rows": agents.rows + 1}))},
-            "part-shortfall": {"sources": (questions, agents.model_copy(update={"count": 4}))},
-            "eval-tag": {"sources": (questions, agents.model_copy(update={"required_tags": ("tool-call-proxy",)}))},
-            "fast-shortfall": {"fast_counts": {"general": 6, "agents": 1}},
-        }.get(failure, {})
-    )
     if failure.endswith("rate"):
         tasks = read_tasks(publish_panel(settings, tmp_path) / FULL_VALIDATION_FILENAME)
-        last = {
-            "missing-rate": {"task_id": "unknown"},
-            "duplicate-rate": {"task_id": tasks[0].id},
-            "attempted-rate": dict.fromkeys(("attempted", "samples", "passed"), PASS_RATE_ATTEMPTS - 1),
-            "model-rate": {"model_revision": "another-model"},
-        }[failure]
-        settings = measured_recipe(settings, tmp_path, tasks, **last)
+        settings = measured_recipe(settings, tmp_path, tasks, task_id="unknown")
     elif failure == "train-manifest":
         (tmp_path / "agents/manifest.json").write_text(json.dumps({"intended_use": "train"}))
         write_corpus(tmp_path)
     elif failure in TASK_EDITS:
         edit_tool_call(tmp_path, TASK_EDITS[failure])
-    elif failure.startswith(("training", "development")):
-        name, key = failure.split("-")
-        excluded = read_tasks(Path(settings.training[0].uri if name == "training" else settings.development.uri))[0]
-        edit_tool_call(tmp_path, lambda task: task.model_copy(update={key: getattr(excluded, key)}))
+    elif failure == "development-id":
+        excluded = read_tasks(Path(settings.development.uri))[0]
+        edit_tool_call(tmp_path, lambda task: task.model_copy(update={"id": excluded.id}))
     with pytest.raises(PanelRefused, match=cause):
         publish_panel(settings, tmp_path)

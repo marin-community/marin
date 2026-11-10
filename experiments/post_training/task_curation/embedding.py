@@ -57,7 +57,6 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
@@ -115,7 +114,7 @@ def _prepare(
 ) -> SemanticArtifact:
     sources = []
     for source_id, root in curated_roots.items():
-        manifest = json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
+        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
         view = "final" if population == "admitted" else "normalize"
         paths = sorted(str(path) for path in (StoragePath(root) / f"{view}/*.parquet").glob())
         if not paths:
@@ -305,11 +304,11 @@ def _publish(
         raise ValueError("Selected sources are absent from the published inventory")
     sources = []
     for source_id, root in curated_roots.items():
-        manifest = json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
+        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
         source_key = canonical_sha256(manifest)
         counted = counts.get(source_id)
         row = (
-            AlignmentSource(**asdict(counted))
+            AlignmentSource(**asdict(counted), basis="matched")
             if counted is not None
             else AlignmentSource(
                 source_id=source_id,
@@ -319,6 +318,7 @@ def _publish(
                 task_count=0,
                 ready_count=0,
                 insufficient_context_count=0,
+                basis="matched",
             )
         )
         if (row.source_key, row.population, row.intended_use) != (source_key, population, manifest["intended_use"]):
@@ -335,6 +335,22 @@ def _publish(
                 }
             )
         )
+    # Inventory-only pointers are carried at their pinned declared count so the Atlas
+    # lists them; they have no embedded tasks, so no placement statistics exist for them.
+    sources.extend(
+        AlignmentSource(
+            source_id=row.id,
+            source_key=canonical_sha256(row.model_dump(mode="json")),
+            population=population,
+            intended_use=None,
+            task_count=row.task_count,
+            ready_count=0,
+            insufficient_context_count=0,
+            basis="declared",
+        )
+        for row in inventory
+        if row.id not in curated_roots and row.task_count is not None
+    )
     curriculum_root = alignment.curriculum_vectors_root
     lineage = {
         key: alignment.model_dump()[key]
@@ -353,7 +369,9 @@ def _publish(
         curriculum_key=alignment.curriculum_key,
         population=population,
         sample_size=sample_size,
-        task_count=sum(row.task_count for row in sources),
+        # Release totals stay the curriculum-processed population; declared counts live
+        # per source so coverage statistics and the release total agree.
+        task_count=sum(row.task_count for row in sources if row.basis == "matched"),
         ready_count=sum(row.ready_count for row in sources),
         insufficient_context_count=sum(row.insufficient_context_count for row in sources),
         sources=sources,

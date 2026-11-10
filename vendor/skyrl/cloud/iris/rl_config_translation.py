@@ -922,7 +922,8 @@ def apply_task_local_values(config: DictConfig, values: TaskLocalSkyRLValues) ->
             OmegaConf.update(updated, path, list(value) if isinstance(value, tuple) else value, force_add=False)
     for name, data_files in values.evaluation_data:
         profile = named_evaluation_profiles(updated).get(name)
-        if profile is not None:
-            OmegaConf.update(profile, "data_files", list(data_files), force_add=True)
+        if profile is None:
+            raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
+        OmegaConf.update(profile, "data_files", list(data_files), force_add=True)
     OmegaConf.resolve(updated)
     return updated

@@ -14,10 +14,6 @@ Count = Annotated[StrictInt, Field(ge=0)]
 Identity = Annotated[str, Field(min_length=1)]
 
 
-def membership_sha256(task_ids: list[str]) -> str:
-    return hashlib.sha256(json.dumps(sorted(task_ids), separators=(",", ":")).encode()).hexdigest()
-
-
 def protocol_sha256(protocol: dict[str, Any]) -> str:
     encoded = json.dumps(protocol, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -54,6 +50,37 @@ class EvaluationIdentity(BaseModel):
         return self
 
 
+class GateComparison(BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow")
+    metric: Identity
+    role: Literal["objective", "constraint", "requirement"]
+    control: FiniteFloat | None
+    run: FiniteFloat | None
+    delta_percent: FiniteFloat | None
+    noise_percent: FiniteFloat | None
+    passes: bool | None
+
+
+class GateInvariant(BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow")
+    name: Identity
+    value: bool | StrictInt | FiniteFloat
+    limit: bool | StrictInt | FiniteFloat
+    holds: bool
+    replicate: Count
+
+
+class GateResult(BaseModel):
+    model_config = ConfigDict(strict=True)
+    comparisons: list[GateComparison]
+    invariants: list[GateInvariant]
+    verdict: Literal["pass", "fail", "invalid"]
+    label: Literal["improves", "trade-off", "no change", "regression"] | None
+    reason: str | None
+    attempt_ids: list[Identity]
+    replicates: Annotated[StrictInt, Field(gt=0)]
+
+
 class RunSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="allow")
     run_id: Identity
@@ -64,7 +91,7 @@ class RunSummary(BaseModel):
     iris_job_id: str | None = None
     wandb_url: str | None = None
     engine: dict[str, Any] | None = None
-    resume_from: str | None = None
+    gate_result: GateResult | None = None
     verdict: Literal["pass", "fail", "invalid"] | None = None
     gate: str | None = None
     failed_facts: list[str] = Field(default_factory=list)
@@ -76,11 +103,11 @@ class RunSummary(BaseModel):
     elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
     timing_scope: Identity
     status: Literal["succeeded", "failed"]
-    optimizer_steps: Count
+    optimizer_steps: Count | None
     source_revision: Identity
     data_identity: Identity
     initializer_identity: Identity
-    evaluation: EvaluationIdentity
+    evaluation: EvaluationIdentity | None
     baseline: EvaluationResult | None
     final: EvaluationResult | None
     artifact_uri: str | None
@@ -104,6 +131,9 @@ class RunSummary(BaseModel):
         ):
             raise ValueError("A final measurement requires a baseline and positive elapsed time when known")
         for phase in (self.baseline, self.final):
-            if phase is not None and phase.attempted > self.evaluation.task_count:
-                raise ValueError("Attempted count exceeds the fixed evaluation cohort")
+            if phase is not None:
+                if self.evaluation is None:
+                    raise ValueError("A measurement requires its evaluation cohort")
+                if phase.attempted > self.evaluation.task_count:
+                    raise ValueError("Attempted count exceeds the fixed evaluation cohort")
         return self

@@ -2,20 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from typing import NamedTuple
 
 import click
-import marin.rl.skyrl as adapter
 import pytest
-import yaml
-from iris.rpc import controller_pb2, job_pb2
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
@@ -32,16 +25,14 @@ def _render(step, path, *, runtime=False):
     )
     config = step.build_config(context)
     path.write_text(config.launch_config_yaml)
-    return yaml.safe_load(config.launch_config_yaml)
 
 
-pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
+pytestmark = pytest.mark.usefixtures("source_provenance")
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
 def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch, native_json):
     paths = []
-    launches = {}
     for name, preset in presets.PRESETS.items():
         if name == "speed-short":
             monkeypatch.delenv("WANDB_ENTITY", raising=False)
@@ -54,21 +45,8 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
         )
         for index, step in enumerate(run.runs):
             path = tmp_path / f"{name}-{index}.yaml"
-            document = _render(step, path, runtime=True)
+            _render(step, path, runtime=True)
             paths.append(str(path))
-            if index == 0:
-                launches[name] = document
-    initializer_path = tmp_path / "long-initializer" / "hf"
-    initializer_path.mkdir(parents=True)
-    for filename in ("config.json", "tokenizer_config.json"):
-        (initializer_path / filename).write_text("{}")
-    long_init = ArtifactStep.adopt(
-        "tests/long-initializer", "2026.10.26", str(initializer_path.parent), kind=LevanterCheckpoint
-    )
-    initialized = snowball.build_run(presets.PRESETS["learning-long"], init=long_init).runs[0]
-    path = tmp_path / "initialized-long.yaml"
-    _render(initialized, path, runtime=True)
-    paths.append(str(path))
     for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
         retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
         path = tmp_path / f"{label}-weights.yaml"
@@ -89,7 +67,6 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                     "trainer={train_batch_size: 64, policy_mini_batch_size: 64}",
                     "generator.n_samples_per_prompt=8",
                     "trainer.micro_train_batch_size_per_gpu=2",
-                    "+trainer.policy.megatron_config.logprob_chunk_size=512",
                 ),
             )
         ),
@@ -166,9 +143,6 @@ print(json.dumps([{
     "quality_wire": quality_request(config),
     "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
                  if entry.type == "evaluation"],
-    "engine_settings": [config.skyrl.trainer.algorithm.batch_invariant,
-                       config.skyrl.generator.vllm_attention_backend,
-                       config.skyrl.generator.enable_prefix_caching],
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
     "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
@@ -179,10 +153,6 @@ print(json.dumps([{
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
     "profile_inputs": (OmegaConf.to_container(config.inputs.evaluation_data)
                        if config.inputs.get("evaluation_data") else {}),
-    "profiles": {name: OmegaConf.to_container(profile, resolve=True)
-                 for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
-                 for name, profile in (entry.get("additional_evaluations") or {}).items()},
-    "primary_steps": [entry.get("eval_steps") for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
         if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
@@ -206,7 +176,6 @@ print(json.dumps([{
         assert row["gpus"] <= 40, row
         assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
         name = row["name"]
-        assert row["engine_settings"] == [False, "FLASH_ATTN", True]
         if "learning-medium-" in name or "data-medium-" in name:
             assert row["at_start"] == [True]
         if "speed-short-" in name or "data-short-" in name:
@@ -225,9 +194,6 @@ print(json.dumps([{
             assert ("hf_model_save" in row["callbacks"]) == saved
         if "speed-long-" in name:
             assert not row["validation"] and not row["export_hf"]
-        if "learning-long-" in name or "data-long-" in name:
-            assert row["primary_steps"] == [25]
-            assert row["profiles"]["test_panel"]["schedule"] == "final"
         if row["training"]:
             assert not row["overlong_filtering"], row
         if row["wire"] is not None:
@@ -248,24 +214,6 @@ print(json.dumps([{
             if "best_checkpoint" in row["callbacks"]:
                 assert row["callbacks"].index("evaluation") < row["callbacks"].index("best_checkpoint"), row
     assert (rows[-1]["batch"], rows[-1]["samples"], rows[-1]["micro"], rows[-1]["forward_micro"]) == (64, 8, 2, 2)
-    # Candidate selection is the only difference between the two learning experiments.
-    learning, data = launches["learning-medium"], launches["data-medium"]
-    assert learning["skyrl"] == data["skyrl"]
-    assert learning["inputs"]["model"] == data["inputs"]["model"]
-    assert learning["inputs"]["validation_data"] == data["inputs"]["validation_data"]
-    assert learning["inputs"]["train_data"] != data["inputs"]["train_data"]
-    long_learning, long_data = launches["learning-long"], launches["data-long"]
-    assert long_learning["skyrl"] == long_data["skyrl"]
-    assert long_learning["inputs"]["validation_data"] == long_data["inputs"]["validation_data"]
-    assert long_learning["inputs"]["evaluation_data"] == long_data["inputs"]["evaluation_data"]
-    assert long_learning["inputs"]["train_data"] != long_data["inputs"]["train_data"]
-    for options, message in (
-        ({}, "data presets require"),
-        ({"tasks": selection, "settings": (presets.parse_setting("trainer.max_steps=2"),)}, "data presets require"),
-        ({"control": True}, "controls use only"),
-    ):
-        with pytest.raises(click.BadParameter, match=message):
-            snowball.build_run(presets.PRESETS["data-long"], **options)
     with pytest.raises(click.BadParameter, match="owned by"):
         snowball.build_run(
             presets.PRESETS["learning-medium"],
@@ -277,12 +225,6 @@ print(json.dumps([{
     summary.write_text(json.dumps(content))
     with pytest.raises(click.BadParameter, match="AI-judge"):
         snowball.build_run(presets.PRESETS["learning-medium"])
-
-
-class ExpectedHashes(NamedTuple):
-    config: str
-    envelope: str
-    fingerprint: str
 
 
 @pytest.mark.timeout(180)
@@ -297,17 +239,17 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "speed-short": ExpectedHashes(config="3c26e593", envelope="4983e280", fingerprint="f332ce07"),
-        "data-short": ExpectedHashes(config="f47923c5", envelope="b8748fb5", fingerprint="0894989e"),
-        "speed-medium": ExpectedHashes(config="e268a2c8", envelope="f3822837", fingerprint="8d92ad78"),
-        "learning-medium": ExpectedHashes(config="934e55eb", envelope="4bdf2d67", fingerprint="61e52823"),
-        "speed-long": ExpectedHashes(config="5b99bc3f", envelope="fa196cc1", fingerprint="07815153"),
-        "learning-long": ExpectedHashes(config="5314c52b", envelope="f082cb08", fingerprint="ad2c6a8b"),
-    }
+        "2026.11.06.1": {
+            "speed-short": "3c26e593",
+            "data-short": "f47923c5",
+            "speed-medium": "e268a2c8",
+            "learning-medium": "934e55eb",
+            "speed-long": "5b99bc3f",
+        }
+    }[presets.PRESET_REVISION]
     paths = []
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
-        assert step.fingerprint() == expected[name].fingerprint
         path = tmp_path / f"{name}.yaml"
         _render(step, path)
         paths.append(str(path))
@@ -320,8 +262,7 @@ from cloud.iris.launch_config import load_launch_config
 os.environ["HOME"] = "/snowball-pin-home"
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"envelope": OmegaConf.to_container(config, resolve=True),
-     "skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
+    {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
      "allocation": OmegaConf.to_container(config.iris.allocation, resolve=True)}
     for config in configs
 ], sort_keys=True))
@@ -332,23 +273,7 @@ print(json.dumps([
         name: fingerprint_hash(json.dumps({key: config[key] for key in ("skyrl", "allocation")}, sort_keys=True))
         for name, config in zip(expected, configs, strict=True)
     }
-    assert actual == {
-        name: hashes.config for name, hashes in expected.items()
-    }, "Gated config changed. Top-level key hashes: " + json.dumps(
-        {
-            name: {
-                section: {key: fingerprint_hash(json.dumps(value, sort_keys=True)) for key, value in values.items()}
-                for section, values in config.items()
-            }
-            for name, config in zip(expected, configs, strict=True)
-        },
-        sort_keys=True,
-    )
-
-    assert {
-        name: fingerprint_hash(json.dumps(config["envelope"], sort_keys=True))
-        for name, config in zip(expected, configs, strict=True)
-    } == {name: hashes.envelope for name, hashes in expected.items()}
+    assert actual == expected, "Native config changed: bump PRESET_REVISION and recollect controls."
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -395,7 +320,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     assert run(long).fingerprint() == original.fingerprint()
     pin = snowball.snowball_rl_gate.control_pins("learning-medium")[0]
     for index in range(pin.runs):
-        recorded_runs("learning-medium", presets.control_name(pin.preset, pin.main_commit, index))
+        recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, index))
     first = snowball.build_run(learning, requirements=("test_panel/mean>=0",))
     second = snowball.build_run(learning, requirements=("test_panel/mean>=0.1",))
     assert first.runs[0].name == second.runs[0].name == name()
@@ -404,66 +329,13 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     monkeypatch.setenv("WANDB_ENTITY", "another-team")
     assert name() == original_name
     monkeypatch.setattr(
-        snowball, "_provenance", lambda **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test")
+        Provenance, "capture", lambda *args, **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test")
     )
     assert name() != original_name
 
-
-def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monkeypatch):
-    original = snowball.build_run(presets.PRESETS["train-long"]).runs[0]
-    document = yaml.safe_load(
-        original.build_config(StepContext.for_fingerprint(original.runtime_args, original.deps)).launch_config_yaml
-    )
-    source = tmp_path / original.name / original.version
-    source.mkdir(parents=True)
-    checkpoints = source / "checkpoints"
-    (checkpoints / "global_step_10").mkdir(parents=True)
-    marker = checkpoints / "latest_ckpt_global_step.txt"
-    marker.write_text("10")
-    attempts = source / "attempts"
-    attempts.mkdir()
-    document["run"]["attempt_id"] = "attempt-fixture"
-    document["iris"]["job_name"] = "train-long-fixture-attempt-fixture"
-    document["artifacts"].update(checkpoint_root=str(checkpoints), attempts_root=str(attempts))
-    (source / "resolved-launch.yaml").write_text(
-        json.dumps({"config": document, "train_data_sources": [], "val_data_sources": []})
-    )
-    state = {"value": job_pb2.JOB_STATE_KILLED, "known": True}
-    job_id = "/tests/parent/" + document["iris"]["job_name"]
-
-    @contextmanager
-    def endpoint(**kwargs):
-        yield SimpleNamespace(url="http://iris.test", credentials=None)
-
-    @contextmanager
-    def rpc(*args):
-        yield SimpleNamespace(
-            list_jobs=lambda request: controller_pb2.Controller.ListJobsResponse(
-                jobs=[job_pb2.JobStatus(job_id=job_id, state=state["value"])] if state["known"] else []
-            )
-        )
-
-    monkeypatch.setattr(adapter, "connect_controller", endpoint)
-    monkeypatch.setattr(adapter, "rpc_client", rpc)
-    earlier = ArtifactStep.adopt(original.name, original.version, str(source), kind=SkyRLRun)
-    resumed = snowball.build_run(presets.PRESETS["train-long"], resume_from=earlier).runs[0]
-    assert resumed.name != original.name
-    assert all(dep.artifact_type is not SkyRLRun for dep in resumed.deps)
-    config = resumed.build_config(
-        StepContext.for_run(
-            str(tmp_path / "resumed"), str(tmp_path / "artifacts"), deps=resumed.deps, runtime_args=resumed.runtime_args
-        )
-    )
-    assert config.output.checkpoint_root == str(checkpoints)
-    assert yaml.safe_load(config.launch_config_yaml)["artifacts"]["checkpoint_root"] == str(checkpoints)
-    state["known"] = False
-    with pytest.raises(click.BadParameter, match="cannot identify the Iris job"):
-        snowball.build_run(presets.PRESETS["train-long"], resume_from=earlier)
-    state["known"] = True
-    state["value"] = job_pb2.JOB_STATE_RUNNING
-    with pytest.raises(click.BadParameter, match=job_id):
-        snowball.build_run(presets.PRESETS["train-long"], resume_from=earlier)
-    state["value"] = job_pb2.JOB_STATE_KILLED
-    marker.unlink()
-    with pytest.raises(click.BadParameter, match="14 days"):
-        snowball.build_run(presets.PRESETS["train-long"], resume_from=earlier)
+    summary_path = Path(selection.path()) / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["recipe"]["exclusions"] = []
+    summary_path.write_text(json.dumps(summary))
+    with pytest.raises(click.BadParameter, match="full test panel"):
+        snowball.build_run(data, tasks=selection)

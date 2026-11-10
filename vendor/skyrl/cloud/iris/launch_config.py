@@ -179,13 +179,13 @@ class SkyRLLaunchConfig:
 
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
-    """Compose a raw mapping into the strict structured launch schema."""
+    """Compose the structured launch schema, omitting empty named evaluation data."""
     schema = OmegaConf.structured(SkyRLLaunchConfig)
     composed = OmegaConf.merge(schema, raw)
+    OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     if not composed.inputs.evaluation_data:
         with open_dict(composed.inputs):
-            del composed.inputs["evaluation_data"]
-    OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
+            del composed.inputs.evaluation_data
     return composed
 
 
@@ -242,7 +242,7 @@ def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
     if _is_source_recipe(config.skyrl):
-        _validate_evaluation_data(config, source_recipe=True)
+        _validate_evaluation_data(config)
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)
@@ -280,12 +280,12 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             data_source(value)
 
 
-def _validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None:
+def _validate_evaluation_data(config: DictConfig) -> None:
     for name in config.inputs.get("evaluation_data", {}):
         profile = named_evaluation_profiles(config.skyrl).get(name)
         if profile is None:
             raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-        if source_recipe and profile.get("data_files") is not None:
+        if _is_source_recipe(config.skyrl) and profile.get("data_files") is not None:
             raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
 
 
@@ -336,7 +336,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if raw["iris"]["timeout"] < 0:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
-    _validate_evaluation_data(config, source_recipe=False)
+    _validate_evaluation_data(config)
     ray = raw["ray"]
     if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(

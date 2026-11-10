@@ -392,8 +392,13 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
             pass
 
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
-    if entrypoint == "generate":
-        monkeypatch.setattr(skyrl_entrypoint, "version", lambda name: "fixture-vllm")
+
+    def installed_version(name):
+        if entrypoint == "generate":
+            return "fixture-vllm"
+        raise skyrl_entrypoint.PackageNotFoundError(name)
+
+    monkeypatch.setattr(skyrl_entrypoint, "version", installed_version)
     module = (
         "skyrl_train.entrypoints.main_generate" if entrypoint == "generate" else "skyrl_train.entrypoints.main_base"
     )
@@ -409,8 +414,6 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     }
     assert first_start <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
     assert record["engine"]["vllm_version"] == ("fixture-vllm" if entrypoint == "generate" else None)
-    record["wandb_url"] = "https://wandb.example/retained-attempt"
-    record_path.write_text(json.dumps(record))
     fail = False
     skyrl_entrypoint.run_config(destination)
     assert json.loads(record_path.read_text()) == record
