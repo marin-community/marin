@@ -20,96 +20,6 @@ COREWEAVE_ORGANIZATION_ID = "208261"
 COREWEAVE_MULTIPART_ABORT_RULE_ID = "marin-abort-incomplete-mpu"
 COREWEAVE_MULTIPART_EXPIRATION = 7
 
-# Temporary carve-out for one reviewed deletion of 17 hero checkpoint step directories: the losing 262K finalist
-# (all seven permanents) and hero-ctx65k-step372k's merge inputs 385500 through 390000. While these constants are set,
-# DenyHeroCheckpointDeletion lists protected paths instead of the ``marin/grug/hero-*`` wildcard: every hero-* run that
-# existed on 2026-11-09 stays whole, except that in the two thinned runs only the kept steps and the executor and
-# tracker files stay. hero-* runs created while this is applied are not protected. Owner: mcwitt; revert by 2026-11-13.
-HERO_RUN_ROOT = "marin/grug"
-HERO_THINNING_VERSION = "2026.08.19.2"
-HERO_THINNING_KEPT_STEPS: dict[str, tuple[int, ...]] = {
-    "hero-ctx65k-step372k": (378000, 384000, 390251),
-    "hero-lce-global184-step390k": (),
-}
-HERO_THINNING_WHOLE_RUNS = (
-    "hero-12d8b6f0-actlog-42k",
-    "hero-12d8b6f0-actlog-42k-b",
-    "hero-12d8b6f0-actlog-lr-42k",
-    "hero-12d8b6f0-attngate-42k",
-    "hero-12d8b6f0-attngatescaleeval-48k",
-    "hero-12d8b6f0-attnko-42k",
-    "hero-12d8b6f0-attnko-42k-b",
-    "hero-12d8b6f0-attnko-42k-c",
-    "hero-12d8b6f0-attnko-c4-42k",
-    "hero-12d8b6f0-attnrangeeval-42k",
-    "hero-12d8b6f0-dee637",
-    "hero-12d8b6f0-embed1k-42k",
-    "hero-12d8b6f0-embedfull-42k",
-    "hero-12d8b6f0-expert-norms",
-    "hero-12d8b6f0-gateweights-42k",
-    "hero-12d8b6f0-norms-18k",
-    "hero-12d8b6f0-norms-24k",
-    "hero-12d8b6f0-norms-42k",
-    "hero-12d8b6f0-norms-6k",
-    "hero-12d8b6f0-rmsgain-42k",
-    "hero-12d8b6f0-routerscale-42k",
-    "hero-12d8b6f0-samplegen-42k",
-    "hero-12d8b6f0-samplegen-42k-t0-s0",
-    "hero-12d8b6f0-samplemulti-42k-t0.2-s0",
-    "hero-12d8b6f0-samplemulti-step102000-t0.2-s0",
-    "hero-12d8b6f0-samplemulti-step102000-t0.2-s1",
-    "hero-12d8b6f0-samplemulti-step24000-t0.2-s0",
-    "hero-12d8b6f0-samplemulti-step24000-t0.2-s1",
-    "hero-12d8b6f0-samplemulti-step42000-t0.2-s1",
-    "hero-12d8b6f0-samplemulti-step6000-t0.2-s0",
-    "hero-12d8b6f0-samplemulti-step6000-t0.2-s1",
-    "hero-12d8b6f0-samplemulti-step78000-t0.2-s0",
-    "hero-12d8b6f0-samplemulti-step78000-t0.2-s1",
-    "hero-12d8b6f0-samplemulti-step78000-t0.2-s2",
-    "hero-12d8b6f0-samplemulti-step78000-t0.2-s3",
-    "hero-12d8b6f0-samplemulti-step78000-t1-s0",
-    "hero-12d8b6f0-sconvnorms-42k",
-    "hero-12d8b6f0-skipeval-42k",
-    "hero-20260819",
-    "hero-20260820",
-    "hero-4rack-bs4096-hist",
-    "hero-4rack-bs4096-hist-10k",
-    "hero-4rack-bs4096-hist-minmax",
-    "hero-4rack-bs4096-int64fix",
-    "hero-84579c80-072503",
-    "hero-ctx16k-step257k",
-    "hero-ctx65k-merge-hb-avg11",
-    "hero-fa4sm100-nomask-step146k",
-    "hero-format-sft",
-    "hero-gradclip-step356k",
-    "hero-lce-log65536sq-step390k",
-    "hero-main-step121638",
-    "hero-mfu30-step231k",
-    "hero-mix-996f4891-step108k",
-    "hero-nopdl-step108k",
-    "hero-ragged_a2a-ep-step54k",
-    "hero-ragged_a2a-ep-step81k",
-    "hero-ragged_a2a-nccl2307-ep-step81k",
-    "hero-wd-1rack-test-48k",
-    "hero-wd-1rack-test-48k-b",
-    "hero-wd-1rack-test-48k-c",
-    "hero-wd-1rack-test-48k-d",
-    "hero-wd-gate-router-p02-step58k",
-    "hero-wd-twitter-pertoken-72k",
-)
-
-
-def hero_thinning_protected_paths() -> list[str]:
-    """Return object globs that stay delete-protected during the hero checkpoint thinning."""
-    paths = [f"{HERO_RUN_ROOT}/{run}/*" for run in HERO_THINNING_WHOLE_RUNS]
-    for run, steps in HERO_THINNING_KEPT_STEPS.items():
-        root = f"{HERO_RUN_ROOT}/{run}/{HERO_THINNING_VERSION}"
-        paths.append(f"{root}/.*")
-        paths.append(f"{root}/tracker_metrics.jsonl*")
-        paths.extend(f"{root}/checkpoints/step-{step}/*" for step in steps)
-    return paths
-
-
 # Marin Belay's dedicated CoreWeave user. Iris attaches the submitter's keys to every CoreWeave job, so this
 # principal's access bounds what Belay runs (including agent-written code) can read and write. The organization
 # access policy below grants that access, but `admin-use-bucket-go-fast` grants every principal far more, so the bounds
@@ -196,7 +106,7 @@ def coreweave_bucket_policy(bucket_name: str, temp_bucket: str) -> str:
                 "Effect": "Deny",
                 "Principal": {"CW": "*"},
                 "Action": list(CHECKPOINT_DELETE_ACTIONS),
-                "Resource": [f"arn:aws:s3:::{bucket_name}/{path}" for path in hero_thinning_protected_paths()],
+                "Resource": f"arn:aws:s3:::{bucket_name}/{HERO_CHECKPOINT_PREFIX}*",
             }
         )
     statements.extend(belay_bucket_denies(bucket_name, temp_bucket))
