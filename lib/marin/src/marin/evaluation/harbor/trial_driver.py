@@ -71,7 +71,6 @@ from marin.evaluation.harbor.agent_context import (
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
-_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
 _STABLE_JOB_NAME = "__marin_job__"

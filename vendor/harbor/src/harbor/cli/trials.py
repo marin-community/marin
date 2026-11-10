@@ -13,6 +13,7 @@ from harbor.cli.utils import (
     parse_tpu_spec,
     run_async,
 )
+from harbor.models.agent.name import AgentName
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import (
     AgentConfig,
@@ -141,9 +142,7 @@ def start(
         Option(
             "-a",
             "--agent",
-            help=(
-                "Supported agent: pi, mini-swe-agent, codex, opencode, terminus-2, or terminus-kira."
-            ),
+            help=f"Supported agent: {', '.join(name.value for name in AgentName)}.",
             rich_help_panel="Agent",
             show_default=False,
         ),
