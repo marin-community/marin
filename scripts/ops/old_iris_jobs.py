@@ -12,7 +12,10 @@ tasks to their root, because the owner cancels the root.
 A job carries the name of the cluster that runs it. The federation hub mirrors
 the jobs it hands off, children included, so scanning the hub covers them; a job
 submitted directly to a peer appears only when that peer is scanned. A job found
-on both the hub and its peer is reported once.
+on both the hub and its peer is reported once, under the cluster scanned first.
+The message tells the owner to cancel a job through the cluster that found it: the
+hub routes a cancel to the peer that runs a federated job, and an owner may lack
+the port-forward access that a CoreWeave controller needs.
 
 A job is reported once while it stays old and active. The state holds the keys of
 the reported jobs that still are; a job that stops being active leaves the state
@@ -23,6 +26,7 @@ import json
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 
 import click
@@ -58,6 +62,9 @@ class ActiveTree:
 class OldJob:
     """A root job active past the threshold, with the resources its tree holds."""
 
+    # The cluster whose controller found the job; the owner cancels the job through it.
+    scanned_cluster: str
+    # The cluster that runs the job.
     cluster: str
     root: JobName
     started_at_ms: int
@@ -124,24 +131,40 @@ def _job_line(job: OldJob, now_ms: int) -> str:
     return f"• {job.cluster} `{job.root}`: owner {job.root.user}, {age_days:.1f} days, {resources}"
 
 
+def _line_bytes(line: str) -> int:
+    return len(line.encode()) + 1
+
+
+def _cancel_line(scanned_cluster: str) -> str:
+    return f"Cancel with `iris --cluster={scanned_cluster} job cancel <job>`:"
+
+
 def _compose_message(new_jobs: Sequence[OldJob], now_ms: int, min_age_days: float) -> tuple[str, list[OldJob]]:
-    """Return the Slack message for the oldest new jobs that fit, and those jobs."""
+    """Return the Slack message for the oldest new jobs that fit, and those jobs.
+
+    The jobs are grouped under the cancel command of the cluster that found them.
+    """
     if not new_jobs:
         return "", []
-    header = [
+    lines = [
         f"*Iris jobs active for more than {min_age_days:g} days*",
-        "Cancel a job you no longer need with `iris --cluster=<cluster> job cancel <job>`. "
-        "Each job is listed once while it stays active.",
-        "",
+        "Each job is listed once while it stays active. Cancel a job you no longer need with the command above it.",
     ]
-    size = sum(len(line.encode()) + 1 for line in header) + DEFERRED_LINE_BYTES
+    size = sum(_line_bytes(line) for line in lines) + DEFERRED_LINE_BYTES
     posted: list[OldJob] = []
+    groups: set[str] = set()
     for job in sorted(new_jobs, key=lambda job: job.started_at_ms):
-        size += len(_job_line(job, now_ms).encode()) + 1
+        size += _line_bytes(_job_line(job, now_ms))
+        if job.scanned_cluster not in groups:
+            size += _line_bytes("") + _line_bytes(_cancel_line(job.scanned_cluster))
         if size > MAX_MESSAGE_BYTES:
             break
+        groups.add(job.scanned_cluster)
         posted.append(job)
-    lines = header + [_job_line(job, now_ms) for job in sorted(posted, key=lambda job: (job.cluster, job.started_at_ms))]
+    ordered = sorted(posted, key=lambda job: (job.scanned_cluster, job.cluster, job.started_at_ms))
+    for scanned_cluster, jobs in groupby(ordered, key=lambda job: job.scanned_cluster):
+        lines += ["", _cancel_line(scanned_cluster)]
+        lines += [_job_line(job, now_ms) for job in jobs]
     deferred = len(new_jobs) - len(posted)
     if deferred:
         lines += ["", f"_{deferred} more jobs will be listed in the next report._"]
@@ -206,7 +229,7 @@ def main(clusters: tuple[str, ...], min_age_days: float, state_path: Path, messa
                     continue
                 # ListJobs omits resources; the per-job status carries them.
                 occupied = occupied_resources(tree.jobs, lambda job_id: client.job_status(job_id).resources)
-                old_jobs[key] = OldJob(tree.cluster, tree.root, tree.started_at_ms, occupied)
+                old_jobs[key] = OldJob(scanned_cluster, tree.cluster, tree.root, tree.started_at_ms, occupied)
 
     reported = read_reported(state_path)
     message, next_reported = report(list(old_jobs.values()), reported, now_ms, min_age_days)

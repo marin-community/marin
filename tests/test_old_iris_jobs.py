@@ -25,9 +25,13 @@ def _running_job(
     return job_status_from_proto(proto)
 
 
-def _old_job(name: str, started_days_ago: float) -> OldJob:
+def _old_job(name: str, started_days_ago: float, *, scanned_cluster: str = "marin", cluster: str = "marin") -> OldJob:
     return OldJob(
-        "marin", JobName.from_wire(f"/alice/{name}"), NOW_MS - int(started_days_ago * MS_PER_DAY), {"tpu=v5p-8": 1}
+        scanned_cluster,
+        cluster,
+        JobName.from_wire(f"/alice/{name}"),
+        NOW_MS - int(started_days_ago * MS_PER_DAY),
+        {"tpu=v5p-8": 1},
     )
 
 
@@ -104,3 +108,14 @@ def test_report_lists_a_job_again_after_it_stops_being_active():
     assert third_reported == {kept.key, paused.key}
     assert str(paused.root) in message
     assert str(kept.root) not in message
+
+
+def test_report_tells_owners_to_cancel_through_the_cluster_that_found_the_job():
+    federated = _old_job("federated", 9, scanned_cluster="marin", cluster="cw-rno2a")
+    direct = _old_job("direct", 9, scanned_cluster="cw-us-east-02a", cluster="cw-us-east-02a")
+
+    message, _ = report([federated, direct], set(), NOW_MS, 7)
+
+    groups = {block.splitlines()[0]: block for block in message.split("\n\n")[1:]}
+    assert str(federated.root) in groups["Cancel with `iris --cluster=marin job cancel <job>`:"]
+    assert str(direct.root) in groups["Cancel with `iris --cluster=cw-us-east-02a job cancel <job>`:"]
