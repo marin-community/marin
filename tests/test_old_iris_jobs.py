@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import shlex
 from dataclasses import replace
 
 from iris.client.workload import Device, DeviceKind, JobStatus, ResourceRequest
@@ -137,6 +138,10 @@ def test_report_tells_owners_to_cancel_through_the_cluster_that_found_the_job():
 
     message, _ = report([federated, direct], set(), NOW_MS, 7)
 
-    groups = {block.splitlines()[0]: block for block in message.split("\n\n")[1:]}
-    assert str(federated.root) in groups["Cancel with `iris --cluster=marin job cancel <job>`:"]
-    assert str(direct.root) in groups["Cancel with `iris --cluster=cw-us-east-02a job cancel <job>`:"]
+    groups = {}
+    for block in message.split("\n\n")[1:]:
+        command = shlex.split(block.split("`")[1])
+        cluster = next(arg.partition("=")[2] for arg in command if arg.startswith("--cluster="))
+        groups[cluster] = block
+    assert str(federated.root) in groups[federated.scanned_cluster]
+    assert str(direct.root) in groups[direct.scanned_cluster]

@@ -69,7 +69,7 @@ class OldJob:
     cluster: str
     root: JobName
     started_at_ms: int
-    # Active task count per per-task resource description; empty while every task waits.
+    # Empty while every task waits.
     occupied: Mapping[str, int]
 
     @property
@@ -117,7 +117,7 @@ def format_resources(resources: ResourceRequest) -> str:
 def occupied_resources(
     jobs: Iterable[JobStatus], task_resources: Callable[[JobName], ResourceRequest]
 ) -> dict[str, int]:
-    """Count active tasks per per-task resource description; ``task_resources`` gives a job's per-task request."""
+    """Count active tasks by resource request."""
     occupied: Counter[str] = Counter()
     for job in jobs:
         count = active_task_count(job)
