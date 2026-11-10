@@ -121,19 +121,28 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
 
 
 @pytest.mark.parametrize(
-    "speed,telemetry,verdict,label", [(80, 1, "pass", "improves"), (130, 1000, "fail", "regression")]
+    "speed,telemetry,control_values,verdict,label,change",
+    [
+        (80, 1, (100, 101, 102, 103), "pass", "improves", "changed"),
+        (130, 1000, (100, 101, 102, 103), "fail", "regression", "changed"),
+        (80, 1, (float("nan"), 101, 102, 103), "pass", "improves", "unavailable"),
+    ],
 )
-def test_verdict_labels_use_objectives_and_guards(recorded_runs, speed, telemetry, verdict, label):
+def test_verdict_labels_use_objectives_and_guards(
+    recorded_runs, speed, telemetry, control_values, verdict, label, change
+):
     pin = gate.control_pins("speed-medium")[0]
-    for i in range(pin.runs):
+    for i, value in enumerate(control_values):
         recorded_runs(
-            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: 100 + i}
+            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value}
         )
     recorded_runs("speed-medium", "users/test/telemetry", speed=speed, metrics={VLLM: telemetry})
     report = rescore("speed-medium", "--candidate", "users/test/telemetry")
     assert (report["verdict"], report["label"]) == (verdict, label)
-    assert comparisons(report, "reported")[VLLM]["change"] == "changed"
-    assert comparisons(report, "reported")[VLLM]["higher_is_better"] is None
+    row = comparisons(report, "reported")[VLLM]
+    assert row["change"] == change and row["higher_is_better"] is None
+    if change == "unavailable":
+        assert row["control"] is None and row["control_min"] is None and row["control_max"] is None
 
 
 def test_zero_spread_is_unavailable_and_required_guards_are_invalid(recorded_runs):
@@ -173,6 +182,10 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         "--require",
         key + "<=control",
     )
+    repeated_guard = rescore(
+        "speed-medium", "--candidate", "users/test/borderline", "--require", "speed/update_seconds<=control"
+    )
+    assert repeated_guard["comparisons"] == base["comparisons"]
     for report in (base, added, duplicate):
         assert report["verdict"] == "fail", report
         assert {key: row for key, row in comparisons(report).items() if row["role"] in ("objective", "constraint")} == {

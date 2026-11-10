@@ -680,9 +680,10 @@ def _compare(
             )
         signed = row.delta * (1 if metric.higher_is_better else -1)
         rows.append(row.model_copy(update={"passes": signed >= -row.tolerance}))
+    built_in = {(metric.key, metric.higher_is_better) for metric in preset.guards}
     for text in dict.fromkeys(requirements):
         requirement = parse_requirement(text)
-        if requirement.bound is not None:
+        if requirement.bound is not None or (requirement.key, requirement.higher_is_better) in built_in:
             continue
         row = _comparison(
             requirement.key,
@@ -719,7 +720,7 @@ def _compare(
             continue
         role = ComparisonRole.SLICE if key.startswith(prefixes) else ComparisonRole.REPORTED
         row = _comparison(key, role, values, noise.get(key), n_control)
-        reference = [run.values[key] for group in controls.values() for run in group if key in run.values]
+        reference = [run.values[key] for group in controls.values() for run in group] if key in noise else []
         sizes = {run.slices.get(key) for run in runs}
         row = row.model_copy(
             update={

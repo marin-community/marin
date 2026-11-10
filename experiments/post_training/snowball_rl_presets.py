@@ -55,7 +55,6 @@ REPO_ROOT = find_project_root(Path(__file__))
 PRESET_REVISION = "2026.11.06.1"
 RUN_PREFIX = "checkpoints/snowball-rl"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
-TRAIN_LONG_RUN = f"{RUN_PREFIX}/train-long-"
 # Fraction of a native panel that must be scored before its scores count.
 MINIMUM_PANEL_COVERAGE = 0.99
 SEED = 20261020
@@ -407,10 +406,6 @@ def gated(preset: Preset) -> bool:
     return preset.focus != Focus.TRAIN
 
 
-def run_tree_hash(name: str) -> str:
-    return name.partition(TRAIN_LONG_RUN)[2].partition("-in-")[0]
-
-
 def selection_summary(selection: ArtifactStep) -> dict:
     return json.loads((StoragePath(selection.path()) / SUMMARY_FILENAME).read_text())
 
@@ -556,7 +551,6 @@ def cluster_config_path(cluster: str) -> str:
 
 
 def grafana_links(
-    preset: Preset,
     *,
     run_id: str,
     cluster: str,

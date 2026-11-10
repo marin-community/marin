@@ -501,7 +501,6 @@ def _grafana_links(preset: presets.Preset, receipt: SkyRLLaunchReceipt | None, c
         return {}
     training_type = receipt.config.get("runtime", {}).get("training_type")
     return presets.grafana_links(
-        preset,
         run_id=run_id,
         cluster=cluster,
         training_type=(

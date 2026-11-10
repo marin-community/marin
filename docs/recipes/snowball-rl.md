@@ -105,7 +105,7 @@ show scored task count and candidate/control means with the control minimum and 
 
 Add repeatable conditions with `--require 'KEY<=NUMBER'`, `KEY>=NUMBER`, `KEY<=control` or
 `KEY>=control`. Numeric bounds apply to every candidate replicate. Each relative requirement
-uses `k=1` independently; adding or repeating requirements cannot widen a built-in guard's
+uses `k=1` independently; repeating a built-in condition uses its existing row. Requirements cannot widen a built-in guard's
 threshold. A relative requirement with zero spread needs a numeric bound. Preflight checks the
 key against control r0's computed metrics. Train-long and controls refuse requirements.
 Python callers use `build_run(requirements=(...))`. Requirements affect report identity, while
