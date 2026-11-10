@@ -196,7 +196,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     )
     assert len(first.served_records) == 1 and first.errors == ["Readback unavailable after insert"]
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
-    report, second_gate = saved_gate(("policy/entropy<=0", "test_panel/aaii_category/coding/mean>=control"))
+    relative_key = "test_panel/aaii_category/coding/mean"
+    report, second_gate = saved_gate(("policy/entropy<=0", f"{relative_key}>=control"))
+    assert [
+        (row.metric, row.run, row.control) for row in report.comparisons if row.role == gate.ComparisonRole.REQUIREMENT
+    ] == [(relative_key, pytest.approx(0.5), pytest.approx(0.505))]
     assert report.verdict == "fail" and all(row.passes is not False for row in report.comparisons)
     assert [(fact.replicate, fact.holds) for fact in report.invariants if fact.name == "require/policy/entropy"] == [
         (0, True),

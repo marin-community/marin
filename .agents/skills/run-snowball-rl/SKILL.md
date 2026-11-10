@@ -36,8 +36,8 @@ Without `--wait`, submission exits 0 when accepted. With it, exits are 0 for PAS
 ungated run, 1 for FAIL, 2 for INVALID, 3 without a required verdict, and 4 for pre-execution
 refusal. Repeating the command without `--run` reads saved status from the same source tree;
 a source edit selects a new run name. Follow the native attempt, Iris job, W&B URL and Grafana
-link in status. For published presets, read `rl_progress_url` and record that dashboard link
-with the verdict.
+link in status. After `--run --wait` publishes a run, read `rl_progress_url` from its finishing
+status and record that dashboard link with the verdict.
 
 ## Change an input
 
