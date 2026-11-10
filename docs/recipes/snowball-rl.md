@@ -40,8 +40,10 @@ checkpoints or export; learner and engine token rates are descriptive telemetry.
 After `--run --wait` observes the coordinator finish, the launcher rebuilds and publishes
 trained-panel records using the caller's Marina login. Each terminal native `(run_id, attempt_id)`,
 including failures, identifies one updatable record. Repeat publication replaces that record and
-preserves other attempts. Finishing status includes `rl_progress_url` after serving verification.
-Controls and train-long have a null gate verdict; standalone gate commands publish nothing.
+preserves other attempts. Pass `--issue ISSUE_NUMBER` with the experiment's GitHub issue when
+submitting; use the same issue on retries. Read `rl_progress_url` from finishing status after
+serving verification and record it with the verdict. An absent issue preserves the attempt's
+stored issue link. Controls and train-long have a null gate verdict; standalone gate commands publish nothing.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
 successful steps and runs failed work, then the launcher retries publication from stored outputs.

@@ -12,7 +12,11 @@ const series = (run) => run.series ?? run.label;
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
 const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
-const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} (required ${row.limit}) · ${row.holds ? 'PASS' : 'FAIL'}`;
+const invariant = (row) => {
+  const name = row.name.split('/').pop();
+  const limit = name === 'grader_error_fraction' ? `at most ${row.limit}` : name === 'panel_scored_fraction' ? `at least ${row.limit}` : row.limit;
+  return `r${row.replicate} ${row.name}: ${row.value} (required ${limit}) · ${row.holds ? 'PASS' : 'FAIL'}`;
+};
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
 function groupedRuns() {
@@ -55,7 +59,7 @@ function showDetails(run) {
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
     ['Coverage', `Baseline ${run.baseline?.scored ?? 'Unknown'}/${run.baseline?.attempted ?? 'Unknown'}; final ${run.final?.scored ?? 'Unknown'}/${run.final?.attempted ?? 'Unknown'}`],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
-    ['Timing scope', run.timing_scope], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
+    ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Evaluation', run.evaluation ? `${run.evaluation.name} · ${run.evaluation.version}` : null], ['Task set', run.evaluation?.task_set_sha256],
     ['Evaluation protocol', run.evaluation?.protocol_sha256], ['Artifact location', run.artifact_uri],

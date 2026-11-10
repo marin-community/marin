@@ -28,15 +28,16 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    experiment issue or prepare one through `file-issue`. Submit train-long or multiple 40-H100
    replicates only when the person asked. Set `WANDB_API_KEY`; `WANDB_ENTITY` chooses the team,
    defaulting to `marin-community`.
-5. Add `--run` to submit. Add `--wait` for the final report; use a background process for these
-   multi-minute jobs. Record the original process and job ID so a yielded tool call does not
+5. Pass the experiment's issue as `--issue ISSUE_NUMBER`. Add `--run` to submit and `--wait`
+   for the final report; use a background process for these multi-minute jobs. Record the original process and job ID so a yielded tool call does not
    cause a second submission.
 
 Without `--wait`, submission exits 0 when accepted. With it, exits are 0 for PASS or a completed
 ungated run, 1 for FAIL, 2 for INVALID, 3 without a required verdict, and 4 for pre-execution
 refusal. Repeating the command without `--run` reads saved status from the same source tree;
 a source edit selects a new run name. Follow the native attempt, Iris job, W&B URL and Grafana
-link in status.
+link in status. For published presets, read `rl_progress_url` and record that dashboard link
+with the verdict.
 
 ## Change an input
 

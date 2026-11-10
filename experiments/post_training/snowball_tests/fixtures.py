@@ -26,6 +26,7 @@ from verifyit.spec import ExactSpec
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 
+SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
 
@@ -53,7 +54,7 @@ def selection(tmp_path, monkeypatch):
         "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
     }
     write_json(root / "summary.json", summary)
-    candidate = presets.selection_artifact("fixture-selection@2026.11.10")
+    candidate = presets.selection_artifact(SELECTION_IDENTITY)
     candidate_summary = deepcopy(summary)
     candidate_summary["recipe"]["exclusions"] = [
         {"uri": str(panel / presets.FULL_VALIDATION_FILENAME), "version": panel.name}

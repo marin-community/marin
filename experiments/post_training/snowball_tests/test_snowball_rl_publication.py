@@ -196,7 +196,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     )
     assert len(first.served_records) == 1 and first.errors == ["Readback unavailable after insert"]
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
-    report, second_gate = saved_gate(("policy/entropy<=0",))
+    report, second_gate = saved_gate(("policy/entropy<=0", "test_panel/aaii_category/coding/mean>=control"))
     assert report.verdict == "fail" and all(row.passes is not False for row in report.comparisons)
     assert [(fact.replicate, fact.holds) for fact in report.invariants if fact.name == "require/policy/entropy"] == [
         (0, True),
@@ -256,6 +256,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     )
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
+    historical = next(
+        row for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"] if row["attempt_id"] == "native-0"
+    )
+    assert historical["issue"] == 74
     saved_answers = {}
     for root in sources:
         for path in (root / f"exports/dumped_evals/global_step_{preset.updates}_evals").glob("*.jsonl"):
