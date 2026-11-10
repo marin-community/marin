@@ -120,7 +120,8 @@ class GrugModelConfig:
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
     (cut) CE that avoids materializing the [tokens, vocab] logits tile -- large HBM saving at long
-    context. None is byte-identical to the prior behaviour."""
+    context. None is byte-identical to the prior behaviour. ``"batched_xla_in_place_dw"`` is ``"batched_xla"`` with a
+    backward that writes the output projection's gradient in place, block by block, instead of stacking the blocks."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so

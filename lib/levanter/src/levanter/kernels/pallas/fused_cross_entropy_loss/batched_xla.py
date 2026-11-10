@@ -624,7 +624,64 @@ def _backward_b_tiled_from_lse(
     return grad_x[:b_dim].astype(x.dtype), grad_w.astype(w.dtype)
 
 
-@partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])
+def _streaming_block_grads(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    lse: Float[Array, "B"],
+    g_loss: Float[Array, "B"],
+    g_softmax: Float[Array, "B"],
+    w_block: Float[Array, "H Vb"],
+    v_start: jax.Array | int,
+    v_valid: jax.Array | int,
+    *,
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+) -> tuple[Float[Array, "B H"], Float[Array, "H Vb"]]:
+    """One vocab block's float32 input-gradient term and its weight gradient, in the GEMM's output dtype.
+
+    ``w_block`` holds columns ``v_start`` onward, of which the first ``v_valid`` are in the vocabulary (the rest are
+    padding). ``labels``, ``lse``, ``g_loss`` and ``g_softmax = g_loss + g_lse`` are int32 / float32."""
+    v_block_size = w_block.shape[1]
+    logits_raw = jax.lax.dot_general(
+        x,
+        w_block,
+        (((1,), (0,)), ((), ())),
+        precision=precision,
+    ).astype(jnp.float32)
+    logits = _apply_logit_soft_cap(logits_raw, logit_soft_cap)
+
+    in_vocab = jnp.arange(v_block_size, dtype=jnp.int32) < v_valid
+    probs = jnp.where(in_vocab[None, :], jnp.exp(logits - lse[:, None]), 0.0)
+    dlogits = probs * g_softmax[:, None]
+
+    in_block = (labels >= v_start) & (labels < v_start + v_block_size)
+    safe_idx = jnp.clip(labels - v_start, 0, v_block_size - 1)
+    label_one_hot = jax.nn.one_hot(safe_idx, v_block_size, dtype=x.dtype)
+    label_one_hot = label_one_hot * in_block[:, None].astype(x.dtype)
+    dlogits = dlogits - label_one_hot * g_loss[:, None]
+
+    if logit_soft_cap is not None:
+        cap = jnp.asarray(logit_soft_cap, dtype=jnp.float32)
+        soft_cap_grad = 1.0 - jnp.square(logits / cap)
+        dlogits = dlogits * soft_cap_grad
+
+    dlogits_for_matmul = dlogits.astype(x.dtype)
+    grad_x_block = jax.lax.dot_general(
+        dlogits_for_matmul,
+        w_block,
+        (((1,), (1,)), ((), ())),
+        precision=precision,
+    ).astype(jnp.float32)
+    grad_w_block = jax.lax.dot_general(
+        x,
+        dlogits_for_matmul,
+        (((0,), (0,)), ((), ())),
+        precision=precision,
+    )
+    return grad_x_block, grad_w_block
+
+
+@partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision", "in_place_weight_grad"])
 def _backward_streaming_from_lse(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -636,10 +693,60 @@ def _backward_streaming_from_lse(
     v_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
+    in_place_weight_grad: bool = False,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
-    """Streaming backward pass over vocab blocks using saved LSE."""
+    """Streaming backward pass over vocab blocks using saved LSE.
+
+    By default the scan emits each block's weight gradient, in the GEMM's output dtype, as a ``[blocks, H, v_block]``
+    stack that is transposed and sliced to ``[H, V]`` afterwards, from a weight padded to whole blocks.
+
+    With ``in_place_weight_grad`` the scan writes each block's weight gradient into a carried ``[H, V]`` buffer in
+    ``w``'s dtype instead, and covers only the whole blocks; the remaining columns run after it, padded to one block.
+    Neither ``w`` nor the gradient is copied at the padded width and no block stack is kept. Every block computes the
+    same values at the same shapes and the input gradient sums them in the same order, so the gradients are the same
+    (bit for bit on CPU; on GPU the strided output and the peeled last block may get other GEMM kernels)."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
+
+    labels_i32 = labels.astype(jnp.int32)
+    lse_f32 = lse.astype(jnp.float32)
+    g_loss_f32 = g_loss.astype(jnp.float32)
+    g_softmax = g_loss_f32 + g_lse.astype(jnp.float32)
+    block_grads = partial(
+        _streaming_block_grads,
+        x,
+        labels_i32,
+        lse_f32,
+        g_loss_f32,
+        g_softmax,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
+    grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
+
+    if in_place_weight_grad:
+        num_full_blocks = v_dim // v_block_size
+        tail = v_dim - num_full_blocks * v_block_size
+
+        def body_in_place(carry, v_block_index):
+            grad_x, grad_w = carry
+            v_start = v_block_index * v_block_size
+            w_block = jax.lax.dynamic_slice(w, (0, v_start), (h_dim, v_block_size))
+            grad_x_block, grad_w_block = block_grads(w_block, v_start, v_dim - v_start)
+            grad_w = jax.lax.dynamic_update_slice(grad_w, grad_w_block.astype(w.dtype), (0, v_start))
+            return (grad_x + grad_x_block, grad_w), None
+
+        carry = (grad_x_init, jnp.zeros((h_dim, v_dim), dtype=w.dtype))
+        if num_full_blocks:
+            carry, _ = jax.lax.scan(body_in_place, carry, jnp.arange(num_full_blocks, dtype=jnp.int32))
+        grad_x, grad_w = carry
+        if tail:
+            v_start = num_full_blocks * v_block_size
+            w_tail = _zero_pad(w[:, v_start:], axis=1, multiple=v_block_size, pad_value=0.0)
+            grad_x_block, grad_w_block = block_grads(w_tail, v_start, tail)
+            grad_x = grad_x + grad_x_block
+            grad_w = jax.lax.dynamic_update_slice(grad_w, grad_w_block[:, :tail].astype(w.dtype), (0, v_start))
+        return grad_x.astype(x.dtype), grad_w
 
     v_pad = _ceil_div(v_dim, v_block_size) * v_block_size
     if v_pad == v_dim:
@@ -648,67 +755,19 @@ def _backward_streaming_from_lse(
         w_pad = _zero_pad(w, axis=1, multiple=v_block_size, pad_value=0.0)
     num_v_blocks = v_pad // v_block_size
 
-    labels_i32 = labels.astype(jnp.int32)
-    lse_f32 = lse.astype(jnp.float32)
-    g_loss_f32 = g_loss.astype(jnp.float32)
-    g_lse_f32 = g_lse.astype(jnp.float32)
-    g_softmax = g_loss_f32 + g_lse_f32
-    v_offsets = jnp.arange(v_block_size, dtype=jnp.int32)
-
-    grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
-    v_indices = jnp.arange(num_v_blocks, dtype=jnp.int32)
-
     def body(grad_x, v_block_index):
         v_start = v_block_index * v_block_size
         w_block = jax.lax.dynamic_slice(w_pad, (0, v_start), (h_dim, v_block_size))
+        grad_x_block, grad_w_block = block_grads(w_block, v_start, v_dim - v_start)
+        return grad_x + grad_x_block, grad_w_block
 
-        logits_raw = jax.lax.dot_general(
-            x,
-            w_block,
-            (((1,), (0,)), ((), ())),
-            precision=precision,
-        ).astype(jnp.float32)
-        logits = _apply_logit_soft_cap(logits_raw, logit_soft_cap)
-
-        in_vocab = (v_start + v_offsets) < v_dim
-        probs = jnp.where(in_vocab[None, :], jnp.exp(logits - lse_f32[:, None]), 0.0)
-        dlogits = probs * g_softmax[:, None]
-
-        in_block = (labels_i32 >= v_start) & (labels_i32 < v_start + v_block_size)
-        safe_idx = jnp.clip(labels_i32 - v_start, 0, v_block_size - 1)
-        label_one_hot = jax.nn.one_hot(safe_idx, v_block_size, dtype=x.dtype)
-        label_one_hot = label_one_hot * in_block[:, None].astype(x.dtype)
-        dlogits = dlogits - label_one_hot * g_loss_f32[:, None]
-
-        if logit_soft_cap is not None:
-            cap = jnp.asarray(logit_soft_cap, dtype=jnp.float32)
-            soft_cap_grad = 1.0 - jnp.square(logits / cap)
-            dlogits = dlogits * soft_cap_grad
-
-        dlogits_for_matmul = dlogits.astype(x.dtype)
-        grad_x_block = jax.lax.dot_general(
-            dlogits_for_matmul,
-            w_block,
-            (((1,), (1,)), ((), ())),
-            precision=precision,
-        ).astype(jnp.float32)
-        grad_w_block = jax.lax.dot_general(
-            x,
-            dlogits_for_matmul,
-            (((0,), (0,)), ((), ())),
-            precision=precision,
-        ).astype(jnp.float32)
-
-        grad_x = grad_x + grad_x_block
-        return grad_x, grad_w_block
-
-    grad_x, grad_w_blocks = jax.lax.scan(body, grad_x_init, v_indices)
+    grad_x, grad_w_blocks = jax.lax.scan(body, grad_x_init, jnp.arange(num_v_blocks, dtype=jnp.int32))
     grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_pad))
     grad_w = grad_w[:, :v_dim]
     return grad_x.astype(x.dtype), grad_w.astype(w.dtype)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6))
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6, 7))
 def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -717,7 +776,9 @@ def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
+    in_place_weight_grad: bool,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    del in_place_weight_grad
     return _linear_softmax_cross_entropy_loss_batched_xla_impl(
         x,
         labels,
@@ -737,7 +798,9 @@ def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_fwd(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
+    in_place_weight_grad: bool,
 ):
+    del in_place_weight_grad
     loss, lse = _linear_softmax_cross_entropy_loss_batched_xla_impl(
         x,
         labels,
@@ -767,6 +830,7 @@ def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_bwd(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
+    in_place_weight_grad: bool,
     residuals,
     output_cotangent,
 ):
@@ -795,6 +859,7 @@ def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_bwd(
             v_block_size=residuals.backward_v_block,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            in_place_weight_grad=in_place_weight_grad,
         )
 
     return grad_x, None, grad_w
@@ -814,6 +879,7 @@ _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward.defvjp(
         "logit_soft_cap",
         "precision",
         "return_argmax",
+        "in_place_weight_grad",
     ],
 )
 def _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
@@ -826,6 +892,7 @@ def _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
+    in_place_weight_grad: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if return_argmax:
         return _linear_softmax_cross_entropy_loss_batched_xla_impl(
@@ -846,6 +913,7 @@ def _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
         dtype,
         logit_soft_cap,
         precision,
+        in_place_weight_grad,
     )
 
 
@@ -859,7 +927,10 @@ def linear_softmax_cross_entropy_loss_batched_xla(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
+    in_place_weight_grad: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+    """``in_place_weight_grad``: the streaming backward writes the weight gradient into its ``[H, V]`` result block
+    by block (see ``_backward_streaming_from_lse``)."""
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
     if "gb10" in device_kind and not is_gb10_bf16:
@@ -883,6 +954,7 @@ def linear_softmax_cross_entropy_loss_batched_xla(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
         return_argmax=return_argmax,
+        in_place_weight_grad=in_place_weight_grad,
     )
 
 

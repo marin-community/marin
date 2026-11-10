@@ -41,6 +41,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import GrugAttentionImplementation
+from levanter.kernels.pallas.fused_cross_entropy_loss import Implementation as CrossEntropyImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -143,6 +144,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
     parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
     parser.add_argument(
+        "--ce-implementation",
+        choices=get_args(CrossEntropyImplementation),
+        default=None,
+        help="Fused cross-entropy backend (default: the backend's default order) (GrugModelConfig.ce_implementation).",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -186,6 +193,7 @@ def main() -> None:
         model,
         attention_implementation=args.attention,
         moe_implementation=args.moe_impl,
+        ce_implementation=args.ce_implementation,
         remat_mode=args.remat_mode,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
