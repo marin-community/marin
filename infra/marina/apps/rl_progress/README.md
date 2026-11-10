@@ -5,7 +5,9 @@ The stable UUID is declared in `applet.toml`. Preserve it when releasing updates
 
 Each run has one row with its attempts in a dropdown, latest first. Failed attempts
 are marked. The selected attempt supplies the run's details.
-Series comes from record fields.
+The row shows the gate report's climbed metrics (control → run, change and noise),
+constraints and invariants, then verdict and label. Replicate counts identify aggregate
+results. Attempts without report details remain descriptive; unknown measurements are explicit.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
 run URL; an `issue` field links to the experiment's GitHub issue.

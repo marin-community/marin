@@ -10,6 +10,9 @@ function element(tag, text, attrs = {}) {
 }
 const series = (run) => run.series ?? run.label;
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
+const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
+const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
+const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} (required ${row.limit}) · ${row.holds ? 'PASS' : 'FAIL'}`;
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
 function groupedRuns() {
@@ -37,7 +40,7 @@ function addField(list, title, value) {
 function showDetails(run) {
   $('detail-title').textContent = run.label;
   const body = $('detail-body'); body.replaceChildren();
-  body.append(element('p', run.status === 'failed' ? 'The native attempt failed. See its retained evidence.' : 'Recorded native attempt.', { class: 'note' }));
+  body.append(element('p', run.status === 'failed' ? 'The native attempt or a recorded invariant failed. See the named facts.' : 'Recorded native attempt.', { class: 'note' }));
   const links = element('div', null, { class: 'links' });
   const explicitWandb = run.wandb_url;
   if (explicitWandb && /^https:\/\/wandb\.ai\//.test(explicitWandb)) links.append(element('a', 'W&B run ↗', { href: explicitWandb, target: '_blank', rel: 'noopener noreferrer' }));
@@ -46,20 +49,27 @@ function showDetails(run) {
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id], ['Resume source', run.resume_from],
-    ['Verdict', run.verdict], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
-    ['Status', `${run.status} · ${run.optimizer_steps} optimizer updates`],
+    ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
+    ['Verdict', run.gate_result?.verdict ?? run.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
+    ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
     ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
-    ['Coverage', `Baseline ${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0}; final ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`],
+    ['Coverage', `Baseline ${run.baseline?.scored ?? 'Unknown'}/${run.baseline?.attempted ?? 'Unknown'}; final ${run.final?.scored ?? 'Unknown'}/${run.final?.attempted ?? 'Unknown'}`],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
     ['Timing scope', run.timing_scope], ['Submission date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
-    ['Evaluation', `${run.evaluation.name} · ${run.evaluation.version}`], ['Task set', run.evaluation.task_set_sha256],
-    ['Evaluation protocol', run.evaluation.protocol_sha256 ?? 'Unknown · unranked'], ['Artifact location', run.artifact_uri],
+    ['Evaluation', run.evaluation ? `${run.evaluation.name} · ${run.evaluation.version}` : null], ['Task set', run.evaluation?.task_set_sha256],
+    ['Evaluation protocol', run.evaluation?.protocol_sha256], ['Artifact location', run.artifact_uri],
     ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];
   for (const [title, value] of facts) addField(fields, title, value);
-  body.append(fields, element('h3', 'Evidence and caveats'));
+  body.append(fields);
+  if (run.gate_result) {
+    body.append(element('h3', `Gate report · ${run.gate_result.replicates} replicate(s)`));
+    for (const row of run.gate_result.comparisons) body.append(element('p', comparison(row)));
+    for (const row of run.gate_result.invariants) body.append(element('p', invariant(row), { class: row.holds ? 'note' : 'warning' }));
+    if (run.gate_result.reason) body.append(element('p', run.gate_result.reason));
+  }
+  body.append(element('h3', 'Evidence and caveats'));
   const evidence = element('ul', null, { class: 'evidence' });
   for (const text of run.evidence ?? []) evidence.append(element('li', text));
   body.append(evidence);
@@ -87,7 +97,23 @@ function render() {
     }
     attempts.onchange = () => { location.hash = route(groups.get(run.run_id).find((attempt) => attempt.attempt_id === attempts.value)); };
     name.append(attempts, element('span', run.status, { class: run.status === 'failed' ? 'warning' : 'note' }));
-    tr.append(name, element('td', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`), element('td', `${number(hours(run), 2)} h`), element('td', run.optimizer_steps), element('td', `${run.baseline?.scored ?? 0}/${run.baseline?.attempted ?? 0} → ${run.final?.scored ?? 0}/${run.final?.attempted ?? 0}`), element('td', run.evidence?.join('; ') || '—'));
+    const report = run.gate_result;
+    const objectives = element('td'), constraints = element('td'), verdict = element('td');
+    if (report) {
+      for (const row of report.comparisons) {
+        const cell = row.role === 'objective' ? objectives : constraints;
+        cell.append(element('p', comparison(row), { class: row.passes === false ? 'warning' : '' }));
+      }
+      for (const row of report.invariants) constraints.append(element('p', invariant(row), { class: row.holds ? 'note' : 'warning' }));
+      objectives.append(element('span', `Report across ${report.replicates} replicate(s)`, { class: 'note' }));
+      verdict.append(element('strong', `${report.verdict}${report.label ? ` · ${report.label}` : ''}`));
+      if (report.reason) verdict.append(element('p', report.reason));
+    } else {
+      objectives.textContent = 'Report details unavailable';
+      constraints.textContent = '—';
+      verdict.textContent = run.verdict ?? '—';
+    }
+    tr.append(name, objectives, constraints, verdict);
     return tr;
   }));
 }

@@ -34,7 +34,12 @@ from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
-from marin.rl.skyrl_records import read_skyrl_attempt_tracking, read_skyrl_launch_config, read_skyrl_metrics
+from marin.rl.skyrl_records import (
+    read_skyrl_attempt_tracking,
+    read_skyrl_launch_config,
+    read_skyrl_metrics,
+    read_stored_skyrl_receipt,
+)
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -813,6 +818,10 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
+        receipts = [read_stored_skyrl_receipt(path) for path in run_paths]
+        metadata = metadata.model_copy(
+            update={"attempt_ids": tuple(receipt.config["run"]["attempt_id"] for receipt in receipts if receipt)}
+        )
         runs = [
             _with_requirements(_with_objectives(_load_run(path, preset, inputs), preset), inputs.requirements)
             for path in run_paths

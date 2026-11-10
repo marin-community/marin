@@ -7,7 +7,7 @@
       "exports/metrics/step-000025.json",
       "exports/dumped_evals/global_step_25_evals/HuggingFaceH4_MATH-500.jsonl"
     ],
-    "redactions": "Only gate-consumed fields; no command line, environment credentials, prompt, response text or model data."
+    "redactions": "Only gate and progress-record fields; no command line, environment credentials, prompt, response text or model data."
   },
   "receipt": {
     "config": {
@@ -109,7 +109,24 @@
             "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-test-panel/2026.11.06.1"
           }
         ],
-        "evaluation_data": {}
+        "evaluation_data": {},
+        "model": {
+          "chat_template": null,
+          "identity": "models/snowball-datakit-sft-fe666478454e79fe6027a0bab0388d9abd68f51a@2026.09.21:ead0f35f",
+          "local_path": "/tmp/marinskyrl/models/snowball-datakit-sft-fe666478454e79fe6027a0bab0388d9abd68f51a",
+          "tokenizer_revision": "fe666478454e79fe6027a0bab0388d9abd68f51a",
+          "tokenizer_uri": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
+          "uri": "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
+        },
+        "train_data": [
+          {
+            "identity": "rl-data/task-selection/snowball-100k@2026.11.04.1:3171a74e",
+            "kind": "directory",
+            "local_path": "/tmp/marinskyrl/data/snowball-100k",
+            "relative_path": "train.parquet",
+            "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04.1"
+          }
+        ]
       }
     },
     "result": {

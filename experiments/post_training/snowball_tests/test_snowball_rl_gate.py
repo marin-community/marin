@@ -12,11 +12,13 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import yaml
 from click.testing import CliRunner
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
@@ -616,3 +618,166 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, tmp_path, mo
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert before == {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "pass",
+        "fail-no-login",
+        "invalid-no-login",
+        "parent-early",
+        "mixed-native-failed",
+        "control-missing-receipt",
+        "partial-retry",
+        "child",
+        "data-short",
+    ],
+)
+def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, monkeypatch, case):
+    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    preset_name = "data-short" if case == "data-short" else "learning-medium"
+    controls(recorded_runs, preset_name)
+    preset = presets.PRESETS[preset_name]
+    replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
+    control = case == "control-missing-receipt"
+    built = snowball.build_run(
+        preset, control=control, replicates=replicas, tasks=presets.default_selection() if case == "data-short" else None
+    )
+    sources = [
+        recorded_runs(
+            preset.name,
+            training.name,
+            score=0.1 if case == "fail-no-login" else 0.5,
+            fingerprint=training.fingerprint(),
+            attempt_id=f"native-{index}",
+        )
+        for index, training in enumerate(built.runs)
+    ]
+    if case == "invalid-no-login":
+        receipt = json.loads((sources[0] / "terminal.json").read_text())
+        receipt["result"]["provenance"] = None
+        _json(sources[0] / "terminal.json", receipt)
+    pending = {}
+    for root in sources:
+        for filename in ("terminal.json", "resolved-launch.yaml"):
+            path = root / filename
+            pending[path] = path.read_bytes()
+            path.unlink()
+    client = MagicMock(spec=IrisClient)
+    job = JobName.from_wire("/atqamar/dashboard-coordinator")
+    client.submit.return_value.job_id = job
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
+    monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
+    phase = {"retry": False}
+
+    def finish(*args, **kwargs):
+        for path, data in pending.items():
+            path.write_bytes(data)
+        if case in {"parent-early", "mixed-native-failed"}:
+            receipt = json.loads((sources[0] / "terminal.json").read_text())
+            if not phase["retry"]:
+                receipt["result"]["state"] = "failed"
+                _json(sources[0] / "attempts/native-0.json", receipt)
+                (sources[0] / "terminal.json").unlink()
+                return SimpleNamespace(state=JobState.FAILED)
+            receipt["config"]["run"]["attempt_id"] = "native-retry"
+            _json(sources[0] / "terminal.json", receipt)
+            _json(sources[0] / "attempts/native-retry.json", receipt)
+            _json(sources[0] / "resolved-launch.yaml", {"config": receipt["config"]})
+            for path in (sources[0] / "exports/metrics").glob("*.json"):
+                row = json.loads(path.read_text())
+                row["attempt_id"] = "native-retry"
+                _json(path, row)
+        if control and not phase["retry"]:
+            (sources[0] / "terminal.json").unlink()
+            (sources[0] / "attempts/native-0.json").unlink(missing_ok=True)
+            return SimpleNamespace(state=JobState.FAILED)
+        completed = gate.completed_gate(preset, built.runs, built.gate)
+        if completed is not None:
+            run(completed)
+        return SimpleNamespace(state=JobState.SUCCEEDED)
+
+    client.job.return_value.wait.side_effect = finish
+    published = []
+    unavailable = {"value": case in {"partial-retry", "fail-no-login", "invalid-no-login"}}
+
+    def publish(record, service_url=None):
+        if unavailable["value"] and (case != "partial-retry" or record["attempt_id"] == "native-1"):
+            raise RuntimeError("Credential unavailable; run iris login")
+        published.append(record)
+        return "https://progress.test/#" + urlencode({"run": record["run_id"], "attempt": record["attempt_id"]})
+
+    monkeypatch.setattr("experiments.post_training.publish_rl_progress.publish_result", publish)
+    if case == "child":
+        finish()
+        monkeypatch.setenv("IRIS_TASK_ID", "/atqamar/cached-coordinator/0")
+        monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: SkyRLRun.raw_load(str(sources[0])))
+        monkeypatch.setattr(
+            "experiments.post_training.publish_rl_progress.publish_result",
+            lambda *args: pytest.fail("Coordinator contacted Marina"),
+        )
+    arguments = ["--preset", preset.name, "--version", presets.PRESET_REVISION, "--run", "--wait", "--issue", "73"]
+    if control:
+        arguments.append("--control")
+    if case == "data-short":
+        arguments.extend(["--tasks", f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}"])
+    if replicas == 2:
+        arguments.extend(["--replicates", "2"])
+    expected = (
+        1
+        if case == "fail-no-login"
+        else 2 if case in {"invalid-no-login", "parent-early", "mixed-native-failed"} else 3 if control else 0
+    )
+    try:
+        result = CliRunner().invoke(snowball.main, arguments)
+    finally:
+        set_job_info(None)
+    assert result.exit_code == expected, (result.output, result.exception)
+    if case == "child":
+        assert published == []
+        return
+    snapshot = yaml.safe_load("preset:" + result.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    if case == "data-short":
+        assert "publication" not in snapshot and published == []
+        return
+    paths = [str(root / f"exports/attempts/native-{index}") for index, root in enumerate(sources)]
+    if unavailable["value"]:
+        assert snapshot["publication"] == {
+            "served_records": paths[:1] if case == "partial-retry" else [],
+            "unserved_records": paths[1:] if case == "partial-retry" else paths,
+            "errors": (
+                ["Credential unavailable; run iris login"] * (replicas - 1 if case == "partial-retry" else replicas)
+            ),
+            "retry": "Repeat the original command with --wait.",
+        }
+    if case == "mixed-native-failed":
+        assert [row["attempt_id"] for row in published] == ["native-0"]
+        assert snapshot["publication"] == {
+            "served_records": paths[:1],
+            "unserved_records": paths[1:],
+            "errors": ["Gate report missing for this attempt; repeat the original command with --wait"],
+            "retry": "Repeat the original command with --wait.",
+        }
+    if case in {"parent-early", "mixed-native-failed"}:
+        assert published[0]["status"] == "failed" and published[0]["verdict"] is None
+    if expected == 0 and not unavailable["value"]:
+        for row in snapshot["runs"]:
+            assert parse_qs(urlsplit(row["rl_progress_url"]).fragment)["attempt"] == [row["attempt_id"]]
+    unavailable["value"] = False
+    phase["retry"] = True
+    arguments[arguments.index("--issue") + 1] = "74"
+    repeated = CliRunner().invoke(snowball.main, arguments)
+    assert repeated.exit_code == (
+        0 if case in {"parent-early", "mixed-native-failed", "control-missing-receipt"} else expected
+    ), (repeated.output, repeated.exception)
+    recovered = yaml.safe_load("preset:" + repeated.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
+    assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
+    if case in {"parent-early", "mixed-native-failed"}:
+        retry = next(row for row in published if row["attempt_id"] == "native-retry")
+        assert retry["status"] == "succeeded" and retry["verdict"] == "pass"
+    else:
+        assert any(
+            row["attempt_id"] == "native-0" and row["issue"] == recovered["runs"][0]["issue"] for row in published
+        )

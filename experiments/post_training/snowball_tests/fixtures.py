@@ -149,27 +149,30 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         inputs=None,
         fingerprint="",
         legacy=False,
+        attempt_id="recorded-attempt",
     ):
         preset = presets.PRESETS[preset_name]
         root = tmp_path / name / presets.PRESET_REVISION
         root.mkdir(parents=True, exist_ok=True)
         native = deepcopy(NATIVE_RECORD["receipt"])
         launch, result = native["config"], native["result"]
-        attempt = "recorded-attempt"
+        attempt = attempt_id
         launch["run"].update(id=f"{name}-{presets.PRESET_REVISION}", attempt_id=attempt)
         launch["artifacts"].update(export_root=str(root / "exports"), attempts_root=str(root / "attempts"))
         launch["iris"]["allocation"].update(num_nodes=preset.recipe.layout.role_plan.num_nodes, gpus_per_node=8)
         launch["skyrl"]["trainer"].update(max_steps=preset.updates, seed=presets.SEED, callbacks=[])
         launch["inputs"]["validation_data"] = []
         launch["inputs"]["evaluation_data"] = {}
-        pin = gate.control_pins(preset.name)[0]
+        pin = gate.control_pins(preset.name)[0] if presets.gated(preset) else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
             finished_at="2026-11-06T19:40:00+00:00",
         )
         result["provenance"].update(
-            base_commit=pin.commit, dirty=False, command_line=["unrelated-command", "--preset", "train-long"]
+            base_commit=pin.commit if pin else result["provenance"]["base_commit"],
+            dirty=False,
+            command_line=["unrelated-command", "--preset", "train-long"],
         )
         inputs = inputs or gate.GateInputs(preset_name=preset.name)
         write_json(root / gate.GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))

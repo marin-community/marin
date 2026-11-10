@@ -138,7 +138,7 @@ jobs:
         run: >-
           uv run --all-packages --no-default-groups --extra cpu --extra dedup
           --group test pytest -n 0 -m "" infra/marina/tests/test_rl_progress.py
-          experiments/post_training/test_snowball_rl_publication.py::test_snowball_publication_updates_attempts_and_publishes_controls
+          experiments/post_training/snowball_tests/test_snowball_rl_publication.py::test_snowball_publication_updates_attempts_and_publishes_controls
 
   slow:
     if: ${{ github.event_name == 'schedule' }}

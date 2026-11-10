@@ -79,11 +79,17 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "completed_at": None,
         "baseline": None,
         "final": None,
+        "evaluation": None,
+        "optimizer_steps": None,
     }
     publication.publish_result(unknown, "http://localhost")
     for run_id, invalid in (
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
+        (
+            "test/bad-result",
+            record | {"run_id": "test/bad-result", "attempt_id": "bad", "gate_result": {"comparisons": "invalid"}},
+        ),
     ):
         request(
             "http://localhost",
@@ -114,7 +120,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert rows["native-second"] == failed
     assert rows["partial"] == partial and rows["unknown"] == unknown
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
-    assert set(skipped) == {"test/bad-shape", "test/huge-extra", "test/wrong-sql-key"}
+    assert "gate_result.comparisons" in skipped["test/bad-result"]
+    assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key"}
 
     def rejected_record(origin, method, path, **kwargs):
         if path.endswith("/api/runs"):

@@ -57,9 +57,12 @@ python -m experiments.post_training.snowball_rl_publication --preset learning-me
 
 Speed presets and data-short publish nothing. Native failures and failed training invariants set
 `status: failed` and name the `failed_facts`. Records contain stored native identity, lineage timing,
-measurements, source and engine facts, and the launcher's issue. The app serves the stored records.
-`--run --wait` publishes when the coordinator ends; publish a run started without `--wait` within
-14 days, while its earlier attempts' receipts are kept.
+source and engine facts, and the launcher's issue. The dashboard copies climbed metrics
+(`control → run`, change and noise), constraints, invariants, verdict and label from the gate report.
+Replicate counts identify aggregate results; historical attempts carry their own native facts.
+Updates or lineage duration are unknown when stored evidence cannot attribute them. Controls and
+train-long have no gate verdict. Native receipts persist under the configured export root.
+`--run --wait` publishes when the coordinator ends; repeat it to publish a run started without `--wait`.
 
 ## Change one input
 

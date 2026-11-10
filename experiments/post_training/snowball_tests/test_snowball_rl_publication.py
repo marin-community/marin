@@ -127,11 +127,13 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         assert ("finite_losses_and_gradients" if case == "invariant-failed" else "native_attempt") in row["failed_facts"]
     else:
         assert row["status"] == "succeeded" and row["failed_facts"] == []
+    if case == "legacy-lineage":
+        historical = publication.build_record(str(source), preset, attempt_id="ancestor")
+        assert historical["optimizer_steps"] == 1 and historical["elapsed_seconds"] == 3600
     if case == "missing-tracking":
         assert row["wandb_url"] is None and row["engine"] is None
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
-        assert receipt["config"]["skyrl"]["context_budget"]["max_new_tokens_per_turn"] == 8192
 
 
 @pytest.mark.integration

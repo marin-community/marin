@@ -82,7 +82,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
-from experiments.post_training import snowball_rl_gate
+from experiments.post_training import snowball_rl_gate, snowball_rl_publication
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.task_curation.inventory import (
@@ -531,7 +531,14 @@ def _comparison_line(row: snowball_rl_gate.Comparison) -> str:
     return f"{values}; {delta}; noise +/-{noise}; {row.change}"
 
 
-def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = False) -> dict:
+def _status(
+    run: SnowballRun,
+    preset: presets.Preset,
+    *,
+    stored_only: bool = False,
+    issue: int | None = None,
+    publication_urls: dict[str, str] | None = None,
+) -> dict:
     run = replace(run, gate=snowball_rl_gate.completed_gate(preset, run.runs, run.gate))
     rows = []
     planned = []
@@ -582,6 +589,8 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
                     "disk": execution.disk,
                 },
                 "output": path,
+                "issue": issue,
+                "rl_progress_url": (publication_urls or {}).get(path),
             }
         )
     verdict = {}
@@ -680,20 +689,65 @@ def _iris_client() -> Iterator[IrisClient]:
             yield client
 
 
-def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
-    with _iris_client() as client:
-        parent = client.job(job).wait(RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
+def _publish_records(
+    run: SnowballRun, preset: presets.Preset, *, issue: int | None = None
+) -> snowball_rl_publication.PublicationOutcome | None:
+    if not snowball_rl_publication.publishes(preset):
+        return None
+    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
+    completed_gate = snowball_rl_gate.completed_gate(preset, run.runs, run.gate)
+    gate_path = completed_gate.path(prefix) if completed_gate is not None else None
+    outputs = [training.path(prefix) for training in run.runs]
+    return snowball_rl_publication.publish_runs(
+        outputs, preset, gate_path=gate_path, gate_required=completed_gate is not None, issue=issue
+    )
+
+
+def _finish_run(
+    handles: list[ArtifactStep],
+    preset: presets.Preset,
+    coordinator_error: str | None = None,
+    *,
+    issue: int | None = None,
+) -> None:
     run = _from_handles(handles)
-    snapshot = _status(run, preset)
-    if "verdict" not in snapshot and (parent.state != JobState.SUCCEEDED or run.gate is not None):
-        snapshot["reason"] = f"coordinator {job} is {parent.state}; required verdict unavailable"
+    try:
+        publication = _publish_records(run, preset, issue=issue)
+    except Exception as error:
+        publication = snowball_rl_publication.PublicationOutcome(
+            errors=[str(error)], retry="Repeat the original command with --wait."
+        )
+    snapshot = _status(
+        run,
+        preset,
+        issue=issue,
+        stored_only=True,
+        publication_urls=publication.urls if publication is not None else None,
+    )
+    if publication is not None:
+        snapshot["publication"] = publication.to_dict()
+    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+        snapshot["reason"] = coordinator_error or "required verdict unavailable"
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if "report" in snapshot:
         click.echo((StoragePath(snapshot["report"]).parent / snowball_rl_gate.GATE_MARKDOWN_FILENAME).read_text())
     verdict = snapshot.get("verdict")
-    if verdict is None and run.gate is None and parent.state == JobState.SUCCEEDED:
-        verdict = snowball_rl_gate.Verdict.PASS.value
+    if verdict is None and run.gate is None and coordinator_error is None:
+        verdict = "pass"
     raise click.exceptions.Exit(snowball_rl_gate.EXIT_CODES[verdict])
+
+
+def _wait_for_run(
+    job: JobName, handles: list[ArtifactStep], preset: presets.Preset, *, issue: int | None = None
+) -> None:
+    with _iris_client() as client:
+        parent = client.job(job).wait(RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
+    error = (
+        f"coordinator {job} is {parent.state}; required verdict unavailable"
+        if parent.state != JobState.SUCCEEDED
+        else None
+    )
+    _finish_run(handles, preset, error, issue=issue)
 
 
 def _run_command(function: Callable) -> click.Command:
@@ -729,7 +783,7 @@ def _run_command(function: Callable) -> click.Command:
                     build_artifacts(gate, max_concurrent=max_concurrent)
                 job = None
             if options["wait"] and job is not None:
-                _wait_for_run(job, handles, preset)
+                _wait_for_run(job, handles, preset, issue=options["issue"])
         except click.exceptions.Exit:
             raise
         except Exception as error:
@@ -743,10 +797,12 @@ def _run_command(function: Callable) -> click.Command:
 
 
 @_run_command
+@click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
 @click.option(
     "--wait",
     is_flag=True,
-    help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
+    help="Wait after --run and publish trained-panel attempts using the caller Marina login; "
+    "exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
 )
 @click.option(
     "--preset",
@@ -822,6 +878,7 @@ def main(
     control: bool,
     keep_weights: bool,
     requirements: tuple[str, ...],
+    issue: int | None,
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
@@ -837,7 +894,7 @@ def main(
         requirements=requirements,
     )
     do_run = click.get_current_context().params.get("do_run", False)
-    snapshot = _status(run, preset, stored_only=do_run)
+    snapshot = _status(run, preset, stored_only=do_run, issue=issue)
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if not do_run and "verdict" in snapshot:
         raise click.exceptions.Exit(snowball_rl_gate.EXIT_CODES[snapshot["verdict"]])
