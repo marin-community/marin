@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve the existing Postgres run summaries without changing stored evidence."""
+"""Serve RL progress records stored in Postgres."""
 
 import json
 from typing import Any

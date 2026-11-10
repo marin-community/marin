@@ -226,7 +226,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     payload = client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert repeated.urls[str(sources[0])].endswith("#run=tests%2Fpublication-0&attempt=native-0")
+    assert repeated.urls[str(sources[0])].endswith(
+        f"#run=tests%2Fpublication-0-{presets.PRESET_REVISION}&attempt=native-0"
+    )
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
