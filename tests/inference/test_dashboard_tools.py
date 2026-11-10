@@ -24,6 +24,11 @@ from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, b
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
+from marin.inference.web_search import ParallelWebSearch
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from experiments.llama import llama3_instruct_trainable_chat_template
@@ -438,3 +443,45 @@ def test_dashboard_shell_workspace_recreates_imported_git_history(dashboard_tool
     assert response.status_code == 200
     assert response.json()["exit_code"] == 0
     assert response.json()["stdout"] == "add program\ninitial import\n\nOLD\nfirst revision\n"
+
+
+PARALLEL_RESULTS = {"search_id": "search_1", "results": [{"url": "https://example.com", "excerpts": ["Example"]}]}
+
+
+def _fake_parallel_app(received: list[tuple[str | None, dict[str, object]]]) -> Starlette:
+    async def search(request: Request) -> JSONResponse:
+        body = await request.json()
+        received.append((request.headers.get("x-api-key"), body))
+        return JSONResponse(PARALLEL_RESULTS)
+
+    return Starlette(routes=[Route("/v1/search", search, methods=["POST"])])
+
+
+def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    received: list[tuple[str | None, dict[str, object]]] = []
+    parallel_sock = bind_serving_socket("127.0.0.1", 0)
+    parallel_url = f"http://127.0.0.1:{parallel_sock.getsockname()[1]}/v1"
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1",
+        model_id="fake-model",
+        info=info,
+        web_search=ParallelWebSearch("test-key", base_url=parallel_url),
+    )
+    with serve_app_background(_fake_parallel_app(received), parallel_sock), TestClient(app) as client:
+        assert client.get("/info").json()["web_search"] is True
+        search = client.post(
+            "/web-search",
+            json={"objective": "Find an example", "search_queries": ["example"], "processor": "pro"},
+        )
+        rejected = client.post("/web-search", json={"objective": "Find an example"})
+
+    assert search.status_code == 200
+    assert search.json() == PARALLEL_RESULTS
+    assert rejected.status_code == 422
+    assert received == [("test-key", {"objective": "Find an example", "search_queries": ["example"]})]
+
+    unconfigured = build_dashboard_app(upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info)
+    with TestClient(unconfigured) as client:
+        assert client.get("/info").json()["web_search"] is False
+        assert client.post("/web-search", json={"objective": "x", "search_queries": ["x"]}).status_code == 404

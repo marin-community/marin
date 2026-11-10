@@ -147,6 +147,16 @@ afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
 prepared on the first Python-tool invocation or shell command. Guest code has no
 ambient host filesystem, process, network, environment or clock access.
 
+If a call returns `503` with `Dashboard tool runtime preparation failed`, inspect
+the serving task's logs for the underlying package download or cache error.
+ShellSim 0.1.39 uses
+`https://public.oa.dev/shellsim/ports/catalog.json`; 0.1.38 uses
+`shellsim.rjp.io`, which can return HTTP 502. Relaunch the serving job with its
+original `uv run marin-serve iris ...` command from an updated checkout to use
+the current lockfile and catalog. A running dashboard keeps its catalog
+selection for the process lifetime. Transient preparation failures are retried
+on the next tool call.
+
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
 of rounds in that turn. The default value, `0`, allows unlimited rounds. For a
@@ -207,5 +217,24 @@ worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-It also authorizes ShellSim commands and bounded public GitHub clones. Share
-the URL only with trusted users and treat it as a credential.
+It also authorizes ShellSim commands, bounded public GitHub clones, and, when
+enabled, web searches. Share the URL only with trusted users and treat it as a
+credential.
+
+## Web search
+
+The **Web search** checkbox above the Chat composer adds a `web_search` tool,
+backed by Parallel's search API, to the request's `tools` field. It is shown
+only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
+dashboard server adds the key to each call, so the browser never receives it.
+Each search is billed to the account that owns the key.
+
+```bash
+uv run marin-serve iris MODEL --cluster marin --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
+```
+
+A custom launcher that calls `build_dashboard_app` directly must submit the same
+secret and pass `web_search=parallel_web_search_from_secret()` from
+`marin.inference.web_search`. In brokered mode, the model worker jobs do not
+receive the key; in direct mode, the model server shares the dashboard's task
+and can read it.

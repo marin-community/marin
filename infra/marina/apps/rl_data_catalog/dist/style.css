@@ -60,11 +60,12 @@ tbody tr:hover { background: #f7faf7; }
 .num { font-variant-numeric: tabular-nums; text-align: right; }
 th.num button { justify-content: flex-end; }
 .source-table { table-layout: fixed; min-width: 830px; }
-.source-table th:first-child { width: 40%; }
-.source-table th:nth-child(2) { width: 12%; }
-.source-table th:nth-child(3) { width: 11%; }
-.source-table th:nth-child(4) { width: 15%; }
-.source-table th:nth-child(5) { width: 22%; }
+.source-table th:first-child { width: 34%; }
+.source-table th:nth-child(2) { width: 11%; }
+.source-table th:nth-child(3) { width: 10%; }
+.source-table th:nth-child(4) { width: 13%; }
+.source-table th:nth-child(5) { width: 15%; }
+.source-table th:nth-child(6) { width: 17%; }
 .source-name { border: 0; background: none; padding: 0; color: #244a37; font-size: 14px; font-weight: 550; text-align: left; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-name:hover { text-decoration: underline; }
 .source-subtitle { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -132,7 +133,8 @@ dialog h2 { font-size: 23px; margin: 26px 0 12px; overflow-wrap: anywhere; }
   .source-table th:nth-child(2) { width: 25%; }
   .source-table th:nth-child(4) { width: 29%; }
   .source-table th:nth-child(3), .source-table td:nth-child(3),
-  .source-table th:nth-child(5), .source-table td:nth-child(5) { display: none; }
+  .source-table th:nth-child(5), .source-table td:nth-child(5),
+  .source-table th:nth-child(6), .source-table td:nth-child(6) { display: none; }
   .source-table td { padding: 13px 8px; font-size: 12px; }
   .source-table thead button { padding: 13px 8px; gap: 4px; font-size: 11px; }
   .source-name { font-size: 12px; white-space: normal; overflow-wrap: anywhere; }

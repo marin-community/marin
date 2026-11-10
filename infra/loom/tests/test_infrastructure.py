@@ -319,6 +319,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
                 "ops",
                 {
                     "agent": "codex",
+                    "docArtifact": "doc",
                     "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
@@ -326,6 +327,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
             ),
         )
     )
+    assert profiles[0]["profile"]["doc_artifact"] == "doc"
     assert profiles[0]["profile"]["github_repositories"] == [
         "marin-community/marin",
         "marin-community/vllm",

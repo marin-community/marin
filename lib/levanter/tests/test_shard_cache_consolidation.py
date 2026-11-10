@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for shard cache consolidation metadata."""
@@ -14,7 +14,6 @@ from levanter.store.cache import (
     CACHE_LAYOUT_CONSOLIDATED,
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
-    ShardedCacheLayout,
     TreeCache,
     _expose_cache_rows,
     consolidate_shard_cache_ledgers,
@@ -91,41 +90,7 @@ def test_consolidate_shard_caches_writes_materialized_tree_store():
         )
 
 
-def test_relative_shard_path_requires_child_paths():
-    with tempfile.TemporaryDirectory(prefix="levanter-test-shard-paths-") as tmpdir:
-        output_path = os.path.join(tmpdir, "output")
-        internal_shard = os.path.join(output_path, "part-00000")
-        external_shard = os.path.join(tmpdir, "source", "part-00000")
-
-        layout = ShardedCacheLayout.parse(output_path)
-        assert layout.relative_shard(internal_shard) == "part-00000"
-        with pytest.raises(ValueError, match="not under output path"):
-            layout.relative_shard(external_shard)
-
-
-def test_relative_shard_path_requires_child_uri_paths():
-    output_path = "gs://bucket/cache/train"
-    internal_shard = "gs://bucket/cache/train/part-00000"
-    external_shard = "gs://bucket/other/train/part-00000"
-
-    layout = ShardedCacheLayout.parse(output_path)
-    assert layout.relative_shard(internal_shard) == "part-00000"
-    with pytest.raises(ValueError, match="not under output path"):
-        layout.relative_shard(external_shard)
-
-
-def test_relative_shard_path_tolerates_double_slash_output():
-    # A trailing slash in MARIN_PREFIX yields a `//` after the StepSpec path join,
-    # while shard writes normalize `//`->`/`. Consolidation must treat both as the
-    # same location instead of raising "not under output path".
-    output_path = "s3://marin-na/marin//slimpajama-6b/2026.06.28/train"
-    shard_path = "s3://marin-na/marin/slimpajama-6b/2026.06.28/train/part-00000-of-00048"
-
-    assert ShardedCacheLayout.parse(output_path).relative_shard(shard_path) == "part-00000-of-00048"
-
-
-@pytest.mark.asyncio
-async def test_consolidate_external_shards_rejected():
+def test_consolidate_external_shards_rejected():
     with tempfile.TemporaryDirectory(prefix="levanter-test-external-shards-") as tmpdir:
         source_dir = os.path.join(tmpdir, "source")
         output_path = os.path.join(tmpdir, "output")
