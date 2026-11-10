@@ -151,11 +151,19 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
             [
                 "experiments/post_training/snowball_tests/test_snowball_rl.py",
                 "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
+                "tests/rl/test_skyrl.py",
             ],
         )
         for path in (
             "vendor/skyrl/cloud/iris/launch_config.py",
             "vendor/skyrl/skyrl-train/skyrl_train/config/ppo_base_config.yaml",
+        )
+    ]
+    + [
+        (path, ["tests/rl/test_skyrl.py"])
+        for path in (
+            "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+            "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
         )
     ],
 )
@@ -180,6 +188,7 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
         "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
         "def test_native_protocol():\n    pass\n",
     )
+    write(tmp_path, "tests/rl/test_skyrl.py", "def test_stored_record_boundary():\n    pass\n")
     selection = select_tests([changed_file], tmp_path)
 
     assert leg_paths(selection.matrix, "marin") == expected
