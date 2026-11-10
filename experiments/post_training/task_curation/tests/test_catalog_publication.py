@@ -17,6 +17,8 @@ from finestore.rl.curation import (
     AssessmentStatus,
     CurationCatalog,
     CurationSummary,
+    IndependentQC,
+    Verdict,
     register_catalog,
 )
 from finestore.store import DataStore
@@ -24,6 +26,7 @@ from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.curation_catalog import RUNS
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
@@ -177,6 +180,19 @@ def test_a_superseded_source_does_not_block_the_other_sources_in_its_campaign(tm
     assert rows[first.info.id].assessment_key is None
     assert rows[first.info.id].latest_attempt_key == "new-key"
     assert rows[second.info.id].assessment_key == "second"
+
+
+def test_republication_refreshes_an_inventory_only_declaration(tmp_path):
+    root = str(tmp_path / "production")
+    runnable = number_source(tmp_path / "input")
+    pointer = RlDataSource(info=SourceInfo(id="release:pointer", title="pointer", origin="fixture"))
+    record_attempt(root, runnable, "first", "2026-10-16T10:00:00Z", "key-a")
+    publish_catalog(root, "first", [runnable, pointer])
+    qc = IndependentQC(verdict=Verdict.GOOD, method="release oracle", reviewed=3, admitted=2, evidence_url="pinned")
+    edited = RlDataSource(info=replace(pointer.info, independent_qc=qc))
+    record_attempt(root, runnable, "second", "2026-10-16T11:00:00Z", "key-a")
+    publish_catalog(root, "second", [runnable, edited])
+    assert selected_sources(root)[pointer.info.id].declaration.independent_qc == qc
 
 
 class ExpiredLease(LocalFileLease):

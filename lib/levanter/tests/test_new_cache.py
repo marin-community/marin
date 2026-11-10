@@ -327,6 +327,13 @@ async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
         ("gs://bucket/cache/", "gs://bucket/cache/train/shard_0", "train/shard_0"),
         # A doubled interior separator on either side collapses structurally.
         ("gs://bucket/cache", "gs://bucket/cache//train//shard_0", "train/shard_0"),
+        # A trailing slash in MARIN_PREFIX doubles a separator in the output path while
+        # shard writes normalize it away; both must name the same location.
+        (
+            "s3://marin-na/marin//slimpajama-6b/train",
+            "s3://marin-na/marin/slimpajama-6b/train/part-00000-of-00048",
+            "part-00000-of-00048",
+        ),
         # Local absolute paths.
         ("/tmp/cache", "/tmp/cache/shard_0", "shard_0"),
         # An object-store key may contain a literal `..` segment (keys are not
@@ -343,6 +350,8 @@ def test_relative_shard_path_structural(output_path, shard_path, expected):
     [
         # Sibling, not descendant.
         ("gs://bucket/cache", "gs://bucket/other/shard_0"),
+        # Local sibling, not descendant.
+        ("/tmp/output", "/tmp/source/part-00000"),
         # Different bucket.
         ("gs://bucket/cache", "gs://other/cache/shard_0"),
         # shard_path equals output_path — no relative key to emit.
