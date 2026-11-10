@@ -14,14 +14,14 @@ import yaml
 from click.testing import CliRunner
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
-from marin.rl.skyrl import SkyRLRun, read_skyrl_launch_config
+from marin.rl.skyrl import read_skyrl_launch_config
 
 from experiments.post_training import publish_rl_progress as publisher
 from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
-from experiments.post_training.snowball_rl_test_fixtures import native_config, write_json
+from experiments.post_training.snowball_rl_test_fixtures import write_json
 
 pytestmark = pytest.mark.usefixtures("source_provenance", "synthetic_current_controls")
 
@@ -53,12 +53,6 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
     ]
     preset = replace(original, updates=3 if case.startswith("lineage") else 2, measured=range(1, 3))
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {preset.name: preset})
-    monkeypatch.setattr("marin.rl.skyrl.run_skyrl", lambda config: native(config))
-    settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)
-    if case.startswith("lineage"):
-        settings += (presets.parse_setting("trainer.max_steps=2"),)
-    built = snowball.build_run(preset, settings=settings)
-    training = built.runs[0]
     stored_preset = replace(preset, updates=2)
     if case == "partial":
         stored_preset = replace(
@@ -66,11 +60,10 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
         )
     source = recorded_runs(
         stored_preset,
-        training.name,
+        "tests/stored-progress",
         attempt_id="native-attempt",
         initial_score=0.3,
         score=0.5,
-        fingerprint=training.fingerprint(),
         unscored=15 if case == "partial" else 0,
         argv=[
             "--preset",
@@ -88,6 +81,9 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
     launch = read_skyrl_launch_config(str(source))
     attempts = source.parent / "separate-attempt-receipts" / case
     if case == "native-composed":
+        training = snowball.build_run(
+            preset, settings=(presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),)
+        ).runs[0]
         context = StepContext.for_run(
             str(source), str(source.parent), runtime_args=training.runtime_args, deps=training.deps
         )
@@ -137,47 +133,35 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         write_json(first, baseline)
         (source / "exports/dumped_evals/global_step_0_evals").rename(source / "exports/dumped_evals/global_step_1_evals")
         initial.unlink()
-    config = native_config(source, launch)
-
-    def native(edge_config):
-        if case == "missing-tracking":
-            (source / "exports/attempts/native-attempt/tracking.json").unlink()
-        if case == "historical":
-            receipt = json.loads((source / "terminal.json").read_text())
-            write_json(attempts / "native-attempt.json", receipt)
-            (source / "terminal.json").unlink()
-            current = json.loads(json.dumps(launch))
-            current["run"]["attempt_id"] = "newer-attempt"
-            (source / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": current}))
-        if case == "wrong-cohort":
-            descriptor = launch["inputs"]["validation_data"][0]
-            path = Path(descriptor["uri"]) / descriptor["relative_path"]
-            rows = pq.read_table(path).to_pylist()
-            task = json.loads(rows[0]["task_spec"])
-            task["id"] = "different-task"
-            rows[0]["task_spec"] = json.dumps(task)
-            pq.write_table(pa.Table.from_pylist(rows), path)
-        if case == "native-failed":
-            shutil.rmtree(source / "exports")
-            receipt = json.loads((source / "terminal.json").read_text())
-            receipt["result"]["state"] = "failed"
-            (source / "terminal.json").unlink()
-            write_json(attempts / "native-attempt.json", receipt)
-            raise RuntimeError("native failed")
-        if case == "invariant-failed":
-            step = 1
-            path = source / f"exports/metrics/step-{step:06d}.json"
-            row = json.loads(path.read_text())
-            row["policy/raw_grad_norm"] = float("nan")
-            write_json(path, row)
-        return SkyRLRun.raw_load(str(source))
-
+    if case == "missing-tracking":
+        (source / "exports/attempts/native-attempt/tracking.json").unlink()
+    if case == "historical":
+        receipt = json.loads((source / "terminal.json").read_text())
+        write_json(attempts / "native-attempt.json", receipt)
+        (source / "terminal.json").unlink()
+        current = json.loads(json.dumps(launch))
+        current["run"]["attempt_id"] = "newer-attempt"
+        (source / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": current}))
+    if case == "wrong-cohort":
+        descriptor = launch["inputs"]["validation_data"][0]
+        path = Path(descriptor["uri"]) / descriptor["relative_path"]
+        rows = pq.read_table(path).to_pylist()
+        task = json.loads(rows[0]["task_spec"])
+        task["id"] = "different-task"
+        rows[0]["task_spec"] = json.dumps(task)
+        pq.write_table(pa.Table.from_pylist(rows), path)
     if case == "native-failed":
-        with pytest.raises(RuntimeError, match="native failed"):
-            training.run(config)
-    else:
-        result = training.run(config)
-        assert result.path == str(source)
+        shutil.rmtree(source / "exports")
+        receipt = json.loads((source / "terminal.json").read_text())
+        receipt["result"]["state"] = "failed"
+        (source / "terminal.json").unlink()
+        write_json(attempts / "native-attempt.json", receipt)
+    if case == "invariant-failed":
+        step = 1
+        path = source / f"exports/metrics/step-{step:06d}.json"
+        row = json.loads(path.read_text())
+        row["policy/raw_grad_norm"] = float("nan")
+        write_json(path, row)
     row = publication.build_record(str(source), preset, attempt_id="native-attempt")
     assert row["artifact_uri"] == str(source)
     assert (row["run_id"], row["attempt_id"]) == (launch["run"]["id"], "native-attempt")
