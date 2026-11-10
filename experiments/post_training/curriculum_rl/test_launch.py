@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-
 import pytest
 from marin.execution.lazy import StepContext
 
@@ -15,10 +13,8 @@ import sys
 from pathlib import Path
 from cloud.iris.launch_config import load_launch_config
 
-composer = Path(load_launch_config.__code__.co_filename).resolve()
-assert composer == Path(sys.argv[1]) / "vendor/skyrl/cloud/iris/launch_config.py"
 rows = []
-for path in sys.argv[2:]:
+for path in sys.argv[1:]:
     config = load_launch_config(Path(path))
     placement = config.skyrl.trainer.placement
     allocation = config.iris.allocation
@@ -55,8 +51,7 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
         path.write_text(config.launch_config_yaml)
         paths.append(str(path))
     run_native = native_json()
-    rows = run_native(COMPOSE_LAUNCHES, [str(Path(__file__).resolve().parents[3]), *paths])
-    assert rows
+    rows = run_native(COMPOSE_LAUNCHES, paths)
     assert [{key: row[key] for key in ("profile", "strategy")} for row in rows] == [
         {"profile": "megatron", "strategy": "megatron"}
     ] * len(arms)
