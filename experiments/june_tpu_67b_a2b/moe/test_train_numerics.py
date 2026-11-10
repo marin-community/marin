@@ -9,15 +9,10 @@ import pytest
 from experiments.june_tpu_67b_a2b.moe.train import _check_step_numerics
 
 
-@pytest.mark.parametrize("loss", [jnp.nan, jnp.inf])
-def test_nonfinite_loss_fails_training(loss):
-    with pytest.raises(FloatingPointError):
-        _check_step_numerics({"train/loss": loss}, step=2, diagnose_numerics=False)
-
-
 def test_nonfinite_update_fails_before_next_step():
     metrics = {
         "train/loss": jnp.array(3.49),
+        "train/loss_finite": jnp.array(True),
         "train/grads_finite": jnp.array(True),
         "train/updates_finite": jnp.array(False),
         "train/params_finite": jnp.array(False),

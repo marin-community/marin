@@ -30,7 +30,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import Checkpointer, load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -67,6 +67,9 @@ from experiments.june_tpu_67b_a2b.moe.model import (
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+_LOSS_FINITE_KEY = "train/loss_finite"
+# The hyperparameters (learning rate, ...) of the optimizer state a step returns, which the step-info hook logs.
+_OPTIMIZER_HYPERPARAMS_KEY = "optimizer_hyperparams"
 _NUMERIC_DIAGNOSTIC_KEYS = (
     "train/grads_finite",
     "train/updates_finite",
@@ -184,6 +187,17 @@ class GrugTrainerConfig:
     all-gather combiner to combine one layer's expert weight gathers into one
     (``--xla_gpu_all_gather_combine_threshold_bytes`` above one layer's gathered expert weight bytes); without it the
     gathers run one after another and overlap little compute. The checkpoint layout is unchanged."""
+
+    pipelined_step_logging: bool = False
+    """Dispatch step N+1 before fetching step N's metrics, checking its loss and running its hooks and logging, so
+    that host work runs while the devices compute the next step instead of between steps. The non-finite loss check
+    (and with ``diagnose_numerics`` the update checks) then raises one step late, after step N+1 is dispatched, except
+    that with a checkpointer step N is checked before its state can be saved. Hooks of steps that do not wait see a
+    state that only carries the step number and the optimizer hyperparameters, since the next step took the full state
+    (it is donated); the steps whose hooks read the state (eval), that bound the profiler window, and the last step
+    finish before the next one is dispatched, as without it. ``throughput/duration`` is the time from the later of the
+    step's dispatch and the previous step's completion to its completion. False finishes every step before
+    dispatching the next."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -628,8 +642,10 @@ def _make_train_step(
             qb_compute_params = _apply_qb_betas(state.compute_params, state.pending_qb_betas)
             (loss, summarized_metrics), compute_grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_compute_params)
             grads = mp.cast_to_param(compute_grads)
-        metrics = {"train/loss": loss, **summarized_metrics}
+        # The loss's finiteness is checked on the host from this flag, fetched with the other metrics.
+        metrics = {"train/loss": loss, _LOSS_FINITE_KEY: jnp.isfinite(loss), **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        metrics[_OPTIMIZER_HYPERPARAMS_KEY] = _optimizer_hyperparams(opt_state)
         params = optax.apply_updates(qb_params, updates)
         if diagnose_numerics:
             metrics.update(
@@ -1106,16 +1122,78 @@ def _tree_all_finite(tree: object) -> jax.Array:
     return finite
 
 
+def _optimizer_hyperparams(opt_state: optax.OptState) -> dict[str, jax.Array]:
+    """The hyperparameters ``log_optimizer_hyperparams`` logs from ``opt_state``: none unless the optimizer injects
+    them (``optax.inject_hyperparams``)."""
+    if isinstance(opt_state, optax.MultiStepsState):
+        opt_state = opt_state.inner_opt_state
+    return dict(getattr(opt_state, "hyperparams", {}))
+
+
 def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> None:
+    """Raise if a step's loss (with ``diagnose_numerics`` also its gradients, updates, parameters or QB betas) is not
+    finite. ``metrics`` are the step's host metrics (``_fetch_step_metrics``): the flags were computed in the step."""
     diagnostics = (
         {key: float(metrics[key]) for key in (*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens")}
         if diagnose_numerics
         else {}
     )
-    if not bool(jnp.isfinite(metrics["train/loss"])):
+    if not bool(metrics[_LOSS_FINITE_KEY]):
         raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
     if diagnose_numerics and not all(bool(metrics[key]) for key in _NUMERIC_DIAGNOSTIC_KEYS):
         raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
+
+
+def _is_router_metric(key: str) -> bool:
+    return (key.startswith("train/router/") or key.startswith("moe_bias/")) and key not in (
+        "train/router/routing_counts_per_layer",
+        "qb_beta_per_layer",
+    )
+
+
+def _fetch_step_metrics(metrics: dict, diagnose_numerics: bool) -> dict:
+    """The metrics of a step the loop checks and logs, copied to the host in one transfer, which waits for the step."""
+    keys = ["train/loss", _LOSS_FINITE_KEY, _OPTIMIZER_HYPERPARAMS_KEY]
+    if diagnose_numerics:
+        keys += [*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens"]
+    if "train/cross_entropy_loss" in metrics:
+        keys.append("train/cross_entropy_loss")
+    keys += [key for key in metrics if _is_router_metric(key)]
+    return jax.device_get({key: metrics[key] for key in keys})
+
+
+@dataclass(frozen=True)
+class _HostOptimizerState:
+    """The part of an optimizer state the step-info hook reads (``log_optimizer_hyperparams``), on the host."""
+
+    hyperparams: dict
+
+
+@dataclass(frozen=True)
+class _HostStepState:
+    """What the hooks of a pipelined step see in place of the state it returned, which the next step took: the step
+    number and the optimizer hyperparameters, with no model."""
+
+    step: int
+    opt_state: _HostOptimizerState | None
+    params: None = None
+    ema_params: None = None
+
+
+@dataclass
+class _DispatchedStep:
+    """A dispatched train step whose metrics the loop has not yet logged."""
+
+    step: int
+    """The step's index: the state it returns has ``step + 1``."""
+    metrics: dict
+    watch_stats: dict | None
+    dispatch_time: float
+    load_time: float
+    may_compile: bool
+    """The first step of the process or a gradient-watch step, whose wait has no hang timeout."""
+    host_metrics: dict | None = None
+    done_time: float | None = None
 
 
 def _model_shardings(model_config: GrugModelConfig, key: PRNGKeyArray) -> Transformer:
@@ -1192,6 +1270,116 @@ def exit_if_hung(timeout: float | None):
         yield
     finally:
         faulthandler.cancel_dump_traceback_later()
+
+
+def _train_loop(
+    train_step: Callable,
+    state: GrugTrainState,
+    iterator: LoadingTimeTrackerIterator,
+    *,
+    num_train_steps: int,
+    state_callbacks: StateCallbackRunner[GrugTrainState | _HostStepState],
+    checkpointer: Checkpointer | None,
+    watch_interval: int,
+    step_timeout: float | None,
+    diagnose_numerics: bool,
+    pipelined: bool,
+    hooks_read_state: Callable[[int], bool],
+) -> GrugTrainState:
+    """Run ``train_step`` on batches from ``iterator`` up to ``num_train_steps``, then the hooks and the checkpointer
+    forced on the final state, which it returns.
+
+    Each step's metrics come to the host in one transfer; then its loss is checked (``_check_step_numerics``), its
+    hooks run and its metrics are logged, and the checkpointer gets the state it returned. With ``pipelined``
+    (``GrugTrainerConfig.pipelined_step_logging``) that happens for step N after step N+1 is dispatched, except for
+    the last step and the steps for which ``hooks_read_state(step)``. ``watch_interval`` is the gradient watch's
+    interval in steps, 0 for none. ``step_timeout`` bounds each wait for a step (``exit_if_hung``) except for the first
+    step and watch steps, which can compile."""
+    first_step = int(state.step)
+    next_step = first_step
+    pending: _DispatchedStep | None = None
+    last_done = -math.inf
+    last_loss = 0.0
+    last_duration = 0.0
+
+    def fetch(record: _DispatchedStep) -> dict:
+        if record.host_metrics is None:
+            record.host_metrics = _fetch_step_metrics(record.metrics, diagnose_numerics)
+            record.done_time = time.perf_counter()
+        return record.host_metrics
+
+    def finish(record: _DispatchedStep, returned_state: GrugTrainState | None) -> None:
+        """Check, hook and log a fetched step; ``returned_state`` is the state it returned, None once donated."""
+        nonlocal last_done, last_loss, last_duration
+        host = fetch(record)
+        assert record.done_time is not None
+        duration = record.done_time - max(record.dispatch_time, last_done)
+        last_done = record.done_time
+        _check_step_numerics(host, record.step + 1, diagnose_numerics)
+        hyperparams = host[_OPTIMIZER_HYPERPARAMS_KEY]
+        hook_state = (
+            returned_state
+            if returned_state is not None
+            else _HostStepState(record.step + 1, _HostOptimizerState(hyperparams) if hyperparams else None)
+        )
+        loss = float(host["train/loss"])
+        hook_start = time.perf_counter()
+        with jax.profiler.TraceAnnotation("callbacks"):
+            state_callbacks.run(hook_state, loss=loss, step_duration=duration)
+            levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=record.step)
+            levanter.tracker.log({"throughput/loading_time": record.load_time}, step=record.step)
+            router_metrics = {key: value for key, value in host.items() if _is_router_metric(key)}
+            if router_metrics:
+                levanter.tracker.log(router_metrics, step=record.step)
+            if "train/cross_entropy_loss" in host:
+                levanter.tracker.log({"train/cross_entropy_loss": host["train/cross_entropy_loss"]}, step=record.step)
+            if record.watch_stats is not None:
+                levanter.tracker.log(record.watch_stats, step=record.step)
+        last_loss = loss
+        last_duration = duration
+
+    try:
+        while next_step < num_train_steps:
+            with jax.profiler.TraceAnnotation("load_batch"):
+                batch = next(iterator)
+            step = next_step
+            dispatch_time = time.perf_counter()
+            # grad_watch runs only on its configured interval.
+            compute_watch = watch_interval > 0 and step % watch_interval == 0
+            # The first step compiles, so it gets no timeout; neither do watch steps, which can compile a variant.
+            may_compile = step == first_step or compute_watch
+            waits_for_compile = may_compile or (pending is not None and pending.may_compile)
+            with exit_if_hung(None if waits_for_compile else step_timeout):
+                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                if pending is not None:
+                    fetch(pending)
+            next_step = step + 1
+            record = _DispatchedStep(step, metrics, watch_stats, dispatch_time, iterator.this_load_time, may_compile)
+            if pending is not None:
+                finish(pending, None)
+                pending = None
+            if not pipelined or next_step == num_train_steps or hooks_read_state(step):
+                with exit_if_hung(None if may_compile else step_timeout):
+                    fetch(record)
+                finish(record, state)
+            else:
+                pending = record
+                if checkpointer is not None:
+                    # The checkpointer may save the state this step returned, so check the step first; the
+                    # checkpointer's save decision waits for the step anyway.
+                    with exit_if_hung(None if may_compile else step_timeout):
+                        _check_step_numerics(fetch(record), next_step, diagnose_numerics)
+            if checkpointer is not None:
+                checkpointer.on_step(tree=_checkpointed(state), step=next_step)
+    except BaseException:
+        logger.exception("Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause")
+        raise
+    # Mirror classic trainer behavior: force callbacks on the last completed step.
+    state_callbacks.run(state, loss=last_loss, step_duration=last_duration, force=True)
+    if checkpointer is not None:
+        checkpointer.on_step(tree=_checkpointed(state), step=next_step, force=True)
+        checkpointer.wait_until_finished()
+    return state
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -1329,7 +1517,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         log_every = max(1, config.trainer.log_every)
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
 
-        state_callbacks = StateCallbackRunner[GrugTrainState](
+        state_callbacks = StateCallbackRunner[GrugTrainState | _HostStepState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
@@ -1351,10 +1539,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 every=1,
             )
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        eval_interval: int | None = None
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
             if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
+                eval_interval = interval
                 model_shardings = _eval_model_shardings(config.trainer, config.model, model_key)
                 for eval_hook in _eval_hooks(
                     evaluator,
@@ -1365,68 +1555,27 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ):
                     state_callbacks.add_hook(eval_hook, every=interval)
 
-        last_loss: float | jax.Array = 0.0
-        last_step_duration = 0.0
+        profile_bounds = (
+            (profiler_cfg.start_step - 1, profiler_cfg.start_step + profiler_num_steps - 1) if profiler_enabled else ()
+        )
 
-        first_step = int(state.step)
-        # Main optimization loop.
-        try:
-            while int(state.step) < trainer.num_train_steps:
-                with jax.profiler.TraceAnnotation("load_batch"):
-                    batch = next(iterator)
-                step_start = time.perf_counter()
-                current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
-                compute_watch = (
-                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
-                )
-                # The first step compiles, so it gets no timeout; neither do watch steps, which can compile a variant.
-                step_timeout = None if current_step == first_step or compute_watch else config.trainer.step_timeout
-                with exit_if_hung(step_timeout):
-                    state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
-                    step = int(state.step) - 1
+        def hooks_read_state(step: int) -> bool:
+            # The eval hooks read the model; the profiler's window must start and stop between steps.
+            return (eval_interval is not None and (step + 1) % eval_interval == 0) or step in profile_bounds
 
-                    jax.block_until_ready(metrics["train/loss"])
-
-                _check_step_numerics(metrics, int(state.step), config.trainer.diagnose_numerics)
-                duration = time.perf_counter() - step_start
-                hook_start = time.perf_counter()
-                with jax.profiler.TraceAnnotation("callbacks"):
-                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                    last_loss = metrics["train/loss"]
-                    last_step_duration = duration
-                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {
-                        key: value
-                        for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
-                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                    }
-                    if router_metrics:
-                        levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
-                        levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                            step=step,
-                        )
-
-                    if watch_stats is not None:
-                        levanter.tracker.log(watch_stats, step=step)
-
-                if checkpointer is not None:
-                    checkpointer.on_step(tree=_checkpointed(state), step=int(state.step))
-        except BaseException:
-            logger.exception(
-                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
-            )
-            raise
-        else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
-                checkpointer.on_step(tree=_checkpointed(state), step=int(state.step), force=True)
-                checkpointer.wait_until_finished()
+        _train_loop(
+            train_step,
+            state,
+            iterator,
+            num_train_steps=trainer.num_train_steps,
+            state_callbacks=state_callbacks,
+            checkpointer=checkpointer,
+            watch_interval=watch_config.interval if watch_config.is_enabled else 0,
+            step_timeout=config.trainer.step_timeout,
+            diagnose_numerics=config.trainer.diagnose_numerics,
+            pipelined=config.trainer.pipelined_step_logging,
+            hooks_read_state=hooks_read_state,
+        )
 
     levanter.tracker.current_tracker().finish()
 
