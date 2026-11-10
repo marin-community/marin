@@ -416,6 +416,14 @@ impl AuthPolicy {
         Ok(Self { layers })
     }
 
+    /// Whether the stack has a `jwt` layer, the one that admits forwarding senders.
+    /// A server with one receives rows relayed from other clusters.
+    pub fn admits_forwarders(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| matches!(layer, AuthLayer::Jwt(_)))
+    }
+
     /// A one-line, secret-free description of the stack for a startup log line
     /// (e.g. `cidr[3], jwt[2]`).
     pub fn describe(&self) -> String {

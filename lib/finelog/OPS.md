@@ -552,8 +552,9 @@ push. `forwarding.cluster` is the origin name the sender stamps on every forward
 row; keep it equal to the hub key entry's `cluster` label so reads line up.
 
 A sender forwards every row it holds, including rows a local writer already labeled
-with a cluster name. Never add `forwarding:` to a server that receives relayed rows
-(one with a `jwt` layer, like `marin`): it would send those rows on again.
+with a cluster name. A server that receives relayed rows (one with a `jwt` layer, like
+`marin`) would send them on again, so the server refuses to start with both a `jwt`
+layer and `forwarding:`.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
 then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
