@@ -103,7 +103,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--size", choices=["tiny", "medium", "full"], required=True)
     parser.add_argument("--layers", type=int, help="Override the preset layer count.")
     parser.add_argument("--seq-len", type=int, help="Override the preset sequence length.")
-    parser.add_argument("--batch-size", type=int, help="Global batch in sequences (default: one per device).")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Global batch of one step in sequences (default: one per device per microbatch).",
+    )
+    parser.add_argument(
+        "--microbatches",
+        type=int,
+        default=1,
+        help="Accumulate each step's gradients over this many microbatches of the batch (1 = whole batch at once).",
+    )
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
@@ -248,7 +258,7 @@ def main() -> None:
                 f"--num-expert-waves {args.num_expert_waves} must divide the {local_experts} local experts "
                 f"({model.num_experts} experts over --expert-axis {args.expert_axis})"
             )
-    batch_size = jax.device_count() if args.batch_size is None else args.batch_size
+    batch_size = jax.device_count() * args.microbatches if args.batch_size is None else args.batch_size
     if batch_size == 1:
         # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
         # drops the sharding of that slice, then rejects concatenating it with the (1, seq_len - 1) remainder.
@@ -301,13 +311,15 @@ def main() -> None:
             step_timeout=args.step_timeout or None,
             qb_sync_interval=args.qb_sync_interval,
             carry_compute_params=args.carry_compute_params,
+            microbatches=args.microbatches,
         ),
         eval=None,
     )
     flops_per_example, _ = _compute_flops(model_config=model)
     logger.info(
-        "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d seq_len=%d window=%d mp=%s "
-        "expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d remat=%s "
+        "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d microbatches=%d seq_len=%d "
+        "window=%d mp=%s expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d "
+        "remat=%s "
         "replicated_grads=%s router_stats=%s qb_balance=%s qb_sync_interval=%d carry_compute_params=%s "
         "watch_interval=%d flops_per_example=%.4e",
         args.size,
@@ -318,6 +330,7 @@ def main() -> None:
         model.num_heads,
         model.num_kv_heads,
         batch_size,
+        args.microbatches,
         model.max_seq_len,
         model.sliding_window,
         trainer.mp,
