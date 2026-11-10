@@ -104,7 +104,8 @@ class GrugTrainerConfig:
     """Carry a compute-dtype copy of the parameters in the train state, written next to the optimizer update, and
     differentiate with respect to it. Saves re-reading and casting every float32 parameter at the start of each step
     (the update already reads them), for one extra compute-dtype copy of the parameters in memory. The gradients are
-    the same: the cast's transpose is the cast of the compute-dtype gradient back to the parameter dtype."""
+    the same: the cast's transpose is the cast of the compute-dtype gradient back to the parameter dtype. Checkpoints
+    leave the copy out; it is rebuilt from the parameters on restore."""
 
     qb_sync_interval: int = 0
     """With per-node QB balancing (``GrugModelConfig.qb_balance="per_node"``): every this many steps, replace each
@@ -297,6 +298,11 @@ class GrugTrainState:
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
     compute_params: Transformer | None = None  # mp.cast_to_compute(params), see carry_compute_params
+
+
+def _checkpointed(state: GrugTrainState) -> GrugTrainState:
+    """``state`` as checkpoints hold it: without the compute copy, which is rebuilt from the parameters on restore."""
+    return dataclasses.replace(state, compute_params=None)
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -594,7 +600,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 carry_compute_params=config.trainer.carry_compute_params,
             )
 
-        state = _init_state(model_key)
+        # Checkpoints leave the compute copy out, so the restore exemplar does too: a run can resume from a checkpoint
+        # saved with carry_compute_params on or off.
+        state = _checkpointed(_init_state(model_key))
 
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         if config.trainer.sft_weights_only_init:
@@ -626,7 +634,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 initialize_from=trainer.initialize_from,
             )
 
-        if state.compute_params is not None:
+        if config.trainer.carry_compute_params:
             # Rebuilt from the (possibly restored) parameters, so it never comes from a checkpoint.
             state = dataclasses.replace(state, compute_params=jax.jit(trainer.mp.cast_to_compute)(state.params))
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
@@ -737,7 +745,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
+                    checkpointer.on_step(tree=_checkpointed(state), step=int(state.step))
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
@@ -747,7 +755,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                checkpointer.on_step(tree=_checkpointed(state), step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
