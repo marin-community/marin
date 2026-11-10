@@ -161,6 +161,7 @@ pub fn log_registered_schema() -> Schema {
 /// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
 /// of the insertion lock so all segment metadata describes exactly the same paths.
 pub struct NamespaceSnapshot {
+    pub read_deadline: Option<tokio::time::Instant>,
     pub schema: SchemaRef,
     pub exact_postings_policy: BTreeMap<String, Vec<String>>,
     pub key_column: String,
@@ -328,7 +329,6 @@ impl Store {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(
                 Arc::new(provider.clone()),
                 root.clone(),
-                Arc::clone(&query_visibility),
                 object_cache_bytes,
             )?) as Arc<dyn ObjectStore>),
             _ => None,
@@ -1339,7 +1339,8 @@ impl Store {
 
     /// The process-wide query-visibility lock. Query/FetchLogs handlers hold the
     /// READ side across the full DataFusion scan; structural mutations that
-    /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
+    /// unlink legacy segments or drop a table take the WRITE side. Object-cache
+    /// eviction uses per-file pins; object compaction retains immutable inputs.
     /// See the field doc on [`Store`].
     pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
         self.tables.query_visibility()
@@ -1383,6 +1384,7 @@ impl Store {
     ) -> Result<NamespaceProvider, StatsError> {
         let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
             .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
+            .with_read_deadline(snapshot.read_deadline)
             .with_segment_artifacts(snapshot.artifacts)
             .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
             .with_exact_postings_policy(snapshot.exact_postings_policy)
@@ -1396,19 +1398,6 @@ impl Store {
         })
     }
 
-    /// The tightest maximum query time among the object-backed tables a server
-    /// read plans over, or `None` when it plans over none.
-    ///
-    /// The read's effective deadline may not exceed this: past it the table
-    /// stops promising that objects retired by a newer state are still readable.
-    pub fn object_query_bound(&self) -> Option<Duration> {
-        self.tables
-            .runtimes()
-            .iter()
-            .filter_map(|runtime| runtime.snapshot_query_bound())
-            .min()
-    }
-
     /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
     /// segments: the paths a scan may read, and the lowest `seq` those paths hold. Both
     /// describe the same segment set, so a reader can tell a `seq` it simply has not
@@ -1417,6 +1406,7 @@ impl Store {
         let engine = self.tables.require(name)?;
         let segments = engine.query_snapshot()?;
         Ok(NamespaceSnapshot {
+            read_deadline: segments.read_deadline,
             schema: Arc::clone(engine.arrow_schema()),
             exact_postings_policy: engine.schema().exact_postings_policy(),
             key_column: engine.key_column().to_string(),
@@ -3175,6 +3165,7 @@ mod tests {
             .unwrap()
             .catalog_generation;
 
+        let old_read = store.query_providers(&["iris.worker".into()]).unwrap();
         // Same layout, different operating policy.
         let registration = store
             .register_versioned_table(
@@ -3199,6 +3190,35 @@ mod tests {
             .iter()
             .all(|segment| segment.table_spec_version == 2));
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, before);
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                tokio::time::pause();
+                let deadline = crate::query::snapshot_deadline(&old_read).unwrap();
+                tokio::time::advance(
+                    deadline.saturating_duration_since(tokio::time::Instant::now())
+                        + Duration::from_millis(1),
+                )
+                .await;
+                let error = crate::query::run_query_over(
+                    &crate::query::make_ctx(),
+                    old_read,
+                    "SELECT * FROM \"iris.worker\"",
+                )
+                .await
+                .err()
+                .expect("the captured snapshot deadline must expire");
+                assert!(
+                    crate::query::is_read_deadline(&error),
+                    "a later policy change must not extend an existing snapshot's lifetime"
+                );
+            });
+        })
+        .await
+        .unwrap();
         assert_eq!(scan_table(&store, "iris.worker").await, 1);
 
         store.shutdown(Duration::from_secs(1)).await;

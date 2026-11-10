@@ -11,13 +11,8 @@ from harbor.bridges.base import BaseBridge
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.bridge import BridgeConfig
-from harbor.utils.scripts import (
-    ensure_acp_node_command,
-    pinned_bin_wrapper_command,
-    safe_bin_symlink_command,
-)
 
-ACPX_NPM_VERSION = "0.12.0"
+
 ACPX_CONFIG_FILENAME = ".acpxrc.json"
 ACP_TARGET_AGENT_KEY = "target"
 DEFAULT_ACPX_TURN_TIMEOUT_SEC = 3600
@@ -110,78 +105,6 @@ def extract_target_usage(session_export: dict[str, Any]) -> dict[str, Any] | Non
     return last_usage
 
 
-async def install_acpx(environment: BaseEnvironment) -> None:
-    # Install the prerequisites used by the nvm bootstrap. Check them
-    # independently because Alpine images may provide curl without bash.
-    prep_result = await environment.exec(
-        command=(
-            '_hb_missing=""; '
-            "for _hb_prerequisite in curl bash; do "
-            'if ! command -v "$_hb_prerequisite" >/dev/null 2>&1; then '
-            '_hb_missing="$_hb_missing $_hb_prerequisite"; '
-            "fi; "
-            "done; "
-            'if [ -n "$_hb_missing" ]; then '
-            "set -- $_hb_missing; "
-            "if command -v apt-get >/dev/null 2>&1; then "
-            'apt-get update && apt-get install -y "$@"; '
-            "elif command -v apk >/dev/null 2>&1; then "
-            'apk add --no-cache "$@"; '
-            "elif command -v dnf >/dev/null 2>&1; then "
-            'dnf install -y "$@"; '
-            "fi; "
-            "fi; "
-            "for _hb_prerequisite in curl bash; do "
-            'if ! command -v "$_hb_prerequisite" >/dev/null 2>&1; then '
-            'echo "Missing ACPX prerequisite: $_hb_prerequisite" >&2; '
-            "exit 1; "
-            "fi; "
-            "done"
-        ),
-        user="root",
-        env={"DEBIAN_FRONTEND": "noninteractive"},
-    )
-    if prep_result.return_code != 0:
-        raise RuntimeError(
-            f"Failed to prepare container for ACPX install: {prep_result.stderr}"
-        )
-
-    # Install Node 22 if needed and install the pinned ACPX package.
-    install_result = await environment.exec(
-        command=(
-            "set -euo pipefail; "
-            '_hb_system_node="$(command -v node 2>/dev/null || true)"; '
-            + ensure_acp_node_command()
-            + " && "
-            f"npm install -g acpx@{ACPX_NPM_VERSION} && "
-            'echo "${_hb_system_node:-none}:$(command -v node):$(command -v acpx)"'
-        )
-    )
-    if install_result.return_code != 0:
-        raise RuntimeError(f"Failed to install ACPX: {install_result.stderr}")
-
-    binary_paths = (install_result.stdout or "").strip().splitlines()[-1]
-    system_node, node_path, acpx_path = (
-        binary_paths.split(":") if binary_paths.count(":") == 2 else ("", "", "")
-    )
-    if not node_path or not acpx_path:
-        raise RuntimeError(
-            f"Could not locate node/ACPX binaries after install: {binary_paths!r}"
-        )
-
-    # Pin ACPX to its Node version. Only expose Node if none existed before.
-    link_command = pinned_bin_wrapper_command(
-        node_path, acpx_path, "/usr/local/bin/acpx"
-    )
-    if system_node == "none":
-        link_command += " && " + safe_bin_symlink_command(
-            node_path, "/usr/local/bin/node"
-        )
-    link_result = await environment.exec(command=link_command, user="root")
-    if link_result.return_code != 0:
-        raise RuntimeError(f"Failed to surface ACPX: {link_result.stderr}")
-
-
 async def write_acpx_config(
     environment: BaseEnvironment, config: dict[str, Any]
 ) -> Path:
@@ -234,7 +157,6 @@ class ACPBridge(BaseBridge):
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:
-        await install_acpx(environment)
         await self._acp_agent.acp_install(environment)
         config = build_acpx_config(
             self._acp_agent.acp_command(),

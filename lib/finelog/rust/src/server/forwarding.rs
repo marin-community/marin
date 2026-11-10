@@ -1010,13 +1010,17 @@ where
         let planning_elapsed = planning_started.elapsed();
         // Honor the table's query lifetime and the tighter forwarder deadline.
         let query_ctx = make_ctx();
+        let forward_deadline = tokio::time::Instant::from_std(read_started + FORWARD_READ_TIMEOUT);
+        let deadline = crate::query::snapshot_deadline(&providers)
+            .map_or(forward_deadline, |deadline| deadline.min(forward_deadline));
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        crate::query::bind_read_deadline(&query_ctx, Some(deadline));
+        let admission = query_ctx
+            .copied_config()
+            .get_extension::<crate::store::object_store::QueryCacheAdmission>()
+            .unwrap();
+        let fills = admission.cancel_on_drop(Some(timeout));
         let read = run_query_over(&query_ctx, providers, &sql);
-        let timeout = self
-            .store
-            .object_query_bound()
-            .map_or(FORWARD_READ_TIMEOUT, |bound| {
-                bound.min(FORWARD_READ_TIMEOUT)
-            });
         let scan_started = Instant::now();
         let result = run_within_query_timeout(
             Some(timeout),
@@ -1027,9 +1031,17 @@ where
                     timeout.as_millis()
                 ))
             },
-            |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
+            |error| {
+                let message = format!("read {name:?} failed: {error}");
+                if crate::query::is_read_deadline(&error) {
+                    StatsError::DeadlineExceeded(message)
+                } else {
+                    StatsError::Internal(message)
+                }
+            },
         )
         .await?;
+        fills.complete();
         let scan_elapsed = scan_started.elapsed();
 
         let encode_started = Instant::now();

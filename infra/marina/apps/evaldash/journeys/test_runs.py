@@ -220,3 +220,47 @@ def test_model_index_reports_failed_load_and_recovers(journey: Journey) -> None:
     expect(card).to_contain_text("@aaaaaaaaaaaa")
     # The rendered name wraps rather than clipping the checkpoint or config identity.
     assert card.locator("[title]").evaluate("el => el.scrollWidth <= el.clientWidth")
+
+
+def test_models_from_different_cohorts_compare_behind_the_mixed_settings_warning(journey: Journey) -> None:
+    journey.visit("/?cohort=all")
+    journey.sees("All cohorts may mix evaluation settings")
+    for model in ("snowball", "qwen3-8b"):
+        journey.page.locator("tr").filter(has_text=model).first.locator("input[type=checkbox]").check()
+
+    journey.page.get_by_role("button", name=re.compile(r"Compare \d+ models")).click()
+    journey.page.wait_for_url(re.compile(r"/compare\?.*cohort=all"))
+    journey.sees("All cohorts may mix evaluation settings")
+    expect(journey.page.get_by_role("button", name="Remove qwen3-8b", exact=True)).to_be_visible()
+
+
+def test_unversioned_runs_have_their_own_cohort_entry(journey: Journey) -> None:
+    journey.visit("/?cohort=unversioned")
+    cohort = journey.page.locator("label").filter(has_text="Cohort").locator("select")
+    expect(cohort).to_have_value("unversioned")
+    journey.sees("Runs launched without a version label")
+    expect(journey.page.locator("tr").filter(has_text="llama3-8b")).to_have_count(2)
+    expect(journey.page.locator("tr").filter(has_text="snowball")).to_have_count(0)
+
+
+def test_links_without_a_cohort_open_on_the_newest_scores_across_cohorts(journey: Journey) -> None:
+    journey.visit("/compare?models=snowball,qwen3-8b")
+    journey.page.wait_for_url(re.compile(r"[?&]cohort=all"))
+    journey.sees("All cohorts may mix evaluation settings")
+    expect(journey.page.get_by_role("button", name="Remove qwen3-8b", exact=True)).to_be_visible()
+
+    journey.visit("/models/snowball")
+    journey.page.wait_for_url(re.compile(r"[?&]cohort=all"))
+    journey.sees("cohort all runs")
+
+
+def test_a_cross_cohort_comparison_names_each_cell_cohort_and_links_its_run(journey: Journey) -> None:
+    comparison = cast(dict[str, Any], journey.api(f"{API}/compare?cohort=all&models=snowball,qwen3-8b"))
+    row = next(row for row in comparison["rows"] if len(row["cells"]) == 2)
+    cell = row["cells"]["qwen3-8b"]
+
+    journey.visit("/compare?cohort=all&models=snowball,qwen3-8b")
+    link = journey.page.get_by_role("link", name=cell["version"], exact=True).first
+    expect(link).to_be_visible()
+    link.click()
+    journey.page.wait_for_url(re.compile(r"/runs/"))

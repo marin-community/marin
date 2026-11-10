@@ -1,9 +1,7 @@
 """GitHub Copilot CLI agent implementation for Harbor."""
 
 import json
-import os
 import re
-import shlex
 from pathlib import Path
 from typing import Any
 
@@ -25,25 +23,24 @@ from harbor.models.trajectories import (
     ToolCall,
     Trajectory,
 )
-from harbor.models.trial.paths import EnvironmentPaths
+
+_UNSUPPORTED_REASON = (
+    "Copilot CLI is unsupported: GitHub credentials must remain on the host "
+    "and no guest model-relay authentication path is supported; "
+    "use mini-swe-agent or terminus-2"
+)
 
 
 class CopilotCli(BaseInstalledAgent):
     """GitHub Copilot CLI agent.
 
-    Installs and runs the GitHub Copilot CLI in non-interactive (headless) mode
-    using ``copilot -p <instruction> --yolo --output-format json``.
-
-    Authentication is handled via the ``GITHUB_TOKEN`` or ``GH_TOKEN``
-    environment variable on the host.
+    Execution is blocked because its GitHub authentication cannot use the
+    guest's declared model relay. Trajectory parsing remains available.
     """
 
     SUPPORTS_ATIF: bool = True
 
     _TRAJECTORY_FILENAME = "copilot-cli.jsonl"
-    _OUTPUT_PATH = EnvironmentPaths.agent_dir / "copilot-cli.txt"
-    _TRAJECTORY_PATH = EnvironmentPaths.agent_dir / _TRAJECTORY_FILENAME
-
     CLI_FLAGS = [
         CliFlag(
             "reasoning_effort",
@@ -72,64 +69,7 @@ class CopilotCli(BaseInstalledAgent):
         return match.group(1) if match else text
 
     async def install(self, environment: BaseEnvironment) -> None:
-        """Install the Copilot CLI in the environment."""
-        await self.exec_as_root(
-            environment,
-            command=(
-                "if command -v apk &> /dev/null; then"
-                "  apk add --no-cache curl bash git;"
-                " elif command -v apt-get &> /dev/null; then"
-                "  dpkg --print-foreign-architectures | xargs -r -I{} dpkg --remove-architecture {} 2>/dev/null || true;"
-                "  apt-get update && apt-get install -y curl git;"
-                " elif command -v yum &> /dev/null; then"
-                "  yum install -y curl git;"
-                " else"
-                '  echo "Warning: No known package manager found" >&2;'
-                " fi"
-            ),
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-
-        version_flag = f" VERSION={shlex.quote(self._version)}" if self._version else ""
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "set -euo pipefail; "
-                f"curl -fsSL https://gh.io/copilot-install |{version_flag} bash && "
-                "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc && "
-                'export PATH="$HOME/.local/bin:$PATH" && '
-                "copilot --version"
-            ),
-        )
-
-    def _build_mcp_config_flag(self) -> str | None:
-        """Build ``--additional-mcp-config`` flag JSON for MCP servers."""
-        if not self.mcp_servers:
-            return None
-        servers: dict[str, dict[str, Any]] = {}
-        for server in self.mcp_servers:
-            if server.transport == "stdio":
-                servers[server.name] = {
-                    "type": "stdio",
-                    "command": server.command,
-                    "args": server.args,
-                }
-            elif server.transport == "streamable-http":
-                servers[server.name] = {"type": "streamable-http", "url": server.url}
-            else:
-                servers[server.name] = {"type": server.transport, "url": server.url}
-        config = json.dumps({"mcpServers": servers})
-        return f"--additional-mcp-config={shlex.quote(config)}"
-
-    def _build_register_skills_command(self) -> str | None:
-        """Copy skills into the Copilot CLI instructions directory."""
-        if not self.skills_dir:
-            return None
-        return (
-            f"mkdir -p ~/.copilot && "
-            f"cp -r {shlex.quote(self.skills_dir)}/* "
-            f"~/.copilot/ 2>/dev/null || true"
-        )
+        raise RuntimeError(_UNSUPPORTED_REASON)
 
     def _read_copilot_cli_jsonl(self, jsonl_path: Path) -> list[dict[str, Any]]:
         """Read and parse the Copilot CLI JSONL output file."""
@@ -355,61 +295,4 @@ class CopilotCli(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        """Run the Copilot CLI agent with the given instruction in the environment."""
-
-        # Forward GitHub auth token if available.
-        # Copilot CLI checks COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN,
-        # but may also authenticate via `gh auth` or a cached login in
-        # ~/.copilot, so we don't fail here if no token is set.
-        token = (
-            os.environ.get("COPILOT_GITHUB_TOKEN")
-            or os.environ.get("GH_TOKEN")
-            or os.environ.get("GITHUB_TOKEN")
-        )
-        env: dict[str, str] = {"GITHUB_TOKEN": token} if token else {}
-
-        # Determine model flag.
-        # Copilot CLI uses its own model identifiers (e.g. "claude-sonnet-4",
-        # "gpt-5.2").  Strip the provider prefix that Harbor conventions add
-        # (e.g. "anthropic/claude-haiku-4-5" → "claude-haiku-4-5").
-        # When the model name is not recognized by Copilot CLI it will error,
-        # so we only pass --model when the user explicitly set one.
-        model_flag = ""
-        if self.model_alias:
-            model = self.model_alias.rsplit("/", 1)[-1]
-            model_flag = f"--model={shlex.quote(model)}"
-
-        # Register skills
-        skills_command = self._build_register_skills_command()
-        if skills_command:
-            await self.exec_as_agent(environment, command=skills_command, env=env)
-
-        try:
-            await self.exec_as_agent(
-                environment,
-                command=(
-                    'set -o pipefail; export PATH="$HOME/.local/bin:$PATH"; '
-                    f"copilot --prompt={shlex.quote(instruction)} "
-                    "--yolo "
-                    f"{model_flag} "
-                    f"{self.build_cli_flags()} "
-                    f"{self._build_mcp_config_flag() or ''} "
-                    "--output-format=json "
-                    f"2>&1 </dev/null | stdbuf -oL tee {self._TRAJECTORY_PATH}"
-                ),
-                env=env,
-            )
-        finally:
-            # Also save a plain-text copy for debugging
-            try:
-                await self.exec_as_agent(
-                    environment,
-                    command=(
-                        f"cat {self._TRAJECTORY_PATH} "
-                        f"> {self._OUTPUT_PATH} 2>/dev/null || true"
-                    ),
-                )
-            except Exception as ex:
-                self.logger.debug(
-                    "Error while copying the trajectory file: %s", ex, exc_info=True
-                )
+        raise RuntimeError(_UNSUPPORTED_REASON)

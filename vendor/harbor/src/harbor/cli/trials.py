@@ -1,13 +1,12 @@
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
 import yaml
-from rich.console import Console
-from typer import Argument, Option, Typer
-from upath import UPath
-
 from harbor.cli.utils import (
+    cli_guest_environment,
+    cli_host_capabilities,
     load_mcp_servers,
     parse_env_vars,
     parse_kwargs,
@@ -21,6 +20,9 @@ from harbor.models.trial.config import (
     TaskConfig,
     TrialConfig,
 )
+from rich.console import Console
+from typer import Argument, Option, Typer
+from upath import UPath
 
 trials_app = Typer(
     no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
@@ -230,16 +232,7 @@ def start(
         EnvironmentType | None,
         Option(
             "--environment-type",
-            help=f"Environment type (default: {EnvironmentType.DOCKER.value})",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
-    environment_import_path: Annotated[
-        str | None,
-        Option(
-            "--environment-import-path",
-            help="Import path for custom environment (module.path:ClassName).",
+            help=f"Environment type (default: {EnvironmentType.LOCAL.value})",
             rich_help_panel="Environment",
             show_default=False,
         ),
@@ -261,11 +254,7 @@ def start(
         bool | None,
         Option(
             "--delete/--no-delete",
-            help=f"Whether to delete the environment after completion (default: {
-                '--delete'
-                if EnvironmentConfig.model_fields['delete'].default
-                else '--no-delete'
-            })",
+            help="Shellbox environments are always deleted; --no-delete is unsupported.",
             rich_help_panel="Environment",
             show_default=False,
         ),
@@ -349,15 +338,6 @@ def start(
             show_default=False,
         ),
     ] = None,
-    extra_docker_compose: Annotated[
-        list[Path] | None,
-        Option(
-            "--extra-docker-compose",
-            help="Additional Docker Compose overlay file. Can be used multiple times.",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
     environment_kwargs: Annotated[
         list[str] | None,
         Option(
@@ -429,6 +409,8 @@ def start(
     from harbor.trial.queue import TrialQueue
     from harbor.trial.trial import Trial
 
+    host_environment = dict(os.environ)
+
     base_config = None
     if config_path is not None:
         if config_path.suffix == ".yaml":
@@ -447,9 +429,9 @@ def start(
         config = TrialConfig(
             task=TaskConfig(path=path),
             trial_name=trial_name or "",
-            trials_dir=UPath(trials_dir)
-            if trials_dir is not None
-            else UPath("./trials"),
+            trials_dir=(
+                UPath(trials_dir) if trials_dir is not None else UPath("./trials")
+            ),
             timeout_multiplier=timeout_multiplier or 1.0,
         )
     else:
@@ -496,9 +478,6 @@ def start(
 
     if environment_type is not None:
         config.environment.type = environment_type
-    if environment_import_path is not None:
-        config.environment.import_path = environment_import_path
-        config.environment.type = None  # Clear type so import_path takes precedence
     if environment_force_build is not None:
         config.environment.force_build = environment_force_build
     if environment_delete is not None:
@@ -519,8 +498,6 @@ def start(
         config.environment.override_tpu = parse_tpu_spec(override_tpu)
     if mounts is not None:
         config.environment.mounts = json.loads(mounts)
-    if extra_docker_compose is not None:
-        config.environment.extra_docker_compose.extend(extra_docker_compose)
     if environment_kwargs is not None:
         config.environment.kwargs.update(parse_kwargs(environment_kwargs))
 
@@ -542,6 +519,14 @@ def start(
     elif path is not None:
         config.task = TaskConfig(path=path)
 
+    host_capabilities = cli_host_capabilities(
+        host_environment,
+        environment_kwargs=config.environment.kwargs,
+        agents=(config.agent,),
+        verifier_environment=config.verifier.env,
+    )
+    guest_environment = cli_guest_environment(config.environment.kwargs)
+
     # Keep creation and execution on one event loop so clients and background
     # tasks survive across the whole trial lifecycle.
     async def _create_and_run() -> TrialResult:
@@ -549,15 +534,21 @@ def start(
         console.print(f"Task: {config.task.get_task_id().get_name()}")
         agent_display = config.agent.name or config.agent.import_path or "unknown"
         console.print(f"Agent: {agent_display}")
-        environment_display = config.environment.import_path or (
-            config.environment.type.value if config.environment.type else "unknown"
-        )
+        environment_display = config.environment.type.value
         console.print(f"Environment: {environment_display}")
         console.print(f"Trials directory: {config.trials_dir}")
 
         if config.trial_attempt_timeout_sec is not None:
-            return await TrialQueue(n_concurrent=1).submit(config)
-        trial = await Trial.create(config)
+            return await TrialQueue(
+                n_concurrent=1,
+                host_capabilities=host_capabilities,
+                guest_environment=guest_environment,
+            ).submit(config)
+        trial = await Trial.create(
+            config,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
+        )
         return await trial.run()
 
     result = run_async(_create_and_run())

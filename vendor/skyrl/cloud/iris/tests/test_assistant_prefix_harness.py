@@ -18,16 +18,22 @@ from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.task_inputs import task_messages
 from skyrl_train.tokenizer import tokenizer_from_config
-from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.trajectory_runners.model_clients import (
+    REASONING_VIOLATION_TOKENS_KEY,
+    REASONING_VIOLATIONS_KEY,
+    DirectModelClient,
+)
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
+from verifyit.reasoning_markup import ReasoningViolation
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     FunctionDefinition,
     PlainText,
+    ReasoningMarkupPolicy,
     Source,
     TaskSpec,
     TextMessage,
@@ -144,6 +150,55 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
     assert result.response_token_ids == (11, 12, 13)
     assert result.loss_mask == (1, 1, 1)
     assert result.logprobs == (-0.1, -0.2, -0.3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy,penalty,target,status,reward,loop_advantages",
+    [
+        (ReasoningMarkupPolicy.REJECT, 0.0, "rollout", Outcome.SUBMISSION_FAILURE, 0.0, [0.0, 0.0, 0.0]),
+        (ReasoningMarkupPolicy.GRADE, 0.25, "rollout", Outcome.GRADED, 0.75, [0.0, 0.0, 0.0]),
+        (ReasoningMarkupPolicy.GRADE, 0.25, "marker", Outcome.GRADED, 1.0, [0.0, 0.0, -0.25]),
+        (ReasoningMarkupPolicy.GRADE, 0.0, "rollout", Outcome.GRADED, 1.0, [0.0, 0.0, 0.0]),
+    ],
+)
+async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
+    task_inputs, policy, penalty, target, status, reward, loop_advantages
+):
+    config, request = task_inputs
+    config = OmegaConf.merge(
+        config,
+        {"trajectory_reward_shaping": {"enabled": True, "reasoning_span": {"penalty": penalty, "target": target}}},
+    )
+    task = request.rows[0].spec.task.model_copy(update={"reasoning_markup": policy})
+    request = replace(request, rows=(task_input(lowered_task(task, max_turns=1)),))
+
+    class Client:
+        """Reports a stray end marker on the reply's last token, as the chat transport records one."""
+
+        async def generate(self, model_request):
+            return {
+                "responses": ["12"],
+                "assistant_messages": [{"role": "assistant", "content": "12"}],
+                "prompt_ids": [[1, 2]],
+                "response_ids": [[11, 12, 13]],
+                "response_logprobs": [[-0.1, -0.2, -0.3]],
+                "stop_reasons": ["stop"],
+                "token_provenance": TokenProvenance.ENGINE,
+                REASONING_VIOLATIONS_KEY: [ReasoningViolation.STRAY_END],
+                REASONING_VIOLATION_TOKENS_KEY: [2],
+            }
+
+    worker = TaskRolloutWorker(config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30)
+    try:
+        (rollout,) = await worker.generate(request)
+        batch = await worker.training_batch(request, [rollout])
+    finally:
+        await worker.shutdown()
+
+    assert rollout.grade.status == status
+    assert batch["rewards"] == [pytest.approx(reward)]
+    assert batch["loop_advantages"] == [pytest.approx(loop_advantages)]
 
 
 @pytest.mark.asyncio

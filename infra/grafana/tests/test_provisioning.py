@@ -139,7 +139,8 @@ def test_alert_rules_define_nodata_and_error_behavior():
     # Most alert endpoints return explicit zeros when healthy. The storage rules
     # stay normal until the optional CoreWeave collector writes its first rows.
     for rule in _rules():
-        expected_no_data = "OK" if rule["uid"].startswith("coreweave-storage-") else "Alerting"
+        optional_metrics = rule["uid"].startswith("coreweave-storage-") or rule["uid"] == "node-runtime-filesystem-full"
+        expected_no_data = "OK" if optional_metrics else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
@@ -182,6 +183,10 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if "node_filesystem_available_bytes" in sql:
+            return pa.table(
+                {"cluster": ["cw-a"], "node": ["n1"], "node_uid": ["uid1"], "mountpoint": ["/"], "value": [0.5]}
+            )
         if '"storage.usage"' in sql:
             return pa.table(
                 {

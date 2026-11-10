@@ -71,7 +71,7 @@ from marin.inference.model_preparation import resolve_model_path, select_tensor_
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
-from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.types import InferenceWorkerMetadata, OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
@@ -84,13 +84,12 @@ from marin.inference.vllm_server import (
     VllmType,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
-
-from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 @pytest.mark.parametrize(
@@ -713,9 +712,10 @@ def test_marin_fork_requires_gpu():
         _plan(vllm_source=VllmSource.MARIN_FORK)  # default tpu path
 
 
-def test_resolve_serving_plan_rejects_multihost_slices():
+def test_resolve_serving_plan_allows_multihost_vllm_but_not_levanter():
+    assert _plan(tpu="v4-32").engine.launcher is VllmLauncherType.TPU
     with pytest.raises(click.ClickException, match="multi-host"):
-        _plan(tpu="v6e-16")
+        _plan(tpu="v6e-16", backend="levanter")
 
 
 def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
@@ -992,6 +992,22 @@ def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
     assert broker.request_lease_timeout_seconds == 3420
 
 
+def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
+    monkeypatch.setenv("TEST_PARALLEL_KEY", "parallel-key")
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--secret",
+        "PARALLEL_API_KEY",
+        "env:TEST_PARALLEL_KEY",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.submit.call_args.kwargs["environment"].secrets == {"PARALLEL_API_KEY": "parallel-key"}
+    assert "parallel-key" not in repr(services[0])
+
+
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
     config = tmp_path / "metrics.toml"
     config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')
@@ -1169,7 +1185,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming_without_tool_catalog(
             assert page.status_code == 200
             assert "marin · serve" in page.text
 
-            assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
+            assert requests.get(f"{base}/info", timeout=10).json() == {**dataclasses.asdict(info), "web_search": False}
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
             assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text
@@ -1211,6 +1227,7 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
         upstream_base_url = f"http://127.0.0.1:{upstream_port}"
         if topology == "brokered":
             broker = InferenceBroker(request_lease_timeout_seconds=30)
+            broker.register_worker("test-worker", InferenceWorkerMetadata(1, "vllm", upstream_base_url))
             worker = InferenceWorker(
                 worker_id="test-worker",
                 broker=broker,
@@ -1266,3 +1283,31 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503
     assert response.json()["status"] == "loading"
+
+
+def test_iris_serve_multihost_allocates_one_slice_and_ray_ports(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--no-wait")
+    assert result.exit_code == 0, result.output
+    submission = client.submit.call_args.kwargs
+    assert submission["replicas"] == 4
+    assert submission["coscheduling"].group_by == "tpu-name"
+    assert set(submission["ports"]) == {"http", "ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent"}
+    assert services[0].iris.worker_resources.device.variant == "v4-32"
+
+
+@pytest.mark.parametrize("broker_args", [("--instances", "2"), ("--broker",)])
+def test_iris_serve_rejects_brokered_multihost_before_submission(monkeypatch, broker_args):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", *broker_args, "--no-wait")
+    assert result.exit_code != 0
+    assert "one instance and no broker" in result.output
+    client.submit.assert_not_called()
+    assert services == []
+
+
+def test_iris_serve_multihost_dry_run_does_not_submit(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--dry-run")
+    assert result.exit_code == 0, result.output
+    client.submit.assert_not_called()
+    # Submission geometry is covered by the adjacent submission test; dry-run
+    # promises no controller allocation rather than a particular display format.
+    client.resolve_endpoint.assert_not_called()

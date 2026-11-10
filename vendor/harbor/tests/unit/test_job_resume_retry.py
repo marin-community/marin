@@ -1,6 +1,6 @@
 """Tests for the RESUME-level "re-run vs keep" gate in ``harbor jobs resume``.
 
-On a fresh resume, a trial whose on-disk result is *resume-retryable*
+On a fresh resume, an unconfirmed attempt always reruns. A confirmed result is *resume-retryable*
 (``CancelledError``, ``SandboxBuildFailedError``, or
 ``ContextManagementInfrastructureError`` — an interrupted / cap-full /
 context-recovery-failed attempt) must be RE-RUN, while valid results and
@@ -28,7 +28,12 @@ from harbor.metrics.mean import Mean
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.trial.config import TaskConfig, TrialConfig
-from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.trial.result import (
+    AgentInfo,
+    ExceptionInfo,
+    TrialCompletion,
+    TrialResult,
+)
 from harbor.models.verifier.result import VerifierResult
 
 # vLLM's structured context-budget-exhausted payload (the legacy signal).
@@ -73,6 +78,8 @@ def _trial_result(
             else VerifierResult(rewards={"reward": 1})
         ),
         exception_info=exception_info,
+        finished_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+        completion=TrialCompletion(trajectory_present=False),
     )
 
 
@@ -85,6 +92,9 @@ _ROLES: dict[str, tuple[str | None, str]] = {
     "/tmp/task-server-error": ("InternalServerError", "no available server"),
     "/tmp/task-connection-error": ("APIConnectionError", "Connection error"),
     "/tmp/task-api-timeout": ("APITimeoutError", "Request timed out"),
+    "/tmp/task-runtime-service": ("RuntimeServiceError", "relay exited"),
+    "/tmp/task-runtime-log": ("RuntimeLogCollectionError", "log collection failed"),
+    "/tmp/task-environment-stop": ("EnvironmentStopError", "teardown failed"),
     # Legacy pre-fix result: BadRequestError + the structured max_tokens=0 signal.
     "/tmp/task-legacy-400": ("BadRequestError", _MAX_TOKENS_ZERO_MSG),
     "/tmp/task-valid": (None, ""),
@@ -103,6 +113,9 @@ _RERUN_PATHS = {
     "/tmp/task-server-error",
     "/tmp/task-connection-error",
     "/tmp/task-api-timeout",
+    "/tmp/task-runtime-service",
+    "/tmp/task-runtime-log",
+    "/tmp/task-environment-stop",
     "/tmp/task-legacy-400",
 }
 _KEPT_PATHS = {
@@ -198,6 +211,39 @@ def test_resume_uses_result_config_when_standalone_config_was_dropped(
         )
         assert loaded.config == valid_result.config
         assert not standalone_config.exists()
+    finally:
+        resumed._close_logger_handlers()
+
+
+@pytest.mark.parametrize(
+    "exception_type", [None, "RuntimeError", "TrialTimeoutError", "AgentTimeoutError"]
+)
+def test_resume_reruns_selected_attempt_without_teardown_confirmation(
+    tmp_path: Path, exception_type: str | None
+) -> None:
+    seeded = _seed_completed_job(tmp_path)
+    selected = next(
+        config
+        for config in seeded._trial_configs
+        if str(config.task.path) == "/tmp/task-valid"
+    )
+    result = _trial_result(selected, exception_type=exception_type).model_copy(
+        update={"completion": None}
+    )
+    trial_dir = seeded.job_dir / selected.trial_name
+    (trial_dir / "result.json").write_text(result.model_dump_json())
+
+    resumed = _make_job(tmp_path, [TaskConfig(path=Path(path)) for path in _ROLES])
+    try:
+        rerun_paths = {
+            str(config.task.path) for config in resumed._remaining_trial_configs
+        }
+        kept_paths = {
+            str(result.config.task.path) for result in resumed._existing_trial_results
+        }
+        assert rerun_paths == _RERUN_PATHS | {"/tmp/task-valid"}
+        assert kept_paths == _KEPT_PATHS - {"/tmp/task-valid"}
+        assert not trial_dir.exists()
     finally:
         resumed._close_logger_handlers()
 

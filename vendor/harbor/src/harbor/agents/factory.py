@@ -1,4 +1,5 @@
 import importlib
+from collections.abc import Mapping
 from pathlib import Path
 
 from upath import UPath
@@ -37,6 +38,7 @@ from harbor.agents.nop import NopAgent
 from harbor.agents.oracle import OracleAgent
 from harbor.agents.terminus_2 import Terminus2
 from harbor.agents.terminus_kira import TerminusKira
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.name import AgentName
 from harbor.models.trial.config import AgentConfig
 from harbor.utils.env import resolve_env_vars
@@ -175,6 +177,9 @@ class AgentFactory:
         cls,
         config: AgentConfig,
         logs_dir: Path | UPath,
+        *,
+        guest_environment: Mapping[str, str] = {},
+        host_capabilities: HostCapabilities = HostCapabilities(),
         **kwargs,
     ) -> BaseAgent:
         """
@@ -189,7 +194,13 @@ class AgentFactory:
         Raises:
             ValueError: If the configuration is invalid.
         """
-        extra_env = resolve_env_vars(config.env)
+        extra_env = resolve_env_vars(
+            config.env,
+            source=guest_environment,
+            protected_values=host_capabilities.protected_values,
+        )
+        kwargs["protected_values"] = host_capabilities.protected_values
+        kwargs["model_authentication"] = host_capabilities.model_authentication
         # Local mode: route to local agent adapter
         if config.mode == "local":
             if config.name is not None and config.name in AgentName.values():

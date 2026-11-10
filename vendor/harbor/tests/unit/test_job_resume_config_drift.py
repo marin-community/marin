@@ -23,7 +23,7 @@ from harbor.metrics.mean import Mean
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.trial.config import TaskConfig, TrialConfig
-from harbor.models.trial.result import AgentInfo, TrialResult
+from harbor.models.trial.result import AgentInfo, TrialCompletion, TrialResult
 from harbor.models.verifier.result import VerifierResult
 
 _JOB_NAME = "job-config-drift-test"
@@ -56,6 +56,8 @@ def _trial_result(trial_config: TrialConfig) -> TrialResult:
         agent_info=AgentInfo(name="test-agent", version="1.0"),
         verifier_result=VerifierResult(rewards={"reward": 1}),
         exception_info=None,
+        finished_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+        completion=TrialCompletion(trajectory_present=False),
     )
 
 

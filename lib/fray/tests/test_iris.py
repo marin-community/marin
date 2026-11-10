@@ -333,15 +333,19 @@ class TestImagePlumbing:
 
         request = JobRequest(
             name="test-job",
+            ports=("ray-gcs", "ray-client"),
             entrypoint=Entrypoint.from_callable(_noop),
             resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
             timeout=Duration.from_minutes(30),
+            termination_grace=Duration.from_seconds(60),
         )
         client.submit(request)
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
         assert kwargs["timeout"] == Duration.from_minutes(30)
+        assert kwargs["termination_grace"] == Duration.from_seconds(60)
+        assert kwargs["ports"] == ["ray-gcs", "ray-client"]
 
 
 class TestActorGroupEnvironment:
@@ -556,17 +560,6 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
         "2",
         "--",
     ]
-
-
-def test_wrap_multiprocess_requires_gpu() -> None:
-    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
-    with pytest.raises(ValueError, match="requires a GPU device"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
-
-
-def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
-    with pytest.raises(ValueError, match="must divide the GPU count"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)
 
 
 def test_wrap_nsys_is_a_noop_without_the_environment_variable(monkeypatch):

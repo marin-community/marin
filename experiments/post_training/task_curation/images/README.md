@@ -15,8 +15,8 @@ image, and the pipeline places each one:
   from its lock ([`../environment_runtime.py`](../environment_runtime.py)).
 
 Agent environments name their image. Iris workers and training pull images
-anonymously, so every agent image is a tag of the public
-`ghcr.io/marin-community/iris-task` package; a digest copied there with
+anonymously, so new agent images use the public
+`ghcr.io/marin-community/rollout-images` package; a digest copied there with
 `crane copy` keeps its reference's `sha256`.
 
 ## The grader packages
@@ -75,7 +75,7 @@ when converter or bundled scorer code changes.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images \
-  (--all | --identity IDENTITY_PREFIX ...) [--repository ghcr.io/marin-community/iris-task]
+  (--all | --identity IDENTITY_PREFIX ...) [--repository ghcr.io/marin-community/rollout-images]
 ```
 
 Register a new buildable grader environment in `BUILDABLE_ENVIRONMENTS` in
@@ -127,8 +127,9 @@ identity raises `MissingEnvironmentArtifact` with the build command. The
 environment's identity and built image digest enter every such source's
 artifact identity.
 
-The default repository is the public `iris-task` package: GHCR creates new
-packages org-internal, and Iris workers pull anonymously, so an image in a new
-package never starts on the cluster until the package is made public. Built
-images are separate from the Zephyr worker image, which carries the grading code
-that starts each grader machine.
+New builds use the public `rollout-images` package, shared with
+[evaluation rollout images](../../../evaluation/images/tau3/README.md).
+Existing digest references remain valid in their original packages. Iris workers
+pull anonymously, so any replacement repository must be public. Built images are
+separate from the Zephyr worker image, which carries the grading code that starts
+each grader machine.

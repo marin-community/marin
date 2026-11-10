@@ -11,7 +11,6 @@ from harbor.utils.scripts import (
 )
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
-from harbor.utils.env import resolve_env_vars
 
 
 class OracleAgent(BaseAgent):
@@ -109,7 +108,7 @@ class OracleAgent(BaseAgent):
 
             env = {"DEBIAN_FRONTEND": "noninteractive", **self._extra_env}
             if self._task.config.solution.env:
-                env.update(resolve_env_vars(self._task.config.solution.env))
+                env.update(environment.resolve_env_vars(self._task.config.solution.env))
 
             timeout_sec = (
                 int(self._agent_timeout_sec) if self._agent_timeout_sec else None

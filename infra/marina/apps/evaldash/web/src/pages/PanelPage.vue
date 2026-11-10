@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, cohortWarning, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { UNVERSIONED_COHORT, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
@@ -141,15 +141,14 @@ function clearFilters() {
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
-  if (cohort.value === 'all') return
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
   else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
 }
 function canSelect(model: string): boolean {
-  return cohort.value !== 'all' && (selected.value.includes(model) || selected.value.length < MAX_COMPARE)
+  return selected.value.includes(model) || selected.value.length < MAX_COMPARE
 }
-const comparing = computed(() => cohort.value !== 'all' && selected.value.length >= 2)
+const comparing = computed(() => selected.value.length >= 2)
 watch(selection, () => {
   selected.value = []
 })
@@ -430,7 +429,7 @@ function cellTitle(cell: PanelCell): string {
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
-    `cohort ${cell.version ?? 'unversioned'} · ${cell.eval_runtime}`,
+    `cohort ${cell.version ?? UNVERSIONED_COHORT}${cell.eval_runtime ? ` · ${cell.eval_runtime}` : ''}`,
     'click for history',
   ].join('\n')
 }
@@ -471,7 +470,6 @@ function goToModel(model: string) {
         benchmarks. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
       <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
-      <p v-if="cohort === 'all'" class="text-xs text-status-warning mt-2">Choose one cohort to compare models.</p>
     </div>
 
     <!-- Fleet readout -->
@@ -520,7 +518,6 @@ function goToModel(model: string) {
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="">Default: {{ meta?.default_cohort ?? 'verified cohort' }}</option>
           <option value="all">Newest per benchmark (all cohorts)*</option>
           <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
             {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}

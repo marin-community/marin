@@ -30,6 +30,22 @@ from harbor_config.models.trial.config import (
 HF_DATASET_PREFIX = "hf://"
 
 
+class SotopiaCohortSource(BaseModel):
+    model: str
+    results_path: str
+
+
+class SotopiaCohort(BaseModel):
+    version: str
+    models: list[SotopiaCohortSource]
+
+    @model_validator(mode="after")
+    def unique_models(self):
+        if len(self.models) != len({source.model for source in self.models}):
+            raise ValueError("SOTOPIA cohort contains duplicate models")
+        return self
+
+
 class DatasetConfig(BaseModel):
     path: Path | None = None
     name: str | None = None
@@ -387,6 +403,8 @@ class JobConfig(BaseModel):
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     metrics: list[MetricConfig] = Field(default_factory=list)
+    sotopia_cohort: SotopiaCohort | None = None
+    """Comparison cohort required for SOTOPIA length correction."""
     agents: list[AgentConfig] = Field(default_factory=lambda: [AgentConfig()])
     user_agent: UserAgentConfig | None = Field(
         default=None,

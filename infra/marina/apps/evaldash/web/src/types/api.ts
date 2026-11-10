@@ -85,7 +85,7 @@ export interface PanelCell {
   created_at: string
   version: string | null
   git_sha: string
-  eval_runtime: string
+  eval_runtime: string | null
 }
 
 // Why a (model, benchmark) has no cell: a rejected run (failed status, coverage below the gate, the
@@ -273,6 +273,15 @@ export interface BenchmarkMetadata {
   n_attempted: number | null
 }
 
+// One row of a run's top metrics table: a declared protocol metric (resolved by the API) or an
+// undeclared task's raw metric.
+export interface RunMetricRow {
+  task: string
+  metric: string
+  value: number
+  declared: boolean
+}
+
 // The canonical record.json shape (records.EvalRunRecord). `headline` is not stored on the record --
 // the run-detail endpoint computes it (the rolled-up primary metric) and attaches it to the response.
 export interface EvalRecord {
@@ -292,9 +301,10 @@ export interface EvalRecord {
   results_path: string
   metrics: Record<string, Record<string, number>>
   canonical_metrics: Record<string, Record<string, number>>
+  metric_rows: RunMetricRow[]
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
-  provenance: { git_sha: string; eval_runtime: string; launch_host: string }
+  provenance: { git_sha: string; eval_runtime?: string | null; launch_host: string }
   timing: { started_at: string; finished_at: string | null } | null
   serving: {
     tensor_parallel_size: number | null
@@ -500,8 +510,8 @@ export interface Trajectory {
 // Unpaginated per-task outcome counts; `ungraded` is its own bucket, apart from `incorrect`.
 export interface SampleCounts {
   all: number
-  correct: number
-  incorrect: number
+  correct: number | null
+  incorrect: number | null
   ungraded: number
 }
 

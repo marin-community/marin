@@ -83,20 +83,20 @@ graphs. In a controlled Snowball Grug-67B run on eight H100s, eager execution to
 decode token, versus 6.523 ms with the vLLM default (6.75x faster). See [issue #9339](https://github.com/marin-community/marin/issues/9339)
 for the setup, startup costs, and limits of that measurement.
 
-Use eager execution when a specific model needs it for compatibility or correctness, or during
-development when shorter startup matters more than steady-state throughput. Record that reason next
-to the model configuration. Marin requires a separate acknowledgement in `vllm_extra_args`:
+Keep compilation and CUDA graphs enabled for serving, evaluation, and inference smoke tests.
+Do not copy eager-mode flags from debugging runs or historical ablations into a launch configuration.
+Shorter startup alone does not justify disabling these optimizations.
 
-```yaml
-serve:
-  vllm_extra_args:
-    - --enforce-eager
-    - --i-know-i-am-making-vllm-slow
-```
+Agents must not add `--enforce-eager` or `--i-know-i-am-making-vllm-slow` unless the user explicitly
+requests eager execution. If an observed compilation or CUDA-graph failure suggests eager execution
+is needed, report the failure and performance cost and obtain that instruction before launching.
+Record the failure and the user's requested exception in a configuration or launch-file comment,
+or in the task's durable launch record for a CLI-only invocation.
 
-Marin removes the acknowledgement before launching vLLM. `--no-enforce-eager` keeps the vLLM default
-and needs no acknowledgement. Pass the full flag spelling in `vllm_extra_args`; Marin rejects vLLM
-`--config` files and abbreviated eager flags so eager mode cannot be hidden from this check.
+The launch guard rejects `--enforce-eager` without the acknowledgement flag
+`--i-know-i-am-making-vllm-slow`. Treat that error as a reason to investigate the configuration;
+do not satisfy it automatically. Marin removes the acknowledgement flag before launching vLLM
+and rejects `--config` files and abbreviated eager flags.
 
 ## Multi-node GPU serving
 

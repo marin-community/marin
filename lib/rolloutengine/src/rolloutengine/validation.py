@@ -35,8 +35,10 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     task = spec.task
     grader = task.grader
     judge = grades_with_judge(grader)
-    # The engine grades a judge on the host, so it uses no machine for the judge's environment.
-    grader_environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not judge else None
+    host_judge = judge and isinstance(grader, VerifyitGrader)
+    grader_environment = (
+        grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) and not host_judge else None
+    )
     if judge:
         judge_connection(spec)
         if task.answer_type not in CONVERSATION_ANSWERS:

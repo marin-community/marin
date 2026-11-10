@@ -3,6 +3,7 @@
 
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -13,6 +14,7 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.reasoning_markup import ReasoningViolation
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
@@ -70,6 +72,20 @@ class TokenUsage:
     completion_tokens: int
 
 
+class ModelResponseError(ValueError):
+    """An unusable endpoint response retained as JSON-safe failure evidence."""
+
+    def __init__(self, message: str, *, response: dict[str, Any]):
+        super().__init__(message)
+        self.response = response
+        self.response_json: str | None = None
+        try:
+            json.dumps(response, allow_nan=False)
+        except ValueError:
+            self.response_json = json.dumps(response, allow_nan=True)
+            self.response = json.loads(self.response_json, parse_constant=lambda _value: None)
+
+
 @dataclass(frozen=True)
 class ModelTurn:
     """The transport's answer to one ``ModelRequest``: the parsed message and the exact tokens.
@@ -88,13 +104,21 @@ class ModelTurn:
     logprobs: tuple[float, ...] | None
     """The log probability of each response token when it was sampled, or ``None`` if the transport gives none."""
     stop_reason: str
-    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop refuses the next ``reply``."""
+    """Why generation stopped, for example ``"stop"`` or ``"length"``. A ``"length"`` stop refuses the next ``reply``.
+
+    It is ``"length"`` whenever generation ended on the output token budget, including a reply that a server's tool
+    parser reports as tool calls. A ``ChatModel`` with a ``context_window`` also reports ``"length"`` for a tool-call
+    reply whose prompt and completion tokens fill that window. The shell harness does not execute tool calls from
+    such a turn.
+    """
     text: str = ""
     """The response as plain text. A harness that reads tags in the text, not tool calls, uses it."""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
+    reasoning_violation: ReasoningViolation | None = None
+    """The malformed reasoning span that the transport found in the reply, if any."""
 
     @property
     def request_tokens(self) -> int:
@@ -108,8 +132,16 @@ Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 """The policy under rollout: it serves one model request and returns the exact turn."""
 
 
+class ContextWindowExceeded(RuntimeError):
+    """Reject one request while allowing the harness to compact and send another."""
+
+
 class GenerationLimitReached(Exception):
-    """The rendered prompt leaves no permitted generation budget."""
+    """The rendered prompt leaves no permitted generation budget.
+
+    ``prompt_token_ids`` are the rendered prompt tokens, or empty when the server rejected the prompt without
+    rendering it. The engine records them only when no turn of the conversation completed.
+    """
 
     def __init__(self, prompt_token_ids: tuple[int, ...]):
         self.prompt_token_ids = prompt_token_ids
@@ -434,12 +466,13 @@ class RolloutLimits(BaseModel):
     ``max_total_tokens`` stops model requests when the tokens spent, plus the known part of the next
     prompt, reach the threshold. The known part is the last request's prompt and response. The new
     observations of a request are not in that count, so the last request sent can exceed the threshold
-    by its observation and response tokens. ``None`` sets no threshold.
+    by its observation and response tokens. ``None`` sets no threshold. A ``max_turns`` of ``None`` sets no
+    turn limit, so the attempt ends only on its token budget, its deadlines, or a ``"length"`` stop.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    max_turns: int = Field(gt=0)
+    max_turns: int | None = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)

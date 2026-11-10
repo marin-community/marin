@@ -1,4 +1,4 @@
-# RL data curation
+# Task data curation
 
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
@@ -13,6 +13,8 @@ The recipe names the source IDs, assigns them to selection families, sets
 family quotas and pins the complete heldout source in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
+See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
+selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
 
@@ -33,11 +35,22 @@ review, grader execution, resource admission and deduplication. Outputs are
 `normalize/*.parquet`, `manifest.json` and `campaign.json`, with no admitted
 `final/` view. Failed sources are recorded while the rest continue.
 
+Evaluation sources also use QUICK, with stricter publication checks that preserve
+the complete benchmark population. They publish canonical TaskSpec rows and
+evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
+for declarations, outputs and the standard evaluation driver.
+`evaluation.py` binds `EvalDataset` recipes to
+`taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
+adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
+including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
+
 Select `--mode quick`, `sample` or `full`, or resume with `--corpus` as described
 below. Omit `--run` to print a plan without downloading, converting or starting
 workers. QUICK preserves named sources in request order, ignoring repeated names.
-SAMPLE/FULL select sources in catalog order. Omitting `--source` selects every
-runnable source. Local QUICK needs no review model, controller, worker image or
+SAMPLE/FULL select sources in catalog order. Omitting `--source` selects runnable
+training sources. Select evaluation sources explicitly with `--mode quick`.
+Local QUICK needs no review model, controller, worker image or
 coordinator settings.
 
 Remote artifacts default to `s3://marin-us-east-02a/marin` on CW, independently
@@ -81,9 +94,10 @@ catalog beside it. `--report-path` chooses another report
 location. Review requests are cached under `CACHE_DIR/review-cache` unless
 `--review-cache` selects another location. `GLM_BULK_TOKEN` supplies credentials.
 Package-backed and image graders retain their normal environment prerequisites.
-`--image-backend` and `--controller-url` can explicitly select a remote image
-grader while curation runs locally; worker-image and coordinator flags apply only
-to Iris execution.
+`--image-backend daytona` selects a remote image grader for local curation.
+`--image-backend gvisor` requires an authenticated Iris driver inside the
+execution cluster with Pod networking; a controller URL alone is insufficient.
+Worker-image and coordinator flags apply only to Iris execution.
 Use `--input-root`, `--input-file` or `--input` only when deliberately replacing
 the pinned inputs; the local rollout can use real sources without overrides.
 Keep the same `--quality-sample-size` and `--seed` when moving from SAMPLE to
@@ -329,7 +343,7 @@ Add `--run` to execute. List runnable source names with:
 uv run python -c 'from experiments.post_training.task_curation.sources import runnable_sources; print("\n".join(runnable_sources()))'
 ```
 
-Repeat `--source NAME` to select sources; omit it for every runnable source. QUICK skips grading and admission, preserves
+Repeat `--source NAME` to select sources; omit it for runnable training sources. QUICK skips grading and admission, preserves
 converter rejections, and writes `corpus.json` after all selected sources finish.
 Conversion artifacts retain their pinned acquisition graph and recipe identities.
 The manifest includes completed source roots, immutable source-manifest hashes,

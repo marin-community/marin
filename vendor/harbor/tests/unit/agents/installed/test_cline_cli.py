@@ -21,7 +21,7 @@ def _extract_json_heredoc(command: str) -> dict[str, str | None]:
 
 class TestClineCli:
     @pytest.mark.asyncio
-    async def test_setup_passes_github_tokens_when_present(self, temp_dir: Path):
+    async def test_setup_does_not_forward_ambient_github_tokens(self, temp_dir: Path):
         logs_dir = temp_dir / "sample-task__trial-001" / "agent"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -40,18 +40,12 @@ class TestClineCli:
             )
             await agent.setup(environment)
 
-        # Verify that install() was called (via setup) and GitHub tokens
-        # are passed through in at least one exec call
         exec_calls = environment.exec.call_args_list
-        token_calls = [
-            call
-            for call in exec_calls
-            if call.kwargs.get("env")
-            and call.kwargs["env"].get("GITHUB_TOKEN") == "gh-token"
-        ]
-        assert len(token_calls) >= 1, (
-            "Expected at least one exec call with GITHUB_TOKEN env var"
-        )
+        assert exec_calls
+        for call in exec_calls:
+            assert not {"GITHUB_TOKEN", "GH_TOKEN"}.intersection(
+                call.kwargs.get("env") or {}
+            )
 
     @pytest.mark.asyncio
     async def test_run_writes_pre_run_metadata(self, temp_dir: Path):
@@ -61,8 +55,11 @@ class TestClineCli:
         prompt_template_path = temp_dir / "prompt-template.md"
         prompt_template_path.write_text("{{ instruction }}")
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
+        with (
+            patch.dict(os.environ, {"API_KEY": "host-provider-canary"}, clear=False),
+        ):
             agent = ClineCli(
+                extra_env={"API_KEY": "EMPTY"},
                 logs_dir=logs_dir,
                 model_name="openrouter:anthropic/claude-opus-4.5",
                 github_user="my-fork",
@@ -119,6 +116,8 @@ class TestClineCli:
         assert pre_run_metadata["task_id"] == "sample-task"
         assert pre_run_metadata["timestamp_utc"]
 
+        assert run_env["API_KEY"] == "EMPTY"
+        assert "host-provider-canary" not in str(exec_calls)
         assert run_env["CLINE_WRITE_PROMPT_ARTIFACTS"] == "1"
         assert run_env["CLINE_PROMPT_ARTIFACT_DIR"] == "/logs/agent"
         assert run_env["PROVIDER"] == "openrouter"
@@ -155,15 +154,15 @@ class TestClineCli:
             "max-consecutive-mistakes": "9",
         }
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
-            agent = ClineCli(
-                logs_dir=logs_dir,
-                model_name="openrouter:anthropic/claude-opus-4.5",
-                **agent_kwargs,
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Solve this task", mock_env, AsyncMock())
+        agent = ClineCli(
+            extra_env={"API_KEY": "EMPTY"},
+            logs_dir=logs_dir,
+            model_name="openrouter:anthropic/claude-opus-4.5",
+            **agent_kwargs,
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Solve this task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         metadata_cmd = exec_calls[1].kwargs["command"]
@@ -188,16 +187,16 @@ class TestClineCli:
         logs_dir = temp_dir / "sample-task__trial-001" / "agent"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
-            agent = ClineCli(
-                logs_dir=logs_dir,
-                model_name="openrouter:anthropic/claude-opus-4.5",
-                agent_timeout_sec=2400,
-                timeout=1200,
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Solve this task", mock_env, AsyncMock())
+        agent = ClineCli(
+            extra_env={"API_KEY": "EMPTY"},
+            logs_dir=logs_dir,
+            model_name="openrouter:anthropic/claude-opus-4.5",
+            agent_timeout_sec=2400,
+            timeout=1200,
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Solve this task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         metadata_cmd = exec_calls[1].kwargs["command"]
@@ -213,11 +212,21 @@ class TestClineCli:
         logs_dir = temp_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
-            agent = ClineCli(logs_dir=logs_dir, model_name="openai:gpt-4o")
+        with (
+            patch.dict(
+                os.environ,
+                {"BASE_URL": "https://ambient-provider.invalid/v1"},
+                clear=False,
+            ),
+        ):
+            agent = ClineCli(
+                extra_env={"API_KEY": "EMPTY"},
+                logs_dir=logs_dir,
+                model_name="openai:gpt-4o",
+            )
             mock_env = AsyncMock()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            with pytest.raises(ValueError, match="BASE_URL environment variable"):
+            with pytest.raises(ValueError, match="BASE_URL task capability"):
                 await agent.run("hi", mock_env, AsyncMock())
 
     def test_invalid_reasoning_effort_raises(self, temp_dir: Path):

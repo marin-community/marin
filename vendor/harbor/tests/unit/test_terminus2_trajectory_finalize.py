@@ -18,9 +18,9 @@ completed split the in-memory steps are still the full conversation and land in
 import json
 
 import pytest
-
 from harbor.models.trajectories import Step
 from harbor.utils.artifact_writer import get_artifact_writer
+
 from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
 
@@ -45,7 +45,7 @@ def _recorded_steps() -> list[Step]:
         pytest.param(1, "trajectory.cont-1.json", id="completed-split"),
     ],
 )
-def test_final_dump_segment_follows_completed_split_count(
+async def test_final_dump_segment_follows_completed_split_count(
     tmp_path,
     segments_persisted: int,
     expected_file: str,
@@ -55,10 +55,12 @@ def test_final_dump_segment_follows_completed_split_count(
         _linear_history=True,
         _trajectory_steps=_recorded_steps(),
     )
+    if segments_persisted:
+        agent._persist_trajectory(0, continued=True)
     agent._continuation_segments_persisted = segments_persisted
 
-    agent._persist_final_trajectory()
-    get_artifact_writer().flush(prefix=str(tmp_path))
+    await agent._persist_final_trajectory()
+    await get_artifact_writer().flush_async(prefix=str(tmp_path))
 
     written = json.loads((tmp_path / expected_file).read_text())
     assert [step["source"] for step in written["steps"]] == ["user", "agent"]

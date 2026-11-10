@@ -14,9 +14,12 @@ pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
 pub mod group_extrema;
+pub(crate) mod indexed_scan;
+pub(crate) mod object_reader;
 pub mod optimizer;
 pub(crate) mod predicate;
 pub mod provider;
+pub(crate) mod read_scope;
 pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
@@ -37,6 +40,7 @@ use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{DataFrame, SQLOptions, SessionConfig, SessionContext};
+use futures::TryStreamExt;
 
 use crate::query::provider::NamespaceProvider;
 use crate::query::string_values::StringValues;
@@ -46,6 +50,53 @@ use crate::query::string_values::StringValues;
 pub struct RegisteredProvider {
     pub name: String,
     pub provider: NamespaceProvider,
+}
+
+pub(crate) fn snapshot_deadline(providers: &[RegisteredProvider]) -> Option<tokio::time::Instant> {
+    providers
+        .iter()
+        .filter_map(|provider| provider.provider.read_deadline())
+        .min()
+}
+
+pub(crate) fn bind_read_deadline(
+    ctx: &SessionContext,
+    deadline: Option<tokio::time::Instant>,
+) -> Option<tokio::time::Instant> {
+    if let Some(scope) = ctx.copied_config().get_extension::<read_scope::ReadScope>() {
+        scope.constrain(deadline);
+        return scope.deadline();
+    }
+    deadline
+}
+
+pub(crate) async fn run_before_deadline<T>(
+    deadline: Option<tokio::time::Instant>,
+    read: impl Future<Output = DFResult<T>>,
+) -> DFResult<T> {
+    let Some(deadline) = deadline else {
+        return read.await;
+    };
+    let expired = || {
+        datafusion::error::DataFusionError::External(Box::new(
+            crate::errors::StatsError::DeadlineExceeded("snapshot read deadline exceeded".into()),
+        ))
+    };
+    if tokio::time::Instant::now() >= deadline {
+        return Err(expired());
+    }
+    let result = tokio::time::timeout_at(deadline, read)
+        .await
+        .map_err(|_| expired())?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(expired());
+    }
+    result
+}
+
+pub(crate) fn is_read_deadline(error: &datafusion::error::DataFusionError) -> bool {
+    matches!(error.find_root(), datafusion::error::DataFusionError::External(error)
+        if matches!(error.downcast_ref::<crate::errors::StatsError>(), Some(crate::errors::StatsError::DeadlineExceeded(_))))
 }
 
 /// Floor for the query memory pool so a tiny/misreported cgroup can't strangle
@@ -248,9 +299,11 @@ fn cache_stats_of(runtime: &RuntimeEnv) -> MetadataCacheStats {
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
 /// OOM-killing the server.
 pub fn make_ctx() -> SessionContext {
-    let mut cfg = SessionConfig::new().with_extension(Arc::new(
-        crate::store::object_store::QueryCacheAdmission::default(),
-    ));
+    let mut cfg = SessionConfig::new()
+        .with_extension(Arc::new(
+            crate::store::object_store::QueryCacheAdmission::default(),
+        ))
+        .with_extension(Arc::new(read_scope::ReadScope::default()));
     cfg.options_mut().sql_parser.map_string_types_to_utf8view = false;
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;
@@ -296,18 +349,40 @@ async fn plan_and_collect<F>(ctx: &SessionContext, dataframe: F) -> DFResult<Col
 where
     F: Future<Output = DFResult<DataFrame>>,
 {
+    let scope = ctx.copied_config().get_extension::<read_scope::ReadScope>();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::LogicalPlan);
+    }
     let logical_started = Instant::now();
     let dataframe = dataframe.await?;
     let logical_plan = logical_started.elapsed();
     let schema = Arc::new(dataframe.schema().as_arrow().clone());
 
     let physical_started = Instant::now();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::PhysicalPlan);
+    }
     let plan = dataframe.create_physical_plan().await?;
     let physical_plan = physical_started.elapsed();
 
     let execution_started = Instant::now();
-    let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx()).await?;
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::Execution);
+    }
+    let batches = datafusion::physical_plan::execute_stream(plan, ctx.task_ctx())?
+        .inspect_ok(|batch| {
+            if batch.num_rows() > 0 {
+                if let Some(scope) = &scope {
+                    scope.first_batch();
+                }
+            }
+        })
+        .try_collect()
+        .await?;
     let execution = execution_started.elapsed();
+    if let Some(scope) = &scope {
+        scope.phase(read_scope::ReadPhase::Normalize);
+    }
 
     Ok(CollectedQuery {
         schema,
@@ -578,6 +653,11 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
+    let deadline = bind_read_deadline(ctx, snapshot_deadline(&providers));
+    let scope = ctx.copied_config().get_extension::<read_scope::ReadScope>();
+    let mut trace = scope
+        .clone()
+        .map(|scope| read_scope::ReadTrace::new(scope, sql, "Query"));
     let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
         .iter()
         .map(|provider| {
@@ -606,7 +686,7 @@ pub async fn run_query_over(
         aggregate_sources,
     )));
     let started = Instant::now();
-    let result = async {
+    let result = run_before_deadline(deadline, async {
         let collected =
             plan_and_collect(ctx, ctx.sql_with_options(sql, read_only_sql_options())).await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
@@ -622,7 +702,7 @@ pub async fn run_query_over(
                 ..collected.timings
             },
         })
-    }
+    })
     .await;
     let elapsed = started.elapsed();
     for name in &names {
@@ -636,6 +716,14 @@ pub async fn run_query_over(
         .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
     let timings = result.as_ref().ok().map(|result| result.timings);
     log_slow_query(ctx, elapsed, "Query", sql, rows, timings);
+    if let Some(trace) = &mut trace {
+        trace.finish(&result);
+    }
+    if result.is_ok() {
+        if let Some(scope) = &scope {
+            scope.phase(read_scope::ReadPhase::Complete);
+        }
+    }
     result
 }
 
@@ -654,9 +742,8 @@ pub async fn fetch_log_rows(
     tail: bool,
     max_lines: i32,
 ) -> DFResult<Vec<crate::store::log_read::LogRow>> {
-    use datafusion::arrow::array::{Int32Array, Int64Array};
-
     const LOG_TABLE: &str = "__finelog_log";
+    let deadline = bind_read_deadline(ctx, provider.read_deadline());
     ctx.register_table(TableReference::bare(LOG_TABLE), Arc::new(provider))?;
 
     let select_cols = if include_key {
@@ -681,9 +768,13 @@ pub async fn fetch_log_rows(
     };
     let sql =
         format!("SELECT {select_cols} FROM \"{LOG_TABLE}\" WHERE {where_clause} {order} {limit}");
+    let scope = ctx.copied_config().get_extension::<read_scope::ReadScope>();
+    let mut trace = scope
+        .clone()
+        .map(|scope| read_scope::ReadTrace::new(scope, &sql, "FetchLogs"));
 
     let started = Instant::now();
-    let collected = plan_and_collect(ctx, ctx.sql(&sql)).await;
+    let collected = run_before_deadline(deadline, plan_and_collect(ctx, ctx.sql(&sql))).await;
     let elapsed = started.elapsed();
     let _ = ctx.deregister_table(TableReference::bare(LOG_TABLE));
     let rows = collected
@@ -692,10 +783,26 @@ pub async fn fetch_log_rows(
         .map(|result| result.batches.iter().map(|batch| batch.num_rows()).sum());
     let timings = collected.as_ref().ok().map(|result| result.timings);
     log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows, timings);
-    let batches = collected?.batches;
+    let result = collected.and_then(|collected| decode_log_rows(&collected.batches, include_key));
+    if let Some(trace) = &mut trace {
+        trace.finish(&result);
+    }
+    if result.is_ok() {
+        if let Some(scope) = &scope {
+            scope.phase(read_scope::ReadPhase::Complete);
+        }
+    }
+    result
+}
+
+fn decode_log_rows(
+    batches: &[RecordBatch],
+    include_key: bool,
+) -> DFResult<Vec<crate::store::log_read::LogRow>> {
+    use datafusion::arrow::array::{Int32Array, Int64Array};
 
     let mut rows = Vec::new();
-    for b in &batches {
+    for b in batches {
         let seq = b
             .column_by_name("seq")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>());

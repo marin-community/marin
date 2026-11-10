@@ -2,18 +2,19 @@ import asyncio
 import concurrent.futures
 import contextlib
 import logging
+import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
+from harbor.agents.base import TurnCapExhaustedError
 from harbor.environments.base import SandboxDiskFullError
-from harbor_config import ErrorCategory, error_category
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
+from harbor.models.verifier.result import VerifierResult
 from harbor.trial.errors import (
     AgentDiskFullError,
     AgentTimeoutError,
@@ -22,8 +23,15 @@ from harbor.trial.errors import (
 from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
 from harbor.trial.queue import TrialQueue
 from harbor.trial.trial import Trial
-from harbor.utils.artifact_writer import ArtifactUploadTimeoutError
+from harbor.utils import artifact_writer
+from harbor.utils.artifact_writer import (
+    ArtifactUploadTimeoutError,
+    ArtifactWriter,
+)
+from harbor_config import ErrorCategory, error_category
+from harbor_config.errors import is_resume_retryable
 
+from tests.unit.agents.terminus_2.bare_agent import make_bare_terminus2
 
 Behavior = Callable[["FakeTrial"], Awaitable[None]]
 
@@ -63,6 +71,12 @@ class PhaseCancellationTrial(Trial):
 
     async def _finalize(self) -> None:
         self.events.append("finalized")
+
+    async def _stop_agent_environment(self) -> None:
+        return None
+
+    async def _cleanup_agents(self) -> None:
+        return None
 
     def _close_logger_handler(self) -> None:
         return None
@@ -182,16 +196,21 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
     async def run_agent(**kwargs):
         raise original
 
+    async def cleanup(*args):
+        pass
+
     trial = _phase_trial(cleanup_grace=1)
     trial.config = _config(tmp_path, "disk-full", attempt_timeout=60)
     trial._result = _result(trial.config, 0)
     trial._hooks = {event: [] for event in TrialEvent}
     trial.task = SimpleNamespace(name="disk-full")
-    trial.agent = SimpleNamespace(run=run_agent)
+    trial.agent = SimpleNamespace(run=run_agent, cleanup=cleanup)
     trial.user_agent = None
     trial.agent_environment = SimpleNamespace(
         with_default_user=lambda user: contextlib.nullcontext(),
         with_agent_timeout=lambda timeout: contextlib.nullcontext(),
+        quiesce_agent_commands=cleanup,
+        requires_agent_quiescence_for_verifier=False,
     )
 
     with pytest.raises(AgentDiskFullError) as raised:
@@ -236,6 +255,40 @@ async def test_cancelled_phase_tracks_cancellation_resistant_provider_work() -> 
 
 
 @pytest.mark.unit
+async def test_external_cancellation_bounds_cleanup_for_a_phase_without_a_deadline() -> (
+    None
+):
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    provider_terminated = asyncio.Event()
+    trial = _phase_trial(cleanup_grace=0.01)
+
+    async def provider() -> None:
+        started.set()
+        await _resist_cancellation(cancellation_seen, provider_terminated)
+
+    phase = asyncio.create_task(
+        trial._await_phase(
+            provider(),
+            timeout_sec=None,
+            timeout_error=AgentTimeoutError("phase expired"),
+        )
+    )
+    await started.wait()
+    phase.cancel("external cancellation")
+    try:
+        async with asyncio.timeout(1):
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await phase
+        assert caught.value.args == ("external cancellation",)
+        assert cancellation_seen.is_set()
+        assert trial.pending_cleanup_tasks()
+    finally:
+        provider_terminated.set()
+        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
+
+
+@pytest.mark.unit
 async def test_phase_timeout_raises_when_cancellation_resists() -> None:
     cancellation_seen = asyncio.Event()
     provider_terminated = asyncio.Event()
@@ -272,6 +325,10 @@ async def test_trial_reports_result_persistence_after_lifecycle_write(
 ) -> None:
     config = _config(tmp_path, "persisting", attempt_timeout=None)
     trial = object.__new__(PhaseTrial)
+    trial._is_agent_environment_stopped = True
+    trial._environment_cleanup_failed = False
+    trial._artifact_persistence_failure = None
+    trial._pending_cleanup_tasks = set()
     trial.config = config
     trial.task = SimpleNamespace(name="task")
     trial.paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
@@ -298,8 +355,326 @@ async def test_trial_reports_result_persistence_after_lifecycle_write(
     assert lifecycle_path.exists()
 
 
+class ObservedArtifactWriter(ArtifactWriter):
+    def __init__(self) -> None:
+        super().__init__(num_workers=2)
+        self.flush_started = asyncio.Event()
+
+    async def flush_async(self, prefix=None, timeout=None) -> int:
+        self.flush_started.set()
+        return await super().flush_async(prefix=prefix, timeout=timeout)
+
+
+def _trial_ready_to_finalize(config: TrialConfig) -> PhaseTrial:
+    trial = object.__new__(PhaseTrial)
+    trial._is_agent_environment_stopped = True
+    trial._environment_cleanup_failed = False
+    trial._artifact_persistence_failure = None
+    trial._pending_cleanup_tasks = set()
+    trial.config = config
+    trial.task = SimpleNamespace(name="task", has_steps=False)
+    trial.paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
+    trial.paths.mkdir()
+    trial._attempt_index = 0
+    trial._result = _result(config, 0)
+    trial.result.verifier_result = VerifierResult(rewards={"reward": 1.0})
+    trial._hooks = {event: [] for event in TrialEvent}
+    trial.logger = logging.getLogger(__name__)
+    return trial
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("flush_timeout", [False, True])
+async def test_finalization_waits_for_queued_trajectory_or_stays_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flush_timeout: bool
+) -> None:
+    writer = ObservedArtifactWriter()
+    monkeypatch.setattr(artifact_writer, "_WRITER", writer)
+    # The blocked optional upload must not block the required lifecycle write.
+    for index in range(64):
+        config = _config(
+            tmp_path,
+            f"trajectory-{index}",
+            attempt_timeout=None,
+            cleanup_grace=0.000001 if flush_timeout else 5,
+        )
+        paths = TrialPaths(config.trials_dir / config.trial_name / "attempts" / "000")
+        trajectory_path = paths.agent_dir / "trajectory.json"
+        if hash(str(trajectory_path)) % 2 != hash(str(paths.lifecycle_result_path)) % 2:
+            break
+    else:
+        pytest.fail("Could not place trajectory and lifecycle on separate shards")
+
+    trial = _trial_ready_to_finalize(config)
+    release = threading.Event()
+    upload_started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def trajectory_payload() -> str:
+        loop.call_soon_threadsafe(upload_started.set)
+        if not release.wait(timeout=10):
+            raise TimeoutError("Test did not release the trajectory upload")
+        return '{"steps": [{"message": "final answer"}]}'
+
+    trajectory_write = writer.submit_optional(
+        trajectory_path, trajectory_payload, description="queued final trajectory"
+    )
+    await asyncio.wait_for(upload_started.wait(), 5)
+    finalizing = asyncio.create_task(trial._finalize())
+    try:
+        await asyncio.wait_for(writer.flush_started.wait(), 5)
+        if not flush_timeout:
+            assert not finalizing.done()
+            assert not paths.lifecycle_result_path.exists()
+            release.set()
+        await asyncio.wait_for(finalizing, 5)
+        native = TrialResult.model_validate_json(
+            paths.lifecycle_result_path.read_text()
+        )
+        if flush_timeout:
+            assert not trajectory_write.done()
+            assert native.completion is None
+            assert native.verifier_result is None
+            error = native.exception_info.exception_type
+            assert error == "ArtifactWriteTimeoutError"
+            assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+            assert is_resume_retryable(error)
+        else:
+            assert native.completion is not None
+            assert native.completion.trajectory_present
+            assert native.verifier_result.rewards == {"reward": 1.0}
+            assert native.exception_info is None
+            assert (
+                trajectory_path.read_text()
+                == '{"steps": [{"message": "final answer"}]}'
+            )
+    finally:
+        release.set()
+        await writer.await_write(trajectory_write, timeout=5)
+        await asyncio.gather(finalizing, return_exceptions=True)
+
+
+def _trial_with_agent_phase(
+    config: TrialConfig,
+    run_agent: Callable[..., Awaitable[None]],
+    *,
+    timeout: float | None,
+) -> PhaseTrial:
+    trial = _trial_ready_to_finalize(config)
+    trial._is_agent_environment_stopped = False
+    trial._first_phase_timeout = None
+    trial._log_handler = None
+    trial.user_agent = None
+
+    async def no_op(*args, **kwargs) -> None:
+        return None
+
+    async def run_phase() -> None:
+        await trial._run_agent_phase(
+            target=trial.result, instruction="answer", timeout_sec=timeout, user=None
+        )
+
+    async def stop_environment() -> None:
+        trial._is_agent_environment_stopped = True
+
+    trial.agent = SimpleNamespace(run=run_agent, cleanup=no_op)
+    trial.agent_environment = SimpleNamespace(
+        with_default_user=lambda _: contextlib.nullcontext(),
+        with_agent_timeout=lambda _: contextlib.nullcontext(),
+        requires_agent_quiescence_for_verifier=False,
+        collect_runtime_logs=no_op,
+    )
+    trial._init_result = no_op
+    trial._prepare = no_op
+    trial._run = run_phase
+    trial._stop_agent_environment = stop_environment
+    return trial
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("external_cancellation", [False, True])
+async def test_cancelled_agent_final_upload_failure_leaves_native_result_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, external_cancellation: bool
+) -> None:
+    writer = ArtifactWriter(num_workers=1)
+    monkeypatch.setattr(artifact_writer, "_WRITER", writer)
+    started = asyncio.Event()
+
+    async def run_agent(**kwargs):
+        try:
+            started.set()
+            await asyncio.Future()
+        finally:
+            await producer._persist_final_trajectory()
+
+    config = _config(tmp_path, "failed-upload", attempt_timeout=None, cleanup_grace=1)
+    trial = _trial_with_agent_phase(
+        config, run_agent, timeout=None if external_cancellation else 0.001
+    )
+    producer = make_bare_terminus2(trial.paths.agent_dir)
+    trajectory_path = trial.paths.agent_dir / "trajectory.json"
+    open_path = type(trajectory_path).open
+
+    def failed_upload(path, *args, **kwargs):
+        if path == trajectory_path:
+            raise OSError("final trajectory upload failed")
+        return open_path(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(trajectory_path), "open", failed_upload)
+    running = asyncio.create_task(trial.run())
+    if external_cancellation:
+        await asyncio.wait_for(started.wait(), 5)
+        running.cancel("caller cancelled")
+        with pytest.raises(asyncio.CancelledError) as cancellation:
+            await asyncio.wait_for(running, 5)
+        assert cancellation.value.args == ("caller cancelled",)
+    else:
+        await asyncio.wait_for(running, 5)
+
+    native = TrialResult.model_validate_json(
+        trial.paths.lifecycle_result_path.read_text()
+    )
+    assert native.completion is None
+    assert native.verifier_result is None
+    error = native.exception_info.exception_type
+    assert is_resume_retryable(error)
+    if external_cancellation:
+        assert error == "CancelledError"
+        assert any(
+            item.exception_type == "ArtifactPersistenceError"
+            for item in native.secondary_exception_info
+        )
+    else:
+        assert error == "ArtifactPersistenceError"
+        assert error_category(error) is ErrorCategory.INFRASTRUCTURE
+    assert not trajectory_path.exists()
+
+
+@pytest.mark.unit
+async def test_slow_cancelled_producer_cannot_publish_over_confirmed_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = ArtifactWriter(num_workers=1)
+    monkeypatch.setattr(artifact_writer, "_WRITER", writer)
+    release = asyncio.Event()
+    producer_started = asyncio.Event()
+
+    async def run_agent(**kwargs):
+        try:
+            await asyncio.Future()
+        finally:
+            producer_started.set()
+            await release.wait()
+            await producer._persist_final_trajectory()
+
+    config = _config(tmp_path, "slow-upload", attempt_timeout=None, cleanup_grace=0.01)
+    trial = _trial_with_agent_phase(config, run_agent, timeout=0.001)
+    producer = make_bare_terminus2(trial.paths.agent_dir)
+    try:
+        await asyncio.wait_for(trial.run(), 5)
+        await asyncio.wait_for(producer_started.wait(), 5)
+        native = TrialResult.model_validate_json(
+            trial.paths.lifecycle_result_path.read_text()
+        )
+        assert native.completion is None
+        assert native.verifier_result is None
+        assert native.exception_info.exception_type == "PhaseCancellationError"
+        assert is_resume_retryable(native.exception_info.exception_type)
+        assert not (trial.paths.agent_dir / "trajectory.json").exists()
+    finally:
+        release.set()
+        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
+
+    assert (trial.paths.agent_dir / "trajectory.json").exists()
+    after_upload = TrialResult.model_validate_json(
+        trial.paths.lifecycle_result_path.read_text()
+    )
+    assert after_upload.completion is None
+    assert after_upload.verifier_result is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "prior_error, scored",
+    [
+        pytest.param(None, True, id="scored"),
+        pytest.param(None, False, id="never-scored"),
+        pytest.param(AgentTimeoutError("agent deadline"), True, id="agent-timeout"),
+        pytest.param(TurnCapExhaustedError("turn cap"), True, id="passthrough"),
+    ],
+)
+async def test_abandoned_bridge_export_has_retryable_failure_at_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prior_error: Exception | None,
+    scored: bool,
+) -> None:
+    monkeypatch.setattr(artifact_writer, "_WRITER", ArtifactWriter(num_workers=1))
+    config = _config(
+        tmp_path, "bridge-export", attempt_timeout=None, cleanup_grace=0.01
+    )
+    trial = _trial_ready_to_finalize(config)
+    trial._first_phase_timeout = None
+    trial._reached_verifier = True
+    trial.user_agent = None
+    if prior_error is not None:
+        trial.result.exception_info = ExceptionInfo.from_exception(prior_error)
+    if not scored:
+        trial.result.verifier_result = None
+    release = asyncio.Event()
+    export_cancelled = asyncio.Event()
+
+    async def export(environment, path):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            export_cancelled.set()
+            await release.wait()
+
+    async def no_op(*args):
+        return None
+
+    trial.bridge = SimpleNamespace(
+        export_trajectory=export,
+        teardown=no_op,
+        trajectory_filename="bridge-trajectory.json",
+    )
+    trial._bridge_ready = True
+    trial.agent_environment = SimpleNamespace(
+        with_default_user=lambda _: contextlib.nullcontext(),
+        scoped_exec_env=lambda _: contextlib.nullcontext(),
+    )
+    try:
+        # Bridge cleanup deliberately swallows the abandoned export's error.
+        await trial._cleanup_bridge(user=None)
+        assert export_cancelled.is_set()
+        await trial._finalize()
+
+        native = TrialResult.model_validate_json(
+            trial.paths.lifecycle_result_path.read_text()
+        )
+        assert native.completion is None
+        assert native.verifier_result is None
+        assert native.exception_info.exception_type == "PhaseCancellationError"
+        assert (
+            error_category(native.exception_info.exception_type)
+            is ErrorCategory.INFRASTRUCTURE
+        )
+        assert is_resume_retryable(native.exception_info.exception_type)
+    finally:
+        release.set()
+        await asyncio.gather(*trial.pending_cleanup_tasks(), return_exceptions=True)
+
+
 def _install_factory(monkeypatch, behaviors: dict[tuple[str, int], FakeTrial]) -> None:
-    async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
+    async def create(
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
+    ):
         if attempt_index is None:
             raise ValueError("queue attempts require an attempt index")
         return behaviors[(config.trial_name, attempt_index)]
@@ -385,7 +760,12 @@ async def test_trial_creation_failure_returns_terminal_result(
     config = _config(tmp_path, "creation-failed", attempt_timeout=None)
 
     async def fail_create(
-        cls, trial_config: TrialConfig, *, attempt_index: int | None = None
+        cls,
+        trial_config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
     ) -> Trial:
         raise RuntimeError("trial creation failed")
 
@@ -416,7 +796,14 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
     queued = _config(tmp_path, "queued", attempt_timeout=0.01)
     first_trial = FakeTrial(first, 0, hold_first)
 
-    async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
+    async def create(
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
+    ):
         created.append(config.trial_name)
         if config.trial_name == "first" and attempt_index == 0:
             return first_trial
@@ -471,7 +858,14 @@ async def test_attempt_deadline_covers_trial_creation(
 ) -> None:
     creation_started = asyncio.Event()
 
-    async def create(cls, config: TrialConfig, *, attempt_index: int | None = None):
+    async def create(
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities=None,
+        guest_environment=None,
+    ):
         creation_started.set()
         await asyncio.Event().wait()
 
