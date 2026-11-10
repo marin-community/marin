@@ -274,6 +274,7 @@ def test_unpinned_gpu_skips_preparation_but_tpu_keeps_it(serving, caplog, device
         (["--region", "us-central2,us-east1"], False, False),
         (["--region", "*"], False, False),
         (["--target-cluster", "cw-rno2a", "--gpu", "H100x1"], True, False),
+        (["--gpu", "H100x1", "--region", "us-east5"], False, False),
         (["--region", "us-central2"], True, True),
     ],
 )

@@ -46,7 +46,7 @@ import click
 import requests
 from click.core import ParameterSource
 from fray.iris_backend import FrayIrisClient, convert_constraints, convert_resources, resolve_coscheduling
-from fray.types import ANY_REGION, ResourceConfig, create_environment
+from fray.types import ANY_REGION, GpuConfig, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
@@ -227,10 +227,12 @@ def _prepared_direct_service(
     service: IrisServiceConfig, placement: ResourceConfig, workspace_dir: Path | None, client: IrisClient
 ) -> IrisServiceConfig:
     regions = placement.regions
-    if not placement.target_cluster and (not regions or len(regions) != 1 or ANY_REGION in regions):
+    if not placement.target_cluster and (
+        isinstance(placement.device, GpuConfig) or not regions or len(regions) != 1 or ANY_REGION in regions
+    ):
         click.echo(
-            "Warning: skipping CPU model preparation without a cluster or single-region pin; "
-            "weights will download on the serving worker. Set --region or --target-cluster.",
+            "Warning: skipping CPU model preparation because the serving cache location is not pinned; "
+            "weights will download on the serving worker. Set --target-cluster for GPUs, or a single --region for TPUs.",
             err=True,
         )
         return service
