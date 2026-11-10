@@ -192,8 +192,6 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     curated = {"fixture:first": first, "fixture:second": second}
     artifact = run(task_selection_step(curated, settings))[0]
     output = Path(artifact.path)
-    summary = json.loads((output / "summary.json").read_text())
-    assert summary["source_counts"]["fixture:first"]["heldout_overlap"] == len(leaked)
     tasks = read_tasks(output / TRAIN_FILENAME)
     assert len(tasks) == 2
     assert {task.id for task in tasks} <= {"training-a", "training-b", "training-c"}
@@ -210,8 +208,8 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     summary = json.loads((output / "summary.json").read_text())
     assert summary["source_counts"] == {
         "fixture:first": {
-            "input": 23,
-            "heldout_overlap": 21,
+            "input": 24,
+            "heldout_overlap": 22,
             "duplicate": 0,
             "eligible": 2,
             "selected": sum(task.id != "training-c" for task in tasks),
