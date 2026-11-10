@@ -1256,8 +1256,11 @@ def _expert_axis(path, leaf: jax.Array, num_experts: int) -> int | None:
     return None
 
 
-@functools.partial(jax.jit, static_argnums=(2,), donate_argnums=(0,))
-def _take_experts(leaf: jax.Array, order: jax.Array, axis: int) -> jax.Array:
+@functools.partial(jax.jit, static_argnums=(2, 3), donate_argnums=(0,))
+def _take_experts(leaf: jax.Array, order: jax.Array, axis: int, on_host: bool) -> jax.Array:
+    # Memory-kind moves need the traced sharding, so an offloaded leaf crosses to the device and back in here.
+    if on_host:
+        leaf = _tree_to_memory_kind(leaf, "device")
     sharding = jax.typeof(leaf).sharding
     layer_spec = P(*sharding.spec[1:]) if sharding.spec else P()
 
@@ -1267,7 +1270,8 @@ def _take_experts(leaf: jax.Array, order: jax.Array, axis: int) -> jax.Array:
 
     # A gather along the expert-sharded axis all-gathers its operand, so map over layers one at a time:
     # a vmap would gather every layer's experts onto each device at once.
-    return jax.lax.map(take, (leaf, order))
+    placed = jax.lax.map(take, (leaf, order))
+    return _tree_to_memory_kind(placed, "pinned_host") if on_host else placed
 
 
 def _permute_tree(tree, order: jax.Array, num_experts: int):
@@ -1277,11 +1281,8 @@ def _permute_tree(tree, order: jax.Array, num_experts: int):
         axis = _expert_axis(path, leaf, num_experts)
         if axis is None:
             return leaf
-        on_host = leaf.sharding.memory_kind == "pinned_host"
         # One leaf at a time, donated, so the device holds at most one extra copy of the largest leaf.
-        moved = _tree_to_memory_kind(leaf, "device") if on_host else leaf
-        permuted = _take_experts(moved, order, axis)
-        return _tree_to_memory_kind(permuted, "pinned_host") if on_host else permuted
+        return _take_experts(leaf, order, axis, leaf.sharding.memory_kind == "pinned_host")
 
     return jax.tree_util.tree_map_with_path(permute, tree)
 

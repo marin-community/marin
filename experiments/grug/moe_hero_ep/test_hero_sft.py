@@ -3,6 +3,7 @@
 
 import math
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -325,3 +326,36 @@ def test_expert_placement_round_trips_through_its_inverse():
     assert not np.array_equal(moved, expected.params.stacked_blocks.stacked.mlp.expert_mlp.w_gate)
     for (path, want), have in zip(jax.tree_util.tree_leaves_with_path(expected), jax.tree.leaves(restored), strict=True):
         np.testing.assert_array_equal(np.asarray(have), want, err_msg=jax.tree_util.keystr(path))
+
+
+def test_expert_placement_moves_host_offloaded_optimizer_state():
+    # The hero offloads optimizer state to pinned host memory; placement must move those leaves too.
+    config = _tiny_config()
+    placement = _placement([[2, 0, 3, 1], [1, 3, 0, 2]])
+    order = np.asarray(placement.order)
+    mesh = _one_device_mesh()
+    with jax.set_mesh(mesh):
+        # The trainer builds its state under jit, where the offload's memory-kind moves can trace.
+        state = jax.jit(
+            lambda key: initial_state(
+                config, optimizer=_optimizer(), mp=_FP32, key=key, ema_beta=None, offload_opt_state=True
+            )
+        )(jax.random.key(0))
+        host_leaves = {
+            jax.tree_util.keystr(path): np.asarray(leaf)
+            for path, leaf in jax.tree_util.tree_leaves_with_path(state.opt_state)
+            if eqx.is_array(leaf) and leaf.sharding.memory_kind == "pinned_host"
+        }
+        placed = permute_experts(state, placement)
+
+    gate_moments = 0
+    layers = np.arange(order.shape[0])[:, None]
+    for path, leaf in jax.tree_util.tree_leaves_with_path(placed.opt_state):
+        key = jax.tree_util.keystr(path)
+        if key not in host_leaves:
+            continue
+        assert leaf.sharding.memory_kind == "pinned_host"
+        if key.endswith(".expert_mlp.w_gate"):
+            gate_moments += 1
+            np.testing.assert_array_equal(np.asarray(leaf), host_leaves[key][layers, order])
+    assert gate_moments >= 1
