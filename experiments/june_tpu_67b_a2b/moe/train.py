@@ -118,11 +118,18 @@ class GrugTrainerConfig:
     """Split each step's batch into this many microbatches, run forward and backward on one at a time and sum their
     gradients in float32 before the single optimizer update; activation memory is that of one microbatch.
     ``train_batch_size`` stays the batch of one step and must be a multiple of ``microbatches`` times the number of
-    batch shards. Each device takes every ``microbatches``-th of its own rows, so the split moves no data. The loss,
+    batch shards. Each device takes every ``microbatches``-th of its own rows, so the split moves no data. Each
+    gradient is reduced across devices once per step, after the last microbatch; until then every device keeps its
+    own float32 partial sums, full size for the weights sharded over ``replica_dcn`` or ``data`` (the embedding and
+    output projection, FSDP weights) and expert-sharded for the expert weights. The loss,
     the gradients and the routing counts equal those of the whole batch up to rounding, as long as no expert overflows
     its capacity, which applies per microbatch. The next step's QB thresholds are the mean of the microbatches'
     thresholds weighted by their valid tokens, each estimated from its own tokens. 1 runs the whole batch at once.
-    The levanter ``TrainerConfig.per_device_parallelism``, if set, must agree: rows per batch shard per microbatch."""
+    The levanter ``TrainerConfig.per_device_parallelism``, if set, must agree: rows per batch shard per microbatch.
+    On GPU, XLA's default while-loop unrolling unrolls a loop of 4 or more microbatches and keeps extra copies of the
+    accumulator live (about 20 GiB per device at 8 x 4k with 4 microbatches); pass
+    ``--xla_gpu_enable_while_loop_unrolling=WHILE_LOOP_UNROLLING_NO_UNROLL`` in ``XLA_FLAGS`` to keep the peak at
+    that of 2 microbatches."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -170,6 +177,7 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_EXPERT_AXIS = "expert"
 
 
 def build_train_loader(
@@ -462,17 +470,12 @@ def _make_train_step(
 
         if microbatches > 1:
             if state.compute_params is None:
-                loss, summarized_metrics, accumulated_grads = _microbatched_loss_and_grads(
-                    lambda params, microbatch: loss_terms_fn(mp.cast_to_compute(params), microbatch),
-                    qb_params,
-                    batch,
-                    microbatches,
-                )
+                qb_compute_params = mp.cast_to_compute(qb_params)
             else:
                 qb_compute_params = _apply_qb_betas(state.compute_params, state.pending_qb_betas)
-                loss, summarized_metrics, accumulated_grads = _microbatched_loss_and_grads(
-                    loss_terms_fn, qb_compute_params, batch, microbatches
-                )
+            loss, summarized_metrics, accumulated_grads = _microbatched_loss_and_grads(
+                loss_terms_fn, qb_compute_params, batch, microbatches
+            )
             grads = mp.cast_to_param(accumulated_grads)
         elif state.compute_params is None:
             (loss, summarized_metrics), grads = jax.value_and_grad(
@@ -611,7 +614,7 @@ def _microbatched_loss_and_grads(
     batch,
     microbatches: int,
 ) -> tuple[jax.Array, dict, Transformer]:
-    """Loss, summarized metrics and float32 gradients of the whole ``batch``, one microbatch at a time.
+    """Loss, summarized metrics and gradients of the whole ``batch``, one microbatch at a time.
 
     ``loss_terms_fn(params, microbatch)`` returns the microbatch's summed (``reduction="sum"``) cross-entropy, its
     weighted router aux loss and its raw per-layer router metrics. The loss each microbatch differentiates is its
@@ -621,11 +624,13 @@ def _microbatched_loss_and_grads(
     microbatch's keeps a microbatch without loss weight from producing a 0/0 gradient. A batch with no loss weight
     has zero cross-entropy and gradient.
 
-    The gradient of each microbatch is taken in full, cross-device reductions included, so today these still run
-    once per microbatch: the expert weights' over ``replica_dcn`` and ``data`` and the large dense block weights' in
-    every layer of the backward layer scan; the small replicated block weights' (``replicated_grad_reduction=
-    "after_scan"``), the embedding, norm and output projection weights' after it; and the loss, routing statistics
-    and QB threshold reductions of the forward. The accumulator has the parameters' sharding.
+    The gradients are reduced across devices once, after the loop. ``params`` are marked ``reduced`` over the batch
+    axes first (``_mark_batch_reduced``), so each microbatch's gradient is a per-device partial sum, ``unreduced``
+    over those axes, with no cross-device reduction in the backward. The partials accumulate in float32 on every
+    device. ``_finalize_accumulated_grad`` then casts each to the dtype of ``params`` and reduces it once: an
+    all-reduce, or a reduce-scatter for a weight sharded over a batch axis. Only the loss, routing statistics and QB
+    threshold reductions of the forward still run once per microbatch. The returned gradients have the dtype and
+    sharding of ``params``.
     """
     batch_size = batch.tokens.shape[0]
     batch_shards = _batch_shards(get_abstract_mesh())
@@ -650,22 +655,71 @@ def _microbatched_loss_and_grads(
         return cross_entropy_loss + aux_loss, (cross_entropy_loss, aux_loss, router_metrics)
 
     value_and_grad = jax.value_and_grad(loss_and_terms, has_aux=True)
+    marked_params = _mark_batch_reduced(params)
 
     def body(carry, xs):
         grad_sum, loss_sum, cross_entropy_sum, aux_sum = carry
         microbatch, token_share = xs
-        (loss, (cross_entropy_loss, aux_loss, router_metrics)), grads = value_and_grad(params, microbatch, token_share)
+        (loss, (cross_entropy_loss, aux_loss, router_metrics)), grads = value_and_grad(
+            marked_params, microbatch, token_share
+        )
         grad_sum = jax.tree.map(lambda acc, g: acc + g.astype(jnp.float32), grad_sum, grads)
         carry = (grad_sum, loss_sum + loss, cross_entropy_sum + cross_entropy_loss, aux_sum + aux_loss)
         return carry, router_metrics
 
     zero = jnp.zeros((), jnp.float32)
-    init = (jax.tree.map(lambda p: jnp.zeros_like(p, dtype=jnp.float32), params), zero, zero, zero)
-    (grads, loss, cross_entropy_loss, aux_loss), stacked_router_metrics = jax.lax.scan(
+    init = (jax.tree.map(_zero_accumulator, marked_params), zero, zero, zero)
+    (grad_sum, loss, cross_entropy_loss, aux_loss), stacked_router_metrics = jax.lax.scan(
         body, init, (split_batch, token_shares)
     )
     router_metrics = _combine_microbatch_router_metrics(stacked_router_metrics, row_valid_tokens)
+    grads = jax.tree.map(_finalize_accumulated_grad, grad_sum, params)
     return loss, summarize_loss_metrics(router_metrics, cross_entropy_loss, aux_loss), grads
+
+
+def _mark_batch_reduced(params: Transformer) -> Transformer:
+    """Mark every weight ``reduced`` over the batch axes it is not sharded over by ``expert``.
+
+    Its gradient is then ``unreduced`` over them: each device's partial sum over its own tokens, which the caller
+    reduces when it chooses. A weight sharded over a batch axis other than ``expert`` (the embedding and output
+    projection over ``replica_dcn`` and ``data``, FSDP weights over ``data``) is all-gathered first; its gradient is
+    then full size on every device. The expert weights keep their ``expert`` sharding, since only their own shard's
+    tokens reach them. ``router_bias`` is left alone: it is added elementwise and has no gradient.
+    """
+
+    def mark(path, x):
+        if not isinstance(x, jax.Array) or any(getattr(k, "name", None) == "router_bias" for k in path):
+            return x
+        spec = jax.typeof(x).sharding.spec
+        partitions = []
+        for entry in spec.partitions:
+            axes = entry if isinstance(entry, tuple) else (entry,)
+            kept = tuple(a for a in axes if a is not None and (a not in _BATCH_AXES or a == _EXPERT_AXIS))
+            partitions.append(kept[0] if len(kept) == 1 else (kept or None))
+        kept_axes = {a for entry in partitions for a in (entry if isinstance(entry, tuple) else (entry,))}
+        # Every batch axis not kept, size-1 ones included: a dot's unreduced output names its contracting dim's axes.
+        reduced = frozenset(a for a in _BATCH_AXES if a not in kept_axes)
+        return reshard(x, P(*partitions, reduced=reduced))
+
+    return jax.tree_util.tree_map_with_path(mark, params)
+
+
+def _zero_accumulator(marked_param):
+    """A float32 zero gradient sum with the sharding of ``marked_param``'s gradient: unreduced where it is reduced."""
+    if not isinstance(marked_param, jax.Array):
+        return marked_param
+    spec = jax.typeof(marked_param).sharding.spec.to_ct_spec()
+    return jnp.zeros(marked_param.shape, jnp.float32, out_sharding=spec)
+
+
+def _finalize_accumulated_grad(grad_sum, param):
+    """Reduce one accumulated gradient across devices into ``param``'s dtype and sharding.
+
+    The float32 sum is cast to ``param``'s dtype (bfloat16 under a bfloat16 compute policy) before the reduction, so
+    the step moves as many bytes as one microbatch's gradient did, not twice that."""
+    if not isinstance(grad_sum, jax.Array):
+        return grad_sum
+    return reshard(grad_sum.astype(param.dtype), jax.typeof(param).sharding)
 
 
 def _batch_shards(mesh) -> int:

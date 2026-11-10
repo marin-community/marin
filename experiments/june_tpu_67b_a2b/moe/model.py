@@ -657,6 +657,8 @@ def _mark_reduced(blocks: "Block", max_bytes: int) -> "Block":
             return x
         if x.size * x.dtype.itemsize // x.shape[0] > max_bytes:  # stacked: leading axis is the layer
             return x
+        if jax.typeof(x).sharding.spec.reduced:  # Marked by the caller, e.g. the microbatch loop.
+            return x
         spec = _without_unit_axes(jax.typeof(x).sharding.spec, mesh)
         if spec is None:
             return x

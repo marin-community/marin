@@ -114,6 +114,17 @@ def _reshard_for_shard_map(
     return x
 
 
+def keep_reduced(spec: PartitionSpec, x: jax.Array) -> PartitionSpec:
+    """``spec`` with the mesh axes ``x`` is ``reduced`` over, except those ``spec`` already shards over.
+
+    A weight that enters a ``shard_map`` with these in_specs gets a cotangent ``unreduced`` over them, so the caller
+    chooses when to reduce its gradient. With a plain spec the ``shard_map`` transpose psums it over them instead. An
+    axis ``spec`` shards over cannot also be reduced; each shard's cotangent covers only its own slice there.
+    """
+    sharded = {name for entry in spec for name in _axis_names(entry)}
+    return spec.update(reduced=jax.typeof(x).sharding.spec.reduced - sharded)
+
+
 _GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "context", "model")
 
 
