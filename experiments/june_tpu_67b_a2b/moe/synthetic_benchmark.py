@@ -112,7 +112,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Draw the tokens from this many batches' worth of sequences, repeated over the run, so the loss can "
-        "fall (a convergence check); 0 = fresh tokens every step.",
+        "fall (a convergence check); 0 = fresh tokens every step. Either way the run draws from at most 65535 "
+        "distinct sequences.",
     )
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
@@ -250,6 +251,11 @@ def main() -> None:
     # cycles through them, so the model can memorize them, the loss falls below ln(vocab_size) and convergence
     # differences show.
     distinct = args.steps if args.repeat_batches == 0 else min(args.repeat_batches, args.steps)
+    if distinct * batch_size >= 2**16:
+        raise ValueError(
+            f"{distinct} batches of {batch_size} sequences exceed the mixture block limit of 65535 sequences; lower "
+            "--steps or --repeat-batches"
+        )
     examples = synthetic_examples(distinct * batch_size, model.max_seq_len, model.vocab_size)
     data = LmDataConfig(
         components={"synthetic": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
