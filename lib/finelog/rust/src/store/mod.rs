@@ -7,6 +7,7 @@
 
 pub mod adopt;
 pub mod catalog;
+pub mod column_bounds;
 pub mod compaction;
 pub mod ipc;
 pub mod legacy;

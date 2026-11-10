@@ -27,8 +27,8 @@ use crate::store::legacy::archive::{self, LegacyArchive};
 use crate::store::legacy::layout::{self, LocalLayout};
 use crate::store::state_store::object::StateGcPolicy;
 use crate::store::table::index_artifacts::{self, IndexBackfill, INDEX_BUNDLES_PER_TICK};
-use crate::store::table::key_bounds;
 use crate::store::table::runtime::TableRuntime;
+use crate::store::table::segment_bounds;
 use crate::store::table::spec_migration::{self, SpecMigration};
 
 /// Physical maintenance appropriate to the process hosting a table.
@@ -60,8 +60,8 @@ pub enum TableWork {
     /// Compact one planner-issued run. `force_compact_l0` makes an L0 run
     /// eligible regardless of the size threshold.
     Compaction { force_compact_l0: bool },
-    /// Recover missing key bounds from immutable object footers.
-    KeyBounds,
+    /// Recover missing key and column bounds from immutable object footers.
+    SegmentBounds,
     /// Build the derived index artifacts segments still owe, or remove them from
     /// a table whose policy disables them.
     IndexArtifacts,
@@ -168,8 +168,8 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             ))
         }
         TableWork::Compaction { force_compact_l0 } => compact(runtime, force_compact_l0).await,
-        TableWork::KeyBounds => Ok(WorkOutcome::from_pending(
-            key_bounds::maintain(runtime).await?,
+        TableWork::SegmentBounds => Ok(WorkOutcome::from_pending(
+            segment_bounds::maintain(runtime).await?,
             MaintenanceClass::QueryServing,
         )),
         TableWork::IndexArtifacts => {
@@ -282,7 +282,7 @@ async fn cycle(
         // then drains at the fast re-poll cadence through the dedicated slot
         // instead of one run per shared-queue visit, mirroring how a legacy
         // table drains its whole backlog in one cycle.
-        let bounds_pending = run_one(runtime, TableWork::KeyBounds)
+        let bounds_pending = run_one(runtime, TableWork::SegmentBounds)
             .await?
             .has_more_work();
         let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })

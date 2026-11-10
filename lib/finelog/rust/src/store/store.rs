@@ -149,7 +149,10 @@ pub fn log_registered_schema() -> Schema {
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            // Each segment covers a short time span, so per-segment bounds in
+            // the catalog drop most segments for a time-bounded search; the
+            // key column is `key`, so key bounds cannot.
+            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false).with_catalog_bounds(),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
         ],
@@ -167,6 +170,7 @@ pub struct NamespaceSnapshot {
     pub key_column: String,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
+    pub column_bounds: BTreeMap<String, crate::store::column_bounds::ColumnBounds>,
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
@@ -779,6 +783,9 @@ impl Store {
                         table_spec_version,
                         source: source.clone(),
                         artifacts: ArtifactReferences::from_catalog_segment(segment),
+                        column_bounds: crate::store::column_bounds::from_proto(
+                            &segment.column_bounds,
+                        ),
                         migration_backfill: segment.migration_backfill.unwrap_or(false),
                         migration_source_id: segment.migration_source_id.clone(),
                         migration_source_rows: segment.migration_source_rows,
@@ -1389,6 +1396,7 @@ impl Store {
             .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
             .with_exact_postings_policy(snapshot.exact_postings_policy)
             .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
+            .with_segment_column_bounds(snapshot.column_bounds)
             .with_segment_seq_bounds(snapshot.seq_bounds)
             .with_segment_row_counts(snapshot.row_counts)
             .with_segment_partitions(physical_partition_policy_for(name), snapshot.partitions);
@@ -1412,6 +1420,7 @@ impl Store {
             key_column: engine.key_column().to_string(),
             paths: segments.paths,
             key_bounds: segments.key_bounds,
+            column_bounds: segments.column_bounds,
             seq_bounds: segments.seq_bounds,
             row_counts: segments.row_counts,
             partitions: segments.partitions,
@@ -2144,7 +2153,7 @@ mod tests {
             .is_empty());
         std::fs::remove_file(&path).unwrap();
 
-        maintenance::run(&runtime, TableWork::KeyBounds)
+        maintenance::run(&runtime, TableWork::SegmentBounds)
             .await
             .unwrap();
         assert!(
@@ -5243,11 +5252,278 @@ mod tests {
             schema.column("key").unwrap().index.trigram,
             "boot enables the key trigram index a pre-existing namespace lacks"
         );
+        assert!(
+            schema.column("epoch_ms").unwrap().index.catalog_bounds,
+            "boot enables epoch_ms catalog bounds a pre-existing namespace lacks"
+        );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
             seeded_policy,
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn catalog_bounds_leave_the_index_policy_fingerprint_unchanged() {
+        // Turning the flag on must not rebuild every index bundle of `log`.
+        let flagged = stored_form(log_registered_schema());
+        assert!(flagged.column("epoch_ms").unwrap().index.catalog_bounds);
+        let mut plain = flagged.clone();
+        for column in &mut plain.columns {
+            column.index.catalog_bounds = false;
+        }
+        let fingerprint = |schema: Schema| {
+            crate::store::table::segment_format::SegmentFormat::resolve(schema)
+                .unwrap()
+                .index_config("iris.worker")
+                .policy_fingerprint()
+        };
+        assert_eq!(fingerprint(flagged), fingerprint(plain));
+    }
+
+    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`:
+    /// its key bounds cannot prune by time, so only the column bounds can.
+    fn time_bounded_worker_spec() -> ValidatedTableSpec {
+        let mut schema = worker_schema_keyed_on("worker_id");
+        for column in &mut schema.columns {
+            if column.name == "timestamp_ms" {
+                column.index.catalog_bounds = true;
+            }
+        }
+        ObjectSpec::new(1).schema(schema).validated()
+    }
+
+    struct TimeBoundedTable {
+        store: Store,
+        data_dir: PathBuf,
+        remote_dir: PathBuf,
+        /// One segment per write, in `timestamp_ms` order: 1000–1500,
+        /// 2000–2500 and 3000–3500.
+        paths: Vec<String>,
+    }
+
+    impl TimeBoundedTable {
+        async fn new(tag: &str) -> Self {
+            let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+            let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
+            let store = Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Shadow,
+            )
+            .unwrap();
+            store
+                .register_versioned_table("iris.worker", time_bounded_worker_spec())
+                .unwrap();
+            store.publish_object_catalog("iris.worker").await.unwrap();
+            for (worker, start) in [("w-1", 1_000), ("w-2", 2_000), ("w-3", 3_000)] {
+                let (_, ipc) = worker_ipc(&[(worker, 1, start), (worker, 2, start + 500)]);
+                store.write_rows("iris.worker", &ipc, None).unwrap();
+                store
+                    .maintain_namespace("iris.worker", false)
+                    .await
+                    .unwrap();
+            }
+            let paths = store.query_snapshot("iris.worker").unwrap().paths;
+            assert_eq!(paths.len(), 3, "each write flushes its own segment");
+            Self {
+                store,
+                data_dir,
+                remote_dir,
+                paths,
+            }
+        }
+
+        fn clear_column_bounds(&self, path: &str) {
+            let runtime = self.store.tables.require("iris.worker").unwrap();
+            let lease = runtime.controller().begin_compaction().unwrap();
+            runtime
+                .controller()
+                .commit_maintenance(&lease, || {
+                    let revision = self
+                        .store
+                        .catalog
+                        .clear_object_segment_column_bounds("iris.worker", path)?;
+                    Ok((revision, ()))
+                })
+                .unwrap();
+        }
+
+        /// The planner's view of each segment's bounds, in segment order.
+        fn recorded_bounds(&self) -> Vec<Option<(i64, i64)>> {
+            let snapshot = self.store.query_snapshot("iris.worker").unwrap();
+            self.paths
+                .iter()
+                .map(|path| {
+                    snapshot
+                        .column_bounds
+                        .get(path)
+                        .and_then(|bounds| bounds.get("timestamp_ms").copied())
+                })
+                .collect()
+        }
+
+        fn provider(&self, pruning: bool) -> crate::query::provider::NamespaceProvider {
+            let mut snapshot = self.store.query_snapshot("iris.worker").unwrap();
+            if !pruning {
+                snapshot.column_bounds.clear();
+            }
+            self.store
+                .namespace_provider("iris.worker", snapshot)
+                .unwrap()
+        }
+
+        async fn rows(&self, sql: &str, pruning: bool) -> String {
+            let providers = vec![crate::query::RegisteredProvider {
+                name: "iris.worker".to_string(),
+                provider: self.provider(pruning),
+            }];
+            let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, sql)
+                .await
+                .unwrap();
+            datafusion::arrow::util::pretty::pretty_format_batches(&result.batches)
+                .unwrap()
+                .to_string()
+        }
+
+        /// How many segments the scan plans for `sql`, from the filters DataFusion
+        /// pushes into it.
+        async fn planned_segments(&self, sql: &str) -> usize {
+            use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+            use datafusion::logical_expr::LogicalPlan;
+
+            let ctx = crate::query::make_ctx();
+            ctx.register_table(
+                datafusion::common::TableReference::bare("iris.worker"),
+                Arc::new(self.provider(true)),
+            )
+            .unwrap();
+            let plan = ctx.sql(sql).await.unwrap().into_optimized_plan().unwrap();
+            let mut filters = Vec::new();
+            plan.apply(|node| {
+                if let LogicalPlan::TableScan(scan) = node {
+                    filters.extend(scan.filters.iter().cloned());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+            self.provider(true)
+                .segment_paths_for_filters(&filters)
+                .len()
+        }
+
+        /// Assert each time filter returns the same rows with and without column
+        /// bounds, and plans the expected number of segments with them.
+        async fn assert_results_unchanged(&self, expected_planned: [usize; 5]) {
+            let filters = [
+                "timestamp_ms >= 2000",
+                "timestamp_ms BETWEEN 1200 AND 2100",
+                "timestamp_ms > 2400.5",
+                // The OPS form: `extract(epoch ...) * 1000` is a Float64.
+                "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
+                "timestamp_ms < 1000",
+            ];
+            for (filter, expected) in filters.iter().zip(expected_planned) {
+                let sql = format!(
+                    "SELECT worker_id, mem_bytes, timestamp_ms FROM \"iris.worker\" \
+                     WHERE {filter} ORDER BY timestamp_ms, mem_bytes"
+                );
+                assert_eq!(
+                    self.rows(&sql, true).await,
+                    self.rows(&sql, false).await,
+                    "{filter}: rows differ with column bounds"
+                );
+                assert_eq!(self.planned_segments(&sql).await, expected, "{filter}");
+            }
+        }
+
+        fn cleanup(self) {
+            std::fs::remove_dir_all(self.data_dir).ok();
+            std::fs::remove_dir_all(self.remote_dir).ok();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flushed_segments_record_column_bounds_and_prune_by_them() {
+        let table = TimeBoundedTable::new("column_bounds_flushed").await;
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![
+                Some((1_000, 1_500)),
+                Some((2_000, 2_500)),
+                Some((3_000, 3_500))
+            ]
+        );
+        table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn segments_without_column_bounds_are_always_scanned() {
+        let table = TimeBoundedTable::new("column_bounds_absent").await;
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        assert_eq!(table.recorded_bounds(), vec![None, None, None]);
+        table.assert_results_unchanged([3, 3, 3, 3, 3]).await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mix_of_segments_with_and_without_column_bounds_keeps_results() {
+        // Mid-backfill, some segments have bounds and the rest are scanned.
+        let table = TimeBoundedTable::new("column_bounds_partial").await;
+        table.clear_column_bounds(&table.paths[2]);
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![Some((1_000, 1_500)), Some((2_000, 2_500)), None]
+        );
+        table.assert_results_unchanged([2, 3, 2, 2, 2]).await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn maintenance_backfills_column_bounds_from_footers_without_rewriting_objects() {
+        let table = TimeBoundedTable::new("column_bounds_backfill").await;
+        let sources_before: Vec<_> = table
+            .store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.source)
+            .collect();
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+        maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![
+                Some((1_000, 1_500)),
+                Some((2_000, 2_500)),
+                Some((3_000, 3_500))
+            ]
+        );
+        let sources_after: Vec<_> = table
+            .store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.source)
+            .collect();
+        assert_eq!(
+            sources_after, sources_before,
+            "the backfill reuses each object"
+        );
+        table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
+        table.cleanup();
     }
 }

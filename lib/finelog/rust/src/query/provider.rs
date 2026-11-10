@@ -46,6 +46,7 @@ use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
 use crate::query::indexed_scan::{IndexedParquetSource, ScanInputs, SegmentFile};
+use crate::store::column_bounds::ColumnBounds;
 use crate::store::object_store::{ObjectReference, ObjectStore, QueryCacheAdmission};
 use crate::store::table::query_view::SegmentObjectMap;
 
@@ -64,6 +65,9 @@ pub struct NamespaceProvider {
     segment_paths: Vec<String>,
     segment_key_column: Option<String>,
     segment_key_bounds: BTreeMap<String, (String, String)>,
+    /// Bounds of the table's `catalog_bounds` columns, per segment that records
+    /// any. A segment without bounds for a filtered column is always scanned.
+    segment_column_bounds: BTreeMap<String, ColumnBounds>,
     partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
     segment_partitions: BTreeMap<String, SegmentPartition>,
     /// Exact per-segment `seq` bounds, captured with the path snapshot.
@@ -327,7 +331,7 @@ impl NamespaceProvider {
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
 
-    fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
+    pub(crate) fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
         let int_ranges = crate::query::predicate::int_column_ranges(filters);
         let string_ranges = crate::query::trigram_prune::string_column_ranges(filters);
         let int_key_range = self
@@ -369,6 +373,18 @@ impl NamespaceProvider {
                             });
                             int_matches && string_matches
                         });
+                // A min above the max records a segment with no non-null value
+                // in the column; it is scanned, as without bounds.
+                let column_matches =
+                    self.segment_column_bounds
+                        .get(path.as_str())
+                        .is_none_or(|bounds| {
+                            int_ranges.iter().all(|(column, range)| {
+                                bounds.get(column).is_none_or(|&(minimum, maximum)| {
+                                    minimum > maximum || range.overlaps(minimum, maximum)
+                                })
+                            })
+                        });
                 let seq_matches = seq_range.is_none_or(|range| {
                     self.segment_seq_bounds
                         .get(path.as_str())
@@ -387,7 +403,7 @@ impl NamespaceProvider {
                                 || candidates.contains(partition)
                         })
                 });
-                key_matches && seq_matches && partition_matches
+                key_matches && column_matches && seq_matches && partition_matches
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -395,7 +411,7 @@ impl NamespaceProvider {
             tracing::debug!(
                 segments_total = self.segment_paths.len(),
                 segments_selected = paths.len(),
-                "scoped segment planning to key range, seq range, and physical partitions"
+                "scoped segment planning to key range, column bounds, seq range, and physical partitions"
             );
         }
         paths
@@ -449,6 +465,7 @@ impl NamespaceProvider {
                 segment_paths: Vec::new(),
                 segment_key_column: None,
                 segment_key_bounds: BTreeMap::new(),
+                segment_column_bounds: BTreeMap::new(),
                 partition_policy: None,
                 segment_partitions: BTreeMap::new(),
                 segment_seq_bounds: BTreeMap::new(),
@@ -469,6 +486,7 @@ impl NamespaceProvider {
             segment_paths: segment_paths.to_vec(),
             segment_key_column: None,
             segment_key_bounds: BTreeMap::new(),
+            segment_column_bounds: BTreeMap::new(),
             partition_policy: None,
             segment_partitions: BTreeMap::new(),
             segment_seq_bounds: BTreeMap::new(),
@@ -510,6 +528,14 @@ impl NamespaceProvider {
     ) -> Self {
         self.segment_key_column = Some(key_column.into());
         self.segment_key_bounds = bounds;
+        self
+    }
+
+    /// Attach the per-segment bounds of the table's `catalog_bounds` columns
+    /// captured with the path snapshot. Paths missing from `bounds`, and columns
+    /// a segment has no bounds for, remain queryable for scan safety.
+    pub fn with_segment_column_bounds(mut self, bounds: BTreeMap<String, ColumnBounds>) -> Self {
+        self.segment_column_bounds = bounds;
         self
     }
 
@@ -1161,6 +1187,53 @@ mod tests {
             vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
         );
         assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+    }
+
+    #[test]
+    fn column_bounds_drop_only_segments_whose_recorded_range_misses_the_filter() {
+        let paths: Vec<String> = (0..4)
+            .map(|index| format!("/planned/seg_{index}.parquet"))
+            .collect();
+        let bounds = |range: (i64, i64)| ColumnBounds::from([("mem_bytes".to_string(), range)]);
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_column_bounds(BTreeMap::from([
+                (paths[0].clone(), bounds((100, 199))),
+                (paths[1].clone(), bounds((200, 299))),
+                // paths[2] has no bounds yet, as before its backfill.
+                (
+                    paths[3].clone(),
+                    bounds(crate::store::column_bounds::NO_VALUES),
+                ),
+            ]));
+        let selected = |filters: &[Expr]| {
+            provider
+                .segment_paths_for_filters(filters)
+                .into_iter()
+                .map(|path| paths.iter().position(|planned| *planned == path).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            selected(&[col("mem_bytes").gt_eq(lit(250_i64))]),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            selected(&[col("mem_bytes")
+                .gt_eq(lit(120_i64))
+                .and(col("mem_bytes").lt_eq(lit(150_i64)))]),
+            vec![0, 2, 3]
+        );
+        // The float form keeps a segment whose max is only past the widened bound.
+        let as_float = || datafusion::logical_expr::cast(col("mem_bytes"), DataType::Float64);
+        assert_eq!(selected(&[as_float().gt(lit(299.5_f64))]), vec![1, 2, 3]);
+        assert_eq!(selected(&[as_float().gt(lit(300.5_f64))]), vec![2, 3]);
+        // No filter, or a filter on another column, keeps every segment.
+        assert_eq!(selected(&[]), vec![0, 1, 2, 3]);
+        assert_eq!(
+            selected(&[col("worker_id").eq(lit("w-1"))]),
+            vec![0, 1, 2, 3]
+        );
     }
 
     #[test]

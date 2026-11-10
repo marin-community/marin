@@ -621,6 +621,10 @@ pub fn adopt_local_segments(
             max_key_value: meta.max_key_value,
             partition: meta.partition,
             location,
+            column_bounds: object_records
+                .get(&row.path)
+                .map(|record| record.column_bounds.clone())
+                .unwrap_or_default(),
             artifacts: segment_artifacts(objects, object_records.get(&row.path), local_path)?,
         });
     }
@@ -677,6 +681,7 @@ pub fn adopt_local_segments(
             max_key_value: meta.max_key_value,
             partition: meta.partition,
             location: SegmentLocation::Local,
+            column_bounds: Default::default(),
             // A file with no catalog row is not object-backed, so its sidecars
             // come from the local layout.
             artifacts: local_sidecar_artifacts(path),
