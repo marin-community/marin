@@ -18,7 +18,8 @@ Malformed records are skipped individually and named in a visible note.
 
 The app's release migration creates its `rl_runs` table in the application schema.
 Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
-publication replaces that attempt's record; other attempts remain separate.
+publication refreshes that attempt's record; a missing issue preserves its stored
+issue link. Other attempts remain separate.
 
 The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` returns stored records and lists malformed rows in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/snowball-rl.md#dashboard-publication)

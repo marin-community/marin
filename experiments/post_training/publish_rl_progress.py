@@ -16,7 +16,9 @@ APPLET_ID = tomllib.loads(
 )["applet_id"]
 INSERT = """INSERT INTO rl_runs (run_id, attempt_id, record)
 VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
-ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = EXCLUDED.record"""
+ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = jsonb_set(
+    EXCLUDED.record, '{issue}',
+    COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb), rl_runs.record -> 'issue', 'null'::jsonb))"""
 
 
 def publish_result(record: dict[str, Any], service_url: str | None = None) -> str:
