@@ -9,7 +9,8 @@ replicas and expert parallelism (replica_dcn=4 x expert=2) and on one that also 
 applies per microbatch. This holds with the logit and router z-losses on, with padding that leaves the microbatches
 unequal valid tokens, and with a microbatch that carries no loss weight at all. The next step's QB thresholds are the
 mean of those of the microbatches. Every weight's gradient is reduced across the replicas once per step, after the
-microbatch loop.
+microbatch loop. With ``overlap_last_microbatch`` the step gives the same loss, metrics and gradients, bit for bit, and
+the expert weights' gradients are reduced instead one layer at a time in the last microbatch's backward layer scan.
 """
 
 import collections
@@ -89,7 +90,17 @@ def keep_gradients():
     )
 
 
-def step(cfg, mesh, policy, *, microbatches, carry_compute_params=False, batch=BATCH, z_loss_weight=0.0):
+def step(
+    cfg,
+    mesh,
+    policy,
+    *,
+    microbatches,
+    carry_compute_params=False,
+    batch=BATCH,
+    z_loss_weight=0.0,
+    overlap_last_microbatch=False,
+):
     optimizer = keep_gradients()
     with jax.set_mesh(mesh):
         state = june_train.initial_state(
@@ -101,30 +112,43 @@ def step(cfg, mesh, policy, *, microbatches, carry_compute_params=False, batch=B
             carry_compute_params=carry_compute_params,
         )
         train_step = june_train._make_train_step(
-            optimizer, policy, z_loss_weight=z_loss_weight, ema_beta=None, microbatches=microbatches
+            optimizer,
+            policy,
+            z_loss_weight=z_loss_weight,
+            ema_beta=None,
+            microbatches=microbatches,
+            overlap_last_microbatch=overlap_last_microbatch,
         )
         state, metrics, _ = train_step(state, batch)
     return state, jax.device_get(metrics)
 
 
-def compiled_step_hlo(cfg, mesh, policy, *, microbatches):
+def compiled_step_hlo(cfg, mesh, policy, *, microbatches, overlap_last_microbatch=False, combine_all_reduces=True):
     optimizer = optax.adam(1e-2)
+    # Without the combiner every reduction keeps its own instruction and op_name.
+    options = {} if combine_all_reduces else {"xla_disable_hlo_passes": "cpu-all-reduce-combiner"}
     with jax.set_mesh(mesh):
         state = june_train.initial_state(cfg, optimizer=optimizer, mp=policy, key=jax.random.key(0), ema_beta=None)
         train_step = june_train._make_train_step(
-            optimizer, policy, z_loss_weight=0.0, ema_beta=None, microbatches=microbatches
+            optimizer,
+            policy,
+            z_loss_weight=0.0,
+            ema_beta=None,
+            microbatches=microbatches,
+            overlap_last_microbatch=overlap_last_microbatch,
         )
-        return train_step.lower(state, BATCH).compile().as_text()
+        return train_step.lower(state, BATCH).compile(compiler_options=options).as_text()
 
 
 Reduction = collections.namedtuple("Reduction", "in_loop elements scalar op_name")
 _REDUCTIONS = ("all-reduce", "all-reduce-start", "reduce-scatter")
 
 
-def replica_reductions(hlo, mesh):
-    # The all-reduces and reduce-scatters of a compiled CPU module that sum across replica_dcn: whether each runs
-    # inside a while loop (the microbatch loop, the layer scans), how many elements it reduces (its operands', so a
-    # reduce-scatter counts its output times its group size), whether every operand is a scalar, and its source op.
+def replica_reductions(hlo, mesh, ops=_REDUCTIONS):
+    # The all-reduces and reduce-scatters (or other collectives ``ops``) of a compiled CPU module that cross
+    # replica_dcn: whether each runs inside a while loop (the microbatch loop, the layer scans), how many elements it
+    # reduces (its operands', so a reduce-scatter counts its output times its group size; an all-gather its output),
+    # whether every operand is a scalar, and its source op.
     computations, current = {}, None
     for line in hlo.splitlines():
         header = re.match(r"(ENTRY )?%?([\w.\-]+) .*\{$", line)
@@ -153,13 +177,15 @@ def replica_reductions(hlo, mesh):
     for name, (_, lines) in computations.items():
         for line in lines:
             m = re.match(r"(?:ROOT )?%?[\w.\-]+ = (.+?) ([\w\-]+)\((.*)$", line)
-            if not m or m.group(2) not in _REDUCTIONS:
+            if not m or m.group(2) not in ops:
                 continue
             shape, _, attrs = m.groups()
             named = re.search(
                 r"replica_groups=mesh\[([^\]]*)\]" r"(?:, device_ids=\(\[([\d,]+)\](?:T\(([\d,]+)\))?\))?\s*\{([^}]*)\}",
                 attrs,
             )
+            # Iota groups: [groups, size]<=[dims], optionally T(permutation) of the dims.
+            iota = re.search(r"replica_groups=\[(\d+),(\d+)\]<=\[([\d,]+)\](?:T\(([\d,]+)\))?", attrs)
             if named and named.group(1) == mesh_text:
                 sizes = {axis: int(size) for axis, size in re.findall(r"'(\w+)'=(\d+)", named.group(1))}
                 axes = re.findall(r"'(\w+)'", named.group(4))
@@ -181,9 +207,16 @@ def replica_reductions(hlo, mesh):
                 groups = ids.reshape(-1, group_size).tolist()
                 crosses = any(len({coords[int(d)][replica] for d in group}) > 1 for group in groups)
             else:
-                groups = re.search(r"replica_groups=\{(.*?)\}\}", attrs)
-                assert groups, line
-                groups = [group.split(",") for group in re.findall(r"\{([\d,]+)", groups.group(0))]
+                if iota:
+                    count, size, dims, permutation = iota.groups()
+                    ids = np.arange(mesh.devices.size).reshape([int(d) for d in dims.split(",")])
+                    if permutation:
+                        ids = ids.transpose([int(d) for d in permutation.split(",")])
+                    groups = ids.reshape(int(count), int(size)).tolist()
+                else:
+                    groups = re.search(r"replica_groups=\{(.*?)\}\}", attrs)
+                    assert groups, line
+                    groups = [group.split(",") for group in re.findall(r"\{([\d,]+)", groups.group(0))]
                 crosses = any(len({coords[int(d)][replica] for d in group}) > 1 for group in groups)
                 group_size = len(groups[0])
             if crosses:
@@ -374,3 +407,120 @@ def test_gradients_are_reduced_across_replicas_once_after_the_microbatch_loop():
             assert in_loop and not any("transpose(" in r.op_name and not r.scalar for r in in_loop), (name, in_loop)
             after_loop = sum(r.elements for r in reductions if not r.in_loop)
             assert sum(sizes) <= after_loop < sum(sizes) + min(sizes), (name, after_loop, sum(sizes), reductions)
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    ("cfg_changes", "policy", "step_args"),
+    [
+        ({}, "f32", {"batch": PADDED_BATCH, "z_loss_weight": 1e-2}),
+        ({"router_z_loss_coef": 0.1}, "f32", {"batch": UNWEIGHTED_MICROBATCH}),
+        ({"remat_mode": "save_moe"}, "p=f32,c=bfloat16", {}),
+        ({"remat_mode": "save_moe"}, "p=f32,c=bfloat16", {"carry_compute_params": True}),
+    ],
+    ids=["f32_z_loss_and_padding", "f32_unweighted_microbatch", "bfloat16", "bfloat16_carry_compute_params"],
+)
+def test_overlapping_the_last_microbatch_gives_the_same_step(cfg_changes, policy, step_args):
+    # The per-layer reduction in the last microbatch's backward adds the same float32 accumulator and gradient, casts
+    # the sum the same way and reduces it over the same devices as the single reduction after the loop: on CPU the
+    # gradients, the loss, the metrics and the next QB thresholds are bit-identical.
+    cfg = dataclasses.replace(BASE, **cfg_changes)
+    policy = jmp.get_policy(policy)
+    with use_cpu_devices(8):
+        for name, mesh in _meshes().items():
+            for k in (2, 4):
+                msg = f"{name} K={k}"
+                hoisted, hoisted_metrics = step(cfg, mesh, policy, microbatches=k, **step_args)
+                overlapped, metrics = step(cfg, mesh, policy, microbatches=k, overlap_last_microbatch=True, **step_args)
+                assert metrics.keys() == hoisted_metrics.keys(), msg
+                for key in metrics:
+                    np.testing.assert_array_equal(metrics[key], hoisted_metrics[key], err_msg=f"{msg} {key}")
+                for a, b in zip(
+                    jax.tree_util.tree_leaves((overlapped.opt_state, overlapped.pending_qb_betas)),
+                    jax.tree_util.tree_leaves((hoisted.opt_state, hoisted.pending_qb_betas)),
+                    strict=True,
+                ):
+                    assert a.dtype == b.dtype and a.sharding == b.sharding, msg
+                    np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=msg)
+
+
+@pytest.mark.multidevice
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("replicated_grad_max_bytes", [None, 0], ids=["after_scan", "per_layer"])
+def test_overlapping_the_last_microbatch_with_one_expert_shard(replicated_grad_max_bytes):
+    # With a size-1 expert axis the expert weights are replicated: small enough, the layer scan itself marks them
+    # reduced after the scan (replicated_grad_reduction="after_scan"), and they then take the same path as the other
+    # weights; larger ones are reduced per layer. Either way the step is bit-identical to the hoisted one.
+    cfg = BASE
+    if replicated_grad_max_bytes is not None:
+        cfg = dataclasses.replace(BASE, replicated_grad_max_bytes=replicated_grad_max_bytes)
+    with use_cpu_devices(8):
+        mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=8)
+        for k in (2, 4):
+            hoisted, hoisted_metrics = step(cfg, mesh, jmp.get_policy("f32"), microbatches=k)
+            overlapped, metrics = step(cfg, mesh, jmp.get_policy("f32"), microbatches=k, overlap_last_microbatch=True)
+            for key in metrics:
+                np.testing.assert_array_equal(metrics[key], hoisted_metrics[key], err_msg=f"K={k} {key}")
+            overlapped_grads, hoisted_grads = (jax.tree_util.tree_leaves(s.opt_state) for s in (overlapped, hoisted))
+            for a, b in zip(overlapped_grads, hoisted_grads, strict=True):
+                assert a.dtype == b.dtype and a.sharding == b.sharding, k
+                np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=f"K={k}")
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.multidevice
+def test_overlapping_the_last_microbatch_reduces_the_expert_gradients_per_layer():
+    # With overlap_last_microbatch, the expert weights' gradients are reduced across the replicas inside the backward
+    # layer scan of the last microbatch, which runs after the microbatch loop: one layer's slice of each per
+    # iteration, so over the scan each expert weight once. No other backward reduction of an array runs in a loop.
+    # After it, there is exactly one reduction for every other weight's gradient. Compiled without the all-reduce
+    # combiner, which would merge them with each other and with the forward's routing statistics.
+    with use_cpu_devices(8):
+        policy = jmp.get_policy("p=f32,c=bfloat16")
+        layer_scan = "jit(train_step)/transpose(jvp(Transformer))/while/body/"
+        for name, mesh in _meshes().items():
+            with jax.set_mesh(mesh):
+                params = june_train.initial_state(
+                    BASE, optimizer=optax.adam(1e-2), mp=policy, key=jax.random.key(0), ema_beta=None
+                ).params
+                marked = jax.eval_shape(june_train._mark_batch_reduced, params)
+                per_layer = june_train._per_layer_reduced(params)
+            expert, other = [], []
+            for (path, x), is_expert in zip(
+                jax.tree_util.tree_leaves_with_path(marked), jax.tree_util.tree_leaves(per_layer), strict=True
+            ):
+                if getattr(path[-1], "name", None) != "router_bias":
+                    (expert if is_expert else other).append(int(np.prod(x.sharding.shard_shape(x.shape))))
+            assert len(expert) == 3, (name, expert)
+            layer_slices = [size // BASE.num_layers for size in expert]
+            for k in (2, 4):
+                msg = f"{name} K={k}"
+                reductions = replica_reductions(
+                    compiled_step_hlo(
+                        BASE, mesh, policy, microbatches=k, overlap_last_microbatch=True, combine_all_reduces=False
+                    ),
+                    mesh,
+                )
+                backward_in_loop = [r for r in reductions if r.in_loop and "transpose(" in r.op_name and not r.scalar]
+                assert backward_in_loop and all(r.op_name.startswith(layer_scan) for r in backward_in_loop), (
+                    msg,
+                    backward_in_loop,
+                )
+                assert sum(r.elements for r in backward_in_loop) == sum(layer_slices), (msg, backward_in_loop)
+                forward = [r for r in reductions if "jvp(" in r.op_name and "transpose(" not in r.op_name]
+                assert forward, (msg, reductions)  # The routing statistics, so the op_name test means something.
+                after_loop = [r.elements for r in reductions if not r.in_loop and not r.scalar and r not in forward]
+                assert sorted(after_loop) == sorted(other), (msg, reductions)
+
+
+def test_overlapping_the_last_microbatch_needs_two_microbatches():
+    with pytest.raises(ValueError, match="at least 2 microbatches"):
+        june_train._make_train_step(
+            optax.sgd(1e-2),
+            jmp.get_policy("f32"),
+            z_loss_weight=0.0,
+            ema_beta=None,
+            microbatches=1,
+            overlap_last_microbatch=True,
+        )

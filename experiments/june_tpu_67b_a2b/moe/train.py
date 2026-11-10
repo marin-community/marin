@@ -53,10 +53,12 @@ from experiments.june_tpu_67b_a2b.moe.model import (
     GrugModelConfig,
     Transformer,
     _long_layer_schedule,
+    after_scan_reduced_spec,
     qb_betas_spec,
     qb_group_count,
     router_token_validity,
     summarize_loss_metrics,
+    unreduced_to_local,
 )
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -126,10 +128,23 @@ class GrugTrainerConfig:
     its capacity, which applies per microbatch. The next step's QB thresholds are the mean of the microbatches'
     thresholds weighted by their valid tokens, each estimated from its own tokens. 1 runs the whole batch at once.
     The levanter ``TrainerConfig.per_device_parallelism``, if set, must agree: rows per batch shard per microbatch.
-    On GPU, XLA's default while-loop unrolling unrolls a loop of 4 or more microbatches and keeps extra copies of the
-    accumulator live (about 20 GiB per device at 8 x 4k with 4 microbatches); pass
-    ``--xla_gpu_enable_while_loop_unrolling=WHILE_LOOP_UNROLLING_NO_UNROLL`` in ``XLA_FLAGS`` to keep the peak at
-    that of 2 microbatches."""
+    XLA's GPU loop unrolling may run the copies of the microbatch loop body in any order; an optimization barrier at
+    the top of each microbatch keeps them in order, so one microbatch's gradients are summed before the next starts."""
+
+    overlap_last_microbatch: bool = False
+    """With ``microbatches`` > 1: run the last microbatch after the microbatch loop and reduce each layer's expert
+    weight gradients (the float32 sum of the earlier microbatches plus the last one's, cast to the compute dtype)
+    inside its backward, as soon as that layer's backward is done, so the reductions overlap the backward of the
+    layers below it instead of running after the step's last backward. Every weight is still reduced once per step,
+    and the gradients are the same as without it. The other weights are reduced after the last microbatch, as
+    without it. Peak memory goes up by about one layer's expert gradients.
+
+    On GPU the overlap needs XLA flags: ``--xla_gpu_all_reduce_combine_threshold_bytes`` above one layer's expert
+    gradient bytes (so the per-layer all-reduces of one layer combine into one), stream domains for in-node
+    collectives (``--xla_gpu_collective_domain_assignment=scale_up_fabric``, so in-node all-to-alls do not queue
+    behind the per-layer all-reduce), room for the latency-hiding scheduler
+    (``--xla_gpu_memory_limit_slop_factor=200``; the default keeps it in memory-pressure mode) and a PGLE profile that
+    costs the per-layer all-reduce. Without them the per-layer reductions run synchronously and hide nothing."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -426,9 +441,12 @@ def _make_train_step(
     diagnose_numerics: bool = False,
     qb_sync_interval: int = 0,
     microbatches: int = 1,
+    overlap_last_microbatch: bool = False,
 ):
     if microbatches < 1:
         raise ValueError(f"microbatches must be at least 1, got {microbatches}")
+    if overlap_last_microbatch and microbatches < 2:
+        raise ValueError(f"overlap_last_microbatch needs at least 2 microbatches, got {microbatches}")
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -459,13 +477,14 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        def loss_terms_fn(compute_params, microbatch):
+        def loss_terms_fn(compute_params, microbatch, block_grad_offsets=None):
             return compute_params.next_token_loss_terms(
                 microbatch.tokens,
                 microbatch.loss_weight,
                 mask=microbatch.attn_mask,
                 reduction="sum",
                 logsumexp_weight=z_loss,
+                block_grad_offsets=block_grad_offsets,
             )
 
         if microbatches > 1:
@@ -474,7 +493,7 @@ def _make_train_step(
             else:
                 qb_compute_params = _apply_qb_betas(state.compute_params, state.pending_qb_betas)
             loss, summarized_metrics, accumulated_grads = _microbatched_loss_and_grads(
-                loss_terms_fn, qb_compute_params, batch, microbatches
+                loss_terms_fn, qb_compute_params, batch, microbatches, overlap_last_microbatch
             )
             grads = mp.cast_to_param(accumulated_grads)
         elif state.compute_params is None:
@@ -613,6 +632,7 @@ def _microbatched_loss_and_grads(
     params: Transformer,
     batch,
     microbatches: int,
+    overlap_last_microbatch: bool = False,
 ) -> tuple[jax.Array, dict, Transformer]:
     """Loss, summarized metrics and gradients of the whole ``batch``, one microbatch at a time.
 
@@ -631,6 +651,13 @@ def _microbatched_loss_and_grads(
     all-reduce, or a reduce-scatter for a weight sharded over a batch axis. Only the loss, routing statistics and QB
     threshold reductions of the forward still run once per microbatch. The returned gradients have the dtype and
     sharding of ``params``.
+
+    With ``overlap_last_microbatch`` the loop runs the first ``microbatches - 1`` microbatches and the last one runs
+    after it, with the expert weights (``_per_layer_reduced``) left unmarked. Its layer scan gets each layer's slice
+    of their accumulators as ``block_grad_offsets``, and its backward reduces that layer's ``accumulator + gradient``,
+    cast as ``_finalize_accumulated_grad`` casts it, as soon as the layer is done: the same arithmetic and one reduction
+    per weight per step, but overlapping the backward of the layers below it. The other weights are reduced after the
+    last microbatch, as without it.
     """
     batch_size = batch.tokens.shape[0]
     batch_shards = _batch_shards(get_abstract_mesh())
@@ -656,10 +683,14 @@ def _microbatched_loss_and_grads(
 
     value_and_grad = jax.value_and_grad(loss_and_terms, has_aux=True)
     marked_params = _mark_batch_reduced(params)
+    looped = microbatches - 1 if overlap_last_microbatch else microbatches
 
     def body(carry, xs):
         grad_sum, loss_sum, cross_entropy_sum, aux_sum = carry
         microbatch, token_share = xs
+        # When XLA unrolls this loop, the barrier keeps each microbatch after the previous one's gradients are summed,
+        # so only one per-microbatch gradient tree is live at a time.
+        grad_sum, microbatch, token_share = jax.lax.optimization_barrier((grad_sum, microbatch, token_share))
         (loss, (cross_entropy_loss, aux_loss, router_metrics)), grads = value_and_grad(
             marked_params, microbatch, token_share
         )
@@ -669,12 +700,71 @@ def _microbatched_loss_and_grads(
 
     zero = jnp.zeros((), jnp.float32)
     init = (jax.tree.map(_zero_accumulator, marked_params), zero, zero, zero)
-    (grad_sum, loss, cross_entropy_loss, aux_loss), stacked_router_metrics = jax.lax.scan(
-        body, init, (split_batch, token_shares)
+    head = (split_batch, token_shares)
+    if overlap_last_microbatch:
+        head = jax.tree.map(lambda x: x[:looped], head)
+    (grad_sum, loss, cross_entropy_loss, aux_loss), stacked_router_metrics = jax.lax.scan(body, init, head)
+    if not overlap_last_microbatch:
+        router_metrics = _combine_microbatch_router_metrics(stacked_router_metrics, row_valid_tokens)
+        grads = jax.tree.map(_finalize_accumulated_grad, grad_sum, params)
+        return loss, summarize_loss_metrics(router_metrics, cross_entropy_loss, aux_loss), grads
+
+    # The last microbatch, outside the loop: its expert weights stay unmarked, and each layer's gradient plus the
+    # earlier microbatches' sum is reduced inside the backward of the layer scan, as soon as that layer is done.
+    last_microbatch, last_share = jax.tree.map(lambda x: x[looped], (split_batch, token_shares))
+    # Start the last microbatch only after the loop: otherwise XLA may run its forward first and keep its activations
+    # live through the whole loop.
+    last_microbatch, grad_sum = jax.lax.optimization_barrier((last_microbatch, grad_sum))
+    per_layer = _per_layer_reduced(params)
+    last_params = jax.tree.map(lambda p, m, pl: p if pl else m, params, marked_params, per_layer)
+    offsets = jax.tree.map(
+        lambda acc, pl: unreduced_to_local(acc, leading=1) if pl else None,
+        grad_sum.stacked_blocks.stacked,
+        per_layer.stacked_blocks.stacked,
+    )
+
+    def last_loss_and_terms(p, microbatch, token_share):
+        cross_entropy_sum, aux, router = loss_terms_fn(p, microbatch, offsets)
+        cross_entropy = cross_entropy_sum / loss_denominator
+        aux = token_share * aux
+        return cross_entropy + aux, (cross_entropy, aux, router)
+
+    (last_loss, (last_ce, last_aux, last_router)), last_grads = jax.value_and_grad(last_loss_and_terms, has_aux=True)(
+        last_params, last_microbatch, last_share
+    )
+    stacked_router_metrics = jax.tree.map(
+        lambda h, t: jnp.concatenate([h, t[None]], axis=0), stacked_router_metrics, last_router
     )
     router_metrics = _combine_microbatch_router_metrics(stacked_router_metrics, row_valid_tokens)
-    grads = jax.tree.map(_finalize_accumulated_grad, grad_sum, params)
+
+    def finalize(acc, g, p, pl):
+        if pl:
+            return g  # Already reduced in the backward, with the accumulator added.
+        return _finalize_accumulated_grad(acc + g.astype(jnp.float32), p) if isinstance(acc, jax.Array) else acc
+
+    grads = jax.tree.map(finalize, grad_sum, last_grads, params, per_layer)
+    loss, cross_entropy_loss, aux_loss = loss + last_loss, cross_entropy_loss + last_ce, aux_loss + last_aux
     return loss, summarize_loss_metrics(router_metrics, cross_entropy_loss, aux_loss), grads
+
+
+def _per_layer_reduced(params: Transformer) -> Transformer:
+    """True for the stacked block weights sharded over ``expert`` (the expert weights): the last microbatch reduces
+    their gradients one layer at a time inside the backward. Everything else is reduced after it, as for the loop.
+
+    Not the expert weights the layer scan itself marks ``reduced`` (``replicated_grad_reduction="after_scan"`` with
+    a size-1 ``expert`` axis and at most ``replicated_grad_max_bytes`` per layer): they are reduced after the scan
+    anyway, so they take the same path as the other weights."""
+    cfg = params.config
+    max_bytes = cfg.replicated_grad_max_bytes if cfg.replicated_grad_reduction == "after_scan" else -1
+
+    def per_layer(path, x):
+        if not isinstance(x, jax.Array) or _EXPERT_AXIS not in jax.typeof(x).sharding.spec:
+            return False
+        return after_scan_reduced_spec(path, x, max_bytes) is None
+
+    flags = jax.tree.map(lambda _: False, params)
+    stacked = jax.tree_util.tree_map_with_path(per_layer, params.stacked_blocks.stacked)
+    return eqx.tree_at(lambda t: t.stacked_blocks.stacked, flags, stacked)
 
 
 def _mark_batch_reduced(params: Transformer) -> Transformer:
@@ -797,6 +887,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         diagnose_numerics=config.trainer.diagnose_numerics,
         qb_sync_interval=config.trainer.qb_sync_interval,
         microbatches=config.trainer.microbatches,
+        overlap_last_microbatch=config.trainer.overlap_last_microbatch,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

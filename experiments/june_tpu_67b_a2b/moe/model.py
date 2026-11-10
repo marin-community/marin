@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import functools
 import math
 from dataclasses import dataclass
 from typing import Literal
@@ -650,22 +651,103 @@ def _mark_reduced(blocks: "Block", max_bytes: int) -> "Block":
     which overlaps with the backward; so do the expert weights, sharded over ``expert``. ``router_bias`` is excluded:
     it is added elementwise and has no gradient.
     """
-    mesh = get_abstract_mesh()
 
     def mark(path, x):
-        if not isinstance(x, jax.Array) or any(getattr(k, "name", None) == "router_bias" for k in path):
-            return x
-        if x.size * x.dtype.itemsize // x.shape[0] > max_bytes:  # stacked: leading axis is the layer
-            return x
-        if jax.typeof(x).sharding.spec.reduced:  # Marked by the caller, e.g. the microbatch loop.
-            return x
-        spec = _without_unit_axes(jax.typeof(x).sharding.spec, mesh)
-        if spec is None:
-            return x
-        # Every batch axis, size-1 ones included: a dot's unreduced output must name its contracting dim's axes.
-        return reshard(x, P(*spec, reduced=frozenset(_BATCH_AXES)))
+        spec = after_scan_reduced_spec(path, x, max_bytes)
+        return x if spec is None else reshard(x, spec)
 
     return jax.tree_util.tree_map_with_path(mark, blocks)
+
+
+def after_scan_reduced_spec(path, x, max_bytes: int) -> P | None:
+    """The ``reduced`` spec ``_mark_reduced`` gives the stacked block weight ``x`` at ``path``, or None if it leaves
+    ``x`` alone (a size-1 ``expert`` axis counts as replicated, so small expert weights are marked too)."""
+    if not isinstance(x, jax.Array) or any(getattr(k, "name", None) == "router_bias" for k in path):
+        return None
+    if x.size * x.dtype.itemsize // x.shape[0] > max_bytes:  # stacked: leading axis is the layer
+        return None
+    if jax.typeof(x).sharding.spec.reduced:  # Marked by the caller, e.g. the microbatch loop.
+        return None
+    spec = _without_unit_axes(jax.typeof(x).sharding.spec, get_abstract_mesh())
+    if spec is None:
+        return None
+    # Every batch axis, size-1 ones included: a dot's unreduced output must name its contracting dim's axes.
+    return P(*spec, reduced=frozenset(_BATCH_AXES))
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3))
+def _reduce_with_offset(weight: jax.Array, offset: jax.Array, reduced_spec: P, weight_spec: P) -> jax.Array:
+    """``weight`` (one layer's slice, sharded as ``weight_spec``) marked ``reduced`` as ``reduced_spec``; in the
+    backward its gradient plus ``offset`` is reduced across devices into ``weight_spec``, inside the backward of the
+    layer scan.
+
+    ``offset`` is the float32 sum of the earlier microbatches' unreduced gradients for this layer. The backward adds the
+    layer's unreduced gradient to it in float32, casts the sum to the gradient's dtype and reshards it to
+    ``weight_spec``: an all-reduce over the reduced axes, or a reduce-scatter over those ``weight_spec`` shards over.
+    ``offset`` gets no gradient."""
+    del offset, weight_spec
+    return reshard(weight, reduced_spec)
+
+
+def _reduce_with_offset_fwd(weight, offset, reduced_spec, weight_spec):
+    del weight_spec
+    return reshard(weight, reduced_spec), offset
+
+
+def _reduce_with_offset_bwd(reduced_spec, weight_spec, offset, cotangent):
+    del reduced_spec
+    total = (_local_to_unreduced(offset) + cotangent.astype(jnp.float32)).astype(cotangent.dtype)
+    return reshard(total, weight_spec), None
+
+
+def _local_to_unreduced(local: jax.Array) -> jax.Array:
+    """[n, ...] with dim 0 sharded over the axes ``axes`` (each device's own partial sum) -> [...] ``unreduced`` over
+    them, the same per-device data. Inverse of ``unreduced_to_local``; moves no data."""
+    spec = jax.typeof(local).sharding.spec
+    axes = spec.partitions[0]
+    axes = axes if isinstance(axes, tuple) else (axes,)
+    rest = spec.partitions[1:]
+    return jax.shard_map(
+        lambda a: jax.lax.pcast(a[0], axes, to="unreduced"),
+        in_specs=P(axes, *rest),
+        out_specs=P(*rest, unreduced=frozenset(axes)),
+    )(local)
+
+
+def unreduced_to_local(x: jax.Array, *, leading: int = 0) -> jax.Array:
+    """``x`` ``unreduced`` over some mesh axes -> each device's partial sum as one row of a new dimension at
+    ``leading``, sharded over those axes: an ordinary array that can be sliced (no ``dynamic_slice`` rule exists for
+    unreduced arrays). Moves no data."""
+    spec = jax.typeof(x).sharding.spec
+    mesh = get_abstract_mesh()
+    axes = tuple(a for a in mesh.axis_names if a in spec.unreduced)
+    parts = tuple(spec.partitions) + (None,) * (x.ndim - len(spec.partitions))
+    out = (*parts[:leading], axes, *parts[leading:])
+    return jax.shard_map(
+        lambda a: jnp.expand_dims(a, leading),
+        in_specs=P(*parts, unreduced=frozenset(axes)),
+        out_specs=P(*out),
+        check_vma=False,
+    )(x)
+
+
+_reduce_with_offset.defvjp(_reduce_with_offset_fwd, _reduce_with_offset_bwd)
+
+
+def _apply_grad_offsets(layer: "Block", offsets: "Block") -> "Block":
+    """Route the layer weights that have an offset in ``offsets`` (None elsewhere) through ``_reduce_with_offset``."""
+
+    def apply(offset, weight):
+        if offset is None:
+            return weight
+        # The offset (``unreduced_to_local`` of the weight's gradient sum): dim 0 over the axes the weight is marked
+        # reduced over, then the marked weight's partitions.
+        offset_spec = jax.typeof(offset).sharding.spec
+        axes = offset_spec.partitions[0]
+        reduced_spec = P(*offset_spec.partitions[1:], reduced=frozenset(axes if isinstance(axes, tuple) else (axes,)))
+        return _reduce_with_offset(weight, offset, reduced_spec, jax.typeof(weight).sharding.spec)
+
+    return jax.tree.map(apply, offsets, layer, is_leaf=lambda x: x is None)
 
 
 class Block(eqx.Module):
@@ -804,6 +886,7 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
         *,
         position_ids: jax.Array | None = None,
+        block_grad_offsets: "Block | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -852,9 +935,11 @@ class Transformer(eqx.Module):
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, Bool[Array, ""]],
+                scan_inputs: tuple[Block, Bool[Array, ""], Block | None],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask = scan_inputs
+                layer, layer_use_long_mask, layer_grad_offsets = scan_inputs
+                if layer_grad_offsets is not None:
+                    layer = _apply_grad_offsets(layer, layer_grad_offsets)
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(
                     carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope, position_ids
                 )
@@ -865,7 +950,7 @@ class Transformer(eqx.Module):
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers,
                 hidden,
-                xs=(stacked, mask_schedule),
+                xs=(stacked, mask_schedule, block_grad_offsets),
                 unroll=cfg.scan_unroll,
             )
             if cfg.router_stats_reduction == "after_scan":
@@ -933,13 +1018,14 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
+        block_grad_offsets: "Block | None" = None,
     ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
         """The cross-entropy loss, the weighted router aux loss and the raw per-layer router metrics.
 
         ``next_token_loss`` is their sum, with the metrics summarized by ``summarize_loss_metrics``. Callers that
         combine several batches, such as gradient accumulation, combine the raw metrics first and summarize once.
         """
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, block_grad_offsets=block_grad_offsets)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
