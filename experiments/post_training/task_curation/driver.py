@@ -56,7 +56,7 @@ from experiments.post_training.task_curation.config import (
     PipelineOptions,
     RecipeSettings,
 )
-from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, MANIFEST_FILENAME
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 from experiments.post_training.task_curation.embedding import (
     INPUTS_VERSION,
     DescriptionEndpoint,
@@ -64,10 +64,10 @@ from experiments.post_training.task_curation.embedding import (
 )
 from experiments.post_training.task_curation.inventory import (
     SELECTION_INPUT_PREFIX,
+    PanelRecipe,
     SelectionRecipe,
-    TestPanelRecipe,
+    panel_step,
     task_selection_step,
-    test_panel_step,
 )
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
@@ -217,7 +217,7 @@ def _quick_conversion(
 def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], report_path: str, population: str) -> None:
     sources = []
     for identifier, root in roots.items():
-        manifest = json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
+        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
         row = {
             "source_id": identifier,
             "root": root,
@@ -251,7 +251,7 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
     roots = {}
     for row in document["sources"]:
-        manifest = json.loads((StoragePath(row["root"]) / MANIFEST_FILENAME).read_text())
+        manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
         if canonical_sha256(manifest) != row["source_key"]:
             raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
         if row["source_id"] in roots:
@@ -308,7 +308,7 @@ def _embedding_pass(
 ) -> None:
     curated = {}
     for source_id, root in roots.items():
-        manifest = json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
+        manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
         digest = canonical_sha256(manifest)
         curated[source_id] = ArtifactStep.adopt(f"rl-semantics/source-{digest[:16]}", INPUTS_VERSION, source=root)
     curriculum = TASK_CURRICULUM
@@ -576,9 +576,9 @@ def main(
         raise click.UsageError("Local input options require local execution")
     if corpus is not None and embed is None:
         if test_panel is not None:
-            panel = TestPanelRecipe.model_validate_json(StoragePath(test_panel).read_text())
+            panel = PanelRecipe.model_validate_json(StoragePath(test_panel).read_text())
             inputs = _corpus_inputs(_corpus_sources(corpus), "converted", panel.name, panel.version)
-            step = test_panel_step(inputs, panel)
+            step = panel_step(inputs, panel)
         else:
             assert selection_recipe is not None
             inputs = _corpus_inputs(_corpus_sources(corpus), "admitted", selection_recipe.name, selection_recipe.version)
@@ -649,11 +649,20 @@ def main(
             pool=pool,
             stage=embed,
         )
-    inventory = [source.declaration for source in {**all_sources(), **selected}.values()]
+    declarations = {source.declaration.id: source.declaration for source in {**all_sources(), **selected}.values()}
+    inventory = list(declarations.values())
     if corpus is not None:
         restored = _corpus_sources(corpus)
         assert embedding is not None
-        embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
+        # Refresh recorded inventory entries by ID while retaining entries no longer in the catalog.
+        corpus_inventory = {row.id: row for row in restored.inventory}
+        corpus_inventory.update({row.id: row for row in inventory})
+        embedding(
+            restored.roots,
+            inventory=list(corpus_inventory.values()),
+            population=restored.population,
+            do_run=do_run,
+        )
         if selection_recipe is not None:
             inputs = _corpus_inputs(restored, "admitted", selection_recipe.name, selection_recipe.version)
             _selection_pass(task_selection_step(inputs, selection_recipe), cache_dir=cache_dir, do_run=do_run)

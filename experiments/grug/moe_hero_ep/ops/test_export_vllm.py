@@ -30,7 +30,7 @@ def test_export_refuses_log_scaling_before_writing(tmp_path):
     request = ExportConfig(
         checkpoint="unused",
         metadata_digest="unused",
-        model=GrugModelConfig(vocab_size=32, log_scaling_n_floor=16),
+        model=GrugModelConfig(vocab_size=32, log_scaling_n_floor=16, log_scaling_alpha=0.1, log_scaling_power=1.0),
         destination=str(destination),
         source_revision="unused",
     )

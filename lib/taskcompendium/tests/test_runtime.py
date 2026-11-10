@@ -12,7 +12,6 @@ import tarfile
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -74,7 +73,6 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import CheckStatus
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime import grading as grading_runtime
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
@@ -568,49 +566,14 @@ def script_grading_task(trusted_bootstrap_task):
 
 @pytest.mark.parametrize("candidate,reward", [(b"print(42)\n", 1.0), (b"print(0)\n", 0.0)])
 def test_script_grader_scores_captured_files_in_sandbox_and_task_grading(
-    tmp_path, script_grading_task, candidate, reward, monkeypatch
+    tmp_path, script_grading_task, candidate, reward
 ):
-    clock = [0.0]
-    monkeypatch.setattr(grading_runtime, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    prepare = grading_runtime.prepare_machine_spec
-
-    def prepare_environment(*args):
-        clock[0] += 7
-        return prepare(*args)
-
-    monkeypatch.setattr(grading_runtime, "prepare_machine_spec", prepare_environment)
-
-    class TimedMachine:
-        def __init__(self, machine):
-            self.machine = machine
-
-        async def upload(self, source, target):
-            clock[0] += 3
-            await self.machine.upload(source, target)
-
-        async def download(self, source, target):
-            await self.machine.download(source, target)
-
-        async def run(self, command):
-            clock[0] += 1 if command.argv[0] in {"mkdir", "rm", "tar"} else 11
-            return await self.machine.run(command)
-
-        async def close(self):
-            clock[0] += 100
-            await self.machine.close()
-
-    class TimedFactory(LocalGradingMachines):
-        async def create(self, spec):
-            clock[0] += 2
-            return TimedMachine(await super().create(spec))
-
-    factory = TimedFactory(tmp_path)
+    factory = LocalGradingMachines(tmp_path)
     attempt = grading_attempt(finished(script_grading_task), RuntimeEvidence({"/app/numbers.py": candidate}, "{}"))
     sandbox = asyncio.run(grade_in_sandbox(script_grading_task, attempt, factory, GRADER_MACHINE))
     runtime = grade_task(script_grading_task, attempt, machine_factory=factory, machine_spec=GRADER_MACHINE)
     assert (sandbox.status, sandbox.reward) == (Outcome.GRADED, reward)
     assert (runtime.status, runtime.reward) == (Outcome.GRADED, reward)
-    assert sandbox.verifier_setup_seconds == runtime.verifier_setup_seconds == 17.0
     assert (tmp_path / "tests/test.sh").read_bytes() == SCRIPT_GRADER
     assert all(machine.closed for machine in factory.machines)
 

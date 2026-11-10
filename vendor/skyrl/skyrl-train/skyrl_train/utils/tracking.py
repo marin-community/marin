@@ -32,7 +32,6 @@ import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from marinskyrl.resource_locator import join_resource_path
-from marinskyrl.checkpoint_paths import TRACKING_FILENAME
 from skyrl_train.io import io
 
 
@@ -95,7 +94,7 @@ class Tracking:
         )
 
         if "files" in backends:
-            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path), tracking_config["attempt_id"])
+            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path))
 
         if "wandb" in backends:
             import wandb
@@ -122,14 +121,6 @@ class Tracking:
                 ),
             )
             run_id = run.id
-            if runtime.get("iris_job_id"):
-                tracking_path = join_resource_path(
-                    str(config.trainer.export_path), "attempts", tracking_config["attempt_id"], TRACKING_FILENAME
-                )
-                if io.exists(tracking_path):
-                    record = json.loads(io.read_bytes(tracking_path))
-                    record["wandb_url"] = run.url
-                    io.write_bytes_atomic(tracking_path, json.dumps(record).encode())
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
@@ -257,9 +248,8 @@ class Tracking:
 
 
 class _FilesAdapter:
-    def __init__(self, export_path: str, attempt_id: str):
+    def __init__(self, export_path: str):
         self.directory = join_resource_path(export_path, "metrics")
-        self.attempt_id = attempt_id
         self.step: int | None = None
         self.metrics: dict[str, Any] = {}
         io.makedirs(self.directory, exist_ok=True)
@@ -278,7 +268,6 @@ class _FilesAdapter:
             self.metrics = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
             self.step = step
         self.metrics.update(data)
-        self.metrics["attempt_id"] = self.attempt_id
         io.write_bytes_atomic(path, (json.dumps(self.metrics, default=float, sort_keys=True) + "\n").encode())
 
     def finish(self) -> None:

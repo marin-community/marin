@@ -25,6 +25,7 @@ export function newConversation(model: string): Conversation {
     system: '',
     pythonTools: '',
     shellWorkspace: null,
+    webSearch: false,
     thinkingMode: ThinkingMode.TemplateDefault,
     customInstructions: '',
     createdAt: now,
@@ -45,6 +46,7 @@ export function loadConversations(): Conversation[] {
       shellWorkspace: conversation.shellWorkspace
         ? { repositoryUrl: '', commits: [], ...conversation.shellWorkspace }
         : null,
+      webSearch: conversation.webSearch ?? false,
       thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
       customInstructions: conversation.customInstructions ?? '',
     }))
