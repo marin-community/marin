@@ -221,8 +221,8 @@ uv run --package marin-core --extra cpu python -m experiments.post_training.task
   --test-panel experiments/post_training/task_curation/recipes/snowball-test-panel.json --run
 ```
 
-Each named part declares a catalog source ID, converted population, format,
-required tags, family, AAII category, license and selection count. The corpus
+Each part declares a catalog source ID, converted population, format, family,
+Artificial Analysis (AAII) category, license and selection count. The corpus
 pins its source roots and manifest hashes. Formats are `evaluation` for a
 verified Evalchemy corpus and `normalized` for evaluation-only curation output.
 Normalized populations count converted tasks; rejections stay in the source ledger.
@@ -250,54 +250,33 @@ recipe version with `pass_rates`. Each measured row carries `task_id`,
 task needs eight attempts, a scored answer and a matching digest; additional
 measured tasks are allowed. Difficulty is one minus mean score.
 
-The rates that the checked-in recipe pins measure
-`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21` at the recipe's
-`model_revision` in a SkyRL run with no training data: eight answers per task at
-temperature 1.0, a 24,576-token request window and at most 8,192 generated
-tokens. The saved answers are under
-`s3://marin-us-east-02a/marin/checkpoints/snowball-rl/e12/pass-rates/2026.11.04.2`.
-Native grading scored 11,356 of the 12,000 answers; the other 644, whose
-verifiers timed out, were graded again on CPU from the same saved replies. The
-per-task rows are at the recipe's `pass_rates.uri`, and
-`s3://marin-us-east-02a/marin/users/atqamar/rlci-e12/2026.11.04/pass-rates-repaired/receipt.json`
-records the run, model, panel and file hashes. Adding a part requires measuring
-its tasks with the same model revision and sampling settings, a rates file that
-covers every selected task (rows whose digests still match can be reused), and a
-new panel recipe version that pins that file.
+Pass rates measure the initializer named by `model_revision`: eight answers per
+task at temperature 1.0, a 24,576-token request window and at most 8,192 generated
+tokens. A changed part needs matching measurements and a new immutable recipe
+version. Rows whose task digests still match can be reused.
 
 The Agents part stays in the final recipe only when its measured initializer
 pass rate is 5%–95%, inclusive. Otherwise edit the recipe's parts and fast
 counts and record the gap. Qualification is a separate evaluation with at least
 99% scored and zero grading exceptions.
 
-### Rebuild the pinned Snowball training releases
+### Rebuild a Snowball training selection
 
-`recipes/snowball-100k.json` names `2026.11.04.1`: 100,000 tasks, including
-16,970 Eurus coding tasks, with local graders. The versioned
-`recipes/snowball-100k-2026.11.04.json` names `2026.11.04`, whose coding quota
-includes 10,317 Eurus tasks and 6,653 Glaive judged tasks. Both use the same
-admitted corpus and development panel. Selection recipes can add `exclusions`
-for evaluation files, while the published development panel stays fixed.
-Training skips a task that matches an exclusion by the heldout rules or by the
-test panel's overlap rule, which adds the whitespace-normalized final user
-statement. The existing releases precede test-panel qualification, so a training
-recipe that adds the test-panel exclusion gets a new immutable version.
+`recipes/snowball-100k.json` selects 100,000 tasks with local graders. Training
+excludes both its `heldout` development input and the independent test panel
+listed in `exclusions`. Exclusions match task IDs, public semantics, complete
+conversations and whitespace-normalized final user statements.
 
-To reproduce either recipe, run the driver inside Iris with `--corpus`
-`s3://marin-us-east-02a/marin/rl-data/inputs/snowball-admitted-030/2026.11.04/corpus.json`
-and `--selection` pointing to that recipe. Use a separate `--artifact-root` for
-an independent rebuild. Iris job
-`/atqamar/atqamar-rlci-e9-selection-20261104-204148` published
-`snowball-100k@2026.11.04` at
-`s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04`.
-Its admitted population is the complete output of the FULL curation campaign
-`snowball-100k-full-2026.10.24.3`, upgraded to TaskSpec 0.30 by validating each
-row with the new defaults. Admission decisions, source recipes, quotas and seed
-are fixed. This schema migration is a release operation: its per-source
-provenance and removed-default counts are in
-`s3://marin-us-east-02a/marin/users/atqamar/rlci-e9/2026.11.04/data-comparison-d2.json`.
-Rebuilds consume those immutable upgraded inputs through the ordinary selection
-path; they need no schema-migration curation mode.
+The checked-in recipe names version `2026.11.10.1`, which is not yet published;
+build it before training on it. The published `snowball-100k@2026.11.04.1`
+(built before the test panel existed, without `exclusions`) and
+`snowball-test-panel@2026.11.06.1` stay frozen; any further recipe change takes
+a new version. Existing
+Snowball controls adopt those published task files.
+
+Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
+`--run`. The corpus pins its complete FULL admission outputs, source recipes,
+quotas and seed. Use a separate `--artifact-root` for an independent rebuild.
 
 ## Dataset-owned invocation
 
@@ -386,7 +365,9 @@ ArtifactSteps.
 
 An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. A `SourceReference` groups a
+search tags, notes and an optional input-row count. `independent_qc` records
+quality control a pinned release performed outside curation, so inventory-only
+pointers surface that evidence in the Atlas. A `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
 assessment records in `finestore.rl.curation.CurationCatalog`.

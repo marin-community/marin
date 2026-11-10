@@ -111,7 +111,7 @@ def test_wait_launches_exports_and_records_the_terminal_model(tmp_path: Path, mo
     assert backend.launched_config is not None
     assert backend.launched_config["inputs"]["train_data"][0]["kind"] == "directory"
     assert [uri for uri, _ in writes] == [
-        "s3://runs/smoke/attempts/attempt-1.json",
+        "s3://runs/smoke/exports/attempts/attempt-1/receipt.json",
         "s3://runs/smoke/terminal.json",
     ]
 
@@ -138,7 +138,7 @@ def test_wait_does_not_commit_nonterminal_zero_exit_outcome(tmp_path: Path, monk
     assert result.state is LaunchState.FAILED
     assert result.failure == "Iris job reached submitted"
     assert not backend.exported
-    assert [uri for uri, _ in writes] == ["s3://runs/smoke/attempts/attempt-1.json"]
+    assert [uri for uri, _ in writes] == ["s3://runs/smoke/exports/attempts/attempt-1/receipt.json"]
 
 
 @dataclass
@@ -146,6 +146,7 @@ class LocalLaunchBackend:
     """Iris I/O boundary with local resolved-config and export fixtures."""
 
     export_jobs: list[str] = field(default_factory=list)
+    outcome: LaunchOutcome = LaunchOutcome("/user/training", "succeeded", 0)
 
     def validate(self, _config_path: Path) -> None:
         raise AssertionError("this lifecycle test submits training")
@@ -159,7 +160,7 @@ class LocalLaunchBackend:
         checkpoint_root = Path(artifacts["checkpoint_root"])
         checkpoint_root.mkdir(parents=True)
         (checkpoint_root / CHECKPOINT_MARKER_FILENAME).write_text("3\n")
-        return LaunchOutcome("/user/training", "succeeded", 0)
+        return self.outcome
 
     def export_terminal_policy(self, config_path: Path) -> None:
         config = yaml.safe_load(config_path.read_text())
@@ -171,8 +172,16 @@ class LocalLaunchBackend:
             (root / name).write_text("{}")
 
 
-@pytest.mark.parametrize("export_hf", [None, True], ids=["default-native", "explicit-hf"])
-def test_completed_launch_defaults_to_native_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None):
+@pytest.mark.parametrize(
+    "export_hf,outcome",
+    [
+        (None, LaunchOutcome("/user/training", "succeeded", 0)),
+        (True, LaunchOutcome("/user/training", "succeeded", 0)),
+        (None, LaunchOutcome("/user/training", "failed", 1)),
+    ],
+    ids=["default-native", "explicit-hf", "failed-native"],
+)
+def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None, outcome):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
     if export_hf is None:
@@ -188,13 +197,20 @@ def test_completed_launch_defaults_to_native_result_and_exports_only_on_opt_in(t
         "terminal_manifest_uri": str(tmp_path / "terminal.json"),
     }
     path.write_text(yaml.safe_dump(config))
-    backend = LocalLaunchBackend()
+    backend = LocalLaunchBackend(outcome=outcome)
 
     result = execute_launch(path, backend=backend)
-
+    attempt = json.loads((tmp_path / "exports/attempts/attempt-1/receipt.json").read_text())
+    assert not (tmp_path / "attempts").exists()
+    if outcome.exit_code:
+        assert result.state is LaunchState.FAILED
+        assert attempt["result"]["state"] == "failed"
+        assert attempt["result"]["failure"] == "Iris job reached failed"
+        assert not (tmp_path / "terminal.json").exists()
+        assert backend.export_jobs == []
+        return
     assert result.state is LaunchState.SUCCEEDED
     terminal = json.loads((tmp_path / "terminal.json").read_text())
-    attempt = json.loads((tmp_path / "attempts/attempt-1.json").read_text())
     assert terminal == attempt
     assert terminal["config"] == yaml.safe_load((tmp_path / "resolved.yaml").read_text())
     assert terminal["result"]["state"] == "succeeded"

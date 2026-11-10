@@ -35,8 +35,6 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     read_skyrl_launch_receipt,
-    read_stored_skyrl_attempts,
-    read_stored_skyrl_receipt,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -44,6 +42,12 @@ from marin.rl.skyrl import (
     validate_megatron_geometry,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
+from marin.rl.skyrl_records import (
+    read_skyrl_attempt_tracking,
+    read_skyrl_metrics,
+    read_stored_skyrl_attempts,
+    read_stored_skyrl_receipt,
+)
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
 
@@ -642,32 +646,42 @@ def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
 
     monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
     launch["artifacts"]["attempts_root"] = str(tmp_path / "attempts")
+    launch["artifacts"]["export_root"] = str(tmp_path / "exports")
+    launch["iris"]["wandb_entity"] = "tests-team"
+    launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["wandb"])
+    launch["skyrl"]["trainer"].setdefault("algorithm", {})["batch_invariant"] = False
+    launch["runtime"]["task_env"] = {"VLLM_ATTENTION_BACKEND": "FLASH_ATTN"}
     (tmp_path / "resolved-launch.yaml").write_text(json.dumps({"config": launch}))
     (tmp_path / "terminal.json").write_text(json.dumps({"config": launch, "result": response}))
     receipt = read_stored_skyrl_receipt(str(tmp_path))
     assert receipt is not None and receipt.result.model is not None
     assert receipt.result.model.policy_export_uri == model.hf_model_uri
     assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
+    tracking_path = tmp_path / f"exports/attempts/{config.attempt_id}/tracking.json"
+    tracking_path.parent.mkdir(parents=True)
+    tracking_path.write_text(json.dumps({"attempt_id": config.attempt_id, "engine": {"vllm_version": "test-vllm"}}))
+    tracking = read_skyrl_attempt_tracking(str(tmp_path), config.attempt_id)
+    assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
+    assert tracking["engine"]["vllm_version"] == "test-vllm"
+    assert tracking["engine"]["batch_invariant"] is False
+    assert tracking["engine"]["vllm_env"] == {"VLLM_ATTENTION_BACKEND": "FLASH_ATTN"}
+    metrics_path = tmp_path / "exports/metrics/step-000003.json"
+    metrics_path.parent.mkdir()
+    metrics_path.write_text(json.dumps({"step": 3, "loss": 0.25}))
+    assert read_skyrl_metrics(str(tmp_path)) == {3: {"step": 3, "loss": 0.25}}
     earlier = launch | {"run": launch["run"] | {"attempt_id": "earlier-failed-attempt"}}
-    attempts = tmp_path / "attempts"
-    attempts.mkdir()
-    (attempts / "earlier-failed-attempt.json").write_text(
+    attempts = tmp_path / "exports/attempts"
+    (attempts / "earlier-failed-attempt").mkdir(parents=True)
+    (attempts / "earlier-failed-attempt/receipt.json").write_text(
         json.dumps({"config": earlier, "result": {"state": "failed", "failure": "worker lost"}})
     )
-    (attempts / f"{config.attempt_id}.json").write_text(json.dumps({"config": launch, "result": response}))
-    (attempts / "wrong-attempt.json").write_text(json.dumps({"config": launch, "result": response}))
     current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
     assert current_id == config.attempt_id
     assert set(stored) == {config.attempt_id, "earlier-failed-attempt"}
     assert stored[current_id] == receipt
     assert stored["earlier-failed-attempt"].result.failure == "worker lost"
-    assert read_stored_skyrl_receipt(str(tmp_path), "wrong-attempt") is None
-    historical = read_stored_skyrl_receipt(str(tmp_path), "earlier-failed-attempt")
-    assert historical is not None and historical.result.state == "failed"
-    assert historical.result.failure == "worker lost"
-    assert read_stored_skyrl_receipt(str(tmp_path), "not-written") is None
     (tmp_path / "terminal.json").unlink()
-    current_attempt = attempts / f"{config.attempt_id}.json"
+    current_attempt = attempts / config.attempt_id / "receipt.json"
     current_attempt.write_text(json.dumps({"config": launch, "result": {"state": "failed"}}))
     failed = read_stored_skyrl_receipt(str(tmp_path))
     assert failed is not None and failed.result.state == "failed"
@@ -678,6 +692,7 @@ def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
     assert current_id == config.attempt_id and set(stored) == {"earlier-failed-attempt"}
     (tmp_path / "resolved-launch.yaml").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
+    assert read_skyrl_launch_receipt(str(tmp_path)) is None
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:

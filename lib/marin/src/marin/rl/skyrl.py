@@ -13,12 +13,11 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
-from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import fsspec
 import yaml
@@ -26,9 +25,7 @@ from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
-from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -36,8 +33,18 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
+from marin.rl.skyrl_records import (
+    EXPORTS_SUBDIRECTORY,
+    RESOLVED_LAUNCH_FILENAME,
+    TERMINAL_RECEIPT_FILENAME,
+    SkyRLLaunchReceipt,
+    SkyRLLaunchResponse,
+    _stored_skyrl_receipt,
+)
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
+
+IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 
 _EXECUTION = "skyrl_execution"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
@@ -46,11 +53,6 @@ _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
-IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
-RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
-TERMINAL_MANIFEST_FILENAME = "terminal.json"
-# Shared with marinskyrl.checkpoint_paths.TRACKING_FILENAME.
-TRACKING_FILENAME = "tracking.json"
 GENERATE_ENTRYPOINT = "generate"
 BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
@@ -472,7 +474,6 @@ class SkyRLSpec:
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
-    resume_checkpoint_root: str | None = None
     evaluation_data: tuple[tuple[str, tuple[SkyRLDataSource, ...]], ...] = ()
 
     def __post_init__(self) -> None:
@@ -482,7 +483,12 @@ class SkyRLSpec:
         names = [name for name, _ in self.evaluation_data]
         if len(names) != len(set(names)):
             raise ValueError("duplicate evaluation data names")
-        profiles = named_evaluation_profiles(_parsed_config(self.config_yaml))
+        profiles = {
+            name: profile
+            for callback in _parsed_config(self.config_yaml).get("trainer", {}).get("callbacks") or []
+            if callback.get("type") == "evaluation"
+            for name, profile in (callback.get("additional_evaluations") or {}).items()
+        }
         for name, _ in self.evaluation_data:
             profile = profiles.get(name)
             if profile is None:
@@ -555,16 +561,6 @@ def _parsed_config(config_yaml: str) -> dict[str, object]:
     if not isinstance(config, dict):
         raise ValueError("SkyRL config_yaml must contain a mapping at the document root")
     return config
-
-
-# Mirrors skyrl_train.evaluation_profiles.named_evaluation_profiles; marin-core does not install skyrl_train.
-def named_evaluation_profiles(config: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    return {
-        name: profile
-        for callback in config.get("trainer", {}).get("callbacks") or []
-        if callback.get("type") == "evaluation"
-        for name, profile in (callback.get("additional_evaluations") or {}).items()
-    }
 
 
 def declared_config_value(config: dict[str, object], dotted_key: str) -> object:
@@ -726,140 +722,6 @@ class SkyRLRun(Artifact):
     draft_checkpoint_root: str | None
     terminal_manifest_uri: str
     iris_job_id: str
-
-
-class _SkyRLTerminalModel(BaseModel):
-    policy_export_uri: str
-    global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
-    checkpoint_root: str
-    terminal_manifest_uri: str
-
-
-class SkyRLLaunchResponse(BaseModel):
-    state: str
-    iris_job_id: str | None = None
-    failure: str | None = None
-    provenance: dict | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
-    model: _SkyRLTerminalModel | None = None
-
-
-class SkyRLReceiptLookupError(ValueError):
-    """The recorded Iris job cannot be identified uniquely."""
-
-
-class SkyRLLaunchReceipt(BaseModel):
-    config: dict
-    result: SkyRLLaunchResponse
-
-
-def read_skyrl_launch_config(run_output: str) -> dict:
-    """Read the native resolved-launch envelope's compiled configuration."""
-    fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
-    return yaml.safe_load(fs.cat(key))["config"]
-
-
-def read_skyrl_attempt_tracking(run_output: str, attempt_id: str) -> dict:
-    """Read one native attempt's startup metadata and W&B link, or return an empty mapping."""
-    fs, key = filesystem_for(prefix_join(run_output, f"exports/attempts/{attempt_id}/{TRACKING_FILENAME}"))
-    record = json.loads(fs.cat(key)) if fs.exists(key) else {}
-    return record if record.get("attempt_id") == attempt_id else {}
-
-
-def _stored_skyrl_receipt(
-    run_output: str, attempt_id: str | None = None
-) -> tuple[SkyRLLaunchReceipt | None, dict | None]:
-    fs, key = filesystem_for(prefix_join(run_output, TERMINAL_MANIFEST_FILENAME))
-    if fs.exists(key):
-        receipt = SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
-        if attempt_id is None or receipt.config["run"]["attempt_id"] == attempt_id:
-            return receipt, receipt.config
-    fs, key = filesystem_for(prefix_join(run_output, RESOLVED_LAUNCH_FILENAME))
-    if not fs.exists(key):
-        return None, None
-    config = read_skyrl_launch_config(run_output)
-    requested = attempt_id or config["run"]["attempt_id"]
-    attempt = prefix_join(config["artifacts"]["attempts_root"], f"{requested}.json")
-    fs, key = filesystem_for(attempt)
-    if fs.exists(key):
-        receipt = SkyRLLaunchReceipt.model_validate_json(fs.cat(key))
-        if receipt.config["run"]["attempt_id"] == requested:
-            return receipt, config
-    return None, config
-
-
-def read_stored_skyrl_receipt(run_output: str, attempt_id: str | None = None) -> SkyRLLaunchReceipt | None:
-    """Read a saved native receipt for the requested attempt, or return None without querying Iris."""
-    return _stored_skyrl_receipt(run_output, attempt_id)[0]
-
-
-def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, SkyRLLaunchReceipt]]:
-    """Read the current native attempt ID and each matching stored receipt without querying Iris."""
-    receipt, config = _stored_skyrl_receipt(run_output)
-    if config is None:
-        return None, {}
-    current = config["run"]["attempt_id"]
-    attempts = {current: receipt} if receipt is not None else {}
-    fs, key = filesystem_for(prefix_join(config["artifacts"]["attempts_root"], "*.json"))
-    for path in fs.glob(key):
-        attempt_id = path.rsplit("/", 1)[-1].removesuffix(".json")
-        if attempt_id in attempts:
-            continue
-        saved = SkyRLLaunchReceipt.model_validate_json(fs.cat(path))
-        if saved.config["run"]["attempt_id"] == attempt_id:
-            attempts[attempt_id] = saved
-    return current, attempts
-
-
-def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
-    """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
-
-    Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
-    controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
-    """
-    receipt, config = _stored_skyrl_receipt(run_output)
-    if receipt is not None:
-        return receipt
-    if config is None:
-        return None
-    name = config["iris"]["job_name"]
-    info = get_job_info()
-    with ExitStack() as stack:
-        if info is not None and info.controller_address:
-            address, credentials = info.controller_address, info.credentials
-        else:
-            root = find_project_root(Path(__file__))
-            if root is None:
-                raise RuntimeError("Iris receipt discovery requires a Marin checkout")
-            endpoint = stack.enter_context(connect_controller(config_file=root / IRIS_HUB_CLUSTER_CONFIG))
-            address, credentials = endpoint.url, endpoint.credentials
-        client = stack.enter_context(rpc_client(address, credentials))
-        response = client.list_jobs(
-            controller_pb2.Controller.ListJobsRequest(
-                query=controller_pb2.Controller.JobQuery(name_filter=name, limit=500)
-            )
-        )
-        jobs = response.jobs
-    matches = [job for job in jobs if str(JobName.from_wire(job.job_id)).rsplit("/", 1)[-1] == name]
-    if len(matches) != 1:
-        raise SkyRLReceiptLookupError(f"cannot identify the Iris job {name}; its state must be known before resume")
-    job = matches[0]
-    state = "running"
-    if is_job_finished(job.state):
-        state = "succeeded" if job.state == job_pb2.JOB_STATE_SUCCEEDED else "failed"
-    return SkyRLLaunchReceipt.model_validate(
-        {
-            "config": config,
-            "result": {
-                "state": state,
-                "iris_job_id": str(JobName.from_wire(job.job_id)),
-                "model": None,
-            },
-        }
-    )
 
 
 def skyrl_cpu_command(*arguments: str) -> list[str]:
@@ -1118,11 +980,11 @@ def skyrl_step(
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(
-            checkpoint_root=spec.resume_checkpoint_root or prefix_join(temporary_root, "checkpoints"),
-            export_root=prefix_join(ctx.output_path, "exports"),
+            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
+            export_root=prefix_join(ctx.output_path, EXPORTS_SUBDIRECTORY),
             attempts_root=attempts_root,
             resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
-            terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_MANIFEST_FILENAME),
+            terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_RECEIPT_FILENAME),
         )
         draft_training = declared_config_value(
             _parsed_config(spec.config_yaml), "generator.speculative_decoding.training"
@@ -1173,4 +1035,57 @@ def skyrl_step(
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
+    )
+
+
+class SkyRLReceiptLookupError(ValueError):
+    """The recorded Iris job cannot be identified uniquely."""
+
+
+def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
+    """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
+
+    Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
+    controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
+    """
+    receipt, config = _stored_skyrl_receipt(run_output)
+    if receipt is not None:
+        return receipt
+    if config is None:
+        return None
+    name = config["iris"]["job_name"]
+    info = get_job_info()
+    with ExitStack() as stack:
+        if info is not None and info.controller_address:
+            address, credentials = info.controller_address, info.credentials
+        else:
+            root = find_project_root(Path(__file__))
+            if root is None:
+                raise RuntimeError("Iris receipt discovery requires a Marin checkout")
+            route = config["iris"]["parent_cluster_config"] or config["iris"]["cluster_config"]
+            endpoint = stack.enter_context(connect_controller(config_file=root / route))
+            address, credentials = endpoint.url, endpoint.credentials
+        client = stack.enter_context(rpc_client(address, credentials))
+        response = client.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(
+                query=controller_pb2.Controller.JobQuery(name_filter=name, limit=500)
+            )
+        )
+        jobs = response.jobs
+    matches = [job for job in jobs if str(JobName.from_wire(job.job_id)).rsplit("/", 1)[-1] == name]
+    if len(matches) != 1:
+        raise SkyRLReceiptLookupError(f"cannot identify the Iris job {name}; its state is unavailable")
+    job = matches[0]
+    state = "submitted"
+    if is_job_finished(job.state):
+        state = "succeeded" if job.state == job_pb2.JOB_STATE_SUCCEEDED else "failed"
+    return SkyRLLaunchReceipt.model_validate(
+        {
+            "config": config,
+            "result": {
+                "state": state,
+                "iris_job_id": str(JobName.from_wire(job.job_id)),
+                "model": None,
+            },
+        }
     )

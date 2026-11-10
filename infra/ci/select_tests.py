@@ -88,6 +88,17 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
+MARIN_NATIVE_CONFIG_TESTS = {
+    "experiments/post_training/snowball_tests/test_snowball_rl.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+    "experiments/post_training/snowball_tests/test_snowball_rl_gate.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+}
+
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
@@ -779,6 +790,10 @@ def classify(
             continue
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+
+        for owner, prefixes in MARIN_NATIVE_CONFIG_TESTS.items():
+            if filepath.startswith(prefixes) and (repo_root / owner).exists():
+                direct_tests["marin"].append(owner)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
