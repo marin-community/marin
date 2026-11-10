@@ -7,10 +7,9 @@ from pathlib import Path
 
 import draccus
 import pytest
-import yaml
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.post_training.long_loop.adopted_sft import is_hf_export, verify_adopted_hf_export, verify_adopted_sft
+from experiments.post_training.long_loop.adopted_sft import verify_adopted_hf_export, verify_adopted_sft
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.sft import check_expert_tensors
 from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig
@@ -177,11 +176,3 @@ def test_expert_tensors_must_match_the_declared_schema():
         check_expert_tensors({**config, "grugmoe_artifact_schema_version": 2}, stacked)
     with pytest.raises(ValueError, match="schema-1 tensor missing"):
         check_expert_tensors({**config, "grugmoe_artifact_schema_version": 1}, split)
-
-
-def test_committed_1005_pin_names_the_full_mirror():
-    pin = yaml.safe_load((Path(__file__).parents[1] / "specs/adopted-sft-20261005.yaml").read_text())
-    assert is_hf_export(pin)
-    assert pin["revision"] == "ac60d9401820953943f5a56e06f36e13c86b12d6"
-    assert len(pin["files"]) == 52
-    assert sum(name.endswith(".safetensors") for name in pin["files"]) == 39

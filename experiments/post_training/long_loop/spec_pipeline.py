@@ -23,7 +23,7 @@ from experiments.post_training.long_loop.evaluation import configured_evaluation
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
-from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
+from experiments.post_training.long_loop.sft import HANDOFF_DIR, export_sft, fresh_sft_config, sft_run
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
@@ -144,7 +144,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             hf_pin["uri"],
             config={"repository": hf_pin["repository"], "revision": hf_pin["revision"]},
         )
-        hf_relative = {"relative_path": ""}
+        handoff_dir = ""
     else:
         exported = timed(
             apply(
@@ -159,7 +159,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 context_limit=tokenizer["context_limit"],
             )
         )
-        hf_relative = {}
+        handoff_dir = HANDOFF_DIR
     endpoint = timed(
         apply(
             f"{name}/endpoint",
@@ -169,7 +169,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             model_root=exported,
             tokenizer_revision=tokenizer["revision"],
             settings=resolved["endpoint"],
-            **hf_relative,
+            relative_path=handoff_dir,
         )
     )
     if hf_pin is not None:
@@ -191,7 +191,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             step=exported,
             tokenizer_uri=tokenizer["repo"],
             tokenizer_revision=tokenizer["revision"],
-            relative_path=hf_relative.get("relative_path", "hf"),
+            relative_path=handoff_dir,
         ),
         train_data=tuple(
             ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in ("agentic", "nonagentic")

@@ -36,6 +36,8 @@ TOKENIZER_REPO = "marin-community/marin-tokenizer-tools"
 TOKENIZER_REVISION = "3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09"
 TOKENIZER_URI = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
 SMOKE_CONFIG = Path(__file__).with_name("sft-smoke.yaml")
+# Loop-produced exports place the HF files below this directory of the stage output.
+HANDOFF_DIR = "hf"
 
 
 def read_json(uri: str) -> dict:
@@ -126,7 +128,7 @@ def check_expert_tensors(config: dict, weight_map: dict) -> None:
             raise ValueError(f"Invalid SFT export: schema-{schema} tensor missing: {name}")
 
 
-def validate_handoff(root: str, relative_path: str = "hf") -> None:
+def validate_handoff(root: str, relative_path: str = HANDOFF_DIR) -> None:
     hf = prefix_join(root, relative_path) if relative_path else root
     check_expert_tensors(
         read_json(prefix_join(hf, "config.json")),
@@ -149,13 +151,13 @@ def export_sft(
         selected["checkpoint"],
         selected["metadata_digest"],
         draccus.decode(GrugModelConfig, model),
-        prefix_join(output, "hf"),
+        prefix_join(output, HANDOFF_DIR),
         source_revision,
         max_position_embeddings=context_limit,
     )
     export_weights(config, restore_frozen, weights_kind="snowball_sft_frozen_router")
     fs, prefix = filesystem_for(tokenizer_uri)
-    destination_fs, destination = filesystem_for(prefix_join(output, "hf"))
+    destination_fs, destination = filesystem_for(prefix_join(output, HANDOFF_DIR))
     for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
         content = fs.cat_file(prefix_join(prefix, name))
         destination_fs.pipe_file(prefix_join(destination, name), content)
@@ -169,7 +171,7 @@ def export_sft(
             }
         ).encode(),
     )
-    manifest = read_json(prefix_join(output, "hf/export-manifest.json"))
+    manifest = read_json(prefix_join(output, f"{HANDOFF_DIR}/export-manifest.json"))
     for shard in manifest["shards"]:
         with destination_fs.open(prefix_join(destination, shard["filename"]), "rb") as stream:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()

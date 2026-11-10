@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import draccus
 from rigging.filesystem.buckets import filesystem_for
@@ -91,6 +92,32 @@ def verify_adopted_sft(*, output: str, checkpoint_pin: dict, model: dict, tokeni
     )
 
 
+@dataclass(frozen=True)
+class PinnedFile:
+    bytes: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class HfExportPin:
+    """An HF repository revision and the exact object set of its in-region copy."""
+
+    kind: str
+    repository: str
+    revision: str
+    uri: str
+    files: dict[str, PinnedFile]
+
+    def __post_init__(self) -> None:
+        if self.kind != HF_EXPORT_KIND:
+            raise ValueError(f"Adopted HF export pin must declare kind: {HF_EXPORT_KIND}")
+        if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
+            raise ValueError("Adopted HF export revision must be a full 40-character commit")
+        for name in self.files:
+            if not name or name.startswith("/") or ".." in name.split("/"):
+                raise ValueError(f"Adopted HF export manifest contains a non-relative path: {name!r}")
+
+
 def is_hf_export(pin: dict) -> bool:
     return pin.get("kind") == HF_EXPORT_KIND
 
@@ -105,25 +132,19 @@ def verify_adopted_hf_export(
     *, output: str, export_pin: dict, model: dict, tokenizer_uri: str, workers: int = 8
 ) -> None:
     """Publish an adoption record only after every pinned byte of the HF export matches."""
-    if not is_hf_export(export_pin):
-        raise ValueError("Adopted HF export pin must declare kind: hf_export")
-    if re.fullmatch(r"[0-9a-f]{40}", export_pin["revision"]) is None:
-        raise ValueError("Adopted HF export revision must be a full 40-character commit")
-    root = export_pin["uri"]
-    files = export_pin["files"]
-    for name in files:
-        if not name or name.startswith("/") or ".." in name.split("/"):
-            raise ValueError(f"Adopted HF export manifest contains a non-relative path: {name!r}")
+    pin = HfExportPin(**{**export_pin, "files": {k: PinnedFile(**v) for k, v in export_pin["files"].items()}})
+    root = pin.uri
+    files = pin.files
     fs, root_key = filesystem_for(root)
     if set(fs.find(root_key)) != {prefix_join(root_key, name) for name in files}:
         raise ValueError("Adopted HF export manifest does not cover the exact object set")
     for name, entry in files.items():
         info = fs.info(prefix_join(root_key, name))
-        if info["type"] != "file" or info["size"] != entry["bytes"]:
+        if info["type"] != "file" or info["size"] != entry.bytes:
             raise ValueError(f"Adopted HF export object is missing or changed size: {name}")
     with ThreadPoolExecutor(max_workers=workers) as pool:
         digests = dict(zip(files, pool.map(lambda name: _file_sha256(prefix_join(root, name)), files), strict=True))
-    changed = sorted(name for name, entry in files.items() if digests[name] != entry["sha256"])
+    changed = sorted(name for name, entry in files.items() if digests[name] != entry.sha256)
     if changed:
         raise ValueError(f"Adopted HF export digest changed: {changed}")
     # The bytes are now pinned; the remaining checks read the verified objects.
@@ -139,7 +160,7 @@ def verify_adopted_hf_export(
     if not set(weight_map.values()) <= files.keys():
         raise ValueError("Adopted HF export index names a shard outside the pinned manifest")
     tokenizer_fs, tokenizer_key = filesystem_for(prefix_join(tokenizer_uri, "tokenizer.json"))
-    if hashlib.sha256(tokenizer_fs.cat_file(tokenizer_key)).hexdigest() != files["tokenizer.json"]["sha256"]:
+    if hashlib.sha256(tokenizer_fs.cat_file(tokenizer_key)).hexdigest() != files["tokenizer.json"].sha256:
         raise ValueError("Adopted HF export tokenizer differs from the loop tokenizer")
     generation = json.loads(fs.cat_file(prefix_join(root_key, "generation_config.json")))
     if set(generation["eos_token_id"]) != GENERATION_EOS_TOKEN_IDS:
@@ -151,7 +172,7 @@ def verify_adopted_hf_export(
             {
                 "export_pin": export_pin,
                 "artifact_schema_version": config["grugmoe_artifact_schema_version"],
-                "verified_bytes": sum(entry["bytes"] for entry in files.values()),
+                "verified_bytes": sum(entry.bytes for entry in files.values()),
             },
             indent=2,
         )

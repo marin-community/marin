@@ -24,7 +24,13 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
 from experiments.post_training.long_loop.serving import check_context_limit, checked_serving_release
-from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, read_json, validate_handoff
+from experiments.post_training.long_loop.sft import (
+    HANDOFF_DIR,
+    TOKENIZER_REPO,
+    TOKENIZER_REVISION,
+    read_json,
+    validate_handoff,
+)
 
 
 def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> list[int]:
@@ -35,7 +41,12 @@ def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> l
 
 
 def probe(
-    *, output: str, model_root: str, tokenizer_revision: str, settings: dict | None = None, relative_path: str = "hf"
+    *,
+    output: str,
+    model_root: str,
+    tokenizer_revision: str,
+    settings: dict | None = None,
+    relative_path: str = HANDOFF_DIR,
 ) -> None:
     """Serve the HF export at ``model_root/relative_path``; ``""`` selects the root itself."""
     validate_handoff(model_root, relative_path)
