@@ -700,9 +700,11 @@ them overflow. At capacity factor 1.5 the one-rack smoke `hero-sft-smoke-v2` dro
 
 An expert placement renumbers each layer's experts so every block carries a similar load. It moves the router
 columns, router bias, QB betas, expert weights, and their optimizer moments together, so the model computes the
-same function. The trainer applies it once, when it restores the placement's source checkpoint; checkpoints the
-run saves are already placed, and a restart from them is not placed again. A placement fits one mesh: the
-trainer refuses it unless the expert axis and block width match.
+same function. The trainer applies it once, when it restores the placement's source checkpoint. Each checkpoint
+the run saves records the placement in its `metadata.json`, under `expert_placement`, and a restart from one is
+not placed again. The trainer refuses to restore a checkpoint whose recorded placement is not the run's, and a
+checkpoint without a record that is not the source. A placement fits one mesh: the trainer refuses it unless the
+expert axis and block width match.
 
 `expert_placement.py` builds a placement from a run's per-expert routing histograms. It assigns experts by
 greedy longest-processing-time: heaviest first, each into the lightest block with a free slot. Build one from a
@@ -724,9 +726,10 @@ the first steps stays within 0.5 points of the per-step oracle through the end o
 
 A placed run writes its checkpoints under `expert-placement-<fingerprint>/` below its output path or
 `--checkpoint-root`. A relaunch with another placement, or none, starts again from the source checkpoint
-instead of resuming checkpoints whose experts are in a different order. Tools that pair experts across
-checkpoints, such as weight merging against the pretraining checkpoint, must first apply
-`ExpertPlacement.inverse()`.
+instead of resuming checkpoints whose experts are in a different order. Tools that pair experts across checkpoints, such as weight merging against the
+pretraining checkpoint, must first apply `ExpertPlacement.inverse()` to the placement that
+`ExpertPlacement.recorded_in(metadata)` reads from the checkpoint. A Hugging Face export does not carry that
+metadata.
 
 Print the plan for a one-rack smoke test:
 

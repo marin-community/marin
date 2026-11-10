@@ -426,7 +426,7 @@ def build_sft_run(
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         # A placed run keeps its checkpoints under its placement's fingerprint, so a relaunch with another
-        # placement, or none, cannot resume checkpoints whose experts are in a different order.
+        # placement, or none, starts again from the source checkpoint; the trainer would refuse to resume them.
         output_path = ctx.output_path if expert_placement is None else _placement_path(ctx.output_path, expert_placement)
         if checkpoint_root is None:
             permanent_path = prefix_join(output_path, "checkpoints")

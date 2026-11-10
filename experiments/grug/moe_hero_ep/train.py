@@ -35,7 +35,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import Checkpointer, discover_checkpoint_candidates
+from levanter.checkpoint import Checkpointer, discover_checkpoint_candidates, load_checkpoint_metadata
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -1322,20 +1322,30 @@ def _validate_expert_placement(placement: ExpertPlacement, config: GrugRunConfig
 
 
 def _place_restored_experts(
-    state: GrugTrainState, placement: ExpertPlacement, *, loaded_checkpoint: str
+    state: GrugTrainState, placement: ExpertPlacement | None, *, loaded_checkpoint: str
 ) -> GrugTrainState:
-    """Place the experts of a restored source checkpoint; the run's own saves are already placed.
+    """Place the routed experts of a restored checkpoint, or check that they are already placed.
 
-    The launcher keeps a placed run's checkpoints under a path named by the placement's fingerprint, so a save
-    restored here was written under this same placement.
+    Each checkpoint of a placed run records its placement in its metadata. The trainer places only the
+    placement's source checkpoint, and refuses a checkpoint whose recorded placement is not the run's.
     """
-    if not placement.permutes(loaded_checkpoint):
-        logger.info(
-            "Restored %s, not the placement source %s; its experts are already placed",
-            loaded_checkpoint,
-            placement.source_checkpoint,
-        )
+    recorded = ExpertPlacement.recorded_in(load_checkpoint_metadata(loaded_checkpoint))
+    if recorded is not None:
+        if placement is None or recorded.fingerprint != placement.fingerprint:
+            run_placement = "no expert placement" if placement is None else f"expert placement {placement.fingerprint}"
+            raise ValueError(
+                f"{loaded_checkpoint} holds its experts in expert placement {recorded.fingerprint}, "
+                f"but this run uses {run_placement}"
+            )
+        logger.info("Restored %s, already in expert placement %s", loaded_checkpoint, recorded.fingerprint)
         return state
+    if placement is None:
+        return state
+    if not placement.permutes(loaded_checkpoint):
+        raise ValueError(
+            f"{loaded_checkpoint} records no expert placement and is not the placement's source checkpoint "
+            f"{placement.source_checkpoint}"
+        )
     placed = permute_experts(state, placement)
     logger.info(
         "Placed routed experts by %s (placement %s) on %d-expert capacity blocks",
@@ -1423,7 +1433,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # in initialization, checkpoint restore, cache construction or compilation.
     progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
 
-    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+    expert_placement = config.trainer.expert_placement
+    checkpointer = (
+        trainer.checkpointer.create(
+            run_id, metadata=None if expert_placement is None else expert_placement.checkpoint_metadata()
+        )
+        if config.trainer.save_checkpoints
+        else None
+    )
     dashboard = (
         TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
     )
@@ -1447,7 +1464,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if released_initial_state:
             state = restore_template_from(state)
 
-        expert_placement = config.trainer.expert_placement
         if expert_placement is not None:
             _validate_expert_placement(expert_placement, config)
         state, loaded_checkpoint = restore_grug_state_and_source(
@@ -1465,7 +1481,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         restored_nothing = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
         if released_initial_state and restored_nothing:
             state = _init_state(model_key)
-        if expert_placement is not None and loaded_checkpoint is not None and not restored_nothing:
+        if loaded_checkpoint is not None and not restored_nothing:
             state = _place_restored_experts(state, expert_placement, loaded_checkpoint=loaded_checkpoint)
         special_tokens = config.trainer.special_tokens
         # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.

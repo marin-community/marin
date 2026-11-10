@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import json
 import math
 
 import equinox as eqx
@@ -34,6 +36,7 @@ from experiments.grug.moe_hero_ep.train import (
     RouterBiasMode,
     SpecialTokenInit,
     _make_train_step,
+    _place_restored_experts,
     initial_state,
     permute_experts,
     reseed_special_token_columns,
@@ -359,3 +362,45 @@ def test_expert_placement_moves_host_offloaded_optimizer_state():
             gate_moments += 1
             np.testing.assert_array_equal(np.asarray(leaf), host_leaves[key][layers, order])
     assert gate_moments >= 1
+
+
+def _write_checkpoint_metadata(path, placement: ExpertPlacement | None) -> str:
+    path.mkdir(parents=True)
+    recorded = {} if placement is None else placement.checkpoint_metadata()
+    (path / "metadata.json").write_text(json.dumps({"step": 0, "timestamp": "2026-11-09T00:00:00", **recorded}))
+    return str(path)
+
+
+def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_path):
+    config = _tiny_config()
+    mesh = _one_device_mesh()
+    source = str(tmp_path / "source")
+    placement = dataclasses.replace(_placement([[2, 0, 3, 1], [1, 3, 0, 2]]), source_checkpoint=source)
+    other = dataclasses.replace(placement, order=((0, 1, 2, 3), (0, 1, 2, 3)))
+    _write_checkpoint_metadata(tmp_path / "source", None)
+    placed_save = _write_checkpoint_metadata(tmp_path / "placed" / "step-5", placement)
+    unrecorded_save = _write_checkpoint_metadata(tmp_path / "unrecorded" / "step-5", None)
+    other_save = _write_checkpoint_metadata(tmp_path / "other" / "step-5", other)
+
+    def gate(state):
+        return np.asarray(state.params.stacked_blocks.stacked.mlp.expert_mlp.w_gate)
+
+    with jax.set_mesh(mesh):
+        state = _trained_state(config, _optimizer(), mesh)
+        before = gate(state)
+        layers = np.arange(2)[:, None]
+        np.testing.assert_array_equal(
+            gate(_place_restored_experts(state, placement, loaded_checkpoint=source)),
+            before[layers, np.asarray(placement.order)],
+        )
+        state = _trained_state(config, _optimizer(), mesh)
+        np.testing.assert_array_equal(
+            gate(_place_restored_experts(state, placement, loaded_checkpoint=placed_save)), before
+        )
+        np.testing.assert_array_equal(gate(_place_restored_experts(state, None, loaded_checkpoint=source)), before)
+        with pytest.raises(ValueError, match="records no expert placement"):
+            _place_restored_experts(state, placement, loaded_checkpoint=unrecorded_save)
+        with pytest.raises(ValueError, match=f"this run uses expert placement {placement.fingerprint}"):
+            _place_restored_experts(state, placement, loaded_checkpoint=other_save)
+        with pytest.raises(ValueError, match="this run uses no expert placement"):
+            _place_restored_experts(state, None, loaded_checkpoint=placed_save)

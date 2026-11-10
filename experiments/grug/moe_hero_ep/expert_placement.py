@@ -19,8 +19,9 @@ import dataclasses
 import hashlib
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import click
 import numpy as np
@@ -30,6 +31,8 @@ from levanter.grug._moe.ep_ragged_all_to_all import capacity_block_experts
 logger = logging.getLogger(__name__)
 
 ROUTING_HISTOGRAM_KEY = "train/router/layer_{layer}/routing_hist/histogram"
+# Key of the placement in the metadata of each checkpoint a placed run saves.
+CHECKPOINT_METADATA_KEY = "expert_placement"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,9 +111,21 @@ class ExpertPlacement:
 
     @classmethod
     def from_json(cls, text: str) -> "ExpertPlacement":
-        raw = json.loads(text)
-        raw["order"] = tuple(tuple(int(e) for e in layer) for layer in raw["order"])
-        return cls(**raw)
+        return cls.from_dict(json.loads(text))
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "ExpertPlacement":
+        return cls(**{**raw, "order": tuple(tuple(int(e) for e in layer) for layer in raw["order"])})
+
+    def checkpoint_metadata(self) -> dict[str, Any]:
+        """Metadata that records this placement in each checkpoint of a placed run."""
+        return {CHECKPOINT_METADATA_KEY: dataclasses.asdict(self)}
+
+    @classmethod
+    def recorded_in(cls, metadata: Mapping[str, Any]) -> "ExpertPlacement | None":
+        """The placement a checkpoint's metadata records, or None for a checkpoint in its source expert order."""
+        raw = metadata.get(CHECKPOINT_METADATA_KEY)
+        return None if raw is None else cls.from_dict(raw)
 
 
 def balanced_expert_order(loads: np.ndarray, *, block_experts: int) -> np.ndarray:
