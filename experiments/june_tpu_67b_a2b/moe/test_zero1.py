@@ -277,15 +277,20 @@ def test_zero1_checkpoint_restores_with_zero1_off_and_on(saved_with_zero1):
         next_losses = {}
         with tempfile.TemporaryDirectory() as tmpdir:
             with jax.set_mesh(mesh):
-                save_checkpoint(state, step=1, checkpoint_path=tmpdir)
+                save_checkpoint(june_train._checkpointed(state), step=1, checkpoint_path=tmpdir)
             for zero1 in (False, True):
                 exemplar = zero1_state(mesh, optimizer, zero1=zero1)
                 with jax.set_mesh(mesh):
-                    restored = load_checkpoint(exemplar, tmpdir, mesh=mesh)
-                    rebuilt = june_train.rebuilt_compute_params(restored, POLICY)
-                assert specs(restored) == specs(exemplar), zero1
+                    # As _run_grug_local restores: without the compute copy, then rebuilt in the initial copy's sharding.
+                    restored = load_checkpoint(june_train._checkpointed(exemplar), tmpdir, mesh=mesh)
+                    rebuilt = june_train.rebuilt_compute_params(
+                        dataclasses.replace(restored, compute_params=exemplar.compute_params), POLICY
+                    )
+                assert specs(restored) == specs(june_train._checkpointed(exemplar)), zero1
                 assert specs(rebuilt.compute_params) == specs(exemplar.compute_params), zero1
-                for a, b in zip(jax.tree.leaves(restored), jax.tree.leaves(saved), strict=True):
+                for a, b in zip(
+                    jax.tree.leaves(restored), jax.tree.leaves(june_train._checkpointed(saved)), strict=True
+                ):
                     np.testing.assert_array_equal(np.asarray(a), b, err_msg=str(zero1))
                 for a, b in zip(
                     jax.tree.leaves(rebuilt.compute_params),
@@ -301,7 +306,7 @@ def test_zero1_checkpoint_restores_with_zero1_off_and_on(saved_with_zero1):
 
 @pytest.mark.timeout(900)
 @pytest.mark.multidevice
-def test_zero1_eval_hooks_gather_each_model_once_per_step():
+def test_zero1_eval_hooks_gather_each_model_once_per_step(monkeypatch):
     # With ZeRO-1 the eval hooks evaluate float32 models in the compute copy's sharding, one model per hook, so a
     # sharded master never reaches the evaluator (which would gather it in every layer of every eval batch) and only
     # one gathered model is live at a time. A step evaluated already gathers nothing.
@@ -312,7 +317,7 @@ def test_zero1_eval_hooks_gather_each_model_once_per_step():
             evaluated.append((prefix, specs(model), {x.dtype for x in jax.tree.leaves(model)}))
             return {}
 
-        levanter.eval.eval_model = fake_eval_model
+        monkeypatch.setattr(levanter.eval, "eval_model", fake_eval_model)
         mesh = _meshes()["replica4_expert2"]
         state = zero1_state(mesh, optax.adam(1e-2), zero1=True)
         model_shardings = jax.tree.map(lambda x: x.sharding, state.compute_params)
