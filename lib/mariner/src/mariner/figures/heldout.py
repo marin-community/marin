@@ -43,6 +43,7 @@ from scipy import stats
 from mariner.data import (
     BASELINE_PREFIX,
     CALIBRATION_RUN,
+    DESIGN_KIND,
     EXPOSURE_ID,
     FIT_INCLUSION,
     HELDOUT_PREDICTIONS_TABLE,
@@ -53,6 +54,7 @@ from mariner.data import (
     OUTCOME_PREFIX,
     RELIABILITY_SOURCES,
     RELIABILITY_TABLE,
+    REPEAT,
     RUN_LABEL,
     TASK_ID,
     TRAINED_MARINER,
@@ -127,12 +129,13 @@ TRANSFER_MARKERS = {
 
 
 def setting_designs(root: Path, setting: str) -> pd.Series:
-    """The Uncheatable BPB of a swarm's fit runs at one proxy setting, by run label."""
+    """The Uncheatable BPB of a swarm's designs, every run but the proportional repeats, at one proxy setting, by run
+    label. A design need not be a fit run: the Llama 160M/1.2B swarm holds its single-bucket removals out of its fit."""
     runs = release_runs(root, setting)
     outcome = f"{OUTCOME_PREFIX}{TRANSFER_OBJECTIVE}"
-    require_columns(runs, [FIT_INCLUSION, RUN_LABEL, outcome], f"swarm_{setting}")
-    fit = runs.loc[runs[FIT_INCLUSION]]
-    return fit.set_index(RUN_LABEL)[outcome]
+    require_columns(runs, [DESIGN_KIND, RUN_LABEL, outcome], f"swarm_{setting}")
+    designs = runs.loc[runs[DESIGN_KIND] != REPEAT]
+    return designs.set_index(RUN_LABEL)[outcome]
 
 
 def proposal_bpb(heldout: pd.DataFrame, mixture: str, setting: str) -> tuple[float, int]:
