@@ -112,6 +112,18 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     assert sum(row["metric"] == "speed/update_seconds" for row in report["comparisons"]) == 1
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
+    invariants = {row["name"]: row for row in report["invariants"]}
+    assert all(row["comparator"] is not None for row in invariants.values())
+    assert invariants["grader_error_fraction"]["comparator"] == "<="
+    assert invariants["planned_updates"]["comparator"] == "=="
+    assert invariants["finite_losses_and_gradients"]["comparator"] == "=="
+    fixed = invariants["fixed_reply_tokens"]
+    assert fixed["value"] is True and fixed["limit"] is True and fixed["comparator"] == "=="
+    historical = json.loads(artifact.read_text())
+    for row in historical["invariants"]:
+        row.pop("comparator")
+    decoded = gate.GateReport.model_validate_json(json.dumps(historical))
+    assert all(row.comparator is None for row in decoded.invariants)
     monkeypatch.setattr(sys, "argv", ["snowball_rl_gate", "--preset", "speed-medium", "--leave-out", "r0"])
     capsys.readouterr()
     with pytest.raises(SystemExit) as result:
@@ -217,7 +229,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     step = gate.gate_step(
         presets.PRESETS["speed-medium"],
         tuple(candidates),
-        inputs=gate.GateInputs(preset_name="speed-medium", requirements=(key + "<=0",)),
+        inputs=gate.GateInputs(preset_name="speed-medium", requirements=(key + "<=0", "speed/update_seconds>=0")),
     )
     report = run(step)[0]
     assert report.verdict == "fail"
@@ -225,6 +237,8 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (0, True),
         (1, False),
     ]
+    assert [row.comparator for row in report.invariants if row.name == "require/" + key] == ["<=", "<="]
+    assert [row.comparator for row in report.invariants if row.name == "require/speed/update_seconds"] == [">=", ">="]
     with pytest.raises(click.BadParameter, match="does not compute"):
         snowball.build_run(presets.PRESETS["speed-medium"], requirements=("typo>=0",))
 
@@ -333,6 +347,8 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
     if preset == "speed-short":
+        coverage = [row for row in report["invariants"] if row["name"].endswith("/panel_scored_fraction")]
+        assert coverage and all(row["comparator"] == ">=" for row in coverage)
         values["eval/test_panel/all/outcome/graded"] = 1480
         values["eval/test_panel/all/outcome/unavailable"] = 20
         _json(root / "exports/metrics/step-000000.json", values)

@@ -24,7 +24,6 @@ import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from enum import StrEnum
 
 import click
 import pyarrow as pa
@@ -33,6 +32,7 @@ from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
 from marin.rl.skyrl_records import read_skyrl_attempt_tracking, read_skyrl_launch_config, read_skyrl_metrics
 from pydantic import BaseModel
@@ -80,29 +80,8 @@ SHARED_CONTROLS = {"data-medium": "learning-medium"}
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
 
 
-class Verdict(StrEnum):
-    PASS = "pass"
-    FAIL = "fail"
-    INVALID = "invalid"
-
-
 EXIT_CODES = {Verdict.PASS: 0, Verdict.FAIL: 1, Verdict.INVALID: 2, None: 3}
 REFUSAL_EXIT_CODE = 4
-
-
-class Label(StrEnum):
-    IMPROVES = "improves"
-    TRADE_OFF = "trade-off"
-    NO_CHANGE = "no change"
-    REGRESSION = "regression"
-
-
-class Change(StrEnum):
-    BETTER = "better"
-    WORSE = "worse"
-    SAME = "same"
-    UNAVAILABLE = "unavailable"
-    CHANGED = "changed"
 
 
 class GateInputs(BaseModel, frozen=True):
@@ -166,43 +145,6 @@ def gate_inputs(
         init=init,
         requirements=tuple(dict.fromkeys(requirements)),
     )
-
-
-class Invariant(BaseModel):
-    name: str
-    value: bool | int | float
-    limit: bool | int | float
-    holds: bool
-    replicate: int = 0
-
-
-class ComparisonRole(StrEnum):
-    OBJECTIVE = "objective"
-    CONSTRAINT = "constraint"
-    REQUIREMENT = "requirement"
-    REPORTED = "reported"
-    SLICE = "slice"
-
-
-class Comparison(BaseModel):
-    metric: str
-    role: ComparisonRole
-    higher_is_better: bool | None = None
-    run: float | None = None
-    control: float | None = None
-    delta: float | None = None
-    delta_percent: float | None = None
-    noise_percent: float | None = None
-    tolerance: float | None = None
-    sd: float | None = None
-    df: int | None = None
-    n_run: int
-    n_control: int
-    passes: bool | None = None
-    change: Change | None = None
-    tasks: int | None = None
-    control_min: float | None = None
-    control_max: float | None = None
 
 
 class RunMetadata(GateInputs):
@@ -388,6 +330,7 @@ def _grader_errors(
         name=name,
         value=upper,
         limit=GRADER_ERROR_LIMIT,
+        comparator="<=",
         holds=upper <= GRADER_ERROR_LIMIT and recorded,
     )
 
@@ -403,7 +346,7 @@ def _session_invariants(
     rows = table.to_pylist()
     counts = Counter(row["item"] for row in rows)
     holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
-    result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, holds=holds)]
+    result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, comparator="==", holds=holds)]
     if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards):
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
         result.append(
@@ -411,6 +354,7 @@ def _session_invariants(
                 name=f"{name}/panel_scored_fraction",
                 value=coverage,
                 limit=presets.MINIMUM_PANEL_COVERAGE,
+                comparator=">=",
                 holds=coverage >= presets.MINIMUM_PANEL_COVERAGE,
             )
         )
@@ -484,7 +428,9 @@ def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[st
     completed = planned.intersection(metrics)
     training = [metrics[step] for step in sorted(completed)]
     invariants = [
-        Invariant(name="planned_updates", value=len(completed), limit=len(planned), holds=completed == planned)
+        Invariant(
+            name="planned_updates", value=len(completed), limit=len(planned), comparator="==", holds=completed == planned
+        )
     ]
     if not generating:
         finite = all(
@@ -496,7 +442,9 @@ def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[st
             and all(math.isfinite(row[key]) for key in row if key.startswith("loss/") or key == "policy/raw_grad_norm")
             for row in training
         )
-        invariants.append(Invariant(name="finite_losses_and_gradients", value=finite, limit=True, holds=finite))
+        invariants.append(
+            Invariant(name="finite_losses_and_gradients", value=finite, limit=True, comparator="==", holds=finite)
+        )
 
     return tuple(invariants)
 
@@ -585,7 +533,7 @@ def _load_run(
             holds = all(
                 row.get("generate/min_num_tokens") == row.get("generate/max_num_tokens") == fixed for row in training
             )
-        invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=fixed, holds=holds))
+        invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
     missing = any(
         metric.key.startswith("policy/mismatch/")
         and _mismatch_counts([metrics.get(step, {}) for step in preset.measured], metric.key.rsplit("/", 1)[0]) is None
@@ -649,7 +597,13 @@ def _with_requirements(candidate: RunData, requirements: Sequence[str]) -> RunDa
         if requirement.bound is not None:
             holds = value >= requirement.bound if requirement.higher_is_better else value <= requirement.bound
             invariants.append(
-                Invariant(name=f"require/{requirement.key}", value=value, limit=requirement.bound, holds=holds)
+                Invariant(
+                    name=f"require/{requirement.key}",
+                    value=value,
+                    limit=requirement.bound,
+                    comparator=">=" if requirement.higher_is_better else "<=",
+                    holds=holds,
+                )
             )
     return replace(candidate, invariants=tuple(invariants))
 
