@@ -19,6 +19,7 @@ from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
+from iris.testing import controller_rows_check
 from iris.testing.controller import (
     fail_worker,
     make_controller_state,
@@ -202,6 +203,7 @@ def test_rolled_back_transaction_writes_no_rows(state):
 
 
 def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, monkeypatch):
+    controller_rows_check.uninstall(state._db)  # this test drops rows on purpose
     rows = _attach(state, "marin")
 
     def broken_snapshot(cur, tables, marked):
@@ -221,6 +223,7 @@ class _ClosedTable(FakeStatsTable):
 
 
 def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
+    controller_rows_check.uninstall(state._db)  # this test drops rows on purpose
     state._db.attach_controller_rows(
         ControllerRowTables(
             cluster="marin",
