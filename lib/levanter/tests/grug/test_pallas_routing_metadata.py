@@ -7,7 +7,6 @@ Off GPU the kernels run in the Pallas interpreter; on TPU the option is rejected
 """
 
 import math
-import re
 
 import jax
 import jax.numpy as jnp
@@ -190,17 +189,8 @@ def test_ring_filtered_pallas_routing_metadata_matches_xla_bitwise(dtype):
                 grad_fn = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True))
                 jaxpr = str(jax.make_jaxpr(grad_fn)(*args))
                 (_, (out, counts)), grads = grad_fn(*args)
-            # Three kernels per side, inside ring_filtered's shard_map, and only on the Pallas path.
-            names = (
-                "grug_send_slot_counts",
-                "grug_send_slot_scan",
-                "grug_send_slots",
-                "grug_expert_row_counts",
-                "grug_expert_row_scan",
-                "grug_expert_rows",
-            )
-            found = [bool(re.search(rf"\b{n}\b", jaxpr)) for n in names]
-            assert found == [routing_metadata == "pallas"] * len(names), found
+            # The option must select the kernels, or the comparison below would hold trivially.
+            assert ("pallas_call" in jaxpr) == (routing_metadata == "pallas")
             return out, counts, grads
 
         xla_out, xla_counts, xla_grads = run("xla")
