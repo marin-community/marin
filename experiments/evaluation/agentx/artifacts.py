@@ -15,6 +15,8 @@ from rigging.filesystem import atomic
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
+SERVER_METRICS_RELATIVE_PATH = Path("aiperf_artifacts/server_metrics_export.json")
+
 
 def file_digest(path: Path) -> str:
     with path.open("rb") as stream:
@@ -70,7 +72,7 @@ def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -
 
 def pack_server_metrics(point: Path) -> None:
     """Keep lossless server metrics within Iris's uncompressed task-output limit."""
-    source = point / "aiperf_artifacts/server_metrics_export.json"
+    source = point / SERVER_METRICS_RELATIVE_PATH
     if not source.is_file():
         return
     encoded = source.with_suffix(".json.zst")
@@ -94,7 +96,7 @@ def pack_server_metrics(point: Path) -> None:
 
 def restore_server_metrics(point: Path) -> None:
     """Restore the original metrics bytes for the unchanged result processor."""
-    source = point / "aiperf_artifacts/server_metrics_export.json"
+    source = point / SERVER_METRICS_RELATIVE_PATH
     encoded = source.with_suffix(".json.zst")
     if not encoded.exists():
         return

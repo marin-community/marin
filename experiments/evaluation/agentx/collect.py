@@ -16,6 +16,7 @@ from iris.resources.state import JobState, TaskState
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.agentx.artifacts import (
+    SERVER_METRICS_RELATIVE_PATH,
     copy_file,
     file_digest,
     restore_server_metrics,
@@ -55,7 +56,7 @@ def validate_window(point: Path, manifest: PointManifest, attempt_uid: str) -> d
     """Keep incomplete, replaced and scenario-invalid windows out of the importer."""
     record = validate_attempt(point, manifest, attempt_uid)
     restore_server_metrics(point)
-    metrics = json.loads((point / "aiperf_artifacts/server_metrics_export.json").read_text())
+    metrics = json.loads((point / SERVER_METRICS_RELATIVE_PATH).read_text())
     if record["worker_metrics_url"] not in metrics["summary"]["endpoints_successful"] or not any(
         name.startswith("vllm:") for name in metrics["metrics"]
     ):
