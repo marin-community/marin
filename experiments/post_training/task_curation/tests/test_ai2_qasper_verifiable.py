@@ -8,7 +8,11 @@ import pytest
 from taskcompendium.models import AnswerType, ScriptGrader
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets import ai2_qasper_verifiable, ai2_qasper_verifiable_grade
+from experiments.post_training.task_curation.datasets import (
+    ai2_qasper,
+    ai2_qasper_verifiable,
+    ai2_qasper_verifiable_grade,
+)
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
@@ -82,7 +86,7 @@ def test_requires_exact_annotation_agreement(annotations, expected):
     ],
 )
 def test_detects_unavailable_figure_and_table_evidence(evidence, expected):
-    assert ai2_qasper_verifiable.uses_missing_evidence([{"evidence": evidence}]) is expected
+    assert ai2_qasper.uses_missing_evidence([{"evidence": evidence}]) is expected
 
 
 @pytest.mark.parametrize(
