@@ -1,5 +1,17 @@
 # Snowball RL experiments
 
+## The loop
+
+1. [Curate tasks](../references/task-curation.md#run-a-campaign) into an admitted corpus.
+2. [Publish a selection](../references/task-curation.md#rebuild-a-snowball-training-selection)
+   at an immutable version with the required evaluation exclusions.
+3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
+   `--tasks NAME@VERSION`, or choose the preset for the change.
+4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
+   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
+
+## Run a preset
+
 Run an experiment from a named preset. The command binds the versioned task selection,
 Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measurement window.
 
@@ -90,8 +102,8 @@ The collected controls retain `snowball-100k@2026.11.04.1`; the updated selectio
 separate unpublished version and must be built before use.
 
 `--init NAME@VERSION` on a learning or train-long preset selects a published model or kept
-HF export. Learning and data controls keep final HF weights automatically; their candidates
-use `--keep-weights`. Durable exports live under `exports/global_step_<N>/policy`.
+HF export. Learning-medium and data-medium retain final HF weights for both controls and
+candidates. Durable exports live under `exports/global_step_<N>/policy`.
 Train-long keeps checkpoints and exports weights by default. Repeating its command resumes
 its latest checkpoint under the same run identity. Temporary checkpoints expire after 14 days;
 see [checkpoint handling](../references/rl-launching.md).

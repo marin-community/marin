@@ -14,8 +14,10 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 1. Choose the preset from the recipe's [choice table](../../../docs/recipes/snowball-rl.md#which-experiment-to-run).
    When it names two, run the second after the first passes.
 2. Track or stage new source under `experiments/`, `lib/` and `vendor/`. The source tree hash enters
-   the run name. Custom tasks must have an immutable recipe, the same development holdout, the
-   full test panel in `exclusions`, and no AI-judged tasks.
+   the run name. Custom tasks follow the
+   [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
+   They need an immutable recipe, the same development holdout, the full test panel in
+   `exclusions`, and no AI-judged tasks.
 3. Print the plan:
 
    ```bash
@@ -55,8 +57,8 @@ uv run python -m experiments.post_training.snowball_rl --preset data-short \
 
 Screen a task selection with data-short, then use data-medium for training quality. Use
 learning-medium for task-sampling changes. `--init NAME@VERSION` on learning or train-long
-selects a published model or kept HF export. Learning/data candidates use `--keep-weights` for
-a durable final export; their controls keep it automatically. Train-long keeps checkpoints and
+selects a published model or kept HF export. Learning-medium and data-medium retain a durable
+final export for controls and candidates. Train-long keeps checkpoints and
 HF exports on 40 H100, with no verdict. Its original command resumes its own latest checkpoint.
 
 `--require 'KEY<=NUMBER'` or `KEY>=NUMBER` bounds every replicate. `KEY<=control` and

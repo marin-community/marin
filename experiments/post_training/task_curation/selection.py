@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select training inventories from admitted curation artifacts and test panels from converted corpora."""
+"""Select training tasks and evaluation panels from admitted curation artifacts."""
 
 import hashlib
 import json
@@ -39,7 +39,7 @@ from taskcompendium.models import (
     grades_in_process,
     grades_with_judge,
 )
-from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
+from taskcompendium.pipeline.fingerprints import deduplication_key
 from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from verifyit.json_objects import unique_object
@@ -440,16 +440,8 @@ def _grader_counts(path: Path) -> dict[str, int]:
 def write_training(
     config: SelectionConfig, heldout: tuple[TaskSpec, ...], exclusions: tuple[TaskSpec, ...], destination: Path
 ) -> dict[str, SourceCounts]:
-    """Filter excluded and duplicate admitted tasks before seeded sampling without replacement.
-
-    Heldout and exclusion tasks match by ID, public semantics or exact context. Exclusion tasks also match by
-    the test panel's overlap keys, which add the whitespace-normalized final user statement.
-    """
-    excluded = (*heldout, *exclusions)
-    excluded_ids = {task.id for task in heldout}
-    excluded_public = {semantic_digest(task, False) for task in excluded}
-    excluded_contexts = {task.context.model_dump_json() for task in heldout}
-    excluded_panel_keys = {key for task in exclusions for key in _panel_keys(task).exclusion}
+    """Sample admitted local tasks after excluding panel overlaps and duplicates."""
+    excluded_keys = {key for task in (*heldout, *exclusions) for key in _panel_keys(task).exclusion}
     selected_ids: set[str] = set()
     selected_contracts: set[str] = set()
     counts = {source.source_id: SourceCounts() for source in config.sources}
@@ -462,12 +454,9 @@ def write_training(
                 task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
                 source_counts = counts[source.source_id]
                 source_counts.input += 1
-                if (
-                    task.id in excluded_ids
-                    or semantic_digest(task, False) in excluded_public
-                    or task.context.model_dump_json() in excluded_contexts
-                    or not excluded_panel_keys.isdisjoint(_panel_keys(task).exclusion)
-                ):
+                if _grader_kind(task) not in LOCAL_GRADERS:
+                    raise ValueError(f"Training selection requires local graders: {task.id}")
+                if not excluded_keys.isdisjoint(_panel_keys(task).exclusion):
                     source_counts.heldout_overlap += 1
                     continue
                 contract = deduplication_key(task)

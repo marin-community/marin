@@ -429,6 +429,29 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
+@pytest.mark.parametrize("failure", ["extra-node", "node-width", "entrypoint"])
+def test_generation_rejects_allocation_and_entrypoint_conflicts(failure):
+    spec = _spec()
+    plan = dataclasses.replace(spec.topology.role_plan, generate_only=True)
+    topology = dataclasses.replace(spec.topology, role_plan=plan)
+    with pytest.raises(
+        ValueError,
+        match={
+            "extra-node": "exactly the inference engine nodes",
+            "node-width": "whole-node topology width",
+            "entrypoint": "entrypoint is derived",
+        }[failure],
+    ):
+        if failure == "extra-node":
+            dataclasses.replace(topology, num_nodes=topology.num_nodes + 1)
+        elif failure == "node-width":
+            dataclasses.replace(
+                topology, role_plan=dataclasses.replace(plan, policy_num_gpus_per_node=2, num_inference_engines=2)
+            )
+        else:
+            dataclasses.replace(spec, topology=topology, config_yaml="entrypoint: generate\n" + spec.config_yaml)
+
+
 @pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
     spec = _spec()
@@ -439,7 +462,9 @@ def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) ->
                 spec.topology, role_plan=dataclasses.replace(spec.topology.role_plan, generate_only=True)
             ),
         )
-    recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
+    recipe = f"{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
+    if entrypoint != "generate":
+        recipe = f"entrypoint: {entrypoint}\n" + recipe
     with pytest.raises(ValueError, match="expert_block requires non-colocated"):
         dataclasses.replace(spec, config_yaml=recipe)
 
@@ -566,9 +591,7 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
         cluster_config.reset_data_config_cache()
 
 
-def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -644,52 +667,146 @@ def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
 
-    monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
-    launch["artifacts"]["attempts_root"] = str(tmp_path / "attempts")
-    launch["artifacts"]["export_root"] = str(tmp_path / "exports")
+
+@pytest.mark.timeout(120)
+def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch):
+    spec = _spec()
+    spec = dataclasses.replace(
+        spec,
+        config_yaml=(
+            "entrypoint: standard\n"
+            "context_budget: {request_window_tokens: 1024, max_new_tokens_per_turn: 256, max_turns: 1}\n"
+            "model_num_attention_heads: 8\n" + spec.config_yaml
+        ),
+    )
+    step = skyrl_step(spec, _execution(), export_hf=True)
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    launch = yaml.safe_load(config.launch_config_yaml)
+    launch["artifacts"] = {
+        key: str(tmp_path / value)
+        for key, value in {
+            "checkpoint_root": "checkpoints",
+            "export_root": "exports",
+            "attempts_root": "attempts",
+            "resolved_config_uri": "resolved.yaml",
+            "terminal_manifest_uri": "terminal.json",
+        }.items()
+    }
     launch["iris"]["wandb_entity"] = "tests-team"
-    launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["wandb"])
-    launch["skyrl"]["trainer"].setdefault("algorithm", {})["batch_invariant"] = False
-    launch["runtime"]["task_env"] = {"VLLM_ATTENTION_BACKEND": "FLASH_ATTN"}
-    (tmp_path / "resolved-launch.yaml").write_text(json.dumps({"config": launch}))
-    (tmp_path / "terminal.json").write_text(json.dumps({"config": launch, "result": response}))
+    launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["files", "wandb"])
+    launch_path = tmp_path / "launch.yaml"
+    launch_path.write_text(yaml.safe_dump(launch))
+    environment = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "IRIS_TASK_ID"):
+        environment.pop(key, None)
+    script = r"""
+import json
+import sys
+from pathlib import Path
+from omegaconf import OmegaConf, open_dict
+from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
+from cloud.iris.launch import LaunchOutcome, execute_launch
+from cloud.iris.launch_config import load_launch_config
+from cloud.iris.skyrl_entrypoint import _write_tracking
+from marinskyrl.checkpoint_paths import policy_export_path
+from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
+from skyrl_train.hf_export_schema import HFExportRequest
+from skyrl_train.utils.tracking import Tracking
+
+path = Path(sys.argv[1])
+root = path.parent
+import cloud.iris.launch, skyrl_train, taskcompendium
+for module in (cloud.iris.launch, skyrl_train, taskcompendium):
+    assert Path(module.__file__).resolve().is_relative_to(Path.cwd()), module.__file__
+
+class LocalBackend:
+    def launch(self, config_path):
+        config = load_launch_config(config_path)
+        resolved = Path(config.artifacts.resolved_config_uri)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(OmegaConf.to_yaml(config))
+        if config.run.mode == "checkpoint_export":
+            policy = Path(policy_export_path(str(config.artifacts.export_root), 8))
+            policy.mkdir(parents=True, exist_ok=True)
+            for name in ("config.json", "model.safetensors", "tokenizer.json"):
+                (policy / name).write_text("{}")
+        elif config.run.attempt_id != "earlier-failed-attempt":
+            with open_dict(config.skyrl):
+                config.skyrl.runtime = {"run_id": config.run.id, "attempt_id": config.run.attempt_id,
+                    "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
+            _write_tracking(config)
+            with Tracking("tests-project", "record-boundary", "files", config.skyrl) as tracker:
+                tracker.start(resumed_step=None)
+                tracker.log({"loss": 0.25}, step=3)
+            checkpoints = Path(config.artifacts.checkpoint_root)
+            checkpoints.mkdir(parents=True, exist_ok=True)
+            (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("8\n")
+        failed = config.run.attempt_id == "earlier-failed-attempt"
+        return LaunchOutcome("/local/training", "failed" if failed else "succeeded", int(failed))
+
+    def export_terminal_policy(self, config_path):
+        config = load_launch_config(config_path)
+        request = HFExportRequest(step=8, checkpoint_base_path=str(config.artifacts.checkpoint_root),
+            checkpoint_path=str(Path(config.artifacts.checkpoint_root) / "global_step_8"),
+            export_path=str(config.artifacts.export_root), model_path=str(config.skyrl.trainer.policy.model.path),
+            model_source_uri=str(config.inputs.model.uri), model_source_identity=str(config.inputs.model.identity),
+            num_nodes=1, gpus_per_node=4)
+        spec = ExportJobSpec(request=request, cluster="local", priority="batch", gpu_variant="H100",
+            job_name=None, timeout=60, no_wait=False)
+        export = checkpoint_export_launch_config(config, request, spec)
+        export_path = root / "export.yaml"
+        export_path.write_text(OmegaConf.to_yaml(export))
+        result = execute_launch(export_path, backend=self)
+        assert result.state == "succeeded", result
+
+    def validate(self, config_path):
+        raise AssertionError("the test exercises wait-mode execution")
+
+config = OmegaConf.load(path)
+current = config.run.attempt_id
+config.run.attempt_id = "earlier-failed-attempt"
+config.run.export_hf = False
+path.write_text(OmegaConf.to_yaml(config))
+assert execute_launch(path, backend=LocalBackend()).state == "failed"
+config.run.attempt_id = current
+config.run.export_hf = True
+path.write_text(OmegaConf.to_yaml(config))
+result = execute_launch(path, backend=LocalBackend())
+assert result.state == "succeeded", result
+receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
+(root / "resolved-launch.yaml").write_text(OmegaConf.to_yaml({"config": receipt["config"]}))
+"""
+    result = subprocess.run(
+        skyrl_cpu_command("python", "-c", script, str(launch_path)),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=110,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
     receipt = read_stored_skyrl_receipt(str(tmp_path))
     assert receipt is not None and receipt.result.model is not None
-    assert receipt.result.model.policy_export_uri == model.hf_model_uri
+    assert receipt.result.model.global_step == 8
     assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
-    tracking_path = tmp_path / f"exports/attempts/{config.attempt_id}/tracking.json"
-    tracking_path.parent.mkdir(parents=True)
-    tracking_path.write_text(json.dumps({"attempt_id": config.attempt_id, "engine": {"vllm_version": "test-vllm"}}))
-    tracking = read_skyrl_attempt_tracking(str(tmp_path), config.attempt_id)
-    assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
-    assert tracking["engine"]["vllm_version"] == "test-vllm"
-    assert tracking["engine"]["batch_invariant"] is False
-    assert tracking["engine"]["vllm_env"] == {"VLLM_ATTENTION_BACKEND": "FLASH_ATTN"}
-    metrics_path = tmp_path / "exports/metrics/step-000003.json"
-    metrics_path.parent.mkdir()
-    metrics_path.write_text(json.dumps({"step": 3, "loss": 0.25}))
-    assert read_skyrl_metrics(str(tmp_path)) == {3: {"step": 3, "loss": 0.25}}
-    earlier = launch | {"run": launch["run"] | {"attempt_id": "earlier-failed-attempt"}}
-    attempts = tmp_path / "exports/attempts"
-    (attempts / "earlier-failed-attempt").mkdir(parents=True)
-    (attempts / "earlier-failed-attempt/receipt.json").write_text(
-        json.dumps({"config": earlier, "result": {"state": "failed", "failure": "worker lost"}})
-    )
-    current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
+    current_id, attempts = read_stored_skyrl_attempts(str(tmp_path))
     assert current_id == config.attempt_id
-    assert set(stored) == {config.attempt_id, "earlier-failed-attempt"}
-    assert stored[current_id] == receipt
-    assert stored["earlier-failed-attempt"].result.failure == "worker lost"
+    assert set(attempts) == {config.attempt_id, "earlier-failed-attempt"}
+    assert attempts["earlier-failed-attempt"].result.failure == "Iris job reached failed"
+    tracking = read_skyrl_attempt_tracking(str(tmp_path), config.attempt_id)
+    assert tracking["attempt_id"] == config.attempt_id
+    assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
+    assert "vllm_version" in tracking["engine"]
+    assert read_skyrl_metrics(str(tmp_path)) == {3: {"step": 3, "loss": 0.25}}
     (tmp_path / "terminal.json").unlink()
-    current_attempt = attempts / config.attempt_id / "receipt.json"
-    current_attempt.write_text(json.dumps({"config": launch, "result": {"state": "failed"}}))
-    failed = read_stored_skyrl_receipt(str(tmp_path))
-    assert failed is not None and failed.result.state == "failed"
-    assert read_skyrl_launch_receipt(str(tmp_path)) == failed
-    current_attempt.unlink()
+    assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
+    (tmp_path / f"exports/attempts/{config.attempt_id}/receipt.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) is None
-    current_id, stored = read_stored_skyrl_attempts(str(tmp_path))
-    assert current_id == config.attempt_id and set(stored) == {"earlier-failed-attempt"}
+    assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
+    (tmp_path / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": attempts["earlier-failed-attempt"].config}))
+    assert read_stored_skyrl_receipt(str(tmp_path)) == attempts["earlier-failed-attempt"]
     (tmp_path / "resolved-launch.yaml").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
     assert read_skyrl_launch_receipt(str(tmp_path)) is None

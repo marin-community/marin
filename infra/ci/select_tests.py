@@ -89,6 +89,16 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 MARIN_NATIVE_CONFIG_TESTS = {
+    "experiments/post_training/curriculum_rl/test_launch.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+    "tests/rl/test_skyrl.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+        "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
+    ),
     "experiments/post_training/snowball_tests/test_snowball_rl.py": (
         "vendor/skyrl/cloud/iris/",
         "vendor/skyrl/skyrl-train/skyrl_train/config/",
