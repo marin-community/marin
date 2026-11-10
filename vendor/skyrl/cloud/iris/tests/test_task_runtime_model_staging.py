@@ -270,7 +270,7 @@ def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeyp
 
     monkeypatch.setattr(hf_model_cache, "snapshot_download", reject_hub_download)
     monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", reject_hub_download)
-    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity)
+    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity, manifest.revision)
     node_path = task_runtime.stage_model(locator)
     snapshot = huggingface_hub.snapshot_download(
         "org/policy",
@@ -293,9 +293,11 @@ def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, mo
     )
     cache = tmp_path / "hf-cache"
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
-    policy = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity)
+    policy = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity, manifest.revision)
     # The derived export config can retain locators for training-only teachers whose TTL expired.
-    teacher = HuggingFaceModelCache("org/teacher", "b" * 40, "memory://expired-teacher-mirror", "sha256:" + "c" * 64)
+    teacher = HuggingFaceModelCache(
+        "org/teacher", "b" * 40, "memory://expired-teacher-mirror", "sha256:" + "c" * 64, "b" * 40
+    )
     config = OmegaConf.create(
         {
             "run": {"mode": "checkpoint_export"},
@@ -311,8 +313,9 @@ def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, mo
     assert not (cache / "models--org--teacher").exists()
 
 
+@pytest.mark.parametrize("requested_revision", ["a" * 40, "main", "refs/pr/7"])
 @pytest.mark.parametrize("missing", ["model.safetensors", ".marinskyrl-model-manifest.json"])
-def test_expired_node_mirror_falls_back_to_the_hub(tmp_path, monkeypatch, missing):
+def test_expired_node_mirror_falls_back_to_the_pinned_hub_commit(tmp_path, monkeypatch, missing, requested_revision):
     mirror = tmp_path / "mirror"
     manifest = publish_hugging_face_snapshot(
         memory_model_snapshot(f"expired-source/{tmp_path.name}"),
@@ -323,21 +326,32 @@ def test_expired_node_mirror_falls_back_to_the_hub(tmp_path, monkeypatch, missin
     (mirror / missing).unlink()
     cache = tmp_path / "hf-cache"
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
-    locator = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity)
+    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity, manifest.revision)
     downloads = []
-    node_snapshot = tmp_path / "downloaded"
-    node_snapshot.mkdir()
+    node_snapshot = cache / "models--org--policy" / "snapshots" / ("a" * 40)
+    node_snapshot.mkdir(parents=True)
     weights = save({"weight": np.arange(4, dtype=np.float32)})
 
     def download(model_id, *, revision, allow_patterns):
         downloads.append((model_id, revision))
-        (node_snapshot / "model.safetensors").write_bytes(weights)
-        return node_snapshot
+        # The Hub branch has advanced, but the CPU-selected commit remains available.
+        selected = node_snapshot if revision == "a" * 40 else node_snapshot.parent / ("b" * 40)
+        selected.mkdir(parents=True, exist_ok=True)
+        (selected / "model.safetensors").write_bytes(weights)
+        return selected
 
     monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
     assert task_runtime.stage_model(locator) == node_snapshot
     assert (node_snapshot / "model.safetensors").read_bytes() == weights
     assert downloads == [("org/policy", "a" * 40)]
+    assert (
+        Path(
+            huggingface_hub.snapshot_download(
+                "org/policy", revision=requested_revision, cache_dir=cache, local_files_only=True
+            )
+        )
+        == node_snapshot
+    )
 
 
 def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
@@ -350,7 +364,7 @@ def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
     )
     cache = tmp_path / "hf-cache"
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
-    locator = HuggingFaceModelCache("org/policy", "main", str(mirror), manifest.identity)
+    locator = HuggingFaceModelCache("org/policy", "main", str(mirror), manifest.identity, manifest.revision)
     ready = Barrier(8)
 
     def stage():
@@ -381,14 +395,14 @@ def test_cpu_draft_mirror_avoids_the_hub_until_any_mirror_file_expires(tmp_path,
 
     monkeypatch.setattr(hf_model_cache, "marin_temp_bucket", lambda *_, **__: str(mirror))
     monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)
-    cache = HuggingFaceModelCache("org/draft", "d" * 40, str(mirror), manifest.identity)
+    cache = HuggingFaceModelCache("org/draft", "d" * 40, str(mirror), manifest.identity, manifest.revision)
     prepared = prepare_draft_model(
-        SpeculatorModelConfig(str(mirror), manifest.identity),
+        SpeculatorModelConfig(str(mirror), manifest.identity, manifest.revision),
         cache_ttl_days=14,
         cache_source_prefix="s3://region/run",
         model_caches=(cache,),
     )
-    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity)
+    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity, manifest.revision)
     assert (mirror / "model.safetensors").is_file()
     assert hf_model_cache.load_model_manifest(str(mirror)).identity == manifest.identity
     assert opened == ([("org/draft", "d" * 40)] if missing else [])
@@ -423,8 +437,12 @@ def test_shared_snapshot_keeps_tokenizers_and_templates_and_repairs_truncated_we
         tokenizer_mode="policy",
     )
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
-    full = HuggingFaceModelCache("org/model", "a" * 40, str(embedded), embedded_manifest.identity)
-    partial = HuggingFaceModelCache("org/model", "a" * 40, str(model_only), model_manifest.identity)
+    full = HuggingFaceModelCache(
+        "org/model", "a" * 40, str(embedded), embedded_manifest.identity, embedded_manifest.revision
+    )
+    partial = HuggingFaceModelCache(
+        "org/model", "a" * 40, str(model_only), model_manifest.identity, model_manifest.revision
+    )
     node = task_runtime.stage_model(full)
     shard = node / "model.safetensors"
     inode = shard.stat().st_ino

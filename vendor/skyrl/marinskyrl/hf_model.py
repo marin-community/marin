@@ -21,12 +21,13 @@ MODEL_CACHE_SUFFIXES = (".safetensors", ".json", ".txt", ".model", ".py", ".jinj
 
 @dataclass(frozen=True)
 class HuggingFaceModelCache:
-    """Completed CPU mirror for a Hub model and its requested revision."""
+    """CPU mirror bound to an immutable commit and its requested ref alias."""
 
     model_id: str
     revision: str
     uri: str
     identity: str
+    resolved_revision: str
 
 
 def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_json: bool, source: str) -> bytes:

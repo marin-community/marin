@@ -263,13 +263,26 @@ def stage_task_data(data_json: str, *, role: str) -> None:
     _log(f"{role.capitalize()} data staged to node-local paths: {resolved}")
 
 
-def _stage_model_from_hub(model_id: str, revision: str | None) -> Path:
+def _write_model_ref(cache_root: Path, revision: str, resolved_revision: str) -> None:
+    if revision == resolved_revision:
+        return
+    refs = (cache_root / "refs").resolve()
+    ref = (refs / revision).resolve()
+    ref.relative_to(refs)
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ref-", dir=ref.parent) as temporary:
+        staged = Path(temporary) / "commit"
+        staged.write_text(resolved_revision)
+        os.replace(staged, ref)
+
+
+def _stage_model_from_hub(model_id: str, revision: str | None, *, requested_revision: str | None = None) -> Path:
     """Retain the node's direct-Hub download when its CPU mirror is unavailable."""
     cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model_id.replace('/', '--')}"
     cache_root.mkdir(parents=True, exist_ok=True)
     with FileLock(str(cache_root / ".stage.lock")):
         _log(f"Pre-staging model from the Hub on node {_rank()}/{_num_tasks()}: {model_id}")
-        return Path(
+        snapshot = Path(
             download_hugging_face_snapshot(
                 model_id,
                 revision=revision,
@@ -277,14 +290,20 @@ def _stage_model_from_hub(model_id: str, revision: str | None) -> Path:
             )
         )
 
+        if requested_revision is not None and revision is not None:
+            _write_model_ref(cache_root, requested_revision, revision)
+        return snapshot
+
 
 def stage_model(model: HuggingFaceModelCache) -> Path:
     """Restore a CPU-made bucket mirror into this node's offline HF cache."""
+    if not is_hugging_face_commit(model.resolved_revision):
+        raise ValueError(f"Hugging Face cache requires a resolved commit: {model.model_id}")
     try:
         manifest = load_model_manifest(model.uri)
         if manifest.identity != model.identity or manifest.model_id != model.model_id:
             raise ValueError(f"Hugging Face mirror identity mismatch: {model.uri}")
-        if not manifest.revision or not is_hugging_face_commit(manifest.revision):
+        if manifest.revision != model.resolved_revision:
             raise ValueError(f"Hugging Face mirror requires an immutable revision: {model.uri}")
         cache_root = Path(huggingface_hub.constants.HF_HUB_CACHE) / f"models--{model.model_id.replace('/', '--')}"
         local_path = cache_root / "snapshots" / manifest.revision
@@ -319,16 +338,11 @@ def stage_model(model: HuggingFaceModelCache) -> Path:
                         destination = local_path / entry.path
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         os.replace(staging / entry.path, destination)
-            if model.revision != manifest.revision:
-                refs = (cache_root / "refs").resolve()
-                ref = (refs / model.revision).resolve()
-                ref.relative_to(refs)
-                ref.parent.mkdir(parents=True, exist_ok=True)
-                ref.write_text(manifest.revision)
+            _write_model_ref(cache_root, model.revision, model.resolved_revision)
         return local_path
     except FileNotFoundError:
         _log(f"Bucket mirror missing files; falling back to the Hub: {model.uri}")
-        return _stage_model_from_hub(model.model_id, model.revision)
+        return _stage_model_from_hub(model.model_id, model.resolved_revision, requested_revision=model.revision)
 
 
 def stage_hugging_face_models(config: DictConfig) -> None:
@@ -538,7 +552,7 @@ def prepare_draft_model(
                 lock.release()
             source_uri, manifest = ensure_hugging_face_model_cache(
                 cached.model_id,
-                cached.revision,
+                cached.resolved_revision,
                 ttl_days=cache_ttl_days,
                 source_prefix=cache_source_prefix,
                 tokenizer_mode="policy",

@@ -151,7 +151,8 @@ def _prepare_model_caches(config: DictConfig) -> None:
                 "Cannot mirror {}@{}; retaining node-side Hub fallback: {}", model.path, model.revision, error
             )
             continue
-        caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity))
+        assert manifest.revision is not None
+        caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity, manifest.revision))
     if hub_draft:
         assert draft is not None and draft.hugging_face_repo_id is not None
         cached = next(
@@ -170,7 +171,10 @@ def _prepare_model_caches(config: DictConfig) -> None:
                 source_prefix=str(config.artifacts.checkpoint_root),
                 tokenizer_mode="policy",
             )
-            cached = HuggingFaceModelCache(draft.hugging_face_repo_id, draft.source_identity, uri, manifest.identity)
+            assert manifest.revision is not None
+            cached = HuggingFaceModelCache(
+                draft.hugging_face_repo_id, draft.source_identity, uri, manifest.identity, manifest.revision
+            )
             caches.append(cached)
         config.skyrl.generator.speculative_decoding.model = asdict(SpeculatorModelConfig(cached.uri, cached.identity))
     config.inputs.hugging_face_models = caches
