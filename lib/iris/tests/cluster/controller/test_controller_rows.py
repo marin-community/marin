@@ -320,6 +320,34 @@ def test_a_replaced_child_gets_its_own_job_key(state):
     assert {(j.job_id, j.submitted_at_ms) for j in rows.jobs} == {(child, 3_000)}
 
 
+def test_job_rows_carry_tags_and_children_inherit_them(state):
+    rows = _attach(state, "marin")
+    root = make_job_request("train")
+    root.tags.CopyFrom(job_pb2.JobTags(project="tokenizer-sweep", category="pre-training", description="Sweep sizes."))
+    submit_job(state, "train", root)
+    submit_job(state, "/test-user/train/data", make_job_request("/test-user/train/data"))
+    evaluation = make_job_request("/test-user/train/eval")
+    evaluation.tags.CopyFrom(job_pb2.JobTags(project="", category="evaluation"))
+    submit_job(state, "/test-user/train/eval", evaluation)
+    submit_job(state, "untagged", make_job_request("untagged"))
+
+    tags = {j.job_id: json.loads(j.tags) if j.tags is not None else None for j in rows.jobs}
+    assert tags == {
+        "/test-user/train": {"project": "tokenizer-sweep", "category": "pre-training", "description": "Sweep sizes."},
+        "/test-user/train/data": {
+            "project": "tokenizer-sweep",
+            "category": "pre-training",
+            "description": "Sweep sizes.",
+        },
+        "/test-user/train/eval": {
+            "project": "tokenizer-sweep",
+            "category": "evaluation",
+            "description": "Sweep sizes.",
+        },
+        "/test-user/untagged": None,
+    }
+
+
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
 
 

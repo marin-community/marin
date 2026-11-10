@@ -289,6 +289,7 @@ def insert_job_config(
     egress_allow_json: list[str] | None = None,
     submit_argv_json: list | None = None,
     fail_if_exists: bool = False,
+    tags_json: str | None = None,
 ) -> None:
     """Insert one row into ``job_config``."""
     tx.execute(
@@ -321,6 +322,7 @@ def insert_job_config(
             egress_allow_json=egress_allow_json if egress_allow_json is not None else [],
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
             fail_if_exists=fail_if_exists,
+            tags_json=tags_json,
         )
     )
 

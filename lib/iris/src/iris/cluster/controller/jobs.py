@@ -52,6 +52,8 @@ from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
+    MAX_JOB_DESCRIPTION_CHARS,
+    MAX_JOB_TAG_CHARS,
     TERMINAL_JOB_STATES,
     USER_JOB_STATES,
     JobName,
@@ -501,6 +503,14 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
             raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     if not request.name:
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
+    for tag, limit in (
+        ("project", MAX_JOB_TAG_CHARS),
+        ("category", MAX_JOB_TAG_CHARS),
+        ("description", MAX_JOB_DESCRIPTION_CHARS),
+    ):
+        length = len(getattr(request.tags, tag))
+        if length > limit:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Job tag {tag} has {length} characters; the limit is {limit}")
     if request.HasField("coscheduling") and not request.coscheduling.group_by:
         raise ConnectError(
             Code.INVALID_ARGUMENT,

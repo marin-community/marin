@@ -171,6 +171,7 @@ class RemoteClusterClient:
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
         egress_allow: Sequence[job_pb2.EgressRule] = (),
         submit_argv: list[str] | None = None,
+        tags: job_pb2.JobTags | None = None,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -204,6 +205,7 @@ class RemoteClusterClient:
             egress_allow=egress_allow,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
+            tags=tags,
         )
         if self._bundle_id and not sandboxed:
             request.bundle_id = self._bundle_id

@@ -283,9 +283,14 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
 
 def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
     """Job rows for ``marked.jobs``."""
-    j = jobs_table.c
+    j, c = jobs_table.c, job_config_table.c
     for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
-        for r in cur.execute(select(jobs_table).where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)):
+        query = (
+            select(jobs_table, c.tags_json)
+            .select_from(jobs_table.outerjoin(job_config_table, c.job_id == j.job_id))
+            .where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)
+        )
+        for r in cur.execute(query):
             marked.job_rows.append(
                 IrisJob(
                     cluster=tables.cluster,
@@ -308,6 +313,7 @@ def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked,
                     backend_id=r.backend_id,
                     placement=r.cluster,
                     ts=ts,
+                    tags=r.tags_json,
                 )
             )
 

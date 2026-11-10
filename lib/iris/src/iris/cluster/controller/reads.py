@@ -657,6 +657,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.egress_allow_json,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
+            job_config_table.c.tags_json,
         )
         .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
         .where(jobs_table.c.job_id == bindparam("job_id")),

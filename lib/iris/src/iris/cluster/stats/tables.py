@@ -277,8 +277,7 @@ class IrisJob:
     # Named placement because this table's cluster is the writing controller.
     placement: str
     ts: datetime
-    # Reserved for submit-time job tags as a JSON object, e.g. {"project": ...,
-    # "category": ...}. Always NULL until Iris accepts job tags at submit.
+    # JobTags as JSON without empty fields; NULL when untagged.
     tags: str | None = None
 
 

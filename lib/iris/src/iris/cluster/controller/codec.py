@@ -196,6 +196,8 @@ def reconstruct_launch_job_request(
         req.ports.append(port)
     for arg in job.submit_argv_json:
         req.submit_argv.append(arg)
+    if job.tags_json is not None:
+        req.tags.CopyFrom(proto_from_json(job.tags_json, job_pb2.JobTags))
 
     if job.has_coscheduling:
         req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))

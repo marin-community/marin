@@ -118,9 +118,9 @@ GROUP BY a.root_job_id, c.accelerator_type
 ORDER BY accelerator_hours DESC;
 ```
 
-`iris.controller_db__jobs.tags` is reserved for submit-time job tags as a JSON object
-(`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
-submit.
+`iris.controller_db__jobs.tags` holds the job's tags as a JSON object
+(`json_get(tags, 'category')`), or NULL for an untagged job; jobs submitted
+before tags existed are untagged.
 
 `error` is not truncated, but token-like strings in it are redacted (see
 **Free text** above).

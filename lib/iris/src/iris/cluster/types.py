@@ -131,6 +131,11 @@ than a person, so its jobs are attributed to this well-known principal. Per-clus
 federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
 a peer only if that peer's policy names it explicitly."""
 
+# Longest JobTags.project and JobTags.category the controller accepts.
+MAX_JOB_TAG_CHARS = 100
+# Longest JobTags.description the controller accepts.
+MAX_JOB_DESCRIPTION_CHARS = 1000
+
 
 def is_federated(cluster: str) -> bool:
     """Whether a job/task ``cluster`` value denotes a peer this controller handed off to.

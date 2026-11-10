@@ -939,6 +939,7 @@ class IrisClient:
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
         egress_allow: Sequence[str] = (),
         submit_argv: list[str] | None = None,
+        tags: job_pb2.JobTags | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -985,6 +986,9 @@ class IrisClient:
                 ``iris.cluster.egress``). They take effect when the job runs
                 under ALLOWLIST, so a launcher can declare them on every
                 cluster. An explicit ``egress_policy`` must be ALLOWLIST.
+            tags: What the job is for (project, category, description), for
+                compute accounting. On a child job, each unset field comes from
+                the parent.
 
         Returns:
             Job handle for the submitted job
@@ -1107,6 +1111,7 @@ class IrisClient:
                 egress_policy=egress_policy,
                 egress_allow=parse_egress_rules(egress_allow),
                 submit_argv=submit_argv,
+                tags=tags,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

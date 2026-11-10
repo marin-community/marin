@@ -315,6 +315,8 @@ job_config_table = Table(
     Column("egress_policy", Integer, nullable=False, server_default="0"),
     # An ALLOWLIST job's own egress rules, as rule strings (iris.cluster.egress).
     Column("egress_allow_json", JSONList(), nullable=False, server_default="[]"),
+    # The job's JobTags as a JSON object without empty fields; NULL when untagged.
+    Column("tags_json", String),
     Index("idx_job_config_name", "name"),
 )
 

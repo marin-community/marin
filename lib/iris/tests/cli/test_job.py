@@ -68,6 +68,12 @@ def test_job_run_resolves_secret_reference_and_isolation(recorded_job_submission
     assert value not in result.output
 
 
+def test_job_run_sends_tags_only_when_given(recorded_job_submissions):
+    assert _run_cli(["--category", "evaluation"]).exit_code == 0
+    assert _run_cli([]).exit_code == 0
+    assert [s["tags"] for s in recorded_job_submissions] == [_job_pb2.JobTags(category="evaluation"), None]
+
+
 def test_validate_region_zone_valid_region(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
     result = _run_cli(["--region", "us-central2"], config=config)

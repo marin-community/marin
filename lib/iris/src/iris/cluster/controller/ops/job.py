@@ -3,6 +3,7 @@
 
 """Aggregate-scoped commands for jobs: submit, cancel, complete, remove_finished."""
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -27,6 +28,7 @@ from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
 )
 from iris.cluster.controller.schema import (
+    job_config_table,
     job_workdir_files_table,
     jobs_table,
 )
@@ -195,11 +197,13 @@ def insert_job_and_config(
 
     parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
     root_submitted_ms = effective_submission_ms
+    # Not proto_to_json: JobTags fields have explicit presence, so it keeps a set empty string.
+    tags = {field.name: value for field, value in request.tags.ListFields() if value}
     if job_id.parent is not None:
         parent_row = cur.execute(
-            select(jobs_table.c.root_submitted_at_ms, jobs_table.c.submitting_user).where(
-                jobs_table.c.job_id == bindparam("job_id")
-            ),
+            select(jobs_table.c.root_submitted_at_ms, jobs_table.c.submitting_user, job_config_table.c.tags_json)
+            .select_from(jobs_table.outerjoin(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id))
+            .where(jobs_table.c.job_id == bindparam("job_id")),
             {"job_id": job_id.parent},
         ).first()
         if parent_row is None:
@@ -209,6 +213,9 @@ def insert_job_and_config(
         # caller: a federated subtree stays attributed to the principal that
         # launched the root.
         submitting_user = parent_row.submitting_user
+        # Each tag the child leaves empty comes from its parent.
+        if parent_row.tags_json is not None:
+            tags = {**json.loads(parent_row.tags_json), **tags}
     elif submitting_user is None:
         # A root with no resolved principal is an identity-less direct/loopback
         # submit — the same case the submit-time resolver attributes to local_admin.
@@ -299,6 +306,7 @@ def insert_job_and_config(
         egress_allow_json=[format_egress_rule(rule) for rule in request.egress_allow],
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
+        tags_json=json.dumps(tags) if tags else None,
     )
     controller_rows.record_job_submit(cur, job_id)
 
