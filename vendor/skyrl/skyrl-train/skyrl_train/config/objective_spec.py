@@ -12,6 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
 from marinskyrl.distillation import (
+    DistillationPlan,
     DistillationObjectiveKind,
     DistillationRewardMode,
     compile_distillation_plan_from_config,
@@ -192,6 +193,25 @@ def _score_centering_megatron_supported(cfg: DictConfig) -> bool:
     )
 
 
+def score_centering_unsupported_reason(cfg: DictConfig, plan: DistillationPlan | None) -> str | None:
+    """Return the support restriction shared by score centering and its probes."""
+    algorithm = cfg.trainer.algorithm
+    try:
+        score_centering_tis_cap(algorithm)
+    except ValueError as error:
+        return str(error)
+    if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
+        return "score centering requires regular PPO without distillation or auxiliary FTPO"
+    if not _score_centering_megatron_supported(cfg):
+        return (
+            "score centering requires Megatron with tensor and sequence parallel size one; "
+            "context parallelism requires sample packing"
+        )
+    if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
+        return "score centering requires local vLLM behavior top-K capture"
+    return None
+
+
 def score_centering_probe_unavailable_reason(cfg: DictConfig) -> str | None:
     """Explain why periodic hypothetical probes cannot run in this configuration."""
     algorithm = cfg.trainer.algorithm
@@ -200,20 +220,9 @@ def score_centering_probe_unavailable_reason(cfg: DictConfig) -> str | None:
         return "disabled (score_centering_probe.interval=0)"
     if algorithm.get("score_centering_enabled", False):
         return "score centering is enabled"
-    if (
-        algorithm.policy_loss_type != PolicyLossType.REGULAR
-        or compile_distillation_plan_from_config(cfg) is not None
-        or ftpo_requested(algorithm)
-    ):
-        return "requires regular PPO without distillation or auxiliary FTPO"
-    try:
-        score_centering_tis_cap(algorithm)
-    except ValueError as error:
-        return str(error)
-    if not _score_centering_megatron_supported(cfg):
-        return "requires Megatron TP=1 without sequence parallelism; CP>1 requires sample packing"
-    if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
-        return "requires local vLLM"
+    reason = score_centering_unsupported_reason(cfg, compile_distillation_plan_from_config(cfg))
+    if reason is not None:
+        return reason
     if cfg.generator.sampling_params.logprobs not in (None, 0):
         return "requires ordinary sampled-token logprobs"
     return None
@@ -377,18 +386,13 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
         if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
             raise ValueError("score_centering_probe.interval must be a nonnegative integer")
     if algorithm.get("score_centering_enabled", False):
-        score_centering_tis_cap(algorithm)
-        if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
-            raise ValueError("score centering requires regular PPO without distillation or auxiliary FTPO")
-        if not _score_centering_megatron_supported(cfg):
-            raise ValueError(
-                "score centering requires Megatron with tensor and sequence parallel size one; "
-                "context parallelism requires sample packing"
-            )
-        if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
-            raise ValueError("score centering requires local vLLM behavior top-K capture")
+        reason = score_centering_unsupported_reason(cfg, plan)
+        if reason is not None:
+            raise ValueError(reason)
         if cfg.generator.sampling_params.logprobs not in (None, 0, candidates):
-            raise ValueError(f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}")
+            raise ValueError(
+                f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}"
+            )
     policy_trains = not (topk and plan.reward_mode is DistillationRewardMode.REPLACE)
     if correction.rules:
         if not policy_trains:
