@@ -158,6 +158,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
     parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
     parser.add_argument(
+        "--remat-prevent-cse",
+        action="store_true",
+        default=None,
+        help="Checkpoint the blocks with prevent_cse=True (JAX's default): optimization barriers around the saved "
+        "residuals, which keep the backward's slices of them unfused. Without it the stacked blocks are checkpointed "
+        "with prevent_cse=False and the unstacked ones with True (GrugModelConfig.remat_prevent_cse).",
+    )
+    parser.add_argument(
         "--scan-unroll", type=int, default=1, help="Layers per iteration of the layer scan (lax.scan unroll)."
     )
     parser.add_argument(
@@ -252,6 +260,7 @@ def main() -> None:
         attention_implementation=args.attention,
         moe_implementation=args.moe_impl,
         remat_mode=args.remat_mode,
+        remat_prevent_cse=args.remat_prevent_cse,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
         scan_unroll=args.scan_unroll,
@@ -340,7 +349,7 @@ def main() -> None:
         "size=%s layers=%d hidden=%d experts=%d topk=%d heads=%d kv=%d batch=%d microbatches=%d "
         "overlap_last_microbatch=%s seq_len=%d "
         "window=%d mp=%s expert_axis=%d replica_axis=%d attention=%s moe=%s capacity=%s pooled_capacity=%s waves=%d "
-        "remat=%s "
+        "remat=%s remat_prevent_cse=%s "
         "replicated_grads=%s router_stats=%s qb_balance=%s qb_sync_interval=%d carry_compute_params=%s "
         "zero1=%s gather_in_first_microbatch=%s watch_interval=%d flops_per_example=%.4e",
         args.size,
@@ -364,6 +373,7 @@ def main() -> None:
         model.pooled_transport_capacity_factor,
         model.num_expert_waves,
         args.remat_mode,
+        model.remat_prevent_cse,
         args.replicated_grads,
         args.router_stats,
         args.qb_balance,

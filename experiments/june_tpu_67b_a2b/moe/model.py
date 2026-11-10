@@ -132,6 +132,13 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    remat_prevent_cse: bool | None = None
+    """``prevent_cse`` of the per-block gradient checkpoints. True (JAX's default) wraps the saved residuals in
+    optimization barriers, which XLA removes only after fusion, so the backward's slices of them stay unfused copies.
+    False drops the barriers, so XLA fuses those slices; inside the stacked-blocks ``lax.scan`` the scan already keeps
+    the backward from reusing forward values (JAX's guidance for ``jax.checkpoint`` under ``scan``), but with unstacked
+    blocks XLA may CSE the recomputation with the forward, keeping its activations alive. None (the default) picks
+    False for the stacked blocks and True for the unstacked ones."""
     replicate_attn_weights: bool = False
     """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
     of FSDP-sharded across the data axis. Attention weights are small (~128 KB
@@ -1027,6 +1034,8 @@ class Transformer(eqx.Module):
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
+        prevent_cse = self.blocks is not None if cfg.remat_prevent_cse is None else cfg.remat_prevent_cse
+        checkpoint = functools.partial(eqx.filter_checkpoint, policy=remat_policy, prevent_cse=prevent_cse)
 
         gathered_blocks = None
         if self.blocks is not None:
@@ -1038,7 +1047,7 @@ class Transformer(eqx.Module):
                 is_last = i == num_blocks - 1
                 is_long = i % LONG_ATTENTION_INTERVAL == LONG_ATTENTION_INTERVAL - 1 or is_last
                 use_pko = is_long and not cfg.disable_pko
-                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                hidden, router_stats = checkpoint(block)(
                     hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope, position_ids
                 )
                 moe_router_stats.append(router_stats)
@@ -1065,13 +1074,13 @@ class Transformer(eqx.Module):
                     layer, buffers = _apply_gathers(layer, layer_gather_sinks, buffers, index)
                 layer_args = (carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope)
                 if layer_grad_offsets is None:
-                    hidden_out, stats = eqx.filter_checkpoint(layer, policy=remat_policy)(*layer_args, position_ids)
+                    hidden_out, stats = checkpoint(layer)(*layer_args, position_ids)
                 else:
                     # The reductions inside the checkpoint: its inputs are then the layer's own slices, which the
                     # backward reads in place, rather than the marked weights, which the scan would stack as a copy.
                     # A weight also sharded over ``data`` (FSDP) is gathered again in the backward, like the rest of
                     # what the checkpoint recomputes.
-                    hidden_out, stats = eqx.filter_checkpoint(_block_with_grad_offsets, policy=remat_policy)(
+                    hidden_out, stats = checkpoint(_block_with_grad_offsets)(
                         layer, layer_grad_offsets, layer_grad_sinks, *layer_args, position_ids
                     )
                 return (hidden_out, buffers), stats
