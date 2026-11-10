@@ -4,8 +4,10 @@
 """Readers for saved SkyRL launch receipts, tracking and metrics."""
 
 import json
+from collections.abc import Mapping
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 
 import yaml
 from iris.cli.connect import connect_controller, rpc_client
@@ -62,6 +64,15 @@ class SkyRLReceiptLookupError(ValueError):
 class SkyRLLaunchReceipt(BaseModel):
     config: dict
     result: SkyRLLaunchResponse
+
+
+def named_evaluation_profiles(config: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        name: profile
+        for callback in config.get("trainer", {}).get("callbacks") or []
+        if callback.get("type") == "evaluation"
+        for name, profile in (callback.get("additional_evaluations") or {}).items()
+    }
 
 
 def read_skyrl_launch_config(run_output: str) -> dict:

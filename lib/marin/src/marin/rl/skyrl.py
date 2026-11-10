@@ -13,11 +13,10 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import fsspec
 import yaml
@@ -31,7 +30,12 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, TERMINAL_RECEIPT_FILENAME, SkyRLLaunchResponse
+from marin.rl.skyrl_records import (
+    RESOLVED_LAUNCH_FILENAME,
+    TERMINAL_RECEIPT_FILENAME,
+    SkyRLLaunchResponse,
+    named_evaluation_profiles,
+)
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
@@ -545,16 +549,6 @@ def _parsed_config(config_yaml: str) -> dict[str, object]:
     if not isinstance(config, dict):
         raise ValueError("SkyRL config_yaml must contain a mapping at the document root")
     return config
-
-
-# Mirrors skyrl_train.evaluation_profiles.named_evaluation_profiles; marin-core does not install skyrl_train.
-def named_evaluation_profiles(config: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    return {
-        name: profile
-        for callback in config.get("trainer", {}).get("callbacks") or []
-        if callback.get("type") == "evaluation"
-        for name, profile in (callback.get("additional_evaluations") or {}).items()
-    }
 
 
 def declared_config_value(config: dict[str, object], dotted_key: str) -> object:
