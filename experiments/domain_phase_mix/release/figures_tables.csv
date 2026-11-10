@@ -1,5 +1,5 @@
 label,kind,file,builder,configs
-fig:pipeline,figure,f1_pipeline,figure1_real_data_drafts/v40/build_figure.py,starcoder;ladder;ladder_accuracy
+fig:pipeline,figure,f1_pipeline,figure1_real_data_drafts/v42/build_figure.py,starcoder;ladder;ladder_accuracy
 fig:epoch-matching,figure,epoch_matching_tpp10,revision_notes/20261019_fig2_full_label/builder/build_figure2_fullwidth.py,starcoder
 fig:b5,figure,b5_matched_compute_scaling,revision_notes/20261012_fig3_label/builder/build_b5_compact.py,starcoder
 fig:b6,figure,b6_olmix_capacity_failure,experiments/domain_phase_mix/exploratory/two_phase_many/plot_starcoder_olmix_failure_b6_compact_20260908.py,starcoder
