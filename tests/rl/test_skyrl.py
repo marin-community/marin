@@ -751,13 +751,15 @@ class LocalBackend:
         request = HFExportRequest(step=8, checkpoint_base_path=str(config.artifacts.checkpoint_root),
             checkpoint_path=str(Path(config.artifacts.checkpoint_root) / "global_step_8"),
             export_path=str(config.artifacts.export_root), model_path=str(config.skyrl.trainer.policy.model.path),
+            model_source_uri=str(config.inputs.model.uri), model_source_identity=str(config.inputs.model.identity),
             num_nodes=1, gpus_per_node=4)
         spec = ExportJobSpec(request=request, cluster="local", priority="batch", gpu_variant="H100",
             job_name=None, timeout=60, no_wait=False)
         export = checkpoint_export_launch_config(config, request, spec)
         export_path = root / "export.yaml"
         export_path.write_text(OmegaConf.to_yaml(export))
-        assert execute_launch(export_path, backend=self).state == "succeeded"
+        result = execute_launch(export_path, backend=self)
+        assert result.state == "succeeded", result
 
     def validate(self, config_path):
         raise AssertionError("the test exercises wait-mode execution")
@@ -771,7 +773,8 @@ assert execute_launch(path, backend=LocalBackend()).state == "failed"
 config.run.attempt_id = current
 config.run.export_hf = True
 path.write_text(OmegaConf.to_yaml(config))
-assert execute_launch(path, backend=LocalBackend()).state == "succeeded"
+result = execute_launch(path, backend=LocalBackend())
+assert result.state == "succeeded", result
 receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
 (root / "resolved-launch.yaml").write_text(OmegaConf.to_yaml({"config": receipt["config"]}))
 """
