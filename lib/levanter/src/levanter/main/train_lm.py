@@ -116,8 +116,9 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
     """Reapply the requested Snowball runtime settings after an HF config reload.
 
     The HF config is authoritative for every architecture field. The FP32 router dot
-    flag and the MoE implementation are not in HF metadata, so they are copied from the
-    requested config. The requested reference checkpoint and tokenizer are kept too.
+    flag, the MoE implementation and the MoE capacity factor are not in HF metadata, so
+    they are copied from the requested config. The requested reference checkpoint and
+    tokenizer are kept too.
     """
     if not isinstance(requested, SnowballConfig):
         return reloaded
@@ -127,6 +128,7 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
         moe_implementation=requested.moe_implementation,
+        moe_capacity_factor=requested.moe_capacity_factor,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )

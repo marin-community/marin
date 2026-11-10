@@ -45,7 +45,7 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
-from levanter.main.train_lm import TrainLmConfig, main
+from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -314,6 +314,18 @@ def test_snowball_load_pretrained_machinery_is_exact():
         src_logits = np.asarray(run(src, ids).array)
         loaded_logits = np.asarray(run(loaded, ids).array)
     assert np.array_equal(src_logits, loaded_logits), "load_pretrained machinery changed logits"
+
+
+def test_snowball_moe_capacity_is_a_runtime_setting():
+    """The capacity reaches every expert MLP, is not exported to HF metadata, and survives an HF reload."""
+    cfg = _tiny_config(moe_capacity_factor=4.0)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+    assert {block.mlp.expert_mlp.capacity_factor for block in model.transformer.blocks} == {4.0}
+    hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    assert "moe_capacity_factor" not in hf and "capacity_factor" not in hf
+    reloaded = SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size))
+    assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
 
 
 def test_snowball_forward_shapes_and_finite():
