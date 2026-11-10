@@ -42,7 +42,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
-from experiments.post_training.task_curation.inventory import (
+from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     SELECTION_PREFIX,
     SUMMARY_FILENAME,

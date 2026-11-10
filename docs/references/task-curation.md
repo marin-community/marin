@@ -134,7 +134,7 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
-[`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
+[`selection.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/selection.py).
 It depends on the recipe's admitted source artifacts and a list of pinned heldout
 inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply

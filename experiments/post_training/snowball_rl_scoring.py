@@ -18,7 +18,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN, TRAIN_FILENAME
+from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN, TRAIN_FILENAME
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [

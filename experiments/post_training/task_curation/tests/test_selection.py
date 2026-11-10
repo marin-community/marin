@@ -45,7 +45,8 @@ from experiments.post_training.task_curation.datasets.nemo_tool_calls import sou
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
-from experiments.post_training.task_curation.inventory import (
+from experiments.post_training.task_curation.pipeline import source_recipe
+from experiments.post_training.task_curation.selection import (
     AAII_CATEGORIES,
     FULL_VALIDATION_FILENAME,
     HELDOUT_BLEND,
@@ -61,7 +62,6 @@ from experiments.post_training.task_curation.inventory import (
     task_selection_step,
     validation_task,
 )
-from experiments.post_training.task_curation.pipeline import source_recipe
 from experiments.post_training.task_curation.tests.conversion import converted_task
 
 FAMILIES = (*HELDOUT_FAMILIES.values(), STRUCTURAL_FAMILY)
