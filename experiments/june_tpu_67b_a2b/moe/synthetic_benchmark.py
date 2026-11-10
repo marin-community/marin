@@ -209,6 +209,9 @@ def log_model_flops(flops_per_example: float, flops_summary: dict[str, float]) -
 def log_throughput_summary(
     step_durations: list[float], batch_size: int, seq_len: int, flops_per_example: float, num_steps: int
 ) -> None:
+    """Log the median step and its throughput, from rank 0 only: every process times its own steps."""
+    if jax.process_index() != 0:
+        return
     median = statistics.median(step_durations)
     throughput = compute_instant_throughput(batch_size, median, seq_len, flops_per_example, aggregate_device_flops())
     logger.info(
