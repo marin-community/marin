@@ -106,6 +106,7 @@ def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int)
         shared_intermediate_dim=cfg.shared_expert_intermediate_dim,
         sliding_window=cfg.sliding_window,
         num_full_attention_layers=num_long_attention_layers(cfg.num_layers),
+        head_dim=cfg.inferred_head_dim,
     )
 
 
@@ -118,6 +119,7 @@ def snowball_attention_flops_per_token(cfg: SnowballConfig, seq_len: int) -> Att
         seq_len=seq_len,
         sliding_window=cfg.sliding_window,
         num_full_attention_layers=num_long_attention_layers(cfg.num_layers),
+        head_dim=cfg.inferred_head_dim,
     )
 
 
