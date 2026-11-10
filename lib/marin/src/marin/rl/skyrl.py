@@ -186,8 +186,10 @@ class SkyRLTopology:
 
         rollout_gpus = plan.num_inference_engines * tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
         if plan.generate_only:
-            if rollout_gpus > self.num_nodes * self.gpus_per_node:
-                raise ValueError("SkyRL inference engines exceed the allocated topology")
+            if self.num_nodes != plan.num_nodes:
+                raise ValueError("SkyRL generation topology must allocate exactly the inference engine nodes")
+            if plan.policy_num_gpus_per_node != self.gpus_per_node:
+                raise ValueError("SkyRL policy_num_gpus_per_node must match the whole-node topology width")
             return
         for field_name in (
             "policy_num_nodes",
@@ -672,6 +674,8 @@ def _validate_skyrl_recipe(
     _validate_role_plan_config(config, topology.role_plan)
     entrypoint = declared_config_value(config, "entrypoint")
     generate_only = topology.role_plan.generate_only
+    if generate_only and entrypoint is not MISSING_CONFIG_VALUE:
+        raise ValueError("SkyRL generation entrypoint is derived from the role plan")
     if entrypoint is not MISSING_CONFIG_VALUE and (entrypoint == GENERATE_ENTRYPOINT) != generate_only:
         raise ValueError("SkyRL entrypoint must agree with the role plan's generate_only setting")
     if (

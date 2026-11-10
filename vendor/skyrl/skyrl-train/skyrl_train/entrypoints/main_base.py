@@ -414,7 +414,8 @@ class BasePPOExp:
         data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts) and data_files:
+        needs_named_evaluation = bool(named_evaluation_profiles(self.cfg))
+        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_named_evaluation) and data_files:
             if EvaluationRunner(self.cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR:
                 return self.harbor_task_dataset(data_files)
             return self.task_dataset(data_files)
