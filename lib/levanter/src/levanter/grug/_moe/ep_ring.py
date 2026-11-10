@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from functools import partial
 from typing import NamedTuple, TypeAlias
 
 import jax
@@ -22,6 +23,7 @@ from levanter.grug._moe.common import (
     CapacityDrops,
 )
 from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
+from levanter.grug._moe.pallas_gather_sum import MoeGatherSum, gather_sum_rows, gather_valid_rows
 
 
 def _select_local_assignments(
@@ -78,39 +80,53 @@ def _take_valid_rows(
 
 # The dispatch gather and the combine are transposes of each other. Autodiff would turn the gather's transpose,
 # and the combine itself, into scatter-adds over the token buffer, which ROCm runs at about 1.2 TB/s. With the
-# inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows.
-@jax.custom_vjp
+# inverse map `slots` both directions are gathers: one reads each token's (at most K) slot rows. `backward` picks how
+# the backward's gather runs: XLA fusions ("xla") or the Pallas-Triton kernel ("pallas"); both give the same bits.
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
 def _dispatch_rows(
-    x: Float[Array, "T H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+    x: Float[Array, "T H"],
+    slot_token: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    slots: Int[Array, "T K"],
+    backward: MoeGatherSum,
 ) -> Float[Array, "P H"]:
     return _take_valid_rows(x, slot_token, slot_valid)
 
 
-def _dispatch_rows_fwd(x, slot_token, slot_valid, slots):
+def _dispatch_rows_fwd(x, slot_token, slot_valid, slots, backward):
     return _take_valid_rows(x, slot_token, slot_valid), slots
 
 
-def _dispatch_rows_bwd(slots, g):
-    return _gather_sum_slots(g, slots), None, None, None
+def _dispatch_rows_bwd(backward, slots, g):
+    d_x = gather_sum_rows(g, slots) if backward == "pallas" else _gather_sum_slots(g, slots)
+    return d_x, None, None, None
 
 
 _dispatch_rows.defvjp(_dispatch_rows_fwd, _dispatch_rows_bwd)
 
 
-@jax.custom_vjp
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
 def _combine_rows(
-    rows: Float[Array, "P H"], slot_token: Int[Array, "P"], slot_valid: Bool[Array, "P"], slots: Int[Array, "T K"]
+    rows: Float[Array, "P H"],
+    slot_token: Int[Array, "P"],
+    slot_valid: Bool[Array, "P"],
+    slots: Int[Array, "T K"],
+    backward: MoeGatherSum,
 ) -> Float[Array, "T H"]:
     return _gather_sum_slots(rows, slots)
 
 
-def _combine_rows_fwd(rows, slot_token, slot_valid, slots):
+def _combine_rows_fwd(rows, slot_token, slot_valid, slots, backward):
     return _gather_sum_slots(rows, slots), (slot_token, slot_valid)
 
 
-def _combine_rows_bwd(residuals, g):
+def _combine_rows_bwd(backward, residuals, g):
     slot_token, slot_valid = residuals
-    return _take_valid_rows(g, slot_token, slot_valid), None, None, None
+    if backward == "pallas":
+        d_rows = gather_valid_rows(g, slot_token, slot_valid)
+    else:
+        d_rows = _take_valid_rows(g, slot_token, slot_valid)
+    return d_rows, None, None, None
 
 
 _combine_rows.defvjp(_combine_rows_fwd, _combine_rows_bwd)
@@ -153,8 +169,8 @@ def _gather_dispatch_combine(
     assignments = tokens * topk
     slots = _assignment_sources(jnp.where(valid, picked, assignments), send_size=assignments).reshape(tokens, topk)
     return _DispatchCombine(
-        dispatch=lambda x: _dispatch_rows(x, token, valid, slots),
-        combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots),
+        dispatch=lambda x: _dispatch_rows(x, token, valid, slots, "xla"),
+        combine=lambda rows, weights: _combine_rows(rows * weights[:, None], token, valid, slots, "xla"),
     )
 
 

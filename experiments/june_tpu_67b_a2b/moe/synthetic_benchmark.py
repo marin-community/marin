@@ -40,6 +40,7 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+from levanter.grug._moe.pallas_gather_sum import MoeGatherSum
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -136,6 +137,14 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Waves for fixed_pooled_wave_all_to_all; must divide the local expert count.",
     )
+    parser.add_argument(
+        "--moe-gather-sum",
+        choices=get_args(MoeGatherSum),
+        default="xla",
+        help="ring_filtered only: run the backward's expert-side dispatch gather-sum and sender-side combine gather as "
+        "XLA fusions (xla) or in a Pallas-Triton row-gather kernel (pallas), with the same results bit for bit "
+        "(GrugModelConfig.moe_gather_sum).",
+    )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
     parser.add_argument("--log-dir", type=Path, default=Path("logs/june-synthetic"))
@@ -189,6 +198,7 @@ def main() -> None:
         remat_mode=args.remat_mode,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
+        moe_gather_sum=args.moe_gather_sum,
     )
     if args.capacity_factor is not None:
         model = dataclasses.replace(model, capacity_factor=args.capacity_factor)
