@@ -34,6 +34,7 @@ from marin.rl.skyrl import (
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
+    read_skyrl_launch_receipt,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -43,7 +44,6 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.rl.skyrl_records import (
     read_skyrl_attempt_tracking,
-    read_skyrl_launch_receipt,
     read_skyrl_metrics,
     read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
@@ -644,9 +644,7 @@ def test_run_skyrl_exports_and_stored_receipts_read_without_iris(
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
 
-    monkeypatch.setattr(
-        "marin.rl.skyrl_records.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup")
-    )
+    monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
     launch["artifacts"]["attempts_root"] = str(tmp_path / "attempts")
     launch["artifacts"]["export_root"] = str(tmp_path / "exports")
     launch["iris"]["wandb_entity"] = "tests-team"
