@@ -6,12 +6,15 @@ from types import SimpleNamespace
 from dataclasses import replace
 
 import pytest
+from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ExitCodeReward, ScriptGrader
 
 from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.dataset.tasks import write_tasks
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.rollouts.task_projections import StepTaskProjection, WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -21,6 +24,34 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
+from tests.cpu.tiny_training.tiny_model import build_tiny_policy
+
+
+def test_final_profiles_build_primary_and_named_datasets_without_periodic_evaluation(tmp_path):
+    config = get_default_config()
+    primary, named = tmp_path / "primary.parquet", tmp_path / "named.parquet"
+    for path in (primary, named):
+        write_tasks(path, [lowered_task(text_task(path.stem))])
+    config.data.val_data = [str(primary)]
+    config.trainer.eval_interval = 0
+    config.trainer.callbacks = [{
+        "type": "evaluation", "eval_steps": 0,
+        "additional_evaluations": {
+            "primary_final": {"schedule": "final"},
+            "named_final": {"schedule": "final", "data_files": [str(named)]},
+        },
+    }]
+    experiment = BasePPOExp.__new__(BasePPOExp)
+    experiment.cfg = config
+    experiment.tokenizer = AutoTokenizer.from_pretrained(build_tiny_policy(tmp_path / "model"))
+
+    primary_dataset = experiment.get_eval_dataset()
+    named_datasets = experiment.get_named_eval_datasets()
+
+    assert primary_dataset is not None
+    assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["primary"]
+    named_dataset = named_datasets["named_final"]
+    assert [row["input"].spec.task.id for row in named_dataset.collate_fn(list(named_dataset))] == ["named"]
 
 
 @pytest.mark.parametrize("per_token", [False, True])

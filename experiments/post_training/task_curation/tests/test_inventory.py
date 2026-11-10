@@ -73,7 +73,7 @@ def local_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
 
 
-def source_task(identifier: str) -> TaskSpec:
+def source_task(identifier: str, *, image: bool = False) -> TaskSpec:
     return TaskSpec(
         id=identifier,
         source=Source(dataset="fixture", revision="release", row=identifier, importer_revision="1"),
@@ -85,7 +85,8 @@ def source_task(identifier: str) -> TaskSpec:
             argv=("python", "/tests/grade.py"),
             env={"MODE": "fixture"},
             environment=EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="python@sha256:" + "a" * 64
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                **({"docker_image": "python@sha256:" + "a" * 64} if image else {"packages_lock": "numpy==2.3.5\n"}),
             ),
         ),
         resources=ResourceGroups(verifier=(inline_resource("private.txt", identifier.encode()),)),
@@ -174,6 +175,16 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
         validation_task(row, {}).model_copy(update={"id": f"changed-id-{index}", "answer_format": Boxed()})
         for index, row in enumerate(heldout_rows()[:21])
     ]
+    leaked.append(
+        leaked[0].model_copy(
+            update={
+                "id": "changed-wrapper",
+                "context": chat(
+                    ("system", "Another wrapper"), ("user", "  " + leaked[0].context.events[-1].content + "\n")
+                ),
+            }
+        )
+    )
     original = source_task("training-a")
     duplicate = original.model_copy(update={"id": "alias"})
     first = admitted_source(tmp_path / "first", [original, source_task("training-b"), *leaked])
@@ -197,8 +208,8 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     summary = json.loads((output / "summary.json").read_text())
     assert summary["source_counts"] == {
         "fixture:first": {
-            "input": 23,
-            "heldout_overlap": 21,
+            "input": 24,
+            "heldout_overlap": 22,
             "duplicate": 0,
             "eligible": 2,
             "selected": sum(task.id != "training-c" for task in tasks),
@@ -243,7 +254,7 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         document = json.loads(row["lowered_task_spec"])
         task = document["task"]
         if task["source"]["dataset"] != "structure-closure":
-            task["grader"]["environment"] = source_task("image").grader.environment.model_dump(mode="json")
+            task["grader"]["environment"] = source_task("image", image=True).grader.environment.model_dump(mode="json")
             task["grader"]["argv"][0] = "python3"
             task["grader"]["env"] = {"MODE": "historical"}
             task["grader"]["timeout"] = 330
@@ -321,19 +332,34 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
-@pytest.mark.parametrize("failure", ["evaluation-source", "development-image"])
-def test_selection_does_not_publish_for_invalid_source_or_development_grader(tmp_path, failure):
+@pytest.mark.parametrize(
+    "failure,cause",
+    [
+        ("evaluation-source", "not a training population"),
+        ("development-image", "Development panel requires local graders"),
+        ("training-image", "Training selection requires local graders"),
+        ("training-judge", "Training selection requires local graders"),
+    ],
+)
+def test_selection_does_not_publish_for_invalid_source_or_grader(tmp_path, failure, cause):
     settings = recipe(tmp_path).model_copy(update={"sources": {"fixture:first": "calendar"}})
-    training = [source_task("training-a")]
+    training = [source_task("training-a"), source_task("training-b")]
     if failure.startswith("development-"):
-        training.append(source_task("training-b"))
         heldout = [validation_task(row, {}) for row in heldout_rows()]
-        heldout[0] = heldout[0].model_copy(update={"grader": source_task("image").grader})
+        heldout[0] = heldout[0].model_copy(update={"grader": source_task("image", image=True).grader})
         settings = settings.model_copy(update={"heldout": (task_file(tmp_path / "development.parquet", heldout),)})
+    elif failure.startswith("training-"):
+        grader = (
+            source_task("image", image=True).grader
+            if failure == "training-image"
+            else verifyit_package(JudgeSpec(references=("target",))).grader
+        )
+        training[0] = training[0].model_copy(update={"grader": grader})
     source = admitted_source(tmp_path / "source", training, "eval" if failure == "evaluation-source" else "train")
     step = task_selection_step({"fixture:first": source}, settings)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as error:
         run(step)
+    assert cause in error_chain(error.value)
     assert not (Path(step.path()) / TRAIN_FILENAME).exists()
 
 

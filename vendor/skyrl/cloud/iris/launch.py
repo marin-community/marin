@@ -18,8 +18,9 @@ from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
-from cloud.iris.launch_config import SubmissionMode, load_launch_config
+from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
 from marinskyrl.checkpoint_paths import attempt_receipt_path, policy_export_path, selected_export_step
+from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
@@ -166,9 +167,16 @@ def _record_failure(
     failure: str,
 ) -> LaunchResult:
     result = _result(config, LaunchState.FAILED, outcome=outcome, failure=failure)
-    attempt_uri = attempt_receipt_path(str(config.artifacts.export_root), str(config.run.attempt_id))
-    write_json(attempt_uri, _receipt(config, result))
+    _write_attempt_receipt(config, result)
     return result
+
+
+def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> None:
+    if config.run.mode == RunMode.CHECKPOINT_EXPORT:
+        uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
+    else:
+        uri = attempt_receipt_path(str(config.artifacts.export_root), str(config.run.attempt_id))
+    write_json(uri, _receipt(config, result))
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
@@ -229,8 +237,7 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         )
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
     payload = _receipt(config, result)
-    attempt_uri = attempt_receipt_path(str(config.artifacts.export_root), str(config.run.attempt_id))
-    write_json(attempt_uri, payload)
+    _write_attempt_receipt(config, result)
     write_json(terminal_receipt_uri, payload)
     return result
 
