@@ -254,6 +254,7 @@ def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
         for chunk in batched(job_ids, _ID_CHUNK_SIZE):
             tx.execute(update(jobs_table).where(jobs_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
             tx.execute(update(tasks_table).where(tasks_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
+            controller_rows.record_job_changes(tx, chunk)
 
 
 @writes_to(job_config_table)

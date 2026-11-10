@@ -7,51 +7,34 @@ Controller rows are marked at the write sites that change ``jobs`` and
 ``task_attempts`` (see ``iris.cluster.controller.controller_rows``). A new write
 path that forgets to mark its rows would drop them silently in production. This
 check wraps a test DB's ``transaction()``: after each commit, every locally owned
-job or attempt whose copied columns changed must have a row written by that
+job or attempt whose columns changed must have a row written by that
 transaction.
+
+Not checked: ``job_config`` rows (written once, at submit), deleted keys, and
+tests attached to real Finelog tables.
 """
 
 import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from sqlalchemy import select
 
+import iris
 from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.types import LOCAL_CLUSTER
 from iris.test_util import FakeStatsTable
 
-_JOB_COLUMNS = (
-    "user_id",
-    "submitting_user",
-    "parent_job_id",
-    "root_job_id",
-    "depth",
-    "state",
-    "submitted_at_ms",
-    "root_submitted_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "error",
-    "exit_code",
-    "num_tasks",
-    "name",
-)
-_ATTEMPT_COLUMNS = (
-    "state",
-    "created_at_ms",
-    "started_at_ms",
-    "finished_at_ms",
-    "exit_code",
-    "error",
-    "terminal_reason",
-    "node_name",
-    "pod_name",
-    "pod_uid",
-)
+# Every controller column is copied (``placement`` is ``jobs.cluster``), so the
+# check compares whole rows. ``worker_id`` is compared separately: remove_worker
+# clears it on finished attempts, and the rows keep the old value on purpose.
+_JOB_COLUMNS = tuple(column.name for column in jobs_table.columns)
+_ATTEMPT_COLUMNS = tuple(column.name for column in task_attempts_table.columns if column.name != "worker_id")
+_PACKAGE_TESTS_DIR = str(Path(iris.__file__).resolve().parents[2] / "tests") + os.sep
 
 
 def _local_state(cur: Tx) -> tuple[dict[str, tuple], dict[tuple[str, int], tuple]]:
@@ -77,7 +60,8 @@ def _opened_by_a_test_file() -> bool:
     frame = sys._getframe(2)
     while frame is not None and frame.f_code.co_filename.endswith("contextlib.py"):
         frame = frame.f_back
-    return frame is not None and f"{os.sep}tests{os.sep}" in frame.f_code.co_filename
+    module_file = frame.f_globals.get("__file__") if frame is not None else None
+    return module_file is not None and str(Path(module_file).resolve()).startswith(_PACKAGE_TESTS_DIR)
 
 
 def _written_keys(tables: ControllerRowTables, marks: dict[int, int]) -> tuple[set[str], set[tuple[str, int]]]:
