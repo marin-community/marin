@@ -696,7 +696,7 @@ their defaults leave pretraining unchanged.
 The ragged expert-parallel transport drops a routed assignment when the capacity block that holds its expert
 is full. A capacity block is a contiguous run of global expert ids within one expert shard: 12 experts at
 EP16. With a frozen router bias, SFT data loads a few experts at 15-35 times the mean, so the blocks holding
-them overflow. At capacity factor 1.5 the one-rack smoke `hero-sft-smoke-v2` dropped 5.2% of assignments.
+them overflow. At capacity factor 1.5 the one-rack smoke `hero-sft-smoke-v2` dropped 5.0% of assignments.
 
 An expert placement renumbers each layer's experts so every block carries a similar load. It moves the router
 columns, router bias, QB betas, expert weights, and their optimizer moments together, so the model computes the
