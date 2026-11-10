@@ -112,3 +112,9 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/openai-gpt-oss-20b.yaml
   zai-org-GLM-4.7-Flash:
     tau3-pi: model-configs/tau3/zai-org-GLM-4.7-Flash.yaml
+  nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16:
+    tau3-pi: model-configs/tau3/nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16.yaml
+  meta-models-Muse-Glimmer-30B:
+    tau3-pi: model-configs/tau3/meta-models-Muse-Glimmer-30B.yaml
+  deepseek-ai-DeepSeek-V4-Flash:
+    tau3-pi: model-configs/tau3/deepseek-ai-DeepSeek-V4-Flash.yaml
