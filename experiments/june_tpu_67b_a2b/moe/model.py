@@ -21,6 +21,7 @@ from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
+from levanter.grug._moe.pallas_routing_metadata import MoeRoutingMetadata
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -116,6 +117,10 @@ class GrugModelConfig:
     """Sender pool capacity per destination shard; required by ``ring_filtered`` and ``fixed_pooled_wave_all_to_all``."""
     num_expert_waves: int = 1
     """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
+    moe_routing_metadata: MoeRoutingMetadata = "xla"
+    """How ``ring_filtered`` builds its integer routing maps from the top-k expert ids (send slots, expert rows, group
+    sizes, drop counts): XLA fusions ("xla") or Pallas-Triton counting sorts ("pallas", GPU only). Both give the same
+    values. Needs ``moe_implementation="ring_filtered"``."""
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
@@ -522,6 +527,7 @@ class MoEMLP(eqx.Module):
                 capacity_factor=cfg.capacity_factor,
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 num_expert_waves=cfg.num_expert_waves,
+                routing_metadata=cfg.moe_routing_metadata,
             ),
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,
