@@ -24,7 +24,7 @@ from rigging.filesystem.conditional_object import LocalConditionalObject
 
 from harbor.archive import ProcessTrialArchive, TrialArchive, open_archive
 from harbor.models.agent.context import AgentContext
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import (
     AgentInfo,
     ExceptionInfo,
@@ -71,7 +71,10 @@ def _end_event(
     else:
         trial_dir.mkdir(parents=True)
     config = TrialConfig(
-        task=TaskConfig(path=Path("/test/task")), trial_name=trial_id, job_id=uuid4()
+        agent=AgentConfig(name="pi"),
+        task=TaskConfig(path=Path("/test/task")),
+        trial_name=trial_id,
+        job_id=uuid4(),
     )
     result = TrialResult(
         task_name=task_name,
@@ -615,6 +618,7 @@ def test_invalid_trajectory_is_reported_during_finalization(tmp_path: Path):
 
 def test_archive_config_survives_job_config_round_trip():
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         tasks=[],
         archive=ArchiveConfig(
             root="s3://eval-archives/run-1",

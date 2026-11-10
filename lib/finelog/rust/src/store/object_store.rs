@@ -291,26 +291,6 @@ pub trait ObjectStore: Send + Sync {
         self.cached_path(reference).await
     }
 
-    /// Resolve an input using the cache when present, otherwise its backing
-    /// scan location. The admission state pins any returned cache path.
-    async fn scan_source(
-        &self,
-        reference: &ObjectReference,
-        query: &QueryCacheAdmission,
-    ) -> Result<ScanSource, StatsError> {
-        if let Some(path) = self.pin_cached_path(reference, &query.pins).await? {
-            return Ok(ScanSource::Local(path));
-        }
-        if let Some(url) = self.remote_scan_url(&reference.id) {
-            self.warm_query(reference, query);
-            return Ok(ScanSource::Remote(url));
-        }
-        Err(StatsError::Internal(format!(
-            "object store has no scan source for {:?}",
-            reference.id.as_str()
-        )))
-    }
-
     /// Consider an optional fill after a query cache miss. Reuse history and
     /// the query's shared budget decide whether a cached store admits it.
     fn warm_query(&self, _reference: &ObjectReference, _query: &QueryCacheAdmission) {}

@@ -68,7 +68,7 @@ import hashlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Protocol, runtime_checkable
 
@@ -540,6 +540,16 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
+    checkpointer: CheckpointerConfig = field(
+        default_factory=lambda: CheckpointerConfig(
+            save_interval=timedelta(minutes=30), keep=None, keep_last_temporary_checkpoints=1
+        )
+    )
+    """Rolling resume checkpoints every 30 minutes; only the final checkpoint is permanent.
+
+    Set ``keep=[{"every": N}]`` to retain intermediate permanent checkpoints explicitly.
+    Marin resolves permanent and temporary paths from the run's output directory at launch.
+    """
 
     def __post_init__(self) -> None:
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
@@ -680,12 +690,7 @@ def _trainer(
             project=spec.wandb_project,
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
-        checkpointer=CheckpointerConfig(
-            base_path="checkpoints/",
-            save_interval=timedelta(minutes=30),
-            keep=[{"every": 5000}],
-            append_run_id_to_base_path=True,
-        ),
+        checkpointer=spec.checkpointer,
     )
 
 

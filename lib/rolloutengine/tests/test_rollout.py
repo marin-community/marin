@@ -3766,6 +3766,21 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     assert record.rollout.metrics == {"score": 1.0}
 
 
+async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():
+    async def agent(_context, complete):
+        messages = ({"role": "user", "content": "Return 12."},)
+        for _ in range(6):
+            response = await complete(Prompt(messages, {}))
+            messages = (*messages, response.message, {"role": "user", "content": "Continue."})
+
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}] * 6), harnesses={"agent": AgentHarness(agent)}
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=None))
+    assert len(record.rollout.conversations[-1].steps) == 6
+    assert record.rollout.stop_reason != "max_turns"
+    assert record.grade.reward == 1.0
+
+
 @pytest.mark.parametrize("compact", [False, True])
 async def test_context_rejection_allows_a_shorter_request_without_ending_the_attempt(compact):
     first = ({"role": "user", "content": "Start."},)

@@ -360,6 +360,7 @@ async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_conti
 
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     # An agent that ignores its empty budget and asks for a web search on every turn.
+    assert LIMITS.max_turns is not None
     agent = ScriptedAgent(tuple(call("web_search", objective="any", queries=["any"]) for _ in range(LIMITS.max_turns)))
     async with ParallelWeb("unused") as web:
         config = agentic_config(agent, ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
@@ -371,6 +372,7 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
 
 
 async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
+    assert LIMITS.max_turns is not None
     script = tuple(call("shell", command="echo still working") for _ in range(LIMITS.max_turns))
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
