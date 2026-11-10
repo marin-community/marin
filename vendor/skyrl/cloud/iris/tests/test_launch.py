@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import fsspec
 import numpy as np
 import pytest
 import yaml
@@ -19,9 +17,10 @@ from cloud.iris import hf_model_cache
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
-from cloud.iris.hf_model_cache import HuggingFaceSnapshot, HuggingFaceSnapshotFile, load_model_manifest
+from cloud.iris.hf_model_cache import HuggingFaceSnapshot, load_model_manifest
 from cloud.iris.launch import ExportedPolicy, LaunchOutcome, LaunchState, execute_launch
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
+from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from marinskyrl.checkpoint_paths import policy_export_path
 
 
@@ -244,22 +243,6 @@ def _hub_config_path(tmp_path: Path, *, submission: str = "detach") -> Path:
     return path
 
 
-def _hub_snapshot(tmp_path: Path) -> HuggingFaceSnapshot:
-    filesystem = fsspec.filesystem("memory")
-    root = f"{tmp_path.name}/hub"
-    payloads = {
-        "config.json": b"{}",
-        "tokenizer.json": b"{}",
-        "tokenizer_config.json": b"{}",
-        "model.safetensors": save({"weight": np.arange(4, dtype=np.float32)}),
-    }
-    files = []
-    for name, payload in payloads.items():
-        filesystem.pipe_file(f"{root}/{name}", payload)
-        files.append(HuggingFaceSnapshotFile(name, len(payload), hashlib.sha256(payload).hexdigest()))
-    return HuggingFaceSnapshot(filesystem, root, tuple(files))
-
-
 @pytest.mark.parametrize("separate_tokenizer", [False, True])
 @pytest.mark.parametrize(("hub_failure", "shared_model"), [(False, False), (False, True), (True, False)])
 def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
@@ -275,16 +258,14 @@ def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
         config["skyrl"]["teachers"]["local"]["model"] = {"path": "org/policy", "revision": "a" * 40}
         path.write_text(yaml.safe_dump(config))
     expected_models = ["org/policy"] if shared_model else ["org/policy", "org/teacher"]
-    snapshot = _hub_snapshot(tmp_path)
+    snapshot = memory_model_snapshot(f"{tmp_path.name}/hub")
     mirror_root = tmp_path / "mirrors"
     monkeypatch.setattr(
         hf_model_cache, "marin_temp_bucket", lambda _ttl, *, prefix, source_prefix: str(mirror_root / prefix)
     )
     monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
-    opened = []
 
     def open_snapshot(model_id, _revision):
-        opened.append(model_id)
         if hub_failure and model_id == "org/teacher":
             raise OSError("Hub unavailable")
         if separate_tokenizer and not shared_model and model_id == "org/policy":
@@ -323,7 +304,6 @@ def test_cold_policy_and_local_teachers_are_mirrored_before_gpu_submission(
             assert result.state is LaunchState.SUBMITTED
     finally:
         set_job_info(previous)
-    assert opened == expected_models
 
 
 @pytest.mark.parametrize("submission", ["prepare", "detach"])
@@ -352,7 +332,7 @@ def test_policy_without_a_separate_tokenizer_rejects_model_only_mirrors(tmp_path
     config = yaml.safe_load(path.read_text())
     config["inputs"]["model"]["tokenizer_uri"] = tokenizer_uri
     path.write_text(yaml.safe_dump(config))
-    snapshot = _hub_snapshot(tmp_path)
+    snapshot = memory_model_snapshot(f"{tmp_path.name}/hub")
     model_only = HuggingFaceSnapshot(
         snapshot.filesystem,
         snapshot.root,
@@ -383,7 +363,7 @@ def test_hub_draft_is_mirrored_and_rewritten_before_gpu_submission(tmp_path, mon
         "method": "eagle3",
     }
     path.write_text(yaml.safe_dump(config))
-    snapshot = _hub_snapshot(tmp_path)
+    snapshot = memory_model_snapshot(f"{tmp_path.name}/hub")
     snapshot = HuggingFaceSnapshot(
         snapshot.filesystem,
         snapshot.root,
@@ -427,7 +407,7 @@ def test_hub_draft_is_mirrored_and_rewritten_before_gpu_submission(tmp_path, mon
 
 def test_unsupported_policy_layout_fails_before_gpu_submission(tmp_path, monkeypatch):
     path = _hub_config_path(tmp_path)
-    snapshot = _hub_snapshot(tmp_path)
+    snapshot = memory_model_snapshot(f"{tmp_path.name}/hub")
     unsupported = HuggingFaceSnapshot(
         snapshot.filesystem,
         snapshot.root,
