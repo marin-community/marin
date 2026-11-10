@@ -166,6 +166,45 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+class RouterBiasMode(StrEnum):
+    """How the router bias moves during training.
+
+    UPDATE sets each step's bias from the previous step's quantile-balancing betas. FROZEN keeps
+    the restored betas, so every step routes with the bias the restored checkpoint would have used next.
+    """
+
+    UPDATE = "update"
+    FROZEN = "frozen"
+
+
+@dataclass(frozen=True)
+class SpecialTokenInit:
+    """Reseed chat special-token rows of the LM head and raise their learning rate.
+
+    At ``start_step`` each ``token_ids`` column of ``output_proj`` is copied from the matching
+    ``anchor_ids`` column, and the optimizer moments of those columns are zeroed; input embeddings
+    and their moments are kept. Every step scales the optimizer updates of the same
+    ``token_embed`` rows and ``output_proj`` columns by ``lr_multiplier``.
+    """
+
+    token_ids: tuple[int, ...]
+    anchor_ids: tuple[int, ...]
+    start_step: int
+    lr_multiplier: float
+
+    def __post_init__(self):
+        if not self.token_ids or len(set(self.token_ids)) != len(self.token_ids):
+            raise ValueError("token_ids must be nonempty and unique")
+        if len(self.anchor_ids) != len(self.token_ids):
+            raise ValueError("each special token needs exactly one anchor token")
+        if set(self.anchor_ids) & set(self.token_ids):
+            raise ValueError("anchor tokens must be rows that are not reseeded")
+        if self.start_step < 0:
+            raise ValueError(f"start_step must be non-negative, got {self.start_step}")
+        if self.lr_multiplier <= 0:
+            raise ValueError(f"lr_multiplier must be positive, got {self.lr_multiplier}")
+
+
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -348,10 +387,15 @@ class GrugTrainerConfig:
     # measured to pay off at 65K, gained only 0.4% at 16K on one rack, and its full-batch gather crosses racks.
     balance_attention_rows: bool = False
     sharding_dump_path: str | None = None
+    router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE
+    # SFT from a pretrained checkpoint: reseed chat-token rows once and train them faster.
+    special_tokens: SpecialTokenInit | None = None
 
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
+        if self.special_tokens is not None and self.master_param_mode != MasterParamMode.DEVICE:
+            raise ValueError("special-token reseeding supports only MasterParamMode.DEVICE")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -760,7 +804,8 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 
     def log_mixture_stage(step_info):
         nonlocal last_mixture_stage
-        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        # Stages are laid out from the mixture's first readable index, which `mixture_start_step` can move.
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step) - train_dataset.first_readable_index()
         block_id = seq_index // train_dataset.block_size
         stage = train_dataset._get_stage_for_block(block_id)
         if stage == last_mixture_stage:
@@ -1015,9 +1060,24 @@ def _make_train_step(
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     balance_rows: bool = False,
+    router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE,
+    special_tokens: SpecialTokenInit | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    frozen_router_bias = router_bias_mode == RouterBiasMode.FROZEN
+
+    def adjust_updates(updates):
+        if special_tokens is None:
+            return updates
+        return scale_special_token_updates(updates, special_tokens.token_ids, special_tokens.lr_multiplier)
+
+    def keep_router_bias(new_params, reference_params):
+        # Inherited optimizer momentum would otherwise move the frozen bias between steps.
+        if not frozen_router_bias:
+            return new_params
+        return eqx.tree_at(_router_bias, new_params, _router_bias(reference_params))
+
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1058,12 +1118,14 @@ def _make_train_step(
             master_params_in = apply_qb_betas(master_params_in, state.pending_qb_betas)
             master_grads = _FP32_POLICY.cast_to_param(grads)
             updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
-            master_params = optax.apply_updates(master_params_in, updates)
+            updates = adjust_updates(updates)
+            master_params = keep_router_bias(optax.apply_updates(master_params_in, updates), master_params_in)
             params = mp.cast_to_param(master_params)
             master_params = _tree_to_memory_kind(master_params, "pinned_host")
         else:
             updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-            params = optax.apply_updates(qb_params, updates)
+            updates = adjust_updates(updates)
+            params = keep_router_bias(optax.apply_updates(qb_params, updates), qb_params)
             master_params = None
 
         if ema_beta is None:
@@ -1102,12 +1164,63 @@ def _make_train_step(
             master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=state.pending_qb_betas if frozen_router_bias else metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
 
     return train_step
+
+
+def _router_bias(model: Transformer) -> jax.Array:
+    return model.stacked_blocks.stacked.mlp.router_bias
+
+
+def scale_special_token_updates(updates: Transformer, token_ids: tuple[int, ...], multiplier: float) -> Transformer:
+    """Scale the updates of special-token embedding rows and LM-head columns by ``multiplier``.
+
+    The scale applies after the optimizer's normalization, so it changes the effective learning rate.
+    """
+    vocab_size = updates.token_embed.shape[0]
+    scales = jnp.ones((vocab_size,), dtype=jnp.float32).at[jnp.asarray(token_ids)].set(multiplier)
+    token_embed = updates.token_embed * scales[:, None].astype(updates.token_embed.dtype)
+    output_proj = updates.output_proj * scales[None, :].astype(updates.output_proj.dtype)
+    return eqx.tree_at(lambda m: (m.token_embed, m.output_proj), updates, (token_embed, output_proj))
+
+
+def reseed_special_token_columns(
+    state: GrugTrainState, special_tokens: SpecialTokenInit, *, offload_opt_state: bool
+) -> GrugTrainState:
+    """Copy each special token's LM-head column from its anchor and zero that column's optimizer moments."""
+    vocab_size = state.params.output_proj.shape[1]
+    if max(special_tokens.token_ids + special_tokens.anchor_ids) >= vocab_size:
+        raise ValueError(f"special or anchor token is outside the {vocab_size}-token vocabulary")
+    ids = jnp.asarray(special_tokens.token_ids)
+    sources = jnp.asarray(special_tokens.anchor_ids)
+    output_proj_shape = state.params.output_proj.shape
+
+    @eqx.filter_jit
+    def reset(state):
+        output_proj = state.params.output_proj
+        sharding = jax.typeof(output_proj).sharding
+        anchors = output_proj.at[:, sources].get(out_sharding=P(sharding.spec[0], None))
+        params = eqx.tree_at(
+            lambda m: m.output_proj, state.params, output_proj.at[:, ids].set(anchors, out_sharding=sharding)
+        )
+
+        def clear_moments(path, leaf):
+            if not eqx.is_array(leaf) or not path or str(path[-1]) != ".output_proj":
+                return leaf
+            if leaf.shape != output_proj_shape:
+                raise ValueError(f"optimizer leaf {jax.tree_util.keystr(path)} has shape {leaf.shape}")
+            moment = _tree_to_memory_kind(leaf, "device") if offload_opt_state else leaf
+            moment = moment.at[:, ids].set(0, out_sharding=jax.typeof(moment).sharding)
+            return _tree_to_memory_kind(moment, "pinned_host") if offload_opt_state else moment
+
+        opt_state = jax.tree_util.tree_map_with_path(clear_moments, state.opt_state)
+        return dataclasses.replace(state, params=params, opt_state=opt_state)
+
+    return reset(state)
 
 
 def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
@@ -1157,6 +1270,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
         balance_rows=config.trainer.balance_attention_rows,
+        router_bias_mode=config.trainer.router_bias_mode,
+        special_tokens=config.trainer.special_tokens,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1215,6 +1330,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
+        special_tokens = config.trainer.special_tokens
+        # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
+        if special_tokens is not None and int(state.step) == special_tokens.start_step:
+            state = reseed_special_token_columns(
+                state, special_tokens, offload_opt_state=config.trainer.offload_opt_state
+            )
+            logger.info(
+                "Reseeded %d LM-head special-token columns from anchors %s",
+                len(special_tokens.token_ids),
+                dict(zip(special_tokens.token_ids, special_tokens.anchor_ids, strict=True)),
+            )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
