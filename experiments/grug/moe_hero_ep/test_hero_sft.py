@@ -358,6 +358,15 @@ def test_expert_placement_moves_host_offloaded_optimizer_state():
                 config, optimizer=_optimizer(), mp=_FP32, key=key, ema_beta=None, offload_opt_state=True
             )
         )(jax.random.key(0))
+        # Fresh moments are zero, and permuted zeros equal zeros, so give the host leaves distinct values.
+        rng = np.random.default_rng(1)
+
+        def nonzero_on_host(leaf):
+            if not (eqx.is_array(leaf) and leaf.sharding.memory_kind == "pinned_host"):
+                return leaf
+            return jax.device_put(rng.uniform(0.5, 1.5, leaf.shape).astype(leaf.dtype), leaf.sharding)
+
+        state = eqx.tree_at(lambda s: s.opt_state, state, jax.tree.map(nonzero_on_host, state.opt_state))
         host_leaves = {
             jax.tree_util.keystr(path): np.asarray(leaf)
             for path, leaf in jax.tree_util.tree_leaves_with_path(state.opt_state)
