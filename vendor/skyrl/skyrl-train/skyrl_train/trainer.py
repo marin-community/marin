@@ -71,6 +71,7 @@ from marinskyrl.distillation import (
 )
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
+from skyrl_train.objective.score_centering import collate_score_centering
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
@@ -2233,6 +2234,18 @@ class RayPPOTrainer:
             if len(rollout_routed_experts_rows) != len(response_ids):
                 raise ValueError("routed experts must have one row per response")
         distillation_tensors = _validated_distillation_tensors(trajectory_batch, response_masks_tensor)
+        score_tensors = {}
+        if self.cfg.trainer.algorithm.get("score_centering_enabled", False):
+            if rollout_logprobs_tensor is None:
+                raise ValueError("score centering requires sampled behavior log probabilities on every batch")
+            score_tensors = collate_score_centering(
+                trajectory_batch["student_topk_indices"],
+                trajectory_batch["behavior_topk_logprobs"],
+                response_ids,
+                loss_masks,
+                self.cfg.trainer.algorithm.score_centering_top_k,
+                sampled_logprobs=rollout_logprobs_tensor,
+            )
         # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
         policy_steps = None
         if rollout_staleness is None:
@@ -2267,6 +2280,7 @@ class RayPPOTrainer:
             routed_expert_rows=rollout_routed_experts_rows,
         )
         training_input.update(distillation_tensors)
+        training_input.update(score_tensors)
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
             candidates, scores, _ = collate_student_selected_rollout(
@@ -2873,6 +2887,16 @@ class RayPPOTrainer:
             fwd_keys.append("rollout_routed_experts")
         data_fwd_pass = training_input.select(keys=fwd_keys, metadata_keys=["response_length"])
         data_fwd_pass.metadata["global_step"] = self.global_step
+        policy_fwd_pass = data_fwd_pass
+        if "score_topk_indices" in training_input:
+            policy_fwd_pass = training_input.select(
+                keys=[
+                    *fwd_keys,
+                    "score_topk_indices",
+                ],
+                metadata_keys=["response_length"],
+            )
+            policy_fwd_pass.metadata["global_step"] = self.global_step
 
         def collect_results(actor_infos, results, key):
             ret_outputs: TrainingOutputBatch = concatenate_outputs_after_mesh_dispatch(actor_infos, results)
@@ -2920,7 +2944,7 @@ class RayPPOTrainer:
         if self.colocate_all:
             self.policy_model.backload_to_gpu(backload_optimizer=False, backload_model=True)
 
-        action_log_probs_refs = self.policy_model.async_run_ray_method("mesh", "forward", data=data_fwd_pass)
+        action_log_probs_refs = self.policy_model.async_run_ray_method("mesh", "forward", data=policy_fwd_pass)
         if self.colocate_all:
             all_rank_action_log_probs: List[TrainingOutputBatch] = ray.get(action_log_probs_refs)
             action_log_probs = collect_results(self.policy_model.actor_infos, all_rank_action_log_probs, key="output")
@@ -2962,6 +2986,13 @@ class RayPPOTrainer:
         # NOTE (sumanthrh): The slicing is needed to make sure that the batch dimension doesn't change for the tensordict.
         reference_scores = reference_scores[: len(sequences_all)] if reference_scores is not None else None
         action_log_probs = action_log_probs[: len(sequences_all)]
+        if "score_topk_indices" in training_input:
+            old_selected = collect_results(
+                self.policy_model.actor_infos, all_rank_action_log_probs, key="score_old_logprobs"
+            )[: len(sequences_all)]
+            if old_selected.shape != training_input["score_behavior_logprobs"].shape:
+                raise ValueError("old-trainer top-K log probabilities must align with captured behavior evidence")
+            training_input["score_old_logprobs"] = old_selected
         values = values[: len(sequences_all)] if values is not None else None
 
         if "ftpo_chosen_mask" in training_input:
