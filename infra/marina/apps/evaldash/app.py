@@ -60,7 +60,7 @@ from marin.evaluation.records import (
 )
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
 from sqlalchemy.engine import Connection, Engine
@@ -82,6 +82,7 @@ from .metrics import (
     in_cohort,
     panel_request,
     record_headline,
+    run_metric_rows,
 )
 from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
 from .results_db import (
@@ -223,10 +224,22 @@ class PanelResponse(BaseModel):
     request: PanelRequestResponse
 
 
+class RunMetricRowResponse(BaseModel):
+    """One row of a run's top metrics table: a declared protocol metric or an undeclared raw one."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task: str
+    metric: str
+    value: float
+    declared: bool
+
+
 class RunDetailResponse(EvalRunRecord):
     headline: PanelCellResponse | None
     comparison_model: str
     policy_violations: list[str]
+    metric_rows: list[RunMetricRowResponse]
 
 
 class LogEntryResponse(BaseModel):
@@ -1156,7 +1169,12 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
         parsed = EvalRunRecord.model_validate(record)
         return RunDetailResponse.model_validate(
-            {**record, "headline": _run_headline(parsed), "policy_violations": list(record_policy_violations(parsed))}
+            {
+                **record,
+                "headline": _run_headline(parsed),
+                "policy_violations": list(record_policy_violations(parsed)),
+                "metric_rows": run_metric_rows(parsed),
+            }
         )
 
     @router.get("/runs/{run_id}/jobs")

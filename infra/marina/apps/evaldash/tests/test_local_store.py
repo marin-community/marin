@@ -234,6 +234,11 @@ def test_api_surface_over_fixtures(client):
     assert detail["headline"]["metric"] == "accuracy"
     assert detail["headline"]["value"] == pytest.approx(0.741)
     assert detail["timing"]["started_at"] and detail["timing"]["finished_at"]
+    # The detail endpoint resolves the declared protocol metric for the run page's top table; the
+    # harness's own metric spelling stays on the record for the folded raw table.
+    assert detail["metric_rows"] == [
+        {"task": "mmlu", "metric": "accuracy", "value": pytest.approx(0.741), "declared": True}
+    ]
     # Serving params round-trip through the record and reach the detail response.
     assert detail["serving"]["tensor_parallel_size"] == 8
     assert detail["serving"]["extra"]["temperature"] == "0.0"
