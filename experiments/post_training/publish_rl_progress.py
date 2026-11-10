@@ -3,6 +3,7 @@
 
 """Publish an RL progress record and verify its served identity."""
 
+import json
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -20,11 +21,12 @@ def publish_result(record: dict[str, Any], service_url: str | None = None) -> st
     from marina import client  # noqa: PLC0415
 
     service_url = service_url or client.DEFAULT_MARINA_URL
-    summary = RunSummary.model_validate(record)
+    summary = RunSummary.model_validate_json(json.dumps(record, allow_nan=False), strict=True)
     details = client.marina_request(service_url, "GET", f"/api/marina/applets/{APPLET_ID}")
     origin = client.applet_origin(service_url, details["authenticated_url"])
-    served = RunSummary.model_validate(
-        client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=record)
+    served = RunSummary.model_validate_json(
+        json.dumps(client.marina_request(origin, "POST", f"/a/{APPLET_ID}/api/runs", json_body=record), allow_nan=False),
+        strict=True,
     )
     if (served.run_id, served.attempt_id) != (summary.run_id, summary.attempt_id):
         raise RuntimeError(f"Published attempt {summary.run_id}/{summary.attempt_id} has a different returned identity")

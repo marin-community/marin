@@ -37,8 +37,8 @@ def create_api(services):
     @api.post("/runs")
     def publish(record: dict[str, Any]) -> dict:
         try:
-            summary = RunSummary.model_validate(record)
             encoded = json.dumps(record, allow_nan=False)
+            summary = RunSummary.model_validate_json(encoded, strict=True)
         except ValidationError as error:
             raise HTTPException(
                 422, detail=error.errors(include_input=False, include_context=False, include_url=False)
@@ -75,10 +75,10 @@ def create_api(services):
             ).mappings()
             for row in rows:
                 try:
-                    summary = RunSummary.model_validate(row["record"])
+                    encoded = json.dumps(row["record"], allow_nan=False)
+                    summary = RunSummary.model_validate_json(encoded, strict=True)
                     if (summary.run_id, summary.attempt_id) != (row["run_id"], row["attempt_id"]):
                         raise ValueError("Stored key disagrees with the record identity")
-                    json.dumps(row["record"], allow_nan=False)
                 except (ValidationError, ValueError) as error:
                     reason = (
                         "; ".join(

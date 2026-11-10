@@ -164,7 +164,7 @@ def build_record(
         "artifact_uri": run_output,
         "evidence": evidence,
     }
-    RunSummary.model_validate(record)
+    RunSummary.model_validate_json(json.dumps(record, allow_nan=False), strict=True)
     return record
 
 

@@ -12,11 +12,7 @@ const series = (run) => run.series ?? run.label;
 const number = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const percent = (value) => value == null ? 'unavailable' : `${number(value, 2)}%`;
 const comparison = (row) => `${row.metric}: ${number(row.control)} → ${number(row.run)}, Δ ${percent(row.delta_percent)}, noise ±${percent(row.noise_percent)}${row.passes == null ? '' : row.passes ? ' · PASS' : ' · FAIL'}`;
-const invariant = (row) => {
-  const name = row.name.split('/').pop();
-  const limit = name === 'grader_error_fraction' ? `at most ${row.limit}` : name === 'panel_scored_fraction' ? `at least ${row.limit}` : row.limit;
-  return `r${row.replicate} ${row.name}: ${row.value} (required ${limit}) · ${row.holds ? 'PASS' : 'FAIL'}`;
-};
+const invariant = (row) => `r${row.replicate} ${row.name}: ${row.value} ${row.comparator ?? '(comparator unknown)'} ${row.limit} · ${row.holds ? 'PASS' : 'FAIL'}`;
 const hours = (run) => run.elapsed_seconds == null ? null : run.elapsed_seconds / 3600;
 const attemptTime = (run) => Date.parse(run.started_at ?? run.run_date ?? run.completed_at) || 0;
 function groupedRuns() {
