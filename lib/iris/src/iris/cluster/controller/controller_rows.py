@@ -171,12 +171,7 @@ def record_worker_removal(cur: RowCursor, worker_id: WorkerId) -> None:
 
 
 def _write(tables: ControllerRowTables, marked: _Marked) -> None:
-    """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped.
-
-    Runs after COMMIT among the transaction's post-commit hooks, so an exception
-    here would reach the caller of a committed transaction and skip the hooks
-    registered after this one (cache invalidations).
-    """
+    """Enqueue the snapshotted rows; a table whose write fails is logged and its rows dropped."""
     for table, rows in (
         (tables.job_table, marked.job_rows),
         (tables.job_config_table, marked.config_rows),
@@ -186,6 +181,8 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
             continue
         try:
             table.write(rows)
+        # This runs among the post-commit hooks: raising would reach the caller of a
+        # committed transaction and skip the hooks registered after it (cache invalidations).
         except Exception:
             logger.exception("controller rows: write failed, dropping %d %s rows", len(rows), type(rows[0]).__name__)
 
