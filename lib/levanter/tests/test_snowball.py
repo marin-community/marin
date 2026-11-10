@@ -24,6 +24,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as random
+import jmp
 import numpy as np
 import pytest
 from haliax import Axis, named_jit
@@ -35,10 +36,12 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
@@ -51,6 +54,7 @@ from levanter.models.snowball import (
     SnowballConfig,
     SnowballLMHeadModel,
     SnowballMoEMLP,
+    _activation_spec,
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
@@ -320,6 +324,54 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_route_observer_is_output_identical():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
+        plain = hax.named_jit(lambda m, x: m.activations(x))(model, ids)
+        observed, routes = hax.named_jit(lambda m, x: m.activations_with_routes(x))(model, ids)
+
+        # Layer 0's routes, recomputed by hand from the block's own pieces.
+        tf = model.transformer
+        tokens = ids.array
+        hidden = tf.embed_gated_norm(tf.embed_norm(tf.token_embed.at[tokens].get(out_sharding=_activation_spec())))
+        block = tf.blocks[0]
+        short_mask = GrugAttentionMask(is_causal=True, sliding_window=cfg.sliding_window)
+        x = hidden + block.attn(block.attn_gated_norm(block.rms_attn(hidden)), short_mask, disable_rope=False)
+        mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
+        logits = jnp.einsum("bsd,de->bse", mlp_in, block.mlp.router).astype(jnp.float32) + block.mlp.router_bias
+        expected = jax.lax.top_k(logits, cfg.num_experts_per_token + 1)[1][..., :-1]
+
+    routes, expected = np.asarray(jax.device_get(routes)), np.asarray(jax.device_get(expected))
+    assert np.array_equal(np.asarray(jax.device_get(plain.array)), np.asarray(jax.device_get(observed.array)))
+    assert routes.shape == (cfg.num_layers, tokens.shape[0], tokens.shape[1], cfg.num_experts_per_token)
+    assert ((routes >= 0) & (routes < cfg.num_experts)).all()
+    np.testing.assert_array_equal(routes[0], expected)
+
+
+def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
+    cfg = _tiny_config(router_dot_fp32=True, num_experts=4, num_experts_per_token=1)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballMoEMLP.init(cfg, key=jax.random.key(23))
+        # BF16 rounds 1 + 1/256 to 1 before bias is added. Native FP32
+        # router bias then makes expert 1 win; the FP32 dot must retain expert 0.
+        router = jnp.zeros((cfg.hidden_dim, cfg.num_experts), jnp.float32)
+        router = router.at[0, :2].set(1).at[1, 0].set(1 / 256)
+        model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
+        compute = with_field_dtype_overrides(
+            jmp.get_policy("p=f32,c=bf16"), {"router_bias": jnp.dtype("float32")}
+        ).cast_to_compute(model)
+        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
+        # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
+        # following FP32 conversion into a CPU dot with an FP32 accumulator.
+        routes = lambda value: value.with_routes(inputs)[1]
+        high = routes(compute)
+        low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
+    np.testing.assert_array_equal(high, [[[0]]])
+    np.testing.assert_array_equal(low, [[[1]]])
 
 
 @pytest.mark.parametrize(
@@ -644,6 +696,89 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             assert math.isfinite(native_metrics["eval/loss"])
 
 
+@pytest.mark.timeout(120)
+@pytest.mark.multidevice
+def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
+    with use_test_devices(4):
+        hf_path = tmp_path / "hf"
+        tokenizer = Tokenizer(
+            models.WordLevel(vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
+        )
+        tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+        fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
+        fast.save_pretrained(hf_path)
+        config = _tiny_config(
+            vocab_size=64,
+            hidden_dim=32,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_layers=1,
+            head_dim=8,
+            max_seq_len=128,
+            router_dot_fp32=True,
+            tokenizer=str(hf_path),
+        )
+        # HF metadata chooses the platform kernel; test reload separately from
+        # context sharding, which has its unchanged reference-backend test above.
+        trainer = TrainerConfig(
+            id="hf-config-override-regression",
+            mesh=MeshConfig(
+                axes={"data": -1, "replica": 1, "model": 1, "context": 1, "expert": 2},
+                compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
+            ),
+            field_dtype_overrides={"router_bias": jnp.dtype("float32")},
+            use_explicit_mesh_axes=True,
+            train_batch_size=max(8, jax.device_count()),
+            per_device_parallelism=1,
+            num_train_steps=1,
+            max_eval_batches=1,
+            require_accelerator=False,
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "ckpts")),
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        )
+        with set_mesh(trainer.device_mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", 64), config, key=random.key(0))
+            config.hf_checkpoint_converter().replaced(tokenizer=fast).save_pretrained(
+                model,
+                str(hf_path),
+                save_tokenizer=False,
+                save_reference_code=False,
+            )
+        examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
+        main(
+            TrainLmConfig(
+                data=LmDataConfig(
+                    tokenizer=str(hf_path),
+                    components={
+                        "direct": DirectDatasetComponent(
+                            datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)},
+                        )
+                    },
+                ),
+                model=config,
+                initialize_from_hf=str(hf_path),
+                use_hf_model_config=True,
+                trainer=trainer,
+                optimizer=AdamConfig(learning_rate=5e-5),
+            )
+        )
+        metrics = json.loads((tmp_path / "eval_results.json").read_text())
+        assert math.isfinite(metrics["train/loss"])
+        assert math.isfinite(metrics["eval/loss"])
+
+
+def test_fp32_router_training_rejects_missing_fp32_bias_before_loading(tmp_path):
+    config = TrainLmConfig(
+        model=_tiny_config(router_dot_fp32=True),
+        data=LmDataConfig(tokenizer=str(tmp_path)),
+    )
+    with pytest.raises(ValueError, match="field_dtype_overrides to map router_bias to float32"):
+        main(config)
+
+
 @pytest.mark.parametrize("separate_key_axis", [False, True])
 def test_snowball_packed_conversations_are_isolated(separate_key_axis):
     cfg = _tiny_config()
@@ -657,6 +792,9 @@ def test_snowball_packed_conversations_are_isolated(separate_key_axis):
         forward = eqx.filter_jit(lambda m, tokens: m.activations(tokens, mask).array)
         before = np.array(forward(model, ids))
         after = np.array(forward(model, changed))
+        observe = eqx.filter_jit(lambda m, tokens: m.activations_with_routes(tokens, mask)[0].array)
+        np.testing.assert_array_equal(observe(model, ids), before)
+        np.testing.assert_array_equal(observe(model, changed), after)
     assert not np.allclose(before[:, :4], after[:, :4])
     np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
 

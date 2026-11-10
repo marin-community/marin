@@ -149,6 +149,11 @@ def test_june_adapter_uses_june_capacity_default_from_hf_config():
     assert decoded.capacity_factor == 1.0
 
 
+def test_june_training_config_rejects_a_set_snowball_only_setting():
+    with pytest.raises(ValueError, match="router_dot_fp32"):
+        dataclasses.replace(_config(), router_dot_fp32=True).training_config()
+
+
 def test_june_stage_telemetry_rejects_oversized_expert_parallel_microbatches():
     # With more than one expert shard, routing counters ride through floating auxiliary
     # transport, so a microbatch above 2**24 total assignments cannot represent exact
