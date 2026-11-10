@@ -1,15 +1,14 @@
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.agent.name import AgentName
 
 
-class NopAgent(BaseAgent):
+class FakeAgent(BaseAgent):
     SUPPORTS_WINDOWS: bool = True
 
     @staticmethod
     def name() -> str:
-        return AgentName.NOP.value
+        return "pi"
 
     def version(self) -> str:
         return "1.0.0"
