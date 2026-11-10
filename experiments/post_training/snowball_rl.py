@@ -85,7 +85,7 @@ from rigging.provenance import Provenance, git_output
 from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.task_curation.inventory import (
+from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TRAIN_FILENAME,
     GraderKind,
