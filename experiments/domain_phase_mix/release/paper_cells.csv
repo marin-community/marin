@@ -284,10 +284,10 @@ tab:a-regmix-argmin,0,1,0,"validation_3e18[launch.isin(['frozen_procedure','fair
 tab:a-regmix-argmin,0,1,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable.std",4,"MARINER, uncheatable, trainer seeds 0-2: std"
 tab:a-regmix-argmin,0,3,0,fits_proposal_predictions[variant=='lwspu_u_snc_cap06' & objective=='uncheatable' & predictor=='regmix'].predicted_bpb.unique,4,regmix prediction for lwspu_u_snc_cap06
 tab:a-regmix-argmin,0,4,0,fits_proposal_predictions[variant=='lwspu_u_snc_cap06' & objective=='uncheatable' & predictor=='mariner'].predicted_bpb.unique,4,mariner prediction for lwspu_u_snc_cap06
-tab:a-regmix-argmin,1,1,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.mean",4,"Tuned RegMix, sampled proposal, uncheatable, trainer seeds 0-2: mean"
-tab:a-regmix-argmin,1,1,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.std",4,"Tuned RegMix, sampled proposal, uncheatable, trainer seeds 0-2: std"
-tab:a-regmix-argmin,1,2,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",3,"Tuned RegMix, sampled proposal minus MARINER, uncheatable: mean paired difference"
-tab:a-regmix-argmin,1,2,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",3,"Tuned RegMix, sampled proposal minus MARINER, uncheatable: SE of the paired difference"
+tab:a-regmix-argmin,1,1,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.mean",4,"Tuned RegMix, sampled proposal, uncheatable, trainer seeds 0-2: mean"
+tab:a-regmix-argmin,1,1,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.std",4,"Tuned RegMix, sampled proposal, uncheatable, trainer seeds 0-2: std"
+tab:a-regmix-argmin,1,2,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",3,"Tuned RegMix, sampled proposal minus MARINER, uncheatable: mean paired difference"
+tab:a-regmix-argmin,1,2,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",3,"Tuned RegMix, sampled proposal minus MARINER, uncheatable: SE of the paired difference"
 tab:a-regmix-argmin,1,3,0,fits_proposal_predictions[variant=='cmp_u_lgbm_cap08' & objective=='uncheatable' & predictor=='regmix'].predicted_bpb.unique,4,regmix prediction for cmp_u_lgbm_cap08
 tab:a-regmix-argmin,1,4,0,fits_proposal_predictions[variant=='cmp_u_lgbm_cap08' & objective=='uncheatable' & predictor=='mariner'].predicted_bpb.unique,4,mariner prediction for cmp_u_lgbm_cap08
 tab:a-regmix-argmin,2,1,0,validation_3e18[launch=='regmix_argmin' & variant=='rgx_u_argmin_center_cap08'].bpb__uncheatable.mean,4,"Tuned RegMix, MILP proposal, uncheatable, trainer seeds 0-2: mean"
@@ -300,10 +300,10 @@ tab:a-regmix-argmin,3,1,0,"validation_3e18[launch.isin(['frozen_procedure','fair
 tab:a-regmix-argmin,3,1,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy.std",4,"MARINER, obe_easy, trainer seeds 0-2: std"
 tab:a-regmix-argmin,3,3,0,fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy' & predictor=='regmix'].predicted_bpb.unique,4,regmix prediction for lwspu_t9_snc_cap08
 tab:a-regmix-argmin,3,4,0,fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy' & predictor=='mariner'].predicted_bpb.unique,4,mariner prediction for lwspu_t9_snc_cap08
-tab:a-regmix-argmin,4,1,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.mean",4,"Tuned RegMix, sampled proposal, obe_easy, trainer seeds 0-2: mean"
-tab:a-regmix-argmin,4,1,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.std",4,"Tuned RegMix, sampled proposal, obe_easy, trainer seeds 0-2: std"
-tab:a-regmix-argmin,4,2,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",3,"Tuned RegMix, sampled proposal minus MARINER, obe_easy: mean paired difference"
-tab:a-regmix-argmin,4,2,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",3,"Tuned RegMix, sampled proposal minus MARINER, obe_easy: SE of the paired difference"
+tab:a-regmix-argmin,4,1,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.mean",4,"Tuned RegMix, sampled proposal, obe_easy, trainer seeds 0-2: mean"
+tab:a-regmix-argmin,4,1,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.std",4,"Tuned RegMix, sampled proposal, obe_easy, trainer seeds 0-2: std"
+tab:a-regmix-argmin,4,2,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",3,"Tuned RegMix, sampled proposal minus MARINER, obe_easy: mean paired difference"
+tab:a-regmix-argmin,4,2,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",3,"Tuned RegMix, sampled proposal minus MARINER, obe_easy: SE of the paired difference"
 tab:a-regmix-argmin,4,3,0,fits_proposal_predictions[variant=='cmp_t9_lgbm_cap12' & objective=='obe_easy' & predictor=='regmix'].predicted_bpb.unique,4,regmix prediction for cmp_t9_lgbm_cap12
 tab:a-regmix-argmin,4,4,0,fits_proposal_predictions[variant=='cmp_t9_lgbm_cap12' & objective=='obe_easy' & predictor=='mariner'].predicted_bpb.unique,4,mariner prediction for cmp_t9_lgbm_cap12
 tab:a-regmix-argmin,5,1,0,validation_3e18[launch=='regmix_argmin' & variant=='rgx_t9_argmin_center_cap12'].bpb__obe_easy.mean,4,"Tuned RegMix, MILP proposal, obe_easy, trainer seeds 0-2: mean"
@@ -606,54 +606,54 @@ tab:a-baseline-validation,5,4,1,validation_3e18[launch=='comparator_proposals' &
 tab:a-baseline-validation,5,5,0,fits_proposal_predictions[variant=='cmp_t9_quad_cap12' & objective=='obe_easy' & predictor=='quadratic'].predicted_bpb.unique,4,quadratic prediction for cmp_t9_quad_cap12
 tab:a-baseline-validation,5,6,0,"paired(validation_3e18[launch=='comparator_proposals' & variant=='cmp_t9_quad_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Quadratic minus MARINER, OBE Easy: mean paired difference"
 tab:a-baseline-validation,5,6,1,"paired(validation_3e18[launch=='comparator_proposals' & variant=='cmp_t9_quad_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Quadratic minus MARINER, OBE Easy: SE of the paired difference"
-tab:a-baseline-validation,6,1,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable.mean",4,"Natural cubic spline, Uncheatable, trainer seeds 0-2: mean"
-tab:a-baseline-validation,6,1,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable.std",4,"Natural cubic spline, Uncheatable, trainer seeds 0-2: std"
+tab:a-baseline-validation,6,1,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable.mean",4,"Natural cubic spline, Uncheatable, trainer seeds 0-2: mean"
+tab:a-baseline-validation,6,1,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable.std",4,"Natural cubic spline, Uncheatable, trainer seeds 0-2: std"
 tab:a-baseline-validation,6,2,0,fits_proposal_predictions[variant=='cmp_u_spline_cap08' & objective=='uncheatable' & predictor=='spline'].predicted_bpb.unique,4,spline prediction for cmp_u_spline_cap08
-tab:a-baseline-validation,6,3,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"Natural cubic spline minus MARINER, Uncheatable: mean paired difference"
-tab:a-baseline-validation,6,3,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"Natural cubic spline minus MARINER, Uncheatable: SE of the paired difference"
-tab:a-baseline-validation,6,4,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy.mean",4,"Natural cubic spline, OBE Easy, trainer seeds 0-2: mean"
-tab:a-baseline-validation,6,4,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy.std",4,"Natural cubic spline, OBE Easy, trainer seeds 0-2: std"
+tab:a-baseline-validation,6,3,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"Natural cubic spline minus MARINER, Uncheatable: mean paired difference"
+tab:a-baseline-validation,6,3,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_spline_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"Natural cubic spline minus MARINER, Uncheatable: SE of the paired difference"
+tab:a-baseline-validation,6,4,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy.mean",4,"Natural cubic spline, OBE Easy, trainer seeds 0-2: mean"
+tab:a-baseline-validation,6,4,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy.std",4,"Natural cubic spline, OBE Easy, trainer seeds 0-2: std"
 tab:a-baseline-validation,6,5,0,fits_proposal_predictions[variant=='cmp_t9_spline_cap12' & objective=='obe_easy' & predictor=='spline'].predicted_bpb.unique,4,spline prediction for cmp_t9_spline_cap12
-tab:a-baseline-validation,6,6,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Natural cubic spline minus MARINER, OBE Easy: mean paired difference"
-tab:a-baseline-validation,6,6,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Natural cubic spline minus MARINER, OBE Easy: SE of the paired difference"
-tab:a-baseline-validation,7,1,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.mean",4,"RegMix (tuned, sampled proposal), Uncheatable, trainer seeds 0-2: mean"
-tab:a-baseline-validation,7,1,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.std",4,"RegMix (tuned, sampled proposal), Uncheatable, trainer seeds 0-2: std"
+tab:a-baseline-validation,6,6,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Natural cubic spline minus MARINER, OBE Easy: mean paired difference"
+tab:a-baseline-validation,6,6,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_spline_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Natural cubic spline minus MARINER, OBE Easy: SE of the paired difference"
+tab:a-baseline-validation,7,1,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.mean",4,"RegMix (tuned, sampled proposal), Uncheatable, trainer seeds 0-2: mean"
+tab:a-baseline-validation,7,1,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable.std",4,"RegMix (tuned, sampled proposal), Uncheatable, trainer seeds 0-2: std"
 tab:a-baseline-validation,7,2,0,fits_proposal_predictions[variant=='cmp_u_lgbm_cap08' & objective=='uncheatable' & predictor=='regmix'].predicted_bpb.unique,4,regmix prediction for cmp_u_lgbm_cap08
-tab:a-baseline-validation,7,3,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"RegMix (tuned, sampled proposal) minus MARINER, Uncheatable: mean paired difference"
-tab:a-baseline-validation,7,3,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"RegMix (tuned, sampled proposal) minus MARINER, Uncheatable: SE of the paired difference"
-tab:a-baseline-validation,7,4,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.mean",4,"RegMix (tuned, sampled proposal), OBE Easy, trainer seeds 0-2: mean"
-tab:a-baseline-validation,7,4,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.std",4,"RegMix (tuned, sampled proposal), OBE Easy, trainer seeds 0-2: std"
+tab:a-baseline-validation,7,3,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"RegMix (tuned, sampled proposal) minus MARINER, Uncheatable: mean paired difference"
+tab:a-baseline-validation,7,3,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_lgbm_cap08'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"RegMix (tuned, sampled proposal) minus MARINER, Uncheatable: SE of the paired difference"
+tab:a-baseline-validation,7,4,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.mean",4,"RegMix (tuned, sampled proposal), OBE Easy, trainer seeds 0-2: mean"
+tab:a-baseline-validation,7,4,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy.std",4,"RegMix (tuned, sampled proposal), OBE Easy, trainer seeds 0-2: std"
 tab:a-baseline-validation,7,5,0,fits_proposal_predictions[variant=='cmp_t9_lgbm_cap12' & objective=='obe_easy' & predictor=='regmix'].predicted_bpb.unique,4,regmix prediction for cmp_t9_lgbm_cap12
-tab:a-baseline-validation,7,6,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"RegMix (tuned, sampled proposal) minus MARINER, OBE Easy: mean paired difference"
-tab:a-baseline-validation,7,6,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"RegMix (tuned, sampled proposal) minus MARINER, OBE Easy: SE of the paired difference"
-tab:a-baseline-validation,8,1,0,"validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable.mean",4,"RegMix (released), Uncheatable, trainer seeds 0-2: mean"
-tab:a-baseline-validation,8,1,1,"validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable.std",4,"RegMix (released), Uncheatable, trainer seeds 0-2: std"
+tab:a-baseline-validation,7,6,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"RegMix (tuned, sampled proposal) minus MARINER, OBE Easy: mean paired difference"
+tab:a-baseline-validation,7,6,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_lgbm_cap12'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"RegMix (tuned, sampled proposal) minus MARINER, OBE Easy: SE of the paired difference"
+tab:a-baseline-validation,8,1,0,"validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable.mean",4,"RegMix (released), Uncheatable, trainer seeds 0-2: mean"
+tab:a-baseline-validation,8,1,1,"validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable.std",4,"RegMix (released), Uncheatable, trainer seeds 0-2: std"
 tab:a-baseline-validation,8,2,0,fits_proposal_predictions[variant=='rgref_u_endpoint_cap64' & objective=='uncheatable' & predictor=='regmix_official'].predicted_bpb.unique,4,regmix_official prediction for rgref_u_endpoint_cap64
-tab:a-baseline-validation,8,3,0,"paired(validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"RegMix (released) minus MARINER, Uncheatable: mean paired difference"
-tab:a-baseline-validation,8,3,1,"paired(validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"RegMix (released) minus MARINER, Uncheatable: SE of the paired difference"
-tab:a-baseline-validation,8,4,0,"validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy.mean",4,"RegMix (released), OBE Easy, trainer seeds 0-2: mean"
-tab:a-baseline-validation,8,4,1,"validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy.std",4,"RegMix (released), OBE Easy, trainer seeds 0-2: std"
+tab:a-baseline-validation,8,3,0,"paired(validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"RegMix (released) minus MARINER, Uncheatable: mean paired difference"
+tab:a-baseline-validation,8,3,1,"paired(validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_u_endpoint_cap64'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"RegMix (released) minus MARINER, Uncheatable: SE of the paired difference"
+tab:a-baseline-validation,8,4,0,"validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy.mean",4,"RegMix (released), OBE Easy, trainer seeds 0-2: mean"
+tab:a-baseline-validation,8,4,1,"validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy.std",4,"RegMix (released), OBE Easy, trainer seeds 0-2: std"
 tab:a-baseline-validation,8,5,0,fits_proposal_predictions[variant=='rgref_t9_endpoint_cap64' & objective=='obe_easy' & predictor=='regmix_official'].predicted_bpb.unique,4,regmix_official prediction for rgref_t9_endpoint_cap64
-tab:a-baseline-validation,8,6,0,"paired(validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"RegMix (released) minus MARINER, OBE Easy: mean paired difference"
-tab:a-baseline-validation,8,6,1,"paired(validation_3e18[launch.isin(['regmix_reference','table5_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"RegMix (released) minus MARINER, OBE Easy: SE of the paired difference"
-tab:a-baseline-validation,9,1,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable.mean",4,"Hellinger kernel ridge, Uncheatable, trainer seeds 0-2: mean"
-tab:a-baseline-validation,9,1,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable.std",4,"Hellinger kernel ridge, Uncheatable, trainer seeds 0-2: std"
+tab:a-baseline-validation,8,6,0,"paired(validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"RegMix (released) minus MARINER, OBE Easy: mean paired difference"
+tab:a-baseline-validation,8,6,1,"paired(validation_3e18[launch.isin(['regmix_reference','baseline_proposal_repeats']) & variant=='rgref_t9_endpoint_cap64'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"RegMix (released) minus MARINER, OBE Easy: SE of the paired difference"
+tab:a-baseline-validation,9,1,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable.mean",4,"Hellinger kernel ridge, Uncheatable, trainer seeds 0-2: mean"
+tab:a-baseline-validation,9,1,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable.std",4,"Hellinger kernel ridge, Uncheatable, trainer seeds 0-2: std"
 tab:a-baseline-validation,9,2,0,fits_proposal_predictions[variant=='cmp_u_krr_cap12' & objective=='uncheatable' & predictor=='krr'].predicted_bpb.unique,4,krr prediction for cmp_u_krr_cap12
-tab:a-baseline-validation,9,3,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"Hellinger kernel ridge minus MARINER, Uncheatable: mean paired difference"
-tab:a-baseline-validation,9,3,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"Hellinger kernel ridge minus MARINER, Uncheatable: SE of the paired difference"
-tab:a-baseline-validation,9,4,0,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy.mean",4,"Hellinger kernel ridge, OBE Easy, trainer seeds 0-2: mean"
-tab:a-baseline-validation,9,4,1,"validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy.std",4,"Hellinger kernel ridge, OBE Easy, trainer seeds 0-2: std"
+tab:a-baseline-validation,9,3,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"Hellinger kernel ridge minus MARINER, Uncheatable: mean paired difference"
+tab:a-baseline-validation,9,3,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_u_krr_cap12'].bpb__uncheatable, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"Hellinger kernel ridge minus MARINER, Uncheatable: SE of the paired difference"
+tab:a-baseline-validation,9,4,0,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy.mean",4,"Hellinger kernel ridge, OBE Easy, trainer seeds 0-2: mean"
+tab:a-baseline-validation,9,4,1,"validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy.std",4,"Hellinger kernel ridge, OBE Easy, trainer seeds 0-2: std"
 tab:a-baseline-validation,9,5,0,fits_proposal_predictions[variant=='cmp_t9_krr_cap16' & objective=='obe_easy' & predictor=='krr'].predicted_bpb.unique,4,krr prediction for cmp_t9_krr_cap16
-tab:a-baseline-validation,9,6,0,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Hellinger kernel ridge minus MARINER, OBE Easy: mean paired difference"
-tab:a-baseline-validation,9,6,1,"paired(validation_3e18[launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Hellinger kernel ridge minus MARINER, OBE Easy: SE of the paired difference"
-tab:a-baseline-validation,10,1,0,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable).mean",4,"Best swarm mixture, retrained, Uncheatable, trainer seeds 0-2: mean"
-tab:a-baseline-validation,10,1,1,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable).std",4,"Best swarm mixture, retrained, Uncheatable, trainer seeds 0-2: std"
-tab:a-baseline-validation,10,3,0,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"Best swarm mixture, retrained minus MARINER, Uncheatable: mean paired difference"
-tab:a-baseline-validation,10,3,1,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"Best swarm mixture, retrained minus MARINER, Uncheatable: SE of the paired difference"
-tab:a-baseline-validation,10,4,0,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy).mean",4,"Best swarm mixture, retrained, OBE Easy, trainer seeds 0-2: mean"
-tab:a-baseline-validation,10,4,1,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy).std",4,"Best swarm mixture, retrained, OBE Easy, trainer seeds 0-2: std"
-tab:a-baseline-validation,10,6,0,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Best swarm mixture, retrained minus MARINER, OBE Easy: mean paired difference"
-tab:a-baseline-validation,10,6,1,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='table5_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Best swarm mixture, retrained minus MARINER, OBE Easy: SE of the paired difference"
+tab:a-baseline-validation,9,6,0,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Hellinger kernel ridge minus MARINER, OBE Easy: mean paired difference"
+tab:a-baseline-validation,9,6,1,"paired(validation_3e18[launch.isin(['comparator_proposals','baseline_proposal_repeats']) & variant=='cmp_t9_krr_cap16'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Hellinger kernel ridge minus MARINER, OBE Easy: SE of the paired difference"
+tab:a-baseline-validation,10,1,0,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable).mean",4,"Best swarm mixture, retrained, Uncheatable, trainer seeds 0-2: mean"
+tab:a-baseline-validation,10,1,1,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable).std",4,"Best swarm mixture, retrained, Uncheatable, trainer seeds 0-2: std"
+tab:a-baseline-validation,10,3,0,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).mean",4,"Best swarm mixture, retrained minus MARINER, Uncheatable: mean paired difference"
+tab:a-baseline-validation,10,3,1,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__uncheatable, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__uncheatable), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_u_snc_cap06'].bpb__uncheatable, trainer_seed).se",4,"Best swarm mixture, retrained minus MARINER, Uncheatable: SE of the paired difference"
+tab:a-baseline-validation,10,4,0,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy).mean",4,"Best swarm mixture, retrained, OBE Easy, trainer seeds 0-2: mean"
+tab:a-baseline-validation,10,4,1,"concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy).std",4,"Best swarm mixture, retrained, OBE Easy, trainer seeds 0-2: std"
+tab:a-baseline-validation,10,6,0,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",4,"Best swarm mixture, retrained minus MARINER, OBE Easy: mean paired difference"
+tab:a-baseline-validation,10,6,1,"paired(concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].bpb__obe_easy, validation_3e18[launch=='baseline_proposal_repeats' & variant=='swarm_run00125_cap08'].bpb__obe_easy), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",4,"Best swarm mixture, retrained minus MARINER, OBE Easy: SE of the paired difference"
 tab:a-compute-equivalence,0,1,0,ladder_compute_equivalence[objective=='uncheatable' & baseline=='proportional'].law_e.unique,3,"proportional, uncheatable: fitted E"
 tab:a-compute-equivalence,0,1,1,ladder_compute_equivalence[objective=='uncheatable' & baseline=='proportional'].law_a.unique,3,"proportional, uncheatable: fitted A"
 tab:a-compute-equivalence,0,1,2,- ladder_compute_equivalence[objective=='uncheatable' & baseline=='proportional'].law_alpha.unique,3,"proportional, uncheatable: the printed exponent, minus alpha"
@@ -1185,370 +1185,370 @@ tab:a-accuracy-components,50,6,0,ladder_accuracy[method=='proportional' & task_i
 tab:a-accuracy-components,50,7,0,ladder_accuracy[method=='unimax8' & task_id=='mt_mbpp_typescript'].accuracy.value,1,"mt_mbpp_typescript: unimax8 accuracy, percent"
 tab:a-accuracy-components,50,8,0,ladder_accuracy[method=='olmix' & task_id=='mt_mbpp_typescript'].accuracy.value,1,"mt_mbpp_typescript: olmix accuracy, percent"
 tab:a-accuracy-components,50,9,0,ladder_accuracy[method=='mariner' & task_id=='mt_mbpp_typescript'].accuracy.value,1,"mt_mbpp_typescript: mariner accuracy, percent"
-tab:a-snr,0,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].panel_mean.value,3,OlmoBaseEval Easy mean: panel_mean
-tab:a-snr,0,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].panel_sd.value,3,OlmoBaseEval Easy mean: panel_sd
-tab:a-snr,0,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].proportional_mean.value,3,OlmoBaseEval Easy mean: proportional_mean
-tab:a-snr,0,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].repeat_sd.value,4,OlmoBaseEval Easy mean: repeat_sd
-tab:a-snr,0,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].snr.value,1,OlmoBaseEval Easy mean: snr
-tab:a-snr,0,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].mariner_spearman.value,2,OlmoBaseEval Easy mean: mariner_spearman
-tab:a-snr,0,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.isna()].olmix_spearman.value,2,OlmoBaseEval Easy mean: olmix_spearman
-tab:a-snr,2,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].panel_mean.value,3,Algebra: panel_mean
-tab:a-snr,2,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].panel_sd.value,3,Algebra: panel_sd
-tab:a-snr,2,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].proportional_mean.value,3,Algebra: proportional_mean
-tab:a-snr,2,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].repeat_sd.value,4,Algebra: repeat_sd
-tab:a-snr,2,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].snr.value,1,Algebra: snr
-tab:a-snr,2,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].mariner_spearman.value,2,Algebra: mariner_spearman
-tab:a-snr,2,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_algebra'].olmix_spearman.value,2,Algebra: olmix_spearman
-tab:a-snr,3,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].panel_mean.value,3,Counting and probability: panel_mean
-tab:a-snr,3,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].panel_sd.value,3,Counting and probability: panel_sd
-tab:a-snr,3,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].proportional_mean.value,3,Counting and probability: proportional_mean
-tab:a-snr,3,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].repeat_sd.value,4,Counting and probability: repeat_sd
-tab:a-snr,3,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].snr.value,1,Counting and probability: snr
-tab:a-snr,3,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].mariner_spearman.value,2,Counting and probability: mariner_spearman
-tab:a-snr,3,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_counting_and_probability'].olmix_spearman.value,2,Counting and probability: olmix_spearman
-tab:a-snr,4,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].panel_mean.value,3,Geometry: panel_mean
-tab:a-snr,4,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].panel_sd.value,3,Geometry: panel_sd
-tab:a-snr,4,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].proportional_mean.value,3,Geometry: proportional_mean
-tab:a-snr,4,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].repeat_sd.value,4,Geometry: repeat_sd
-tab:a-snr,4,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].snr.value,1,Geometry: snr
-tab:a-snr,4,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].mariner_spearman.value,2,Geometry: mariner_spearman
-tab:a-snr,4,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_geometry'].olmix_spearman.value,2,Geometry: olmix_spearman
-tab:a-snr,5,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].panel_mean.value,3,Intermediate algebra: panel_mean
-tab:a-snr,5,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].panel_sd.value,3,Intermediate algebra: panel_sd
-tab:a-snr,5,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].proportional_mean.value,3,Intermediate algebra: proportional_mean
-tab:a-snr,5,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].repeat_sd.value,4,Intermediate algebra: repeat_sd
-tab:a-snr,5,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].snr.value,1,Intermediate algebra: snr
-tab:a-snr,5,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].mariner_spearman.value,2,Intermediate algebra: mariner_spearman
-tab:a-snr,5,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_intermediate_algebra'].olmix_spearman.value,2,Intermediate algebra: olmix_spearman
-tab:a-snr,6,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].panel_mean.value,3,Number theory: panel_mean
-tab:a-snr,6,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].panel_sd.value,3,Number theory: panel_sd
-tab:a-snr,6,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].proportional_mean.value,3,Number theory: proportional_mean
-tab:a-snr,6,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].repeat_sd.value,4,Number theory: repeat_sd
-tab:a-snr,6,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].snr.value,1,Number theory: snr
-tab:a-snr,6,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].mariner_spearman.value,2,Number theory: mariner_spearman
-tab:a-snr,6,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_number_theory'].olmix_spearman.value,2,Number theory: olmix_spearman
-tab:a-snr,7,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].panel_mean.value,3,Prealgebra: panel_mean
-tab:a-snr,7,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].panel_sd.value,3,Prealgebra: panel_sd
-tab:a-snr,7,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].proportional_mean.value,3,Prealgebra: proportional_mean
-tab:a-snr,7,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].repeat_sd.value,4,Prealgebra: repeat_sd
-tab:a-snr,7,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].snr.value,1,Prealgebra: snr
-tab:a-snr,7,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].mariner_spearman.value,2,Prealgebra: mariner_spearman
-tab:a-snr,7,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_prealgebra'].olmix_spearman.value,2,Prealgebra: olmix_spearman
-tab:a-snr,8,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].panel_mean.value,3,Precalculus: panel_mean
-tab:a-snr,8,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].panel_sd.value,3,Precalculus: panel_sd
-tab:a-snr,8,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].proportional_mean.value,3,Precalculus: proportional_mean
-tab:a-snr,8,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].repeat_sd.value,4,Precalculus: repeat_sd
-tab:a-snr,8,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].snr.value,1,Precalculus: snr
-tab:a-snr,8,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].mariner_spearman.value,2,Precalculus: mariner_spearman
-tab:a-snr,8,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='minerva_math_precalculus'].olmix_spearman.value,2,Precalculus: olmix_spearman
-tab:a-snr,9,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].panel_mean.value,3,HumanEval: panel_mean
-tab:a-snr,9,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].panel_sd.value,3,HumanEval: panel_sd
-tab:a-snr,9,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].proportional_mean.value,3,HumanEval: proportional_mean
-tab:a-snr,9,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].repeat_sd.value,4,HumanEval: repeat_sd
-tab:a-snr,9,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].snr.value,1,HumanEval: snr
-tab:a-snr,9,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].mariner_spearman.value,2,HumanEval: mariner_spearman
-tab:a-snr,9,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='codex_humaneval'].olmix_spearman.value,2,HumanEval: olmix_spearman
-tab:a-snr,10,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].panel_mean.value,3,MBPP: panel_mean
-tab:a-snr,10,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].panel_sd.value,3,MBPP: panel_sd
-tab:a-snr,10,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].proportional_mean.value,3,MBPP: proportional_mean
-tab:a-snr,10,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].repeat_sd.value,4,MBPP: repeat_sd
-tab:a-snr,10,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].snr.value,1,MBPP: snr
-tab:a-snr,10,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].mariner_spearman.value,2,MBPP: mariner_spearman
-tab:a-snr,10,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mbpp'].olmix_spearman.value,2,MBPP: olmix_spearman
-tab:a-snr,12,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].panel_mean.value,3,Bash: panel_mean
-tab:a-snr,12,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].panel_sd.value,3,Bash: panel_sd
-tab:a-snr,12,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].proportional_mean.value,3,Bash: proportional_mean
-tab:a-snr,12,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].repeat_sd.value,4,Bash: repeat_sd
-tab:a-snr,12,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].snr.value,1,Bash: snr
-tab:a-snr,12,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].mariner_spearman.value,2,Bash: mariner_spearman
-tab:a-snr,12,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_bash'].olmix_spearman.value,2,Bash: olmix_spearman
-tab:a-snr,13,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].panel_mean.value,3,C: panel_mean
-tab:a-snr,13,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].panel_sd.value,3,C: panel_sd
-tab:a-snr,13,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].proportional_mean.value,3,C: proportional_mean
-tab:a-snr,13,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].repeat_sd.value,4,C: repeat_sd
-tab:a-snr,13,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].snr.value,1,C: snr
-tab:a-snr,13,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].mariner_spearman.value,2,C: mariner_spearman
-tab:a-snr,13,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_c'].olmix_spearman.value,2,C: olmix_spearman
-tab:a-snr,14,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].panel_mean.value,3,C++: panel_mean
-tab:a-snr,14,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].panel_sd.value,3,C++: panel_sd
-tab:a-snr,14,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].proportional_mean.value,3,C++: proportional_mean
-tab:a-snr,14,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].repeat_sd.value,4,C++: repeat_sd
-tab:a-snr,14,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].snr.value,1,C++: snr
-tab:a-snr,14,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].mariner_spearman.value,2,C++: mariner_spearman
-tab:a-snr,14,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_cpp'].olmix_spearman.value,2,C++: olmix_spearman
-tab:a-snr,15,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].panel_mean.value,3,C\#: panel_mean
-tab:a-snr,15,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].panel_sd.value,3,C\#: panel_sd
-tab:a-snr,15,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].proportional_mean.value,3,C\#: proportional_mean
-tab:a-snr,15,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].repeat_sd.value,4,C\#: repeat_sd
-tab:a-snr,15,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].snr.value,1,C\#: snr
-tab:a-snr,15,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].mariner_spearman.value,2,C\#: mariner_spearman
-tab:a-snr,15,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_csharp'].olmix_spearman.value,2,C\#: olmix_spearman
-tab:a-snr,16,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].panel_mean.value,3,Go: panel_mean
-tab:a-snr,16,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].panel_sd.value,3,Go: panel_sd
-tab:a-snr,16,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].proportional_mean.value,3,Go: proportional_mean
-tab:a-snr,16,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].repeat_sd.value,4,Go: repeat_sd
-tab:a-snr,16,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].snr.value,1,Go: snr
-tab:a-snr,16,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].mariner_spearman.value,2,Go: mariner_spearman
-tab:a-snr,16,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_go'].olmix_spearman.value,2,Go: olmix_spearman
-tab:a-snr,17,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].panel_mean.value,3,Haskell: panel_mean
-tab:a-snr,17,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].panel_sd.value,3,Haskell: panel_sd
-tab:a-snr,17,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].proportional_mean.value,3,Haskell: proportional_mean
-tab:a-snr,17,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].repeat_sd.value,4,Haskell: repeat_sd
-tab:a-snr,17,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].snr.value,1,Haskell: snr
-tab:a-snr,17,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].mariner_spearman.value,2,Haskell: mariner_spearman
-tab:a-snr,17,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_haskell'].olmix_spearman.value,2,Haskell: olmix_spearman
-tab:a-snr,18,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].panel_mean.value,3,Java: panel_mean
-tab:a-snr,18,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].panel_sd.value,3,Java: panel_sd
-tab:a-snr,18,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].proportional_mean.value,3,Java: proportional_mean
-tab:a-snr,18,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].repeat_sd.value,4,Java: repeat_sd
-tab:a-snr,18,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].snr.value,1,Java: snr
-tab:a-snr,18,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].mariner_spearman.value,2,Java: mariner_spearman
-tab:a-snr,18,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_java'].olmix_spearman.value,2,Java: olmix_spearman
-tab:a-snr,19,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].panel_mean.value,3,JavaScript: panel_mean
-tab:a-snr,19,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].panel_sd.value,3,JavaScript: panel_sd
-tab:a-snr,19,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].proportional_mean.value,3,JavaScript: proportional_mean
-tab:a-snr,19,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].repeat_sd.value,4,JavaScript: repeat_sd
-tab:a-snr,19,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].snr.value,1,JavaScript: snr
-tab:a-snr,19,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].mariner_spearman.value,2,JavaScript: mariner_spearman
-tab:a-snr,19,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_javascript'].olmix_spearman.value,2,JavaScript: olmix_spearman
-tab:a-snr,20,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].panel_mean.value,3,MATLAB: panel_mean
-tab:a-snr,20,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].panel_sd.value,3,MATLAB: panel_sd
-tab:a-snr,20,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].proportional_mean.value,3,MATLAB: proportional_mean
-tab:a-snr,20,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].repeat_sd.value,4,MATLAB: repeat_sd
-tab:a-snr,20,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].snr.value,1,MATLAB: snr
-tab:a-snr,20,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].mariner_spearman.value,2,MATLAB: mariner_spearman
-tab:a-snr,20,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_matlab'].olmix_spearman.value,2,MATLAB: olmix_spearman
-tab:a-snr,21,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].panel_mean.value,3,PHP: panel_mean
-tab:a-snr,21,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].panel_sd.value,3,PHP: panel_sd
-tab:a-snr,21,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].proportional_mean.value,3,PHP: proportional_mean
-tab:a-snr,21,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].repeat_sd.value,4,PHP: repeat_sd
-tab:a-snr,21,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].snr.value,1,PHP: snr
-tab:a-snr,21,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].mariner_spearman.value,2,PHP: mariner_spearman
-tab:a-snr,21,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_php'].olmix_spearman.value,2,PHP: olmix_spearman
-tab:a-snr,22,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].panel_mean.value,3,Python: panel_mean
-tab:a-snr,22,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].panel_sd.value,3,Python: panel_sd
-tab:a-snr,22,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].proportional_mean.value,3,Python: proportional_mean
-tab:a-snr,22,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].repeat_sd.value,4,Python: repeat_sd
-tab:a-snr,22,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].snr.value,1,Python: snr
-tab:a-snr,22,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].mariner_spearman.value,2,Python: mariner_spearman
-tab:a-snr,22,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_python'].olmix_spearman.value,2,Python: olmix_spearman
-tab:a-snr,23,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].panel_mean.value,3,R: panel_mean
-tab:a-snr,23,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].panel_sd.value,3,R: panel_sd
-tab:a-snr,23,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].proportional_mean.value,3,R: proportional_mean
-tab:a-snr,23,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].repeat_sd.value,4,R: repeat_sd
-tab:a-snr,23,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].snr.value,1,R: snr
-tab:a-snr,23,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].mariner_spearman.value,2,R: mariner_spearman
-tab:a-snr,23,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_r'].olmix_spearman.value,2,R: olmix_spearman
-tab:a-snr,24,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].panel_mean.value,3,Ruby: panel_mean
-tab:a-snr,24,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].panel_sd.value,3,Ruby: panel_sd
-tab:a-snr,24,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].proportional_mean.value,3,Ruby: proportional_mean
-tab:a-snr,24,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].repeat_sd.value,4,Ruby: repeat_sd
-tab:a-snr,24,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].snr.value,1,Ruby: snr
-tab:a-snr,24,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].mariner_spearman.value,2,Ruby: mariner_spearman
-tab:a-snr,24,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_ruby'].olmix_spearman.value,2,Ruby: olmix_spearman
-tab:a-snr,25,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].panel_mean.value,3,Rust: panel_mean
-tab:a-snr,25,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].panel_sd.value,3,Rust: panel_sd
-tab:a-snr,25,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].proportional_mean.value,3,Rust: proportional_mean
-tab:a-snr,25,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].repeat_sd.value,4,Rust: repeat_sd
-tab:a-snr,25,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].snr.value,1,Rust: snr
-tab:a-snr,25,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].mariner_spearman.value,2,Rust: mariner_spearman
-tab:a-snr,25,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_rust'].olmix_spearman.value,2,Rust: olmix_spearman
-tab:a-snr,26,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].panel_mean.value,3,Scala: panel_mean
-tab:a-snr,26,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].panel_sd.value,3,Scala: panel_sd
-tab:a-snr,26,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].proportional_mean.value,3,Scala: proportional_mean
-tab:a-snr,26,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].repeat_sd.value,4,Scala: repeat_sd
-tab:a-snr,26,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].snr.value,1,Scala: snr
-tab:a-snr,26,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].mariner_spearman.value,2,Scala: mariner_spearman
-tab:a-snr,26,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_scala'].olmix_spearman.value,2,Scala: olmix_spearman
-tab:a-snr,27,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].panel_mean.value,3,Swift: panel_mean
-tab:a-snr,27,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].panel_sd.value,3,Swift: panel_sd
-tab:a-snr,27,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].proportional_mean.value,3,Swift: proportional_mean
-tab:a-snr,27,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].repeat_sd.value,4,Swift: repeat_sd
-tab:a-snr,27,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].snr.value,1,Swift: snr
-tab:a-snr,27,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].mariner_spearman.value,2,Swift: mariner_spearman
-tab:a-snr,27,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_swift'].olmix_spearman.value,2,Swift: olmix_spearman
-tab:a-snr,28,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].panel_mean.value,3,TypeScript: panel_mean
-tab:a-snr,28,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].panel_sd.value,3,TypeScript: panel_sd
-tab:a-snr,28,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].proportional_mean.value,3,TypeScript: proportional_mean
-tab:a-snr,28,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].repeat_sd.value,4,TypeScript: repeat_sd
-tab:a-snr,28,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].snr.value,1,TypeScript: snr
-tab:a-snr,28,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].mariner_spearman.value,2,TypeScript: mariner_spearman
-tab:a-snr,28,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mt_mbpp_typescript'].olmix_spearman.value,2,TypeScript: olmix_spearman
-tab:a-snr,30,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].panel_mean.value,3,ARC Easy: panel_mean
-tab:a-snr,30,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].panel_sd.value,3,ARC Easy: panel_sd
-tab:a-snr,30,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].proportional_mean.value,3,ARC Easy: proportional_mean
-tab:a-snr,30,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].repeat_sd.value,4,ARC Easy: repeat_sd
-tab:a-snr,30,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].snr.value,1,ARC Easy: snr
-tab:a-snr,30,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].mariner_spearman.value,2,ARC Easy: mariner_spearman
-tab:a-snr,30,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_easy'].olmix_spearman.value,2,ARC Easy: olmix_spearman
-tab:a-snr,31,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].panel_mean.value,3,ARC Challenge: panel_mean
-tab:a-snr,31,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].panel_sd.value,3,ARC Challenge: panel_sd
-tab:a-snr,31,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].proportional_mean.value,3,ARC Challenge: proportional_mean
-tab:a-snr,31,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].repeat_sd.value,4,ARC Challenge: repeat_sd
-tab:a-snr,31,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].snr.value,1,ARC Challenge: snr
-tab:a-snr,31,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].mariner_spearman.value,2,ARC Challenge: mariner_spearman
-tab:a-snr,31,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='arc_challenge'].olmix_spearman.value,2,ARC Challenge: olmix_spearman
-tab:a-snr,32,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].panel_mean.value,3,MMLU STEM: panel_mean
-tab:a-snr,32,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].panel_sd.value,3,MMLU STEM: panel_sd
-tab:a-snr,32,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].proportional_mean.value,3,MMLU STEM: proportional_mean
-tab:a-snr,32,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].repeat_sd.value,4,MMLU STEM: repeat_sd
-tab:a-snr,32,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].snr.value,1,MMLU STEM: snr
-tab:a-snr,32,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].mariner_spearman.value,2,MMLU STEM: mariner_spearman
-tab:a-snr,32,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_stem'].olmix_spearman.value,2,MMLU STEM: olmix_spearman
-tab:a-snr,33,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].panel_mean.value,3,MMLU humanities: panel_mean
-tab:a-snr,33,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].panel_sd.value,3,MMLU humanities: panel_sd
-tab:a-snr,33,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].proportional_mean.value,3,MMLU humanities: proportional_mean
-tab:a-snr,33,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].repeat_sd.value,4,MMLU humanities: repeat_sd
-tab:a-snr,33,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].snr.value,1,MMLU humanities: snr
-tab:a-snr,33,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].mariner_spearman.value,2,MMLU humanities: mariner_spearman
-tab:a-snr,33,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_humanities'].olmix_spearman.value,2,MMLU humanities: olmix_spearman
-tab:a-snr,34,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].panel_mean.value,3,MMLU social sciences: panel_mean
-tab:a-snr,34,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].panel_sd.value,3,MMLU social sciences: panel_sd
-tab:a-snr,34,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].proportional_mean.value,3,MMLU social sciences: proportional_mean
-tab:a-snr,34,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].repeat_sd.value,4,MMLU social sciences: repeat_sd
-tab:a-snr,34,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].snr.value,1,MMLU social sciences: snr
-tab:a-snr,34,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].mariner_spearman.value,2,MMLU social sciences: mariner_spearman
-tab:a-snr,34,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_social_sciences'].olmix_spearman.value,2,MMLU social sciences: olmix_spearman
-tab:a-snr,35,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].panel_mean.value,3,MMLU other: panel_mean
-tab:a-snr,35,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].panel_sd.value,3,MMLU other: panel_sd
-tab:a-snr,35,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].proportional_mean.value,3,MMLU other: proportional_mean
-tab:a-snr,35,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].repeat_sd.value,4,MMLU other: repeat_sd
-tab:a-snr,35,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].snr.value,1,MMLU other: snr
-tab:a-snr,35,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].mariner_spearman.value,2,MMLU other: mariner_spearman
-tab:a-snr,35,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='mmlu_other'].olmix_spearman.value,2,MMLU other: olmix_spearman
-tab:a-snr,36,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].panel_mean.value,3,CommonsenseQA: panel_mean
-tab:a-snr,36,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].panel_sd.value,3,CommonsenseQA: panel_sd
-tab:a-snr,36,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].proportional_mean.value,3,CommonsenseQA: proportional_mean
-tab:a-snr,36,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].repeat_sd.value,4,CommonsenseQA: repeat_sd
-tab:a-snr,36,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].snr.value,1,CommonsenseQA: snr
-tab:a-snr,36,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].mariner_spearman.value,2,CommonsenseQA: mariner_spearman
-tab:a-snr,36,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='csqa'].olmix_spearman.value,2,CommonsenseQA: olmix_spearman
-tab:a-snr,37,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].panel_mean.value,3,HellaSwag: panel_mean
-tab:a-snr,37,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].panel_sd.value,3,HellaSwag: panel_sd
-tab:a-snr,37,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].proportional_mean.value,3,HellaSwag: proportional_mean
-tab:a-snr,37,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].repeat_sd.value,4,HellaSwag: repeat_sd
-tab:a-snr,37,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].snr.value,1,HellaSwag: snr
-tab:a-snr,37,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].mariner_spearman.value,2,HellaSwag: mariner_spearman
-tab:a-snr,37,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='hellaswag'].olmix_spearman.value,2,HellaSwag: olmix_spearman
-tab:a-snr,38,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].panel_mean.value,3,WinoGrande: panel_mean
-tab:a-snr,38,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].panel_sd.value,3,WinoGrande: panel_sd
-tab:a-snr,38,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].proportional_mean.value,3,WinoGrande: proportional_mean
-tab:a-snr,38,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].repeat_sd.value,4,WinoGrande: repeat_sd
-tab:a-snr,38,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].snr.value,1,WinoGrande: snr
-tab:a-snr,38,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].mariner_spearman.value,2,WinoGrande: mariner_spearman
-tab:a-snr,38,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='winogrande'].olmix_spearman.value,2,WinoGrande: olmix_spearman
-tab:a-snr,39,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].panel_mean.value,3,SocialIQA: panel_mean
-tab:a-snr,39,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].panel_sd.value,3,SocialIQA: panel_sd
-tab:a-snr,39,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].proportional_mean.value,3,SocialIQA: proportional_mean
-tab:a-snr,39,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].repeat_sd.value,4,SocialIQA: repeat_sd
-tab:a-snr,39,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].snr.value,1,SocialIQA: snr
-tab:a-snr,39,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].mariner_spearman.value,2,SocialIQA: mariner_spearman
-tab:a-snr,39,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='socialiqa'].olmix_spearman.value,2,SocialIQA: olmix_spearman
-tab:a-snr,40,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].panel_mean.value,3,PIQA: panel_mean
-tab:a-snr,40,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].panel_sd.value,3,PIQA: panel_sd
-tab:a-snr,40,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].proportional_mean.value,3,PIQA: proportional_mean
-tab:a-snr,40,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].repeat_sd.value,4,PIQA: repeat_sd
-tab:a-snr,40,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].snr.value,1,PIQA: snr
-tab:a-snr,40,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].mariner_spearman.value,2,PIQA: mariner_spearman
-tab:a-snr,40,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='piqa'].olmix_spearman.value,2,PIQA: olmix_spearman
-tab:a-snr,41,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].panel_mean.value,3,CoQA: panel_mean
-tab:a-snr,41,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].panel_sd.value,3,CoQA: panel_sd
-tab:a-snr,41,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].proportional_mean.value,3,CoQA: proportional_mean
-tab:a-snr,41,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].repeat_sd.value,4,CoQA: repeat_sd
-tab:a-snr,41,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].snr.value,1,CoQA: snr
-tab:a-snr,41,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].mariner_spearman.value,2,CoQA: mariner_spearman
-tab:a-snr,41,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='coqa'].olmix_spearman.value,2,CoQA: olmix_spearman
-tab:a-snr,42,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].panel_mean.value,3,DROP: panel_mean
-tab:a-snr,42,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].panel_sd.value,3,DROP: panel_sd
-tab:a-snr,42,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].proportional_mean.value,3,DROP: proportional_mean
-tab:a-snr,42,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].repeat_sd.value,4,DROP: repeat_sd
-tab:a-snr,42,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].snr.value,1,DROP: snr
-tab:a-snr,42,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].mariner_spearman.value,2,DROP: mariner_spearman
-tab:a-snr,42,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='drop'].olmix_spearman.value,2,DROP: olmix_spearman
-tab:a-snr,43,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].panel_mean.value,3,Jeopardy: panel_mean
-tab:a-snr,43,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].panel_sd.value,3,Jeopardy: panel_sd
-tab:a-snr,43,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].proportional_mean.value,3,Jeopardy: proportional_mean
-tab:a-snr,43,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].repeat_sd.value,4,Jeopardy: repeat_sd
-tab:a-snr,43,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].snr.value,1,Jeopardy: snr
-tab:a-snr,43,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].mariner_spearman.value,2,Jeopardy: mariner_spearman
-tab:a-snr,43,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='jeopardy'].olmix_spearman.value,2,Jeopardy: olmix_spearman
-tab:a-snr,44,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].panel_mean.value,3,Natural Questions: panel_mean
-tab:a-snr,44,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].panel_sd.value,3,Natural Questions: panel_sd
-tab:a-snr,44,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].proportional_mean.value,3,Natural Questions: proportional_mean
-tab:a-snr,44,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].repeat_sd.value,4,Natural Questions: repeat_sd
-tab:a-snr,44,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].snr.value,1,Natural Questions: snr
-tab:a-snr,44,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].mariner_spearman.value,2,Natural Questions: mariner_spearman
-tab:a-snr,44,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='naturalqs'].olmix_spearman.value,2,Natural Questions: olmix_spearman
-tab:a-snr,45,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].panel_mean.value,3,SQuAD: panel_mean
-tab:a-snr,45,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].panel_sd.value,3,SQuAD: panel_sd
-tab:a-snr,45,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].proportional_mean.value,3,SQuAD: proportional_mean
-tab:a-snr,45,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].repeat_sd.value,4,SQuAD: repeat_sd
-tab:a-snr,45,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].snr.value,1,SQuAD: snr
-tab:a-snr,45,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].mariner_spearman.value,2,SQuAD: mariner_spearman
-tab:a-snr,45,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='squad'].olmix_spearman.value,2,SQuAD: olmix_spearman
-tab:a-snr,46,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].panel_mean.value,3,SciQ: panel_mean
-tab:a-snr,46,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].panel_sd.value,3,SciQ: panel_sd
-tab:a-snr,46,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].proportional_mean.value,3,SciQ: proportional_mean
-tab:a-snr,46,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].repeat_sd.value,4,SciQ: repeat_sd
-tab:a-snr,46,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].snr.value,1,SciQ: snr
-tab:a-snr,46,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].mariner_spearman.value,2,SciQ: mariner_spearman
-tab:a-snr,46,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='sciq'].olmix_spearman.value,2,SciQ: olmix_spearman
-tab:a-snr,48,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].panel_mean.value,3,Arithmetic: panel_mean
-tab:a-snr,48,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].panel_sd.value,3,Arithmetic: panel_sd
-tab:a-snr,48,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].proportional_mean.value,3,Arithmetic: proportional_mean
-tab:a-snr,48,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].repeat_sd.value,4,Arithmetic: repeat_sd
-tab:a-snr,48,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].snr.value,1,Arithmetic: snr
-tab:a-snr,48,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].mariner_spearman.value,2,Arithmetic: mariner_spearman
-tab:a-snr,48,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_arithmetic'].olmix_spearman.value,2,Arithmetic: olmix_spearman
-tab:a-snr,49,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].panel_mean.value,3,String operations: panel_mean
-tab:a-snr,49,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].panel_sd.value,3,String operations: panel_sd
-tab:a-snr,49,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].proportional_mean.value,3,String operations: proportional_mean
-tab:a-snr,49,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].repeat_sd.value,4,String operations: repeat_sd
-tab:a-snr,49,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].snr.value,1,String operations: snr
-tab:a-snr,49,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].mariner_spearman.value,2,String operations: mariner_spearman
-tab:a-snr,49,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_string_operations'].olmix_spearman.value,2,String operations: olmix_spearman
-tab:a-snr,50,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].panel_mean.value,3,Coding: panel_mean
-tab:a-snr,50,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].panel_sd.value,3,Coding: panel_sd
-tab:a-snr,50,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].proportional_mean.value,3,Coding: proportional_mean
-tab:a-snr,50,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].repeat_sd.value,4,Coding: repeat_sd
-tab:a-snr,50,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].snr.value,1,Coding: snr
-tab:a-snr,50,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].mariner_spearman.value,2,Coding: mariner_spearman
-tab:a-snr,50,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_coding'].olmix_spearman.value,2,Coding: olmix_spearman
-tab:a-snr,51,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].panel_mean.value,3,Logical reasoning: panel_mean
-tab:a-snr,51,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].panel_sd.value,3,Logical reasoning: panel_sd
-tab:a-snr,51,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].proportional_mean.value,3,Logical reasoning: proportional_mean
-tab:a-snr,51,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].repeat_sd.value,4,Logical reasoning: repeat_sd
-tab:a-snr,51,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].snr.value,1,Logical reasoning: snr
-tab:a-snr,51,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].mariner_spearman.value,2,Logical reasoning: mariner_spearman
-tab:a-snr,51,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_logical_reasoning'].olmix_spearman.value,2,Logical reasoning: olmix_spearman
-tab:a-snr,52,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].panel_mean.value,3,Common knowledge: panel_mean
-tab:a-snr,52,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].panel_sd.value,3,Common knowledge: panel_sd
-tab:a-snr,52,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].proportional_mean.value,3,Common knowledge: proportional_mean
-tab:a-snr,52,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].repeat_sd.value,4,Common knowledge: repeat_sd
-tab:a-snr,52,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].snr.value,1,Common knowledge: snr
-tab:a-snr,52,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].mariner_spearman.value,2,Common knowledge: mariner_spearman
-tab:a-snr,52,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_common_knowledge'].olmix_spearman.value,2,Common knowledge: olmix_spearman
-tab:a-snr,53,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].panel_mean.value,3,Pattern: panel_mean
-tab:a-snr,53,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].panel_sd.value,3,Pattern: panel_sd
-tab:a-snr,53,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].proportional_mean.value,3,Pattern: proportional_mean
-tab:a-snr,53,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].repeat_sd.value,4,Pattern: repeat_sd
-tab:a-snr,53,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].snr.value,1,Pattern: snr
-tab:a-snr,53,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].mariner_spearman.value,2,Pattern: mariner_spearman
-tab:a-snr,53,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='basic_skills_pattern'].olmix_spearman.value,2,Pattern: olmix_spearman
-tab:a-snr,54,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].panel_mean.value,3,LAMBADA: panel_mean
-tab:a-snr,54,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].panel_sd.value,3,LAMBADA: panel_sd
-tab:a-snr,54,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].proportional_mean.value,3,LAMBADA: proportional_mean
-tab:a-snr,54,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].repeat_sd.value,4,LAMBADA: repeat_sd
-tab:a-snr,54,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].snr.value,1,LAMBADA: snr
-tab:a-snr,54,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].mariner_spearman.value,2,LAMBADA: mariner_spearman
-tab:a-snr,54,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='lambada'].olmix_spearman.value,2,LAMBADA: olmix_spearman
-tab:a-snr,55,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].panel_mean.value,3,MedMCQA: panel_mean
-tab:a-snr,55,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].panel_sd.value,3,MedMCQA: panel_sd
-tab:a-snr,55,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].proportional_mean.value,3,MedMCQA: proportional_mean
-tab:a-snr,55,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].repeat_sd.value,4,MedMCQA: repeat_sd
-tab:a-snr,55,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].snr.value,1,MedMCQA: snr
-tab:a-snr,55,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].mariner_spearman.value,2,MedMCQA: mariner_spearman
-tab:a-snr,55,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id=='medmcqa'].olmix_spearman.value,2,MedMCQA: olmix_spearman
+tab:a-snr,0,1,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].panel_mean.value,3,OlmoBaseEval Easy mean: panel_mean
+tab:a-snr,0,2,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].panel_sd.value,3,OlmoBaseEval Easy mean: panel_sd
+tab:a-snr,0,3,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].proportional_mean.value,3,OlmoBaseEval Easy mean: proportional_mean
+tab:a-snr,0,4,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].repeat_sd.value,4,OlmoBaseEval Easy mean: repeat_sd
+tab:a-snr,0,5,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].snr.value,1,OlmoBaseEval Easy mean: snr
+tab:a-snr,0,6,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].mariner_spearman.value,2,OlmoBaseEval Easy mean: mariner_spearman
+tab:a-snr,0,7,0,fits_reliability[source_table=='snr_fit_components' & task_id.isna()].olmix_spearman.value,2,OlmoBaseEval Easy mean: olmix_spearman
+tab:a-snr,2,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].panel_mean.value,3,Algebra: panel_mean
+tab:a-snr,2,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].panel_sd.value,3,Algebra: panel_sd
+tab:a-snr,2,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].proportional_mean.value,3,Algebra: proportional_mean
+tab:a-snr,2,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].repeat_sd.value,4,Algebra: repeat_sd
+tab:a-snr,2,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].snr.value,1,Algebra: snr
+tab:a-snr,2,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].mariner_spearman.value,2,Algebra: mariner_spearman
+tab:a-snr,2,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_algebra'].olmix_spearman.value,2,Algebra: olmix_spearman
+tab:a-snr,3,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].panel_mean.value,3,Counting and probability: panel_mean
+tab:a-snr,3,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].panel_sd.value,3,Counting and probability: panel_sd
+tab:a-snr,3,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].proportional_mean.value,3,Counting and probability: proportional_mean
+tab:a-snr,3,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].repeat_sd.value,4,Counting and probability: repeat_sd
+tab:a-snr,3,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].snr.value,1,Counting and probability: snr
+tab:a-snr,3,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].mariner_spearman.value,2,Counting and probability: mariner_spearman
+tab:a-snr,3,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_counting_and_probability'].olmix_spearman.value,2,Counting and probability: olmix_spearman
+tab:a-snr,4,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].panel_mean.value,3,Geometry: panel_mean
+tab:a-snr,4,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].panel_sd.value,3,Geometry: panel_sd
+tab:a-snr,4,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].proportional_mean.value,3,Geometry: proportional_mean
+tab:a-snr,4,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].repeat_sd.value,4,Geometry: repeat_sd
+tab:a-snr,4,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].snr.value,1,Geometry: snr
+tab:a-snr,4,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].mariner_spearman.value,2,Geometry: mariner_spearman
+tab:a-snr,4,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_geometry'].olmix_spearman.value,2,Geometry: olmix_spearman
+tab:a-snr,5,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].panel_mean.value,3,Intermediate algebra: panel_mean
+tab:a-snr,5,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].panel_sd.value,3,Intermediate algebra: panel_sd
+tab:a-snr,5,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].proportional_mean.value,3,Intermediate algebra: proportional_mean
+tab:a-snr,5,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].repeat_sd.value,4,Intermediate algebra: repeat_sd
+tab:a-snr,5,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].snr.value,1,Intermediate algebra: snr
+tab:a-snr,5,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].mariner_spearman.value,2,Intermediate algebra: mariner_spearman
+tab:a-snr,5,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_intermediate_algebra'].olmix_spearman.value,2,Intermediate algebra: olmix_spearman
+tab:a-snr,6,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].panel_mean.value,3,Number theory: panel_mean
+tab:a-snr,6,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].panel_sd.value,3,Number theory: panel_sd
+tab:a-snr,6,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].proportional_mean.value,3,Number theory: proportional_mean
+tab:a-snr,6,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].repeat_sd.value,4,Number theory: repeat_sd
+tab:a-snr,6,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].snr.value,1,Number theory: snr
+tab:a-snr,6,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].mariner_spearman.value,2,Number theory: mariner_spearman
+tab:a-snr,6,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_number_theory'].olmix_spearman.value,2,Number theory: olmix_spearman
+tab:a-snr,7,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].panel_mean.value,3,Prealgebra: panel_mean
+tab:a-snr,7,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].panel_sd.value,3,Prealgebra: panel_sd
+tab:a-snr,7,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].proportional_mean.value,3,Prealgebra: proportional_mean
+tab:a-snr,7,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].repeat_sd.value,4,Prealgebra: repeat_sd
+tab:a-snr,7,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].snr.value,1,Prealgebra: snr
+tab:a-snr,7,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].mariner_spearman.value,2,Prealgebra: mariner_spearman
+tab:a-snr,7,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_prealgebra'].olmix_spearman.value,2,Prealgebra: olmix_spearman
+tab:a-snr,8,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].panel_mean.value,3,Precalculus: panel_mean
+tab:a-snr,8,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].panel_sd.value,3,Precalculus: panel_sd
+tab:a-snr,8,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].proportional_mean.value,3,Precalculus: proportional_mean
+tab:a-snr,8,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].repeat_sd.value,4,Precalculus: repeat_sd
+tab:a-snr,8,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].snr.value,1,Precalculus: snr
+tab:a-snr,8,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].mariner_spearman.value,2,Precalculus: mariner_spearman
+tab:a-snr,8,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='minerva_math_precalculus'].olmix_spearman.value,2,Precalculus: olmix_spearman
+tab:a-snr,9,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].panel_mean.value,3,HumanEval: panel_mean
+tab:a-snr,9,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].panel_sd.value,3,HumanEval: panel_sd
+tab:a-snr,9,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].proportional_mean.value,3,HumanEval: proportional_mean
+tab:a-snr,9,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].repeat_sd.value,4,HumanEval: repeat_sd
+tab:a-snr,9,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].snr.value,1,HumanEval: snr
+tab:a-snr,9,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].mariner_spearman.value,2,HumanEval: mariner_spearman
+tab:a-snr,9,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='codex_humaneval'].olmix_spearman.value,2,HumanEval: olmix_spearman
+tab:a-snr,10,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].panel_mean.value,3,MBPP: panel_mean
+tab:a-snr,10,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].panel_sd.value,3,MBPP: panel_sd
+tab:a-snr,10,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].proportional_mean.value,3,MBPP: proportional_mean
+tab:a-snr,10,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].repeat_sd.value,4,MBPP: repeat_sd
+tab:a-snr,10,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].snr.value,1,MBPP: snr
+tab:a-snr,10,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].mariner_spearman.value,2,MBPP: mariner_spearman
+tab:a-snr,10,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mbpp'].olmix_spearman.value,2,MBPP: olmix_spearman
+tab:a-snr,12,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].panel_mean.value,3,Bash: panel_mean
+tab:a-snr,12,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].panel_sd.value,3,Bash: panel_sd
+tab:a-snr,12,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].proportional_mean.value,3,Bash: proportional_mean
+tab:a-snr,12,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].repeat_sd.value,4,Bash: repeat_sd
+tab:a-snr,12,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].snr.value,1,Bash: snr
+tab:a-snr,12,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].mariner_spearman.value,2,Bash: mariner_spearman
+tab:a-snr,12,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_bash'].olmix_spearman.value,2,Bash: olmix_spearman
+tab:a-snr,13,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].panel_mean.value,3,C: panel_mean
+tab:a-snr,13,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].panel_sd.value,3,C: panel_sd
+tab:a-snr,13,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].proportional_mean.value,3,C: proportional_mean
+tab:a-snr,13,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].repeat_sd.value,4,C: repeat_sd
+tab:a-snr,13,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].snr.value,1,C: snr
+tab:a-snr,13,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].mariner_spearman.value,2,C: mariner_spearman
+tab:a-snr,13,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_c'].olmix_spearman.value,2,C: olmix_spearman
+tab:a-snr,14,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].panel_mean.value,3,C++: panel_mean
+tab:a-snr,14,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].panel_sd.value,3,C++: panel_sd
+tab:a-snr,14,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].proportional_mean.value,3,C++: proportional_mean
+tab:a-snr,14,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].repeat_sd.value,4,C++: repeat_sd
+tab:a-snr,14,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].snr.value,1,C++: snr
+tab:a-snr,14,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].mariner_spearman.value,2,C++: mariner_spearman
+tab:a-snr,14,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_cpp'].olmix_spearman.value,2,C++: olmix_spearman
+tab:a-snr,15,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].panel_mean.value,3,C\#: panel_mean
+tab:a-snr,15,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].panel_sd.value,3,C\#: panel_sd
+tab:a-snr,15,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].proportional_mean.value,3,C\#: proportional_mean
+tab:a-snr,15,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].repeat_sd.value,4,C\#: repeat_sd
+tab:a-snr,15,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].snr.value,1,C\#: snr
+tab:a-snr,15,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].mariner_spearman.value,2,C\#: mariner_spearman
+tab:a-snr,15,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_csharp'].olmix_spearman.value,2,C\#: olmix_spearman
+tab:a-snr,16,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].panel_mean.value,3,Go: panel_mean
+tab:a-snr,16,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].panel_sd.value,3,Go: panel_sd
+tab:a-snr,16,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].proportional_mean.value,3,Go: proportional_mean
+tab:a-snr,16,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].repeat_sd.value,4,Go: repeat_sd
+tab:a-snr,16,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].snr.value,1,Go: snr
+tab:a-snr,16,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].mariner_spearman.value,2,Go: mariner_spearman
+tab:a-snr,16,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_go'].olmix_spearman.value,2,Go: olmix_spearman
+tab:a-snr,17,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].panel_mean.value,3,Haskell: panel_mean
+tab:a-snr,17,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].panel_sd.value,3,Haskell: panel_sd
+tab:a-snr,17,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].proportional_mean.value,3,Haskell: proportional_mean
+tab:a-snr,17,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].repeat_sd.value,4,Haskell: repeat_sd
+tab:a-snr,17,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].snr.value,1,Haskell: snr
+tab:a-snr,17,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].mariner_spearman.value,2,Haskell: mariner_spearman
+tab:a-snr,17,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_haskell'].olmix_spearman.value,2,Haskell: olmix_spearman
+tab:a-snr,18,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].panel_mean.value,3,Java: panel_mean
+tab:a-snr,18,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].panel_sd.value,3,Java: panel_sd
+tab:a-snr,18,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].proportional_mean.value,3,Java: proportional_mean
+tab:a-snr,18,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].repeat_sd.value,4,Java: repeat_sd
+tab:a-snr,18,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].snr.value,1,Java: snr
+tab:a-snr,18,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].mariner_spearman.value,2,Java: mariner_spearman
+tab:a-snr,18,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_java'].olmix_spearman.value,2,Java: olmix_spearman
+tab:a-snr,19,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].panel_mean.value,3,JavaScript: panel_mean
+tab:a-snr,19,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].panel_sd.value,3,JavaScript: panel_sd
+tab:a-snr,19,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].proportional_mean.value,3,JavaScript: proportional_mean
+tab:a-snr,19,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].repeat_sd.value,4,JavaScript: repeat_sd
+tab:a-snr,19,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].snr.value,1,JavaScript: snr
+tab:a-snr,19,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].mariner_spearman.value,2,JavaScript: mariner_spearman
+tab:a-snr,19,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_javascript'].olmix_spearman.value,2,JavaScript: olmix_spearman
+tab:a-snr,20,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].panel_mean.value,3,MATLAB: panel_mean
+tab:a-snr,20,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].panel_sd.value,3,MATLAB: panel_sd
+tab:a-snr,20,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].proportional_mean.value,3,MATLAB: proportional_mean
+tab:a-snr,20,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].repeat_sd.value,4,MATLAB: repeat_sd
+tab:a-snr,20,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].snr.value,1,MATLAB: snr
+tab:a-snr,20,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].mariner_spearman.value,2,MATLAB: mariner_spearman
+tab:a-snr,20,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_matlab'].olmix_spearman.value,2,MATLAB: olmix_spearman
+tab:a-snr,21,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].panel_mean.value,3,PHP: panel_mean
+tab:a-snr,21,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].panel_sd.value,3,PHP: panel_sd
+tab:a-snr,21,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].proportional_mean.value,3,PHP: proportional_mean
+tab:a-snr,21,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].repeat_sd.value,4,PHP: repeat_sd
+tab:a-snr,21,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].snr.value,1,PHP: snr
+tab:a-snr,21,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].mariner_spearman.value,2,PHP: mariner_spearman
+tab:a-snr,21,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_php'].olmix_spearman.value,2,PHP: olmix_spearman
+tab:a-snr,22,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].panel_mean.value,3,Python: panel_mean
+tab:a-snr,22,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].panel_sd.value,3,Python: panel_sd
+tab:a-snr,22,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].proportional_mean.value,3,Python: proportional_mean
+tab:a-snr,22,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].repeat_sd.value,4,Python: repeat_sd
+tab:a-snr,22,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].snr.value,1,Python: snr
+tab:a-snr,22,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].mariner_spearman.value,2,Python: mariner_spearman
+tab:a-snr,22,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_python'].olmix_spearman.value,2,Python: olmix_spearman
+tab:a-snr,23,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].panel_mean.value,3,R: panel_mean
+tab:a-snr,23,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].panel_sd.value,3,R: panel_sd
+tab:a-snr,23,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].proportional_mean.value,3,R: proportional_mean
+tab:a-snr,23,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].repeat_sd.value,4,R: repeat_sd
+tab:a-snr,23,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].snr.value,1,R: snr
+tab:a-snr,23,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].mariner_spearman.value,2,R: mariner_spearman
+tab:a-snr,23,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_r'].olmix_spearman.value,2,R: olmix_spearman
+tab:a-snr,24,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].panel_mean.value,3,Ruby: panel_mean
+tab:a-snr,24,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].panel_sd.value,3,Ruby: panel_sd
+tab:a-snr,24,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].proportional_mean.value,3,Ruby: proportional_mean
+tab:a-snr,24,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].repeat_sd.value,4,Ruby: repeat_sd
+tab:a-snr,24,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].snr.value,1,Ruby: snr
+tab:a-snr,24,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].mariner_spearman.value,2,Ruby: mariner_spearman
+tab:a-snr,24,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_ruby'].olmix_spearman.value,2,Ruby: olmix_spearman
+tab:a-snr,25,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].panel_mean.value,3,Rust: panel_mean
+tab:a-snr,25,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].panel_sd.value,3,Rust: panel_sd
+tab:a-snr,25,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].proportional_mean.value,3,Rust: proportional_mean
+tab:a-snr,25,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].repeat_sd.value,4,Rust: repeat_sd
+tab:a-snr,25,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].snr.value,1,Rust: snr
+tab:a-snr,25,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].mariner_spearman.value,2,Rust: mariner_spearman
+tab:a-snr,25,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_rust'].olmix_spearman.value,2,Rust: olmix_spearman
+tab:a-snr,26,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].panel_mean.value,3,Scala: panel_mean
+tab:a-snr,26,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].panel_sd.value,3,Scala: panel_sd
+tab:a-snr,26,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].proportional_mean.value,3,Scala: proportional_mean
+tab:a-snr,26,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].repeat_sd.value,4,Scala: repeat_sd
+tab:a-snr,26,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].snr.value,1,Scala: snr
+tab:a-snr,26,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].mariner_spearman.value,2,Scala: mariner_spearman
+tab:a-snr,26,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_scala'].olmix_spearman.value,2,Scala: olmix_spearman
+tab:a-snr,27,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].panel_mean.value,3,Swift: panel_mean
+tab:a-snr,27,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].panel_sd.value,3,Swift: panel_sd
+tab:a-snr,27,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].proportional_mean.value,3,Swift: proportional_mean
+tab:a-snr,27,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].repeat_sd.value,4,Swift: repeat_sd
+tab:a-snr,27,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].snr.value,1,Swift: snr
+tab:a-snr,27,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].mariner_spearman.value,2,Swift: mariner_spearman
+tab:a-snr,27,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_swift'].olmix_spearman.value,2,Swift: olmix_spearman
+tab:a-snr,28,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].panel_mean.value,3,TypeScript: panel_mean
+tab:a-snr,28,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].panel_sd.value,3,TypeScript: panel_sd
+tab:a-snr,28,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].proportional_mean.value,3,TypeScript: proportional_mean
+tab:a-snr,28,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].repeat_sd.value,4,TypeScript: repeat_sd
+tab:a-snr,28,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].snr.value,1,TypeScript: snr
+tab:a-snr,28,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].mariner_spearman.value,2,TypeScript: mariner_spearman
+tab:a-snr,28,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mt_mbpp_typescript'].olmix_spearman.value,2,TypeScript: olmix_spearman
+tab:a-snr,30,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].panel_mean.value,3,ARC Easy: panel_mean
+tab:a-snr,30,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].panel_sd.value,3,ARC Easy: panel_sd
+tab:a-snr,30,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].proportional_mean.value,3,ARC Easy: proportional_mean
+tab:a-snr,30,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].repeat_sd.value,4,ARC Easy: repeat_sd
+tab:a-snr,30,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].snr.value,1,ARC Easy: snr
+tab:a-snr,30,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].mariner_spearman.value,2,ARC Easy: mariner_spearman
+tab:a-snr,30,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_easy'].olmix_spearman.value,2,ARC Easy: olmix_spearman
+tab:a-snr,31,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].panel_mean.value,3,ARC Challenge: panel_mean
+tab:a-snr,31,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].panel_sd.value,3,ARC Challenge: panel_sd
+tab:a-snr,31,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].proportional_mean.value,3,ARC Challenge: proportional_mean
+tab:a-snr,31,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].repeat_sd.value,4,ARC Challenge: repeat_sd
+tab:a-snr,31,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].snr.value,1,ARC Challenge: snr
+tab:a-snr,31,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].mariner_spearman.value,2,ARC Challenge: mariner_spearman
+tab:a-snr,31,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='arc_challenge'].olmix_spearman.value,2,ARC Challenge: olmix_spearman
+tab:a-snr,32,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].panel_mean.value,3,MMLU STEM: panel_mean
+tab:a-snr,32,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].panel_sd.value,3,MMLU STEM: panel_sd
+tab:a-snr,32,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].proportional_mean.value,3,MMLU STEM: proportional_mean
+tab:a-snr,32,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].repeat_sd.value,4,MMLU STEM: repeat_sd
+tab:a-snr,32,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].snr.value,1,MMLU STEM: snr
+tab:a-snr,32,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].mariner_spearman.value,2,MMLU STEM: mariner_spearman
+tab:a-snr,32,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_stem'].olmix_spearman.value,2,MMLU STEM: olmix_spearman
+tab:a-snr,33,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].panel_mean.value,3,MMLU humanities: panel_mean
+tab:a-snr,33,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].panel_sd.value,3,MMLU humanities: panel_sd
+tab:a-snr,33,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].proportional_mean.value,3,MMLU humanities: proportional_mean
+tab:a-snr,33,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].repeat_sd.value,4,MMLU humanities: repeat_sd
+tab:a-snr,33,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].snr.value,1,MMLU humanities: snr
+tab:a-snr,33,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].mariner_spearman.value,2,MMLU humanities: mariner_spearman
+tab:a-snr,33,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_humanities'].olmix_spearman.value,2,MMLU humanities: olmix_spearman
+tab:a-snr,34,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].panel_mean.value,3,MMLU social sciences: panel_mean
+tab:a-snr,34,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].panel_sd.value,3,MMLU social sciences: panel_sd
+tab:a-snr,34,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].proportional_mean.value,3,MMLU social sciences: proportional_mean
+tab:a-snr,34,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].repeat_sd.value,4,MMLU social sciences: repeat_sd
+tab:a-snr,34,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].snr.value,1,MMLU social sciences: snr
+tab:a-snr,34,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].mariner_spearman.value,2,MMLU social sciences: mariner_spearman
+tab:a-snr,34,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_social_sciences'].olmix_spearman.value,2,MMLU social sciences: olmix_spearman
+tab:a-snr,35,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].panel_mean.value,3,MMLU other: panel_mean
+tab:a-snr,35,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].panel_sd.value,3,MMLU other: panel_sd
+tab:a-snr,35,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].proportional_mean.value,3,MMLU other: proportional_mean
+tab:a-snr,35,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].repeat_sd.value,4,MMLU other: repeat_sd
+tab:a-snr,35,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].snr.value,1,MMLU other: snr
+tab:a-snr,35,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].mariner_spearman.value,2,MMLU other: mariner_spearman
+tab:a-snr,35,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='mmlu_other'].olmix_spearman.value,2,MMLU other: olmix_spearman
+tab:a-snr,36,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].panel_mean.value,3,CommonsenseQA: panel_mean
+tab:a-snr,36,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].panel_sd.value,3,CommonsenseQA: panel_sd
+tab:a-snr,36,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].proportional_mean.value,3,CommonsenseQA: proportional_mean
+tab:a-snr,36,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].repeat_sd.value,4,CommonsenseQA: repeat_sd
+tab:a-snr,36,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].snr.value,1,CommonsenseQA: snr
+tab:a-snr,36,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].mariner_spearman.value,2,CommonsenseQA: mariner_spearman
+tab:a-snr,36,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='csqa'].olmix_spearman.value,2,CommonsenseQA: olmix_spearman
+tab:a-snr,37,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].panel_mean.value,3,HellaSwag: panel_mean
+tab:a-snr,37,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].panel_sd.value,3,HellaSwag: panel_sd
+tab:a-snr,37,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].proportional_mean.value,3,HellaSwag: proportional_mean
+tab:a-snr,37,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].repeat_sd.value,4,HellaSwag: repeat_sd
+tab:a-snr,37,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].snr.value,1,HellaSwag: snr
+tab:a-snr,37,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].mariner_spearman.value,2,HellaSwag: mariner_spearman
+tab:a-snr,37,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='hellaswag'].olmix_spearman.value,2,HellaSwag: olmix_spearman
+tab:a-snr,38,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].panel_mean.value,3,WinoGrande: panel_mean
+tab:a-snr,38,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].panel_sd.value,3,WinoGrande: panel_sd
+tab:a-snr,38,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].proportional_mean.value,3,WinoGrande: proportional_mean
+tab:a-snr,38,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].repeat_sd.value,4,WinoGrande: repeat_sd
+tab:a-snr,38,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].snr.value,1,WinoGrande: snr
+tab:a-snr,38,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].mariner_spearman.value,2,WinoGrande: mariner_spearman
+tab:a-snr,38,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='winogrande'].olmix_spearman.value,2,WinoGrande: olmix_spearman
+tab:a-snr,39,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].panel_mean.value,3,SocialIQA: panel_mean
+tab:a-snr,39,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].panel_sd.value,3,SocialIQA: panel_sd
+tab:a-snr,39,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].proportional_mean.value,3,SocialIQA: proportional_mean
+tab:a-snr,39,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].repeat_sd.value,4,SocialIQA: repeat_sd
+tab:a-snr,39,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].snr.value,1,SocialIQA: snr
+tab:a-snr,39,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].mariner_spearman.value,2,SocialIQA: mariner_spearman
+tab:a-snr,39,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='socialiqa'].olmix_spearman.value,2,SocialIQA: olmix_spearman
+tab:a-snr,40,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].panel_mean.value,3,PIQA: panel_mean
+tab:a-snr,40,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].panel_sd.value,3,PIQA: panel_sd
+tab:a-snr,40,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].proportional_mean.value,3,PIQA: proportional_mean
+tab:a-snr,40,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].repeat_sd.value,4,PIQA: repeat_sd
+tab:a-snr,40,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].snr.value,1,PIQA: snr
+tab:a-snr,40,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].mariner_spearman.value,2,PIQA: mariner_spearman
+tab:a-snr,40,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='piqa'].olmix_spearman.value,2,PIQA: olmix_spearman
+tab:a-snr,41,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].panel_mean.value,3,CoQA: panel_mean
+tab:a-snr,41,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].panel_sd.value,3,CoQA: panel_sd
+tab:a-snr,41,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].proportional_mean.value,3,CoQA: proportional_mean
+tab:a-snr,41,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].repeat_sd.value,4,CoQA: repeat_sd
+tab:a-snr,41,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].snr.value,1,CoQA: snr
+tab:a-snr,41,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].mariner_spearman.value,2,CoQA: mariner_spearman
+tab:a-snr,41,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='coqa'].olmix_spearman.value,2,CoQA: olmix_spearman
+tab:a-snr,42,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].panel_mean.value,3,DROP: panel_mean
+tab:a-snr,42,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].panel_sd.value,3,DROP: panel_sd
+tab:a-snr,42,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].proportional_mean.value,3,DROP: proportional_mean
+tab:a-snr,42,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].repeat_sd.value,4,DROP: repeat_sd
+tab:a-snr,42,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].snr.value,1,DROP: snr
+tab:a-snr,42,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].mariner_spearman.value,2,DROP: mariner_spearman
+tab:a-snr,42,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='drop'].olmix_spearman.value,2,DROP: olmix_spearman
+tab:a-snr,43,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].panel_mean.value,3,Jeopardy: panel_mean
+tab:a-snr,43,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].panel_sd.value,3,Jeopardy: panel_sd
+tab:a-snr,43,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].proportional_mean.value,3,Jeopardy: proportional_mean
+tab:a-snr,43,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].repeat_sd.value,4,Jeopardy: repeat_sd
+tab:a-snr,43,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].snr.value,1,Jeopardy: snr
+tab:a-snr,43,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].mariner_spearman.value,2,Jeopardy: mariner_spearman
+tab:a-snr,43,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='jeopardy'].olmix_spearman.value,2,Jeopardy: olmix_spearman
+tab:a-snr,44,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].panel_mean.value,3,Natural Questions: panel_mean
+tab:a-snr,44,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].panel_sd.value,3,Natural Questions: panel_sd
+tab:a-snr,44,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].proportional_mean.value,3,Natural Questions: proportional_mean
+tab:a-snr,44,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].repeat_sd.value,4,Natural Questions: repeat_sd
+tab:a-snr,44,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].snr.value,1,Natural Questions: snr
+tab:a-snr,44,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].mariner_spearman.value,2,Natural Questions: mariner_spearman
+tab:a-snr,44,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='naturalqs'].olmix_spearman.value,2,Natural Questions: olmix_spearman
+tab:a-snr,45,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].panel_mean.value,3,SQuAD: panel_mean
+tab:a-snr,45,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].panel_sd.value,3,SQuAD: panel_sd
+tab:a-snr,45,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].proportional_mean.value,3,SQuAD: proportional_mean
+tab:a-snr,45,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].repeat_sd.value,4,SQuAD: repeat_sd
+tab:a-snr,45,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].snr.value,1,SQuAD: snr
+tab:a-snr,45,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].mariner_spearman.value,2,SQuAD: mariner_spearman
+tab:a-snr,45,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='squad'].olmix_spearman.value,2,SQuAD: olmix_spearman
+tab:a-snr,46,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].panel_mean.value,3,SciQ: panel_mean
+tab:a-snr,46,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].panel_sd.value,3,SciQ: panel_sd
+tab:a-snr,46,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].proportional_mean.value,3,SciQ: proportional_mean
+tab:a-snr,46,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].repeat_sd.value,4,SciQ: repeat_sd
+tab:a-snr,46,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].snr.value,1,SciQ: snr
+tab:a-snr,46,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].mariner_spearman.value,2,SciQ: mariner_spearman
+tab:a-snr,46,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='sciq'].olmix_spearman.value,2,SciQ: olmix_spearman
+tab:a-snr,48,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].panel_mean.value,3,Arithmetic: panel_mean
+tab:a-snr,48,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].panel_sd.value,3,Arithmetic: panel_sd
+tab:a-snr,48,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].proportional_mean.value,3,Arithmetic: proportional_mean
+tab:a-snr,48,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].repeat_sd.value,4,Arithmetic: repeat_sd
+tab:a-snr,48,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].snr.value,1,Arithmetic: snr
+tab:a-snr,48,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].mariner_spearman.value,2,Arithmetic: mariner_spearman
+tab:a-snr,48,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_arithmetic'].olmix_spearman.value,2,Arithmetic: olmix_spearman
+tab:a-snr,49,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].panel_mean.value,3,String operations: panel_mean
+tab:a-snr,49,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].panel_sd.value,3,String operations: panel_sd
+tab:a-snr,49,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].proportional_mean.value,3,String operations: proportional_mean
+tab:a-snr,49,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].repeat_sd.value,4,String operations: repeat_sd
+tab:a-snr,49,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].snr.value,1,String operations: snr
+tab:a-snr,49,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].mariner_spearman.value,2,String operations: mariner_spearman
+tab:a-snr,49,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_string_operations'].olmix_spearman.value,2,String operations: olmix_spearman
+tab:a-snr,50,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].panel_mean.value,3,Coding: panel_mean
+tab:a-snr,50,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].panel_sd.value,3,Coding: panel_sd
+tab:a-snr,50,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].proportional_mean.value,3,Coding: proportional_mean
+tab:a-snr,50,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].repeat_sd.value,4,Coding: repeat_sd
+tab:a-snr,50,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].snr.value,1,Coding: snr
+tab:a-snr,50,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].mariner_spearman.value,2,Coding: mariner_spearman
+tab:a-snr,50,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_coding'].olmix_spearman.value,2,Coding: olmix_spearman
+tab:a-snr,51,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].panel_mean.value,3,Logical reasoning: panel_mean
+tab:a-snr,51,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].panel_sd.value,3,Logical reasoning: panel_sd
+tab:a-snr,51,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].proportional_mean.value,3,Logical reasoning: proportional_mean
+tab:a-snr,51,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].repeat_sd.value,4,Logical reasoning: repeat_sd
+tab:a-snr,51,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].snr.value,1,Logical reasoning: snr
+tab:a-snr,51,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].mariner_spearman.value,2,Logical reasoning: mariner_spearman
+tab:a-snr,51,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_logical_reasoning'].olmix_spearman.value,2,Logical reasoning: olmix_spearman
+tab:a-snr,52,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].panel_mean.value,3,Common knowledge: panel_mean
+tab:a-snr,52,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].panel_sd.value,3,Common knowledge: panel_sd
+tab:a-snr,52,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].proportional_mean.value,3,Common knowledge: proportional_mean
+tab:a-snr,52,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].repeat_sd.value,4,Common knowledge: repeat_sd
+tab:a-snr,52,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].snr.value,1,Common knowledge: snr
+tab:a-snr,52,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].mariner_spearman.value,2,Common knowledge: mariner_spearman
+tab:a-snr,52,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_common_knowledge'].olmix_spearman.value,2,Common knowledge: olmix_spearman
+tab:a-snr,53,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].panel_mean.value,3,Pattern: panel_mean
+tab:a-snr,53,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].panel_sd.value,3,Pattern: panel_sd
+tab:a-snr,53,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].proportional_mean.value,3,Pattern: proportional_mean
+tab:a-snr,53,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].repeat_sd.value,4,Pattern: repeat_sd
+tab:a-snr,53,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].snr.value,1,Pattern: snr
+tab:a-snr,53,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].mariner_spearman.value,2,Pattern: mariner_spearman
+tab:a-snr,53,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='basic_skills_pattern'].olmix_spearman.value,2,Pattern: olmix_spearman
+tab:a-snr,54,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].panel_mean.value,3,LAMBADA: panel_mean
+tab:a-snr,54,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].panel_sd.value,3,LAMBADA: panel_sd
+tab:a-snr,54,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].proportional_mean.value,3,LAMBADA: proportional_mean
+tab:a-snr,54,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].repeat_sd.value,4,LAMBADA: repeat_sd
+tab:a-snr,54,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].snr.value,1,LAMBADA: snr
+tab:a-snr,54,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].mariner_spearman.value,2,LAMBADA: mariner_spearman
+tab:a-snr,54,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='lambada'].olmix_spearman.value,2,LAMBADA: olmix_spearman
+tab:a-snr,55,1,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].panel_mean.value,3,MedMCQA: panel_mean
+tab:a-snr,55,2,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].panel_sd.value,3,MedMCQA: panel_sd
+tab:a-snr,55,3,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].proportional_mean.value,3,MedMCQA: proportional_mean
+tab:a-snr,55,4,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].repeat_sd.value,4,MedMCQA: repeat_sd
+tab:a-snr,55,5,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].snr.value,1,MedMCQA: snr
+tab:a-snr,55,6,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].mariner_spearman.value,2,MedMCQA: mariner_spearman
+tab:a-snr,55,7,0,fits_reliability[source_table=='snr_fit_components' & task_id=='medmcqa'].olmix_spearman.value,2,MedMCQA: olmix_spearman
 tab:a-heteroskedastic,0,0,0,starcoder_repeat_noise[mixture_label=='late_code_moderate'].phase_0_starcoder.unique,2,"late_code_moderate: StarCoder share, first phase"
 tab:a-heteroskedastic,0,1,0,starcoder_repeat_noise[mixture_label=='late_code_moderate'].phase_1_starcoder.unique,2,"late_code_moderate: StarCoder share, second phase"
 tab:a-heteroskedastic,0,2,0,starcoder_repeat_noise[mixture_label=='late_code_moderate'].pl_bpb.mean,3,late_code_moderate: mean programming-languages BPB of five data seeds
@@ -1589,84 +1589,84 @@ tab:a-heteroskedastic,9,0,0,starcoder_repeat_noise[mixture_label=='starcoder_onl
 tab:a-heteroskedastic,9,1,0,starcoder_repeat_noise[mixture_label=='starcoder_only'].phase_1_starcoder.unique,2,"starcoder_only: StarCoder share, second phase"
 tab:a-heteroskedastic,9,2,0,starcoder_repeat_noise[mixture_label=='starcoder_only'].pl_bpb.mean,3,starcoder_only: mean programming-languages BPB of five data seeds
 tab:a-heteroskedastic,9,3,0,starcoder_repeat_noise[mixture_label=='starcoder_only'].pl_bpb.std,4,starcoder_only: repeat std of programming-languages BPB
-tab:fit,0,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].task_id.count,0,"OlmoBaseEval Easy, all: components"
-tab:fit,0,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].snr.median,1,"OlmoBaseEval Easy, all: median SNR"
-tab:fit,0,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].{1 - mariner_mse / panel_sd**2}.median,2,"OlmoBaseEval Easy, all: median mariner R2 = 1 - MSE / swarm variance"
-tab:fit,0,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].{1 - olmix_mse / panel_sd**2}.median,2,"OlmoBaseEval Easy, all: median olmix R2 = 1 - MSE / swarm variance"
-tab:fit,0,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].{1 - regmix_mse / panel_sd**2}.median,2,"OlmoBaseEval Easy, all: median regmix R2 = 1 - MSE / swarm variance"
-tab:fit,0,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].{100 * repeat_sd**2 / mariner_mse}.median,0,"OlmoBaseEval Easy, all: median mariner noise share, percent of MSE"
-tab:fit,0,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].{100 * repeat_sd**2 / olmix_mse}.median,0,"OlmoBaseEval Easy, all: median olmix noise share, percent of MSE"
-tab:fit,0,8,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna()].{100 * repeat_sd**2 / regmix_mse}.median,0,"OlmoBaseEval Easy, all: median regmix noise share, percent of MSE"
-tab:fit,0,9,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & mariner_rmse <= 2 * repeat_sd].task_id.count,0,"OlmoBaseEval Easy, all: MARINER RMSE within twice the proportional std"
-tab:fit,1,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].task_id.count,0,math: components
-tab:fit,1,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].snr.median,1,math: median SNR
-tab:fit,1,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].{1 - mariner_mse / panel_sd**2}.median,2,math: median mariner R2 = 1 - MSE / swarm variance
-tab:fit,1,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].{1 - olmix_mse / panel_sd**2}.median,2,math: median olmix R2 = 1 - MSE / swarm variance
-tab:fit,1,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].{1 - regmix_mse / panel_sd**2}.median,2,math: median regmix R2 = 1 - MSE / swarm variance
-tab:fit,1,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].{100 * repeat_sd**2 / mariner_mse}.median,0,"math: median mariner noise share, percent of MSE"
-tab:fit,1,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].{100 * repeat_sd**2 / olmix_mse}.median,0,"math: median olmix noise share, percent of MSE"
-tab:fit,1,8,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math'].{100 * repeat_sd**2 / regmix_mse}.median,0,"math: median regmix noise share, percent of MSE"
-tab:fit,1,9,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Math' & mariner_rmse <= 2 * repeat_sd].task_id.count,0,math: MARINER RMSE within twice the proportional std
-tab:fit,2,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].task_id.count,0,code: components
-tab:fit,2,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].snr.median,1,code: median SNR
-tab:fit,2,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].{1 - mariner_mse / panel_sd**2}.median,2,code: median mariner R2 = 1 - MSE / swarm variance
-tab:fit,2,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].{1 - olmix_mse / panel_sd**2}.median,2,code: median olmix R2 = 1 - MSE / swarm variance
-tab:fit,2,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].{1 - regmix_mse / panel_sd**2}.median,2,code: median regmix R2 = 1 - MSE / swarm variance
-tab:fit,2,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].{100 * repeat_sd**2 / mariner_mse}.median,0,"code: median mariner noise share, percent of MSE"
-tab:fit,2,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].{100 * repeat_sd**2 / olmix_mse}.median,0,"code: median olmix noise share, percent of MSE"
-tab:fit,2,8,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code'].{100 * repeat_sd**2 / regmix_mse}.median,0,"code: median regmix noise share, percent of MSE"
-tab:fit,2,9,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='Code' & mariner_rmse <= 2 * repeat_sd].task_id.count,0,code: MARINER RMSE within twice the proportional std
-tab:fit,3,1,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].task_id.count,0,question answering: components
-tab:fit,3,2,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].snr.median,1,question answering: median SNR
-tab:fit,3,3,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].{1 - mariner_mse / panel_sd**2}.median,2,question answering: median mariner R2 = 1 - MSE / swarm variance
-tab:fit,3,4,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].{1 - olmix_mse / panel_sd**2}.median,2,question answering: median olmix R2 = 1 - MSE / swarm variance
-tab:fit,3,5,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].{1 - regmix_mse / panel_sd**2}.median,2,question answering: median regmix R2 = 1 - MSE / swarm variance
-tab:fit,3,6,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].{100 * repeat_sd**2 / mariner_mse}.median,0,"question answering: median mariner noise share, percent of MSE"
-tab:fit,3,7,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].{100 * repeat_sd**2 / olmix_mse}.median,0,"question answering: median olmix noise share, percent of MSE"
-tab:fit,3,8,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA'].{100 * repeat_sd**2 / regmix_mse}.median,0,"question answering: median regmix noise share, percent of MSE"
-tab:fit,3,9,0,fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & group=='QA' & mariner_rmse <= 2 * repeat_sd].task_id.count,0,question answering: MARINER RMSE within twice the proportional std
-tab:fit,4,1,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].task_id.count,0,Uncheatable: components
-tab:fit,4,2,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].snr.median,1,Uncheatable: median SNR
-tab:fit,4,3,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].{1 - mariner_mse / panel_sd**2}.median,2,Uncheatable: median mariner R2 = 1 - MSE / swarm variance
-tab:fit,4,4,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].{1 - olmix_mse / panel_sd**2}.median,2,Uncheatable: median olmix R2 = 1 - MSE / swarm variance
-tab:fit,4,5,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].{1 - regmix_mse / panel_sd**2}.median,2,Uncheatable: median regmix R2 = 1 - MSE / swarm variance
-tab:fit,4,6,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].{100 * repeat_sd**2 / mariner_mse}.median,0,"Uncheatable: median mariner noise share, percent of MSE"
-tab:fit,4,7,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].{100 * repeat_sd**2 / olmix_mse}.median,0,"Uncheatable: median olmix noise share, percent of MSE"
-tab:fit,4,8,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna()].{100 * repeat_sd**2 / regmix_mse}.median,0,"Uncheatable: median regmix noise share, percent of MSE"
-tab:fit,4,9,0,fits_reliability[source_table=='snr_fit_uncheatable_delphi' & task_id.notna() & mariner_rmse <= 2 * repeat_sd].task_id.count,0,Uncheatable: MARINER RMSE within twice the proportional std
+tab:fit,0,1,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].task_id.count,0,"OlmoBaseEval Easy, all: components"
+tab:fit,0,2,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].snr.median,1,"OlmoBaseEval Easy, all: median SNR"
+tab:fit,0,3,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].{1 - mariner_mse / panel_sd**2}.median,2,"OlmoBaseEval Easy, all: median mariner R2 = 1 - MSE / swarm variance"
+tab:fit,0,4,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].{1 - olmix_mse / panel_sd**2}.median,2,"OlmoBaseEval Easy, all: median olmix R2 = 1 - MSE / swarm variance"
+tab:fit,0,5,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].{1 - regmix_mse / panel_sd**2}.median,2,"OlmoBaseEval Easy, all: median regmix R2 = 1 - MSE / swarm variance"
+tab:fit,0,6,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].{100 * repeat_sd**2 / mariner_mse}.median,0,"OlmoBaseEval Easy, all: median mariner noise share, percent of MSE"
+tab:fit,0,7,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].{100 * repeat_sd**2 / olmix_mse}.median,0,"OlmoBaseEval Easy, all: median olmix noise share, percent of MSE"
+tab:fit,0,8,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna()].{100 * repeat_sd**2 / regmix_mse}.median,0,"OlmoBaseEval Easy, all: median regmix noise share, percent of MSE"
+tab:fit,0,9,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & mariner_rmse <= 2 * repeat_sd].task_id.count,0,"OlmoBaseEval Easy, all: MARINER RMSE within twice the proportional std"
+tab:fit,1,1,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].task_id.count,0,math: components
+tab:fit,1,2,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].snr.median,1,math: median SNR
+tab:fit,1,3,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].{1 - mariner_mse / panel_sd**2}.median,2,math: median mariner R2 = 1 - MSE / swarm variance
+tab:fit,1,4,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].{1 - olmix_mse / panel_sd**2}.median,2,math: median olmix R2 = 1 - MSE / swarm variance
+tab:fit,1,5,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].{1 - regmix_mse / panel_sd**2}.median,2,math: median regmix R2 = 1 - MSE / swarm variance
+tab:fit,1,6,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].{100 * repeat_sd**2 / mariner_mse}.median,0,"math: median mariner noise share, percent of MSE"
+tab:fit,1,7,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].{100 * repeat_sd**2 / olmix_mse}.median,0,"math: median olmix noise share, percent of MSE"
+tab:fit,1,8,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math'].{100 * repeat_sd**2 / regmix_mse}.median,0,"math: median regmix noise share, percent of MSE"
+tab:fit,1,9,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Math' & mariner_rmse <= 2 * repeat_sd].task_id.count,0,math: MARINER RMSE within twice the proportional std
+tab:fit,2,1,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].task_id.count,0,code: components
+tab:fit,2,2,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].snr.median,1,code: median SNR
+tab:fit,2,3,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].{1 - mariner_mse / panel_sd**2}.median,2,code: median mariner R2 = 1 - MSE / swarm variance
+tab:fit,2,4,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].{1 - olmix_mse / panel_sd**2}.median,2,code: median olmix R2 = 1 - MSE / swarm variance
+tab:fit,2,5,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].{1 - regmix_mse / panel_sd**2}.median,2,code: median regmix R2 = 1 - MSE / swarm variance
+tab:fit,2,6,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].{100 * repeat_sd**2 / mariner_mse}.median,0,"code: median mariner noise share, percent of MSE"
+tab:fit,2,7,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].{100 * repeat_sd**2 / olmix_mse}.median,0,"code: median olmix noise share, percent of MSE"
+tab:fit,2,8,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code'].{100 * repeat_sd**2 / regmix_mse}.median,0,"code: median regmix noise share, percent of MSE"
+tab:fit,2,9,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='Code' & mariner_rmse <= 2 * repeat_sd].task_id.count,0,code: MARINER RMSE within twice the proportional std
+tab:fit,3,1,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].task_id.count,0,question answering: components
+tab:fit,3,2,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].snr.median,1,question answering: median SNR
+tab:fit,3,3,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].{1 - mariner_mse / panel_sd**2}.median,2,question answering: median mariner R2 = 1 - MSE / swarm variance
+tab:fit,3,4,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].{1 - olmix_mse / panel_sd**2}.median,2,question answering: median olmix R2 = 1 - MSE / swarm variance
+tab:fit,3,5,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].{1 - regmix_mse / panel_sd**2}.median,2,question answering: median regmix R2 = 1 - MSE / swarm variance
+tab:fit,3,6,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].{100 * repeat_sd**2 / mariner_mse}.median,0,"question answering: median mariner noise share, percent of MSE"
+tab:fit,3,7,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].{100 * repeat_sd**2 / olmix_mse}.median,0,"question answering: median olmix noise share, percent of MSE"
+tab:fit,3,8,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA'].{100 * repeat_sd**2 / regmix_mse}.median,0,"question answering: median regmix noise share, percent of MSE"
+tab:fit,3,9,0,fits_reliability[source_table=='snr_fit_components' & task_id.notna() & group=='QA' & mariner_rmse <= 2 * repeat_sd].task_id.count,0,question answering: MARINER RMSE within twice the proportional std
+tab:fit,4,1,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].task_id.count,0,Uncheatable: components
+tab:fit,4,2,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].snr.median,1,Uncheatable: median SNR
+tab:fit,4,3,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].{1 - mariner_mse / panel_sd**2}.median,2,Uncheatable: median mariner R2 = 1 - MSE / swarm variance
+tab:fit,4,4,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].{1 - olmix_mse / panel_sd**2}.median,2,Uncheatable: median olmix R2 = 1 - MSE / swarm variance
+tab:fit,4,5,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].{1 - regmix_mse / panel_sd**2}.median,2,Uncheatable: median regmix R2 = 1 - MSE / swarm variance
+tab:fit,4,6,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].{100 * repeat_sd**2 / mariner_mse}.median,0,"Uncheatable: median mariner noise share, percent of MSE"
+tab:fit,4,7,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].{100 * repeat_sd**2 / olmix_mse}.median,0,"Uncheatable: median olmix noise share, percent of MSE"
+tab:fit,4,8,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna()].{100 * repeat_sd**2 / regmix_mse}.median,0,"Uncheatable: median regmix noise share, percent of MSE"
+tab:fit,4,9,0,fits_reliability[source_table=='snr_fit_uncheatable' & task_id.notna() & mariner_rmse <= 2 * repeat_sd].task_id.count,0,Uncheatable: MARINER RMSE within twice the proportional std
 tab:a-snr-subset,0,1,0,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy.mean",4,"Full mean (MARINER), obe_easy mean, trainer seeds 0-2: mean"
 tab:a-snr-subset,0,1,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy.std",4,"Full mean (MARINER), obe_easy mean, trainer seeds 0-2: std"
-tab:a-snr-subset,0,3,0,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id).mean",4,"Full mean (MARINER), obe_easy_snr5 mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,0,3,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id).std",4,"Full mean (MARINER), obe_easy_snr5 mean, trainer seeds 0-2: std"
-tab:a-snr-subset,0,5,0,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id).mean",4,"Full mean (MARINER), obe_easy_snr8 mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,0,5,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id).std",4,"Full mean (MARINER), obe_easy_snr8 mean, trainer seeds 0-2: std"
-tab:a-snr-subset,1,1,0,validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy.mean,4,"SNR geq 5 subset, obe_easy mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,1,1,1,validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy.std,4,"SNR geq 5 subset, obe_easy mean, trainer seeds 0-2: std"
-tab:a-snr-subset,1,2,0,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",3,"SNR geq 5 subset minus MARINER, obe_easy mean: mean paired difference"
-tab:a-snr-subset,1,2,1,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",3,"SNR geq 5 subset minus MARINER, obe_easy mean: SE of the paired difference"
-tab:a-snr-subset,1,3,0,validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id).mean,4,"SNR geq 5 subset, obe_easy_snr5 mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,1,3,1,validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id).std,4,"SNR geq 5 subset, obe_easy_snr5 mean, trainer seeds 0-2: std"
-tab:a-snr-subset,1,4,0,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), trainer_seed).mean",3,"SNR geq 5 subset minus MARINER, obe_easy_snr5 mean: mean paired difference"
-tab:a-snr-subset,1,4,1,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), trainer_seed).se",3,"SNR geq 5 subset minus MARINER, obe_easy_snr5 mean: SE of the paired difference"
-tab:a-snr-subset,1,5,0,validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id).mean,4,"SNR geq 5 subset, obe_easy_snr8 mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,1,5,1,validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id).std,4,"SNR geq 5 subset, obe_easy_snr8 mean, trainer seeds 0-2: std"
-tab:a-snr-subset,1,6,0,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), trainer_seed).mean",3,"SNR geq 5 subset minus MARINER, obe_easy_snr8 mean: mean paired difference"
-tab:a-snr-subset,1,6,1,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), trainer_seed).se",3,"SNR geq 5 subset minus MARINER, obe_easy_snr8 mean: SE of the paired difference"
+tab:a-snr-subset,0,3,0,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id).mean",4,"Full mean (MARINER), obe_easy_snr5 mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,0,3,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id).std",4,"Full mean (MARINER), obe_easy_snr5 mean, trainer seeds 0-2: std"
+tab:a-snr-subset,0,5,0,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id).mean",4,"Full mean (MARINER), obe_easy_snr8 mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,0,5,1,"validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id).std",4,"Full mean (MARINER), obe_easy_snr8 mean, trainer seeds 0-2: std"
+tab:a-snr-subset,1,1,0,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy.mean,4,"SNR geq 5 subset, obe_easy mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,1,1,1,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy.std,4,"SNR geq 5 subset, obe_easy mean, trainer seeds 0-2: std"
+tab:a-snr-subset,1,2,0,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",3,"SNR geq 5 subset minus MARINER, obe_easy mean: mean paired difference"
+tab:a-snr-subset,1,2,1,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",3,"SNR geq 5 subset minus MARINER, obe_easy mean: SE of the paired difference"
+tab:a-snr-subset,1,3,0,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id).mean,4,"SNR geq 5 subset, obe_easy_snr5 mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,1,3,1,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id).std,4,"SNR geq 5 subset, obe_easy_snr5 mean, trainer seeds 0-2: std"
+tab:a-snr-subset,1,4,0,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), trainer_seed).mean",3,"SNR geq 5 subset minus MARINER, obe_easy_snr5 mean: mean paired difference"
+tab:a-snr-subset,1,4,1,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), trainer_seed).se",3,"SNR geq 5 subset minus MARINER, obe_easy_snr5 mean: SE of the paired difference"
+tab:a-snr-subset,1,5,0,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id).mean,4,"SNR geq 5 subset, obe_easy_snr8 mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,1,5,1,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id).std,4,"SNR geq 5 subset, obe_easy_snr8 mean, trainer seeds 0-2: std"
+tab:a-snr-subset,1,6,0,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), trainer_seed).mean",3,"SNR geq 5 subset minus MARINER, obe_easy_snr8 mean: mean paired difference"
+tab:a-snr-subset,1,6,1,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr5_t9_cap09'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), trainer_seed).se",3,"SNR geq 5 subset minus MARINER, obe_easy_snr8 mean: SE of the paired difference"
 tab:a-snr-subset,2,2,0,fits_proposal_predictions[variant=='snr5_t9_cap09' & objective=='obe_easy' & predictor=='mariner'].predicted_bpb.unique diff: fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy' & predictor=='mariner'].predicted_bpb.unique,3,predicted obe_easy of snr5_t9_cap09 minus MARINER's
 tab:a-snr-subset,2,4,0,fits_proposal_predictions[variant=='snr5_t9_cap09' & objective=='obe_easy_snr5' & predictor=='mariner'].predicted_bpb.unique diff: fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy_snr5' & predictor=='mariner'].predicted_bpb.unique,3,predicted obe_easy_snr5 of snr5_t9_cap09 minus MARINER's
 tab:a-snr-subset,2,6,0,fits_proposal_predictions[variant=='snr5_t9_cap09' & objective=='obe_easy_snr8' & predictor=='mariner'].predicted_bpb.unique diff: fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy_snr8' & predictor=='mariner'].predicted_bpb.unique,3,predicted obe_easy_snr8 of snr5_t9_cap09 minus MARINER's
-tab:a-snr-subset,3,1,0,validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy.mean,4,"SNR geq 8 subset, obe_easy mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,3,1,1,validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy.std,4,"SNR geq 8 subset, obe_easy mean, trainer seeds 0-2: std"
-tab:a-snr-subset,3,2,0,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",3,"SNR geq 8 subset minus MARINER, obe_easy mean: mean paired difference"
-tab:a-snr-subset,3,2,1,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",3,"SNR geq 8 subset minus MARINER, obe_easy mean: SE of the paired difference"
-tab:a-snr-subset,3,3,0,validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id).mean,4,"SNR geq 8 subset, obe_easy_snr5 mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,3,3,1,validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id).std,4,"SNR geq 8 subset, obe_easy_snr5 mean, trainer seeds 0-2: std"
-tab:a-snr-subset,3,4,0,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), trainer_seed).mean",3,"SNR geq 8 subset minus MARINER, obe_easy_snr5 mean: mean paired difference"
-tab:a-snr-subset,3,4,1,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 5].task_id), trainer_seed).se",3,"SNR geq 8 subset minus MARINER, obe_easy_snr5 mean: SE of the paired difference"
-tab:a-snr-subset,3,5,0,validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id).mean,4,"SNR geq 8 subset, obe_easy_snr8 mean, trainer seeds 0-2: mean"
-tab:a-snr-subset,3,5,1,validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id).std,4,"SNR geq 8 subset, obe_easy_snr8 mean, trainer seeds 0-2: std"
-tab:a-snr-subset,3,6,0,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), trainer_seed).mean",3,"SNR geq 8 subset minus MARINER, obe_easy_snr8 mean: mean paired difference"
-tab:a-snr-subset,3,6,1,"paired(validation_3e18[launch=='table9_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components_delphi' & task_id.notna() & snr >= 8].task_id), trainer_seed).se",3,"SNR geq 8 subset minus MARINER, obe_easy_snr8 mean: SE of the paired difference"
+tab:a-snr-subset,3,1,0,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy.mean,4,"SNR geq 8 subset, obe_easy mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,3,1,1,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy.std,4,"SNR geq 8 subset, obe_easy mean, trainer seeds 0-2: std"
+tab:a-snr-subset,3,2,0,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).mean",3,"SNR geq 8 subset minus MARINER, obe_easy mean: mean paired difference"
+tab:a-snr-subset,3,2,1,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].bpb__obe_easy, validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].bpb__obe_easy, trainer_seed).se",3,"SNR geq 8 subset minus MARINER, obe_easy mean: SE of the paired difference"
+tab:a-snr-subset,3,3,0,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id).mean,4,"SNR geq 8 subset, obe_easy_snr5 mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,3,3,1,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id).std,4,"SNR geq 8 subset, obe_easy_snr5 mean, trainer seeds 0-2: std"
+tab:a-snr-subset,3,4,0,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), trainer_seed).mean",3,"SNR geq 8 subset minus MARINER, obe_easy_snr5 mean: mean paired difference"
+tab:a-snr-subset,3,4,1,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 5].task_id), trainer_seed).se",3,"SNR geq 8 subset minus MARINER, obe_easy_snr5 mean: SE of the paired difference"
+tab:a-snr-subset,3,5,0,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id).mean,4,"SNR geq 8 subset, obe_easy_snr8 mean, trainer seeds 0-2: mean"
+tab:a-snr-subset,3,5,1,validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id).std,4,"SNR geq 8 subset, obe_easy_snr8 mean, trainer seeds 0-2: std"
+tab:a-snr-subset,3,6,0,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), trainer_seed).mean",3,"SNR geq 8 subset minus MARINER, obe_easy_snr8 mean: mean paired difference"
+tab:a-snr-subset,3,6,1,"paired(validation_3e18[launch=='obe_easy_snr_subset' & variant=='snr8_t9_cap07'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), validation_3e18[launch.isin(['frozen_procedure','fairness_repeats']) & variant=='lwspu_t9_snc_cap08'].mean_of(fits_reliability[source_table=='snr_fit_components' & task_id.notna() & snr >= 8].task_id), trainer_seed).se",3,"SNR geq 8 subset minus MARINER, obe_easy_snr8 mean: SE of the paired difference"
 tab:a-snr-subset,4,2,0,fits_proposal_predictions[variant=='snr8_t9_cap07' & objective=='obe_easy' & predictor=='mariner'].predicted_bpb.unique diff: fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy' & predictor=='mariner'].predicted_bpb.unique,3,predicted obe_easy of snr8_t9_cap07 minus MARINER's
 tab:a-snr-subset,4,4,0,fits_proposal_predictions[variant=='snr8_t9_cap07' & objective=='obe_easy_snr5' & predictor=='mariner'].predicted_bpb.unique diff: fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy_snr5' & predictor=='mariner'].predicted_bpb.unique,3,predicted obe_easy_snr5 of snr8_t9_cap07 minus MARINER's
 tab:a-snr-subset,4,6,0,fits_proposal_predictions[variant=='snr8_t9_cap07' & objective=='obe_easy_snr8' & predictor=='mariner'].predicted_bpb.unique diff: fits_proposal_predictions[variant=='lwspu_t9_snc_cap08' & objective=='obe_easy_snr8' & predictor=='mariner'].predicted_bpb.unique,3,predicted obe_easy_snr8 of snr8_t9_cap07 minus MARINER's

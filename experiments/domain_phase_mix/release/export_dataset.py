@@ -5,7 +5,9 @@
 
 `uv run python -m experiments.domain_phase_mix.release.export_dataset [--out release_build] [--private-dir DIR]`
 
-`build_tables` runs every exporter once. `write` replaces the build's data folder, writes each table (Parquet for the
+`build_tables` runs every exporter once, and `public_names.publish` renames the values that keep internal names; the
+record of those renames goes to `--aliases`, by default the repository's `public_name_aliases.csv`. `write` replaces
+the build's data folder, writes each table (Parquet for the
 `fits` tables, the StarCoder dense grid and the trajectories; CSV with pandas' shortest round-trip float repr for the
 rest, so every value is bit-identical to the exported one), writes figures_tables.csv without the builder column
 that only the repository's copy keeps, and writes the public manifest: the build's commit, per table its config,
@@ -25,7 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from experiments.domain_phase_mix.release import checks, context, naming, paths
+from experiments.domain_phase_mix.release import checks, context, naming, paths, public_names
 from experiments.domain_phase_mix.release.configs import (
     domain_sweeps,
     fits,
@@ -261,8 +263,11 @@ def table_format(table: str) -> str:
     return "parquet" if table.startswith("fits_") or table in PARQUET_TABLES else "csv"
 
 
-def build_tables(ctx: context.ExportContext) -> dict[str, pd.DataFrame]:
-    """Every release table; each exporter runs once, and `fits` reuses the held-out and validation tables."""
+def build_tables(ctx: context.ExportContext) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """Every release table under its public names, and the aliases of the values `public_names.publish` renamed.
+
+    Each exporter runs once, and `fits` reuses the held-out and validation tables; `run_sets` follows the renames.
+    """
     tables: dict[str, pd.DataFrame] = {}
     for exporter in (partition_tasks, swarm_qwen3, swarm_llama, heldout, validation):
         _add(tables, exporter.export(ctx))
@@ -274,8 +279,9 @@ def build_tables(ctx: context.ExportContext) -> dict[str, pd.DataFrame]:
     _add(tables, starcoder.export())
     _add(tables, domain_sweeps.export())
     _add(tables, fits.export(ctx, heldout_table=tables["heldout"], validation_table=tables["validation_3e18"]))
+    tables, aliases = public_names.publish(tables)
     _add(tables, {"run_sets": checks.run_sets(tables)})
-    return tables
+    return tables, aliases
 
 
 def _add(tables: dict[str, pd.DataFrame], exported: dict[str, pd.DataFrame]) -> None:
@@ -397,9 +403,14 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=paths.BUILD)
     parser.add_argument("--private-dir", type=Path, default=paths.PRIVATE)
+    parser.add_argument(
+        "--aliases", type=Path, default=public_names.ALIASES, help="the internal record of the renamed values"
+    )
     args = parser.parse_args(argv)
     _require_private_outside(args.out, args.private_dir)  # before the export runs
-    manifest = write(build_tables(context.build()), args.out, args.private_dir)
+    tables, aliases = build_tables(context.build())
+    manifest = write(tables, args.out, args.private_dir)
+    public_names.write_aliases(aliases, args.aliases)
     problems = manifest["consistency_problems"]
     total = sum(t["bytes"] for t in manifest["tables"])
     print(f"wrote {len(manifest['tables'])} tables ({total / 1e6:.1f} MB) to {args.out}; {len(problems)} problems")

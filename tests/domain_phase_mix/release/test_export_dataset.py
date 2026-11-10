@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from experiments.domain_phase_mix.release import context, export_dataset, naming, paths, tables
+from experiments.domain_phase_mix.release import context, export_dataset, naming, paths, public_names, tables
 
 pytestmark = pytest.mark.skipif(not paths.MIXSEL.exists(), reason="sources absent")
 CONFIGS = {
@@ -50,8 +50,15 @@ RUN_TABLES = {
 @pytest.fixture(scope="module")
 def build(tmp_path_factory):
     root = tmp_path_factory.mktemp("release")
-    export_dataset.main(["--out", str(root / "build"), "--private-dir", str(root / "private")])
+    export_dataset.main(
+        ["--out", str(root / "build"), "--private-dir", str(root / "private"), "--aliases", str(root / "aliases.csv")]
+    )
     return root
+
+
+def test_committed_aliases_match_the_export(build):
+    # The repository's record of the renamed values must be the one the current export produces.
+    assert (build / "aliases.csv").read_text() == public_names.ALIASES.read_text()
 
 
 @pytest.fixture(scope="module")
@@ -98,7 +105,7 @@ def test_full_export_writes_every_config(build, manifest):
 @pytest.mark.timeout(1800)
 def test_written_files_hold_the_exported_values_exactly(build, manifest):
     # Every value survives its file bit for bit.
-    built = export_dataset.build_tables(context.build())
+    built, _ = export_dataset.build_tables(context.build())
     assert set(built) == {t["table"] for t in manifest["tables"]}
     for t in manifest["tables"]:
         path = build / "build" / t["path"]
