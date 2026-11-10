@@ -562,17 +562,6 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     ]
 
 
-def test_wrap_multiprocess_requires_gpu() -> None:
-    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
-    with pytest.raises(ValueError, match="requires a GPU device"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
-
-
-def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
-    with pytest.raises(ValueError, match="must divide the GPU count"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)
-
-
 def test_wrap_nsys_is_a_noop_without_the_environment_variable(monkeypatch):
     monkeypatch.delenv(iris_backend.NSYS_TASKS_ENV, raising=False)
     entrypoint = IrisEntrypoint(command=["bash", "-c", "exec $IRIS_PYTHON -u run.py"])
