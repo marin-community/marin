@@ -139,7 +139,7 @@ def _scored_trial_config(tmp_path: Path) -> TrialConfig:
     return TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(import_path="tests.unit.test_trial_log_transfer:_QuickAgent"),
+        agent=AgentConfig(name=AgentName.PI),
         environment=EnvironmentConfig(
             type=EnvironmentType.LOCAL,
             delete=True,

@@ -34,14 +34,17 @@ _CANDIDATE_ENDPOINT = "https://candidate.test/proxy/t/private-capability/v1"
 _JUDGE_ENDPOINT = "https://judge.test/v1"
 
 
-def test_checked_in_policies_select_supported_agents():
-    paths = sorted((_ROOT / "experiments/evaluation/configs/harbor").glob("*.yaml"))
-    assert paths
-    for path in paths:
-        config = JobConfig.model_validate(yaml.safe_load(path.read_text()))
-        _validate_environment(config)
-        for agent in config.agents:
-            AgentFactory.get_agent_class_from_config(agent)
+_POLICIES = sorted((_ROOT / "experiments/evaluation/configs/harbor").glob("*.yaml"))
+
+
+@pytest.mark.parametrize("path", _POLICIES, ids=lambda path: path.name)
+def test_checked_in_policies_select_supported_agents(path):
+    config = JobConfig.model_validate(
+        yaml.safe_load(path.read_text()), extra="forbid"
+    )
+    _validate_environment(config)
+    for agent in config.agents:
+        AgentFactory.get_agent_class_from_config(agent)
 
 
 @pytest.fixture
@@ -204,30 +207,16 @@ def test_installed_candidate_cannot_receive_host_endpoint_or_credentials(
 
 
 @pytest.mark.parametrize(
-    ("import_path", "selected_class", "expected_endpoint"),
+    ("name", "selected_class", "expected_endpoint"),
     [
-        (
-            "harbor.agents.installed.pi:Pi",
-            "Pi",
-            "http://127.0.0.1:8788/v1",
-        ),
-        (
-            "harbor.agents.terminus_2.terminus_2:Terminus2",
-            "Terminus2",
-            _CANDIDATE_ENDPOINT,
-        ),
+        ("pi", "Pi", "http://127.0.0.1:8788/v1"),
+        ("terminus-2", "Terminus2", _CANDIDATE_ENDPOINT),
     ],
 )
-def test_candidate_routing_uses_agent_selected_by_import_path(
-    tmp_path, policy, overlay, import_path, selected_class, expected_endpoint
+def test_candidate_routing_follows_selected_agent(
+    tmp_path, policy, overlay, name, selected_class, expected_endpoint
 ):
-    candidate = AgentConfig.model_validate(
-        {
-            **policy.agents[0].model_dump(mode="python"),
-            "name": None,
-            "import_path": import_path,
-        }
-    )
+    candidate = policy.agents[0].model_copy(update={"name": name})
     config = effective_job_config(
         policy.model_copy(update={"agents": [candidate]}), overlay
     )

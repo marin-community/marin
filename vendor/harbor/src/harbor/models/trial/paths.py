@@ -28,9 +28,6 @@ class EnvironmentPaths:
     /
     ├── setup_files/    # Copied over before the agent runs (if present).
     │   └── ...
-    ├── solution/       # Copied over by the OracleAgent only.
-    │   ├── solve.{sh,ps1,cmd,bat}
-    │   └── ...
     ├── tests/          # Copied over by the Verifier after the agent runs.
         ├── test.{sh,ps1,cmd,bat}
         └── ...
@@ -122,9 +119,6 @@ class TrialPaths:
     Environment copy structure:
     /
     ├── setup_files/    # Copied over before the agent runs (if present).
-    │   └── ...
-    ├── solution/       # Copied over by the OracleAgent only.
-    │   ├── solve.{sh,ps1,cmd,bat}
     │   └── ...
     ├── tests/          # Copied over by the Verifier after the agent runs.
         ├── test.{sh,ps1,cmd,bat}

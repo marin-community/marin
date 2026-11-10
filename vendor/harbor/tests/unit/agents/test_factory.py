@@ -59,9 +59,7 @@ def test_create_agent_from_config_passes_agent_kwargs(monkeypatch, tmp_path):
         AgentConfig(name="claude-code"),
         AgentConfig(name="oracle"),
         AgentConfig(name="nop"),
-        AgentConfig(name="claude-code", mode="local"),
-        AgentConfig(import_path="harbor.agents.installed.claude_code:ClaudeCode"),
-        AgentConfig(import_path="shellbox.agent:BashAgent"),
+        AgentConfig(),
     ],
 )
 def test_unsupported_agents_are_rejected_before_initialization(tmp_path, config):

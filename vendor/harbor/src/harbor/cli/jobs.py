@@ -349,15 +349,6 @@ def start(
             show_default=False,
         ),
     ] = None,
-    agent_import_path: Annotated[
-        str | None,
-        Option(
-            "--agent-import-path",
-            help="Import path of a supported agent",
-            rich_help_panel="Agent",
-            show_default=False,
-        ),
-    ] = None,
     model_names: Annotated[
         list[str] | None,
         Option(
@@ -765,20 +756,22 @@ def start(
     if config_path is not None:
         if config_path.suffix == ".yaml":
             base_config = JobConfig.model_validate(
-                yaml.safe_load(config_path.read_text())
+                yaml.safe_load(config_path.read_text()), extra="forbid"
             )
         elif config_path.suffix == ".json":
-            base_config = JobConfig.model_validate_json(config_path.read_text())
+            base_config = JobConfig.model_validate_json(
+                config_path.read_text(), extra="forbid"
+            )
         else:
             raise ValueError(f"Unsupported config file format: {config_path.suffix}")
 
     if base_config is None:
-        if agent_name is None and agent_import_path is None:
+        if agent_name is None:
             raise ValueError(
                 "Specify --agent or a config with an explicit supported agent"
             )
         config = JobConfig(
-            agents=[AgentConfig(name=agent_name, import_path=agent_import_path)]
+            agents=[AgentConfig(name=agent_name)]
         )
     else:
         config = base_config
@@ -823,7 +816,7 @@ def start(
     if retry_exclude_exceptions is not None:
         config.retry.exclude_exceptions = set(retry_exclude_exceptions)
 
-    if agent_name is not None or agent_import_path is not None:
+    if agent_name is not None:
         config.agents = []
         parsed_kwargs = parse_kwargs(agent_kwargs)
         parsed_env = parse_env_vars(agent_env)
@@ -837,7 +830,6 @@ def start(
             config.agents = [
                 AgentConfig(
                     name=agent_name,
-                    import_path=agent_import_path,
                     model_name=model_name,
                     skills=skills or [],
                     kwargs=parsed_kwargs,
@@ -850,7 +842,6 @@ def start(
             config.agents = [
                 AgentConfig(
                     name=agent_name,
-                    import_path=agent_import_path,
                     skills=skills or [],
                     kwargs=parsed_kwargs,
                     env=parsed_env,

@@ -1,4 +1,3 @@
-import importlib
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -39,19 +38,8 @@ class AgentFactory:
 
     @classmethod
     def get_agent_class_from_config(cls, config: AgentConfig) -> type[BaseAgent]:
-        """Validate support before importing or constructing an agent."""
-        if config.mode != "container":
-            raise cls._unsupported(f"{config.name} (mode={config.mode})")
-        if config.import_path is not None:
-            return cls.get_agent_class_from_import_path(config.import_path)
+        """Validate support before constructing an agent."""
         return cls.get_agent_class(config.name or "<unspecified>")
-
-    @classmethod
-    def get_agent_class_from_import_path(cls, import_path: str) -> type[BaseAgent]:
-        for agent in cls._AGENT_MAP.values():
-            if import_path == f"{agent.__module__}:{agent.__name__}":
-                return agent
-        raise cls._unsupported(import_path)
 
     @classmethod
     def create_agent_from_name(
@@ -77,37 +65,6 @@ class AgentFactory:
         agent_class = cls.get_agent_class(name)
 
         return agent_class(
-            logs_dir=logs_dir,
-            model_name=model_name,
-            model_alias=model_alias,
-            **kwargs,
-        )
-
-    @classmethod
-    def create_agent_from_import_path(
-        cls,
-        import_path: str,
-        logs_dir: Path | UPath,
-        model_name: str | None = None,
-        model_alias: str | None = None,
-        **kwargs,
-    ) -> BaseAgent:
-        """
-        Create an agent from an import path.
-
-        Args:
-            import_path (str): The import path of the agent. In the format
-                'module.path:ClassName'.
-
-        Returns:
-            BaseAgent: The created agent.
-
-        Raises:
-            ValueError: If the import path is invalid.
-        """
-        Agent = cls.get_agent_class_from_import_path(import_path)
-
-        return Agent(
             logs_dir=logs_dir,
             model_name=model_name,
             model_alias=model_alias,

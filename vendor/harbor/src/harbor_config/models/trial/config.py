@@ -99,7 +99,6 @@ class ResolvedTimeouts(BaseModel):
 
 class AgentConfig(BaseModel):
     name: str | None = None
-    import_path: str | None = None
     model_name: str | None = Field(
         default=None,
         description="Immutable model identity recorded in results and used for resume.",
@@ -109,7 +108,6 @@ class AgentConfig(BaseModel):
         description="Mutable serving name used to route model requests for this run.",
     )
     skills: list[Path] = Field(default_factory=list)
-    mode: Literal["container", "local"] = "container"
     override_timeout_sec: float | None = None
     override_setup_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
@@ -192,14 +190,6 @@ class AgentConfig(BaseModel):
 
         serialized = {k: _safe(v) for k, v in kwargs.items()}
         return redact_capability_urls(serialized) if info.mode == "json" else serialized
-
-    @model_validator(mode="after")
-    def require_explicit_agent(self):
-        if self.name is None and self.import_path is None:
-            raise ValueError("Specify a supported agent name or import_path explicitly")
-        if self.name is not None and self.import_path is not None:
-            raise ValueError("Specify either an agent name or import_path")
-        return self
 
 
 class EnvironmentConfig(BaseModel):
@@ -420,7 +410,7 @@ class TaskConfig(BaseModel):
 class TrialConfig(BaseModel):
     # If replay-affecting fields are added or changed here, update TrialLock in
     # harbor.models.job.lock so lock.json records the same resolved run input.
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     EQUALITY_EXCLUDED_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {"trial_name", "job_id", "resolved_timeouts", "artifact_authority"}
