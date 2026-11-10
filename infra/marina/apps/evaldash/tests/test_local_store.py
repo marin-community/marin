@@ -309,12 +309,14 @@ def test_api_compare_applies_the_selection_it_is_given(comparison_client):
     assert comparison["shared"] == ["mmlu"]
 
 
-def test_api_compare_rejects_mixed_cohorts_but_panel_can_browse_them(client):
+def test_api_compare_spans_cohorts_when_all_cohorts_are_selected(client):
     response = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"})
 
-    assert response.status_code == 400
-    panel = client.get("/panel", params={"cohort": "all"}).json()
-    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} >= {"2026.07.20", "2026.07.21"}
+    assert response.status_code == 200
+    comparison = response.json()
+    assert comparison["shared"]
+    versions = {cell["version"] for row in comparison["rows"] for cell in row["cells"].values()}
+    assert versions >= {"2026.07.20", "2026.07.21"}
 
 
 def test_api_compare_rejects_a_request_it_cannot_answer(client):
