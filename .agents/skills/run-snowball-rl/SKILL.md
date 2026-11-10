@@ -54,8 +54,8 @@ uv run python -m experiments.post_training.snowball_rl --preset data-short \
 
 Screen a task selection with data-short, then use data-medium for training quality. Use
 learning-medium for task-sampling changes. `--init NAME@VERSION` on learning or train-long
-selects a published model or kept HF export. Learning/data candidates use `--keep-weights` for
-a durable final export; their controls keep it automatically. Train-long keeps checkpoints and
+selects a published model or kept HF export. Learning-medium and data-medium retain a durable
+final export for controls and candidates. Train-long keeps checkpoints and
 HF exports on 40 H100, with no verdict. Its original command resumes its own latest checkpoint.
 
 `--require 'KEY<=NUMBER'` or `KEY>=NUMBER` bounds every replicate. `KEY<=control` and

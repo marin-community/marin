@@ -60,8 +60,8 @@ The collected controls retain `snowball-100k@2026.11.04.1`; the updated selectio
 separate unpublished version and must be built before use.
 
 `--init NAME@VERSION` on a learning or train-long preset selects a published model or kept
-HF export. Learning and data controls keep final HF weights automatically; their candidates
-use `--keep-weights`. Durable exports live under `exports/global_step_<N>/policy`.
+HF export. Learning-medium and data-medium retain final HF weights for both controls and
+candidates. Durable exports live under `exports/global_step_<N>/policy`.
 Train-long keeps checkpoints and exports weights by default. Repeating its command resumes
 its latest checkpoint under the same run identity. Temporary checkpoints expire after 14 days;
 see [checkpoint handling](../references/rl-launching.md).

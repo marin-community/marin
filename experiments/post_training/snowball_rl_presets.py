@@ -150,6 +150,7 @@ class Preset:
     updates: int
     measured: range
     evaluations: tuple[Evaluation, ...] = ()
+    keep_weights: bool = False
     checkpoint_every: int | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
@@ -312,6 +313,7 @@ _LEARNING_MEDIUM = Preset(
     updates=25,
     measured=range(21, 26),
     evaluations=(replace(EVALUATIONS["test_panel"], at_start=True),),
+    keep_weights=True,
     guards=(Metric("test_panel/family_mean", True),),
     objectives=(Metric("test_panel/family_mean", True), Metric("test_panel/family_mean/gain_per_h100_hour", True)),
     gaps=_GAPS,
@@ -387,6 +389,7 @@ PRESETS = MappingProxyType(
                 measured=range(1, 101),
                 evaluations=(replace(_PANEL, every=10, at_start=True),),
                 checkpoint_every=10,
+                keep_weights=True,
                 gaps=_GAPS,
             ),
         )

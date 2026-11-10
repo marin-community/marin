@@ -21,7 +21,7 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
     --set trainer.algorithm.group_advantage_min_size=null --version dev --run
   --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
   --preset learning-medium --require 'test_panel/aaii_category/coding/mean>=control' --version dev --run
-  --preset learning-medium --keep-weights --version dev --run
+  --preset learning-medium --version dev --run
   --preset data-short --tasks my-selection@2026.11.02 --version dev --run
   --preset train-long --set trainer.max_steps=100 --version dev --run
 """
@@ -244,8 +244,6 @@ def _callbacks(
     evaluation: presets.Evaluation | None,
     profiles: dict,
     expected_tasks: int,
-    *,
-    keep_weights: bool = False,
 ) -> list[dict]:
     if preset.recipe.layout.role_plan.generate_only:
         return [{"type": "evaluation", "additional_evaluations": profiles}] if profiles else []
@@ -272,7 +270,7 @@ def _callbacks(
                 },
             ]
         )
-    if keep_weights:
+    if preset.keep_weights and preset.focus != presets.Focus.TRAIN:
         callbacks.extend(
             (
                 {"type": "checkpoint", "save_steps": preset.updates + 1, "save_on_train_end": True},
@@ -350,17 +348,11 @@ def build_run(
     settings: tuple[presets.Setting, ...] = (),
     replicates: int = 1,
     control: bool = False,
-    keep_weights: bool = False,
     requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
-    learning = (
-        preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA) and not preset.recipe.layout.role_plan.generate_only
-    )
-    if keep_weights and (control or not learning):
-        raise click.BadParameter("--keep-weights needs a learning/data candidate")
-    export_hf = preset.focus == presets.Focus.TRAIN or (learning and (control or keep_weights))
+    export_hf = preset.keep_weights
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -429,16 +421,13 @@ def build_run(
             }
             if not generating:
                 profiles[evaluation.name]["schedule"] = "final"
-    config["trainer"]["callbacks"] = _callbacks(
-        preset, chosen[0] if chosen else None, profiles, expected_tasks, keep_weights=learning and export_hf
-    )
+    config["trainer"]["callbacks"] = _callbacks(preset, chosen[0] if chosen else None, profiles, expected_tasks)
     changes = {
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
         "layout": preset.recipe.layout.name,
         "settings": sorted({setting.key: setting.value for setting in settings}.items()),
         "evaluations": sorted(evaluation_inputs),
-        "keep_weights": keep_weights,
     }
     snowball_rl_gate.validate_candidate(preset, requirements, control=control)
     provenance = _provenance(control=control)
@@ -793,12 +782,6 @@ def _run_command(function: Callable) -> click.Command:
     "the gain.",
 )
 @click.option(
-    "--keep-weights",
-    is_flag=True,
-    help="Keep a learning or data candidate's final HF weights. "
-    "Learning controls and train-long keep them automatically.",
-)
-@click.option(
     "--replicates",
     type=click.IntRange(1, 5),
     default=1,
@@ -810,8 +793,8 @@ def _run_command(function: Callable) -> click.Command:
     "--control",
     is_flag=True,
     help="Run the preset's control replicates from a clean checkout with only its pinned default "
-    "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --require, "
-    "--keep-weights and data-medium, which use the corresponding learning preset's controls.",
+    "inputs. Only for pinning new controls; refuses --set, --tasks, --init, --require "
+    "and data-medium, which uses the corresponding learning preset's controls.",
 )
 def main(
     preset_name: str,
@@ -820,7 +803,6 @@ def main(
     init_name: str | None,
     replicates: int,
     control: bool,
-    keep_weights: bool,
     requirements: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
@@ -833,7 +815,6 @@ def main(
         init=presets.published_artifact(init_name) if init_name else None,
         replicates=replicates,
         control=control,
-        keep_weights=keep_weights,
         requirements=requirements,
     )
     do_run = click.get_current_context().params.get("do_run", False)

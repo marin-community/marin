@@ -47,11 +47,6 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
             path = tmp_path / f"{name}-{index}.yaml"
             _render(step, path, runtime=True)
             paths.append(str(path))
-    for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
-        retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
-        path = tmp_path / f"{label}-weights.yaml"
-        _render(retained.runs[0], path, runtime=True)
-        paths.append(str(path))
     off_boundary = snowball.build_run(
         presets.PRESETS["train-long"], settings=(presets.parse_setting("trainer.max_steps=2"),)
     ).runs[0]
@@ -188,10 +183,9 @@ print(json.dumps([{
             assert row["quality_wire"] == greedy_wire
         if "train-long-" in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
-        if "learning-medium-" in name:
-            saved = row["path"].endswith(("kept-weights.yaml", "control-weights.yaml"))
-            assert row["export_hf"] == saved
-            assert ("hf_model_save" in row["callbacks"]) == saved
+        if "learning-medium-" in name or "data-medium-" in name:
+            assert row["export_hf"]
+            assert "hf_model_save" in row["callbacks"]
         if "speed-long-" in name:
             assert not row["validation"] and not row["export_hf"]
         if row["training"]:
@@ -253,6 +247,10 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
         path = tmp_path / f"{name}.yaml"
         _render(step, path)
         paths.append(str(path))
+    candidate = snowball.build_run(presets.PRESETS["learning-medium"]).runs[0]
+    candidate_path = tmp_path / "learning-medium-candidate.yaml"
+    _render(candidate, candidate_path)
+    paths.append(str(candidate_path))
     configs = native_json(
         """
 import json, os, sys
@@ -274,9 +272,13 @@ print(json.dumps([
             ),
             fingerprint_hash(json.dumps(config, sort_keys=True)),
         )
-        for name, config in zip(expected, configs, strict=True)
+        for name, config in zip(expected, configs[:-1], strict=True)
     }
     assert actual == expected, "Fingerprint envelope changed: bump PRESET_REVISION and recollect controls."
+    learning_control = configs[list(expected).index("learning-medium")]
+    assert configs[-1]["skyrl"] == learning_control["skyrl"]
+    assert configs[-1]["iris"]["allocation"] == learning_control["iris"]["allocation"]
+    assert configs[-1]["run"]["export_hf"] == learning_control["run"]["export_hf"]
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -310,7 +312,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
         (name(), name(init=initializer)),
         (name(), name(changed_panel)),
-        (name(), name(learning, keep_weights=True)),
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(
