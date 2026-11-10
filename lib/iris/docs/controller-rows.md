@@ -1,8 +1,10 @@
 # Controller rows in Finelog
 
-`iris.job`, `iris.job_config` and `iris.task_attempt` are durable copies of the
-controller DB's `jobs`, `job_config` and `task_attempts` rows, which the
-controller deletes a few days after a job ends. The controller that executes
+The `iris.controller_db.*` namespaces are durable copies of the controller DB's
+tables of the same names: `jobs`, `job_config`, `tasks` and `task_attempts`. The
+controller deletes those rows a few days after a job ends. The other `iris.*`
+namespaces, such as `iris.task` and `iris.task_state`, are measurements and
+events, not copies of the controller DB. The controller that executes
 a job writes them, after each write transaction that changes the job or
 attempt: at submit, when an attempt is created, when it starts (with its node)
 and when it finishes. A job handed off to a federation peer is written only by
@@ -21,11 +23,25 @@ changed columns as redacted, never as the controller's own values:
 
 | Column | Differs from the controller DB |
 | --- | --- |
-| `iris.job.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
-| `iris.job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, with sensitive `NAME=value` assignments and token-like strings redacted. Environment variables and secrets are not copied, neither names nor values |
-| `iris.job_config.entrypoint_json` | The command with the values of flags whose names look sensitive (`--hf-token X`, `--api-key=X`) and prefixed or high-entropy tokens redacted; setup commands as setup scripts. Not caught: a secret passed as a plain positional argument, in an ordinary-looking URL, or as a flag value that starts with `-`. Workdir file contents are never stored |
-| `iris.job_config.submit_argv_json` | Every `-e`/`--env-vars` value and `--secret` source redacted, whatever its name (a `--secret` name may be redacted too); then the whole command line as in `entrypoint_json`, since the command may follow the flags without `--` |
-| `iris.job_config.accelerator_*` | Added: the device request flattened (below) |
+| `iris.controller_db.jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
+| `iris.controller_db.job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, with sensitive `NAME=value` assignments and token-like strings redacted. Environment variables and secrets are not copied, neither names nor values |
+| `iris.controller_db.job_config.entrypoint_json` | The command with the values of flags whose names look sensitive (`--hf-token X`, `--api-key=X`) and prefixed or high-entropy tokens redacted; setup commands as setup scripts. Not caught: a secret passed as a plain positional argument, in an ordinary-looking URL, or as a flag value that starts with `-`. Workdir file contents are never stored |
+| `iris.controller_db.job_config.submit_argv_json` | Every `-e`/`--env-vars` value and `--secret` source redacted, whatever its name (a `--secret` name may be redacted too); then the whole command line as in `entrypoint_json`, since the command may follow the flags without `--` |
+| `iris.controller_db.job_config.accelerator_*` | Added: the device request flattened (below) |
+| `iris.controller_db.tasks.placement` | The DB's `tasks.cluster`, as for jobs |
+| `iris.controller_db.tasks.task_submitted_at` | The DB's `tasks.submitted_at_ms`, renamed because `submitted_at_ms` here is the job key |
+
+**Copied raw:** the free-text `error` columns of jobs, tasks and attempts, and
+`tasks.status_message` (the backend's reason a task is not running yet, such as
+a scheduler or Kueue message). They can echo a command or image name.
+
+**The one place the copy is not every change:** an `iris.controller_db.tasks`
+row is written at submit and when the task's state, current attempt, current
+worker, error or exit code changes. A change to `status_message`,
+`container_id` or `current_worker_address` alone writes no row, because
+Kubernetes rewrites the pending reason on every reconcile. So pending-reason
+history is kept only at those trigger points; each row holds the reason as of
+its change.
 
 Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
 submitted_at_ms)`, because job ids are reused after a job ends, and a live
@@ -46,7 +62,7 @@ run on two clusters at once. On the hub, where this query is meant to run,
 
 ```sql
 SELECT a.attempt_uid, max(t.memory_peak_mb) AS peak_memory_mb
-FROM "iris.task_attempt" a
+FROM "iris.controller_db.task_attempts" a
 JOIN "iris.task" t
   ON COALESCE(NULLIF(t.cluster, ''), 'marin') = a.cluster
  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id
@@ -56,13 +72,13 @@ WHERE a.root_job_id = '/user/job' AND a.state = 'TASK_STATE_SUCCEEDED'
 GROUP BY a.attempt_uid;
 ```
 
-`iris.job_config` has one row per job, written at submit, with the requested
+`iris.controller_db.job_config` has one row per job, written at submit, with the requested
 resources. `res_device_json` is the raw device request. Three columns flatten
 it: `accelerator_kind` (`gpu` or `tpu`), `accelerator_type` (for example `H100`
 or `v5p-64`) and `accelerators_per_task`, counted as the scheduler counts it. A
 CPU-only job has NULL, NULL and 0; test `accelerator_kind IS NULL` for
 CPU-only, because a TPU request without a count also has 0. The count is per
-task; multiply by `iris.job.num_tasks` for the whole job. GPU-hours per root
+task; multiply by `iris.controller_db.jobs.num_tasks` for the whole job. GPU-hours per root
 job over the last 7 days, from each attempt's final row. The config side has a
 longer window, because a config row is written at submit and a long job may
 have started weeks before its attempts finished:
@@ -72,10 +88,10 @@ SELECT a.root_job_id, c.accelerator_type,
        sum(c.accelerators_per_task * (to_unixtime(a.finished_at) - to_unixtime(a.started_at))) / 3600.0 AS accelerator_hours
 FROM (
   SELECT *, row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn
-  FROM "iris.task_attempt"
+  FROM "iris.controller_db.task_attempts"
   WHERE ts >= now() - INTERVAL '7 days'
 ) a
-JOIN "iris.job_config" c
+JOIN "iris.controller_db.job_config" c
   ON c.cluster = a.cluster AND c.root_job_id = a.root_job_id
  AND c.root_submitted_at_ms = a.root_submitted_at_ms
  AND c.job_id = a.job_id AND c.submitted_at_ms = a.submitted_at_ms
@@ -86,7 +102,7 @@ GROUP BY a.root_job_id, c.accelerator_type
 ORDER BY accelerator_hours DESC;
 ```
 
-`iris.job.tags` is reserved for submit-time job tags as a JSON object
+`iris.controller_db.jobs.tags` is reserved for submit-time job tags as a JSON object
 (`json_get(tags, 'category')`); it is NULL until Iris accepts job tags at
 submit.
 
@@ -105,7 +121,7 @@ attempt of a job:
 ```sql
 SELECT * FROM (
   SELECT *, row_number() OVER (PARTITION BY attempt_uid ORDER BY ts DESC, seq DESC) AS rn
-  FROM "iris.task_attempt"
+  FROM "iris.controller_db.task_attempts"
   WHERE root_job_id = '/user/job' AND ts >= now() - INTERVAL '7 days'
 ) WHERE rn = 1;
 ```
@@ -117,6 +133,6 @@ flush drops those rows. To find gaps, compare daily row counts with the
 controller DB.
 
 History is kept in the archive (remote retention is `retain_forever`). The
-storage policies (5 years; 8 GiB for `iris.task_attempt`, 4 GiB each for the
+storage policies (5 years; 8 GiB for `iris.controller_db.task_attempts`, 4 GiB each for the
 other two) bound only the hub's local copy; older segments are read back from
 the archive.

@@ -307,7 +307,7 @@ schemas and bound the time window before querying; see [query-finelog](../../.ag
 | `iris.task` | Per-attempt resource samples; Kubernetes CPU needs consecutive samples, memory peaks reset with the agent, and disk usage is unavailable |
 | `iris.task_event` | Backend verdicts and controller actions, retained up to 30 days; use `task events` first |
 | `iris.task_state` | Task counts and wait ages per root job every 30 seconds; empty `root_job_id` is the cluster rollup, emitted even when idle |
-| `iris.job`, `iris.job_config`, `iris.task_attempt` | Durable copies of the controller's job, job config and attempt rows, one row per state change; keys, `cluster` values and joins are in [controller rows](docs/controller-rows.md) |
+| `iris.controller_db.jobs`, `.job_config`, `.tasks`, `.task_attempts` | Durable copies of the controller DB tables of the same names; keys, `cluster` values, redacted columns and joins are in [controller rows](docs/controller-rows.md) |
 | `iris.admission_probe` | Kubernetes admission canary outcomes every 60 seconds; failure or silence can identify webhook outages |
 | `iris.profile` | CPU/memory/thread captures; filter by `source`, `type`, and time; retention target is seven days |
 | `telemetry_v1.node_agent` | Physical-node gauges, including runtime-filesystem capacity |

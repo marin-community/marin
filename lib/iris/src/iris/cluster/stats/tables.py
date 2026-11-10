@@ -23,11 +23,10 @@ from here; ``LogStack`` resolves every table from this catalog.
   the autoscaler).
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
-- ``iris.job`` / ``iris.job_config`` / ``iris.task_attempt`` — durable copies of
-  the controller's job, job request and attempt rows: one ``iris.job_config`` row
-  per job, at submit, and one job or attempt row per state change, written by the
-  controller that executes the work (producer:
-  ``iris.cluster.controller.controller_rows``).
+- ``iris.controller_db.{jobs,job_config,tasks,task_attempts}`` — durable copies of
+  the controller DB tables of the same names: one ``job_config`` row per job, at
+  submit, and one job, task or attempt row per change, written by the controller
+  that executes the work (producer: ``iris.cluster.controller.controller_rows``).
 """
 
 from dataclasses import dataclass
@@ -47,9 +46,10 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
-JOB_NAMESPACE = "iris.job"
-JOB_CONFIG_NAMESPACE = "iris.job_config"
-TASK_ATTEMPT_NAMESPACE = "iris.task_attempt"
+JOB_NAMESPACE = "iris.controller_db.jobs"
+JOB_CONFIG_NAMESPACE = "iris.controller_db.job_config"
+TASK_ATTEMPT_NAMESPACE = "iris.controller_db.task_attempts"
+JOB_TASK_NAMESPACE = "iris.controller_db.tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -85,6 +85,7 @@ _CONTROLLER_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
 JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
 JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
 TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+JOB_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -301,7 +302,7 @@ class IrisJobConfig:
     res_disk_bytes: int
     res_device_json: str | None
     # Flattened from res_device_json: "gpu" or "tpu", the variant (e.g. "H100",
-    # "v5p-64") and the count per task, which iris.job.num_tasks multiplies for the
+    # "v5p-64") and the count per task, which iris.controller_db.jobs.num_tasks multiplies for the
     # whole job. A CPU-only job has NULL, NULL and 0.
     accelerator_kind: str | None
     accelerator_type: str | None
@@ -338,6 +339,50 @@ class IrisJobConfig:
 
 
 @dataclass
+class IrisJobTask:
+    """A snapshot of one controller ``tasks`` row: every column, plus the job key.
+
+    Written at submit and whenever the task's state, current attempt, current
+    worker, error or exit code changes. Unlike the other controller rows, a change
+    to ``status_message``, ``container_id`` or ``current_worker_address`` alone
+    writes no row: Kubernetes rewrites the pending reason on every reconcile, so
+    those columns hold their value as of the task's last written change.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    task_id: str
+    task_index: int
+    state: str
+    error: str | None
+    exit_code: int | None
+    task_submitted_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    max_retries_failure: int
+    max_retries_preemption: int
+    current_attempt_id: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    priority_band: str
+    container_id: str | None
+    # The backend's reason a task is not running yet, as of this row's change.
+    status_message: str | None
+    current_worker_id: str | None
+    current_worker_address: str | None
+    backend_id: str
+    # The controller DB's tasks.cluster, named as on iris.controller_db.jobs.
+    placement: str
+    ts: datetime
+
+
+@dataclass
 class IrisTaskAttempt:
     """A snapshot of one controller ``task_attempts`` row, written when the attempt changes.
 
@@ -345,7 +390,7 @@ class IrisTaskAttempt:
     when a job name is reused, so a join to ``iris.task_event`` uses its
     ``attempt_uid``, and a join to ``iris.task`` (which has none) also needs
     ``ts`` between ``started_at`` and ``finished_at``; ``(cluster, root_job_id,
-    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.job``. ``node_name`` (Kubernetes)
+    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.controller_db.jobs``. ``node_name`` (Kubernetes)
     or ``worker_id`` (worker VMs) places the attempt on a machine.
     """
 

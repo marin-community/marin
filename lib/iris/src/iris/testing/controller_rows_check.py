@@ -25,7 +25,7 @@ from sqlalchemy import select
 import iris
 from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.schema import jobs_table, task_attempts_table
+from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.types import LOCAL_CLUSTER
 from iris.test_util import FakeStatsTable
 
@@ -34,21 +34,28 @@ from iris.test_util import FakeStatsTable
 # clears it on finished attempts, and the rows keep the old value on purpose.
 _JOB_COLUMNS = tuple(column.name for column in jobs_table.columns)
 _ATTEMPT_COLUMNS = tuple(column.name for column in task_attempts_table.columns if column.name != "worker_id")
+# A task row is written only when one of these changes (see IrisJobTask).
+_TASK_TRIGGER_COLUMNS = ("state", "current_attempt_id", "current_worker_id", "error", "exit_code")
 _PACKAGE_TESTS_DIR = str(Path(iris.__file__).resolve().parents[2] / "tests") + os.sep
 
 
-def _local_state(cur: Tx) -> tuple[dict[str, tuple], dict[tuple[str, int], tuple]]:
+def _local_state(cur: Tx) -> tuple[dict, dict, dict]:
     j = jobs_table.c
     jobs = {
         r.job_id.to_wire(): tuple(getattr(r, c) for c in _JOB_COLUMNS)
         for r in cur.execute(select(jobs_table).where(j.cluster == LOCAL_CLUSTER))
+    }
+    tasks = {
+        r.task_id.to_wire(): tuple(getattr(r, c) for c in _TASK_TRIGGER_COLUMNS)
+        for r in cur.execute(select(tasks_table))
+        if r.job_id.to_wire() in jobs
     }
     attempts = {
         (r.task_id.to_wire(), r.attempt_id): (tuple(getattr(r, c) for c in _ATTEMPT_COLUMNS), r.worker_id)
         for r in cur.execute(select(task_attempts_table))
         if r.task_id.parent.to_wire() in jobs
     }
-    return jobs, attempts
+    return jobs, tasks, attempts
 
 
 def _opened_by_a_test_file() -> bool:
@@ -64,23 +71,22 @@ def _opened_by_a_test_file() -> bool:
     return module_file is not None and str(Path(module_file).resolve()).startswith(_PACKAGE_TESTS_DIR)
 
 
-def _written_keys(tables: ControllerRowTables, marks: dict[int, int]) -> tuple[set[str], set[tuple[str, int]]]:
-    job_table = tables.job_table
-    attempt_table = tables.task_attempt_table
-    assert isinstance(job_table, FakeStatsTable) and isinstance(attempt_table, FakeStatsTable)
-    jobs = {row.job_id for write in job_table.writes[marks.get(id(job_table), 0) :] for row in write}
-    attempts = {
-        (row.task_id, row.attempt_id)
-        for write in attempt_table.writes[marks.get(id(attempt_table), 0) :]
-        for row in write
-    }
-    return jobs, attempts
+def _written_keys(tables: ControllerRowTables, marks: dict[int, int]) -> tuple[set, set, set]:
+    def keys(table, key) -> set:
+        assert isinstance(table, FakeStatsTable)
+        return {key(row) for write in table.writes[marks.get(id(table), 0) :] for row in write}
+
+    return (
+        keys(tables.job_table, lambda row: row.job_id),
+        keys(tables.job_task_table, lambda row: row.task_id),
+        keys(tables.task_attempt_table, lambda row: (row.task_id, row.attempt_id)),
+    )
 
 
 def _write_marks(tables: ControllerRowTables) -> dict[int, int]:
     return {
         id(table): len(table.writes)
-        for table in (tables.job_table, tables.task_attempt_table)
+        for table in (tables.job_table, tables.job_task_table, tables.task_attempt_table)
         if isinstance(table, FakeStatsTable)
     }
 
@@ -96,9 +102,12 @@ def install(db: ControllerDB) -> None:
             cluster="test",
             job_table=FakeStatsTable(),
             job_config_table=FakeStatsTable(),
+            job_task_table=FakeStatsTable(),
             task_attempt_table=FakeStatsTable(),
         )
     )
+    if hasattr(db, "_row_check_unchecked"):
+        return
     unchecked = db.transaction
 
     @contextmanager
@@ -113,14 +122,15 @@ def install(db: ControllerDB) -> None:
         # concurrent transaction cannot show up as this one's change.
         after: list = []
         with unchecked() as cur:
-            before_jobs, before_attempts = _local_state(cur)
+            before_jobs, before_tasks, before_attempts = _local_state(cur)
             cur.register_pre_commit(lambda: after.append(_local_state(cur)))
             yield cur
         if not after:
             return
-        after_jobs, after_attempts = after[0]
-        written_jobs, written_attempts = _written_keys(tables, marks)
+        after_jobs, after_tasks, after_attempts = after[0]
+        written_jobs, written_tasks, written_attempts = _written_keys(tables, marks)
         missed_jobs = [k for k, v in after_jobs.items() if before_jobs.get(k) != v and k not in written_jobs]
+        missed_tasks = [k for k, v in after_tasks.items() if before_tasks.get(k) != v and k not in written_tasks]
         missed_attempts = [
             k
             for k, (v, worker_id) in after_attempts.items()
@@ -130,9 +140,10 @@ def install(db: ControllerDB) -> None:
             or (worker_id and worker_id != before_attempts[k][1])
             if k not in written_attempts
         ]
-        assert not missed_jobs and not missed_attempts, (
-            "a committed transaction changed jobs or attempts without writing their controller rows; "
-            f"mark them at the write site (controller_rows.record_*): jobs {missed_jobs}, attempts {missed_attempts}"
+        assert not missed_jobs and not missed_tasks and not missed_attempts, (
+            "a committed transaction changed jobs, tasks or attempts without writing their controller rows; "
+            "mark them at the write site (controller_rows.record_*): "
+            f"jobs {missed_jobs}, tasks {missed_tasks}, attempts {missed_attempts}"
         )
 
     db._row_check_unchecked = unchecked  # type: ignore[attr-defined]

@@ -6,8 +6,8 @@
 The controller DB deletes terminal jobs after a few days. A write path that
 changes a job or an attempt marks its id here. Just before the transaction
 commits, the marked rows are read back in batches, so each row is the entity's
-final state in that transaction; after commit they are written to ``iris.job``
-/ ``iris.job_config`` / ``iris.task_attempt``, the same post-commit path
+final state in that transaction; after commit they are written to ``iris.controller_db.jobs``
+/ ``iris.controller_db.job_config`` / ``iris.controller_db.task_attempts``, the same post-commit path
 ``iris.task_event`` uses. A rolled-back transaction writes nothing.
 
 Only work this controller executes is written: rows for jobs whose ``cluster`` is
@@ -42,7 +42,7 @@ from iris.cluster.constraints import get_device_variant
 from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.redaction import redact_command_argv, redact_script, redact_stored_submit_argv
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt, stats_timestamp
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt, stats_timestamp
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2
 
@@ -87,6 +87,7 @@ class ControllerRowTables:
     cluster: str
     job_table: Table
     job_config_table: Table
+    job_task_table: Table
     task_attempt_table: Table
 
 
@@ -109,11 +110,13 @@ class _Marked:
 
     jobs: dict[JobName, None] = field(default_factory=dict)
     submitted: dict[JobName, None] = field(default_factory=dict)
+    tasks: dict[JobName, None] = field(default_factory=dict)
     attempts: dict[tuple[JobName, int], None] = field(default_factory=dict)
     # Attempts' workers as they were before ``remove_worker`` cleared them.
     removed_workers: dict[tuple[JobName, int], WorkerId] = field(default_factory=dict)
     job_rows: list[IrisJob] = field(default_factory=list)
     config_rows: list[IrisJobConfig] = field(default_factory=list)
+    task_rows: list[IrisJobTask] = field(default_factory=list)
     attempt_rows: list[IrisTaskAttempt] = field(default_factory=list)
 
 
@@ -142,7 +145,7 @@ def record_job_changes(cur: RowCursor, job_ids: Iterable[JobName]) -> None:
 def record_job_submit(cur: RowCursor, job_id: JobName) -> None:
     """Mark a just-submitted job; its ``job_config`` row is written too.
 
-    Submit is the one place a job's request is written, so ``iris.job_config``
+    Submit is the one place a job's request is written, so ``iris.controller_db.job_config``
     gets exactly one row per job.
     """
     marked = _marked(cur)
@@ -150,6 +153,14 @@ def record_job_submit(cur: RowCursor, job_id: JobName) -> None:
         return
     marked.jobs[job_id] = None
     marked.submitted[job_id] = None
+
+
+def record_task_changes(cur: RowCursor, task_ids: Iterable[JobName]) -> None:
+    """Mark ``task_ids`` whose state, attempt, worker, error or exit code changed."""
+    marked = _marked(cur)
+    if marked is None:
+        return
+    marked.tasks.update(dict.fromkeys(task_ids))
 
 
 def record_attempt_changes(cur: RowCursor, attempts: Iterable[tuple[JobName, int]]) -> None:
@@ -172,6 +183,8 @@ def record_worker_removal(cur: RowCursor, worker_id: WorkerId) -> None:
     a = task_attempts_table.c
     for r in cur.execute(select(a.task_id, a.attempt_id).where(a.worker_id == worker_id)):
         marked.removed_workers[(r.task_id, r.attempt_id)] = worker_id
+    t = tasks_table.c
+    marked.tasks.update(dict.fromkeys(cur.execute(select(t.task_id).where(t.current_worker_id == worker_id)).scalars()))
 
 
 def _write(tables: ControllerRowTables, marked: _Marked) -> None:
@@ -179,6 +192,7 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
     for table, rows in (
         (tables.job_table, marked.job_rows),
         (tables.job_config_table, marked.config_rows),
+        (tables.job_task_table, marked.task_rows),
         (tables.task_attempt_table, marked.attempt_rows),
     ):
         if not rows:
@@ -192,7 +206,7 @@ def _write(tables: ControllerRowTables, marked: _Marked) -> None:
 
 
 def _accelerator_columns(device_json: str | None) -> dict:
-    """``iris.job_config``'s flattened device columns, counted as the scheduler counts them."""
+    """``iris.controller_db.job_config``'s flattened device columns, counted as the scheduler counts them."""
     device = proto_from_json(device_json, job_pb2.DeviceConfig) if device_json else job_pb2.DeviceConfig()
     if device.HasField("gpu"):
         kind, count = "gpu", get_gpu_count(device)
@@ -244,6 +258,7 @@ def _snapshot_or_drop(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
         )
         marked.job_rows.clear()
         marked.config_rows.clear()
+        marked.task_rows.clear()
         marked.attempt_rows.clear()
 
 
@@ -318,6 +333,44 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
                     container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
                     egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
                     egress_allow_json=json.dumps(list(r.egress_allow_json)),
+                    ts=ts,
+                )
+            )
+    for chunk in batched(marked.tasks, _ID_CHUNK_SIZE):
+        query = (
+            select(tasks_table, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms.label("job_submitted_at_ms"))
+            .join(jobs_table, j.job_id == t.job_id)
+            .where(t.task_id.in_(chunk), j.cluster == LOCAL_CLUSTER)
+        )
+        for r in cur.execute(query):
+            marked.task_rows.append(
+                IrisJobTask(
+                    cluster=tables.cluster,
+                    root_job_id=r.root_job_id,
+                    root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
+                    job_id=r.job_id.to_wire(),
+                    submitted_at_ms=r.job_submitted_at_ms.epoch_ms(),
+                    task_id=r.task_id.to_wire(),
+                    task_index=r.task_index,
+                    state=job_pb2.TaskState.Name(r.state),
+                    error=r.error,
+                    exit_code=r.exit_code,
+                    task_submitted_at=r.submitted_at_ms.as_naive_utc(),
+                    started_at=_dt(r.started_at_ms),
+                    finished_at=_dt(r.finished_at_ms),
+                    max_retries_failure=r.max_retries_failure,
+                    max_retries_preemption=r.max_retries_preemption,
+                    current_attempt_id=r.current_attempt_id,
+                    priority_neg_depth=r.priority_neg_depth,
+                    priority_root_submitted_ms=r.priority_root_submitted_ms,
+                    priority_insertion=r.priority_insertion,
+                    priority_band=job_pb2.PriorityBand.Name(r.priority_band),
+                    container_id=r.container_id,
+                    status_message=r.status_message,
+                    current_worker_id=str(r.current_worker_id) if r.current_worker_id is not None else None,
+                    current_worker_address=r.current_worker_address,
+                    backend_id=r.backend_id,
+                    placement=r.cluster,
                     ts=ts,
                 )
             )

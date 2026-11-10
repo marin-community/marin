@@ -2397,6 +2397,7 @@ def _build_synthetic_reconcile_state(
             cluster="benchmark",
             job_table=log_stack.job_table,
             job_config_table=log_stack.job_config_table,
+            job_task_table=log_stack.job_task_table,
             task_attempt_table=log_stack.task_attempt_table,
         )
     )

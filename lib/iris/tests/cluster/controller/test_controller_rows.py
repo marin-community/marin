@@ -16,7 +16,7 @@ from iris.cluster.controller.main import _finelog_forwarding_cluster
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
@@ -54,6 +54,10 @@ class RecordedRows:
         return self._rows(self.tables.job_config_table)
 
     @property
+    def tasks(self) -> list[IrisJobTask]:
+        return self._rows(self.tables.job_task_table)
+
+    @property
     def attempts(self) -> list[IrisTaskAttempt]:
         return self._rows(self.tables.task_attempt_table)
 
@@ -63,6 +67,7 @@ def _attach(state: ControllerTestState, cluster: str) -> RecordedRows:
         cluster=cluster,
         job_table=FakeStatsTable(),
         job_config_table=FakeStatsTable(),
+        job_task_table=FakeStatsTable(),
         task_attempt_table=FakeStatsTable(),
     )
     state._db.attach_controller_rows(tables)
@@ -221,7 +226,7 @@ def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, mon
 
 class _ClosedTable(FakeStatsTable):
     def write(self, rows) -> None:
-        raise RuntimeError("Table(iris.job) is closed")
+        raise RuntimeError("Table(iris.controller_db.jobs) is closed")
 
 
 def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
@@ -231,6 +236,7 @@ def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
             cluster="marin",
             job_table=_ClosedTable(),
             job_config_table=FakeStatsTable(),
+            job_task_table=FakeStatsTable(),
             task_attempt_table=FakeStatsTable(),
         )
     )
@@ -390,3 +396,39 @@ def test_entrypoint_rows_never_carry_inline_file_contents():
 
     assert "workdir_files" not in stored
     assert stored["run_command"]["argv"] == ["python", "t.py"]
+
+
+def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
+    rows = _attach(state, "marin")
+    worker_id = register_worker(state, "w1", "w1:1", make_worker_metadata())
+    task = submit_job(state, "train", make_job_request("train", replicas=2))[0]
+    assert sorted(t.task_index for t in rows.tasks) == [0, 1]
+    assert {t.state for t in rows.tasks} == {"TASK_STATE_PENDING"}
+    assert {t.root_job_id for t in rows.tasks} == {"/test-user/train"}
+
+    _run_on_node(state, task, worker_id, "node-a")
+    mine = [t for t in rows.tasks if t.task_id == task.task_id.to_wire()]
+    assert [t.state for t in mine] == ["TASK_STATE_PENDING", "TASK_STATE_ASSIGNED", "TASK_STATE_RUNNING"]
+    assert mine[-1].current_worker_id == str(worker_id)
+
+    written = len(rows.tasks)
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=query_task(state, task.task_id).current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            status_message="made-up pending reason",
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+    assert len(rows.tasks) == written

@@ -22,6 +22,7 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
+from iris.testing import controller_rows_check
 from iris.testing.journeys.backend import (
     BackendEvent,
     ScriptedObservation,
@@ -98,6 +99,8 @@ class JourneyWorld:
         db = ControllerDB(db_dir=self._db_dir)
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
         self.controller, self.backend = self._build_controller(db)
+        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
+        controller_rows_check.install(db)
 
     def _build_controller(self, db: ControllerDB) -> tuple[Controller, ScriptedTaskBackend]:
         self._incarnation += 1
@@ -143,6 +146,8 @@ class JourneyWorld:
         self.controller.stop()
         db = ControllerDB(db_dir=self._db_dir)
         self.controller, self.backend = self._build_controller(db)
+        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
+        controller_rows_check.install(db)
         self._check_invariants()
 
     def checkpoint(self) -> tuple[str, CheckpointResult]:
@@ -175,6 +180,8 @@ class JourneyWorld:
         }
         db = ControllerDB(db_dir=self._db_dir)
         self.controller, self.backend = self._build_controller(db)
+        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
+        controller_rows_check.install(db)
         self._check_invariants()
 
     def submit(

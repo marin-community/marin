@@ -1468,12 +1468,12 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_declared_cluster_column_forwards_only_rows_that_leave_it_empty() {
-    // The Iris controller's iris.job / iris.task_attempt rows declare `cluster`, so
+    // The Iris controller's iris.controller_db.jobs / iris.controller_db.task_attempts rows declare `cluster`, so
     // registration keeps it as the origin column. A row written with it set is taken as
     // already relayed: the forwarder passes it by for good. A row that leaves it empty
     // reaches the hub stamped with the forwarding cluster.
     let fx = Fixture::new("declared_cluster").await;
-    let namespace = "iris.job";
+    let namespace = "iris.controller_db.jobs";
     let schema = Schema::new(
         vec![
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, false),

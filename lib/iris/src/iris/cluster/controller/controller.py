@@ -346,7 +346,7 @@ class ControllerConfig:
     cluster_id: str = field(kw_only=True)
     """This cluster's real identity (from the cluster config ``name``). Required.
 
-    Written as ``cluster`` on the controller's ``iris.job*`` / ``iris.task_attempt``
+    Written as ``cluster`` on the controller's ``iris.controller_db.*`` / ``iris.controller_db.task_attempts``
     Finelog rows when its Finelog does not forward (see ``finelog_forwarding_cluster``).
     Sent as the ``requester_id`` on each ``FederationSync``, and the tag
     a minted capability URL carries so a federation parent can relay it back here."""
@@ -499,6 +499,7 @@ class Controller:
                 cluster=row_cluster(config.cluster_id, config.finelog_forwarding_cluster),
                 job_table=log_stack.job_table,
                 job_config_table=log_stack.job_config_table,
+                job_task_table=log_stack.job_task_table,
                 task_attempt_table=log_stack.task_attempt_table,
             )
         )
