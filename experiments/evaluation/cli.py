@@ -248,7 +248,7 @@ def cli() -> None:
 @click.option(
     "--policy-finalization-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Frozen judge and SOTOPIA cohort configuration; enabled by the policy campaign launcher.",
+    help="Frozen judge configuration; enabled by the policy campaign launcher.",
 )
 def launch(
     model: str | None,

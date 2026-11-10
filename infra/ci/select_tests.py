@@ -223,7 +223,6 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "lib/finestore/",
         "lib/rigging/",
         "lib/marin/src/marin/evaluation/harbor/",
-        "experiments/evaluation/images/tau3/",
         "experiments/post_training/task_curation/harbor_hub.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "infra/ci/select_tests.py",
