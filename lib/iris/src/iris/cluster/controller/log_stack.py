@@ -23,12 +23,15 @@ from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_polic
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, TokenProvider
 
+from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
     JOB_CONFIG_NAMESPACE,
     JOB_CONFIG_STORAGE_POLICY,
     JOB_NAMESPACE,
     JOB_STORAGE_POLICY,
+    JOB_TASK_NAMESPACE,
+    JOB_TASK_STORAGE_POLICY,
     PROFILE_NAMESPACE,
     PROVISIONING_NAMESPACE,
     TASK_ATTEMPT_NAMESPACE,
@@ -40,6 +43,7 @@ from iris.cluster.stats.tables import (
     WORKER_STATS_NAMESPACE,
     IrisJob,
     IrisJobConfig,
+    IrisJobTask,
     IrisProfile,
     IrisProvisioning,
     IrisTaskAttempt,
@@ -71,11 +75,22 @@ class LogStack:
     worker_stats_table: Table
     # iris.task_state rows from the controller's periodic per-root-job aggregate.
     task_state_table: Table
-    # iris.job / iris.job_config / iris.task_attempt: durable controller rows.
+    # iris.controller_db__*: durable copies of the controller DB's jobs, job_config, tasks and task_attempts.
     job_table: Table
     job_config_table: Table
+    job_task_table: Table
     task_attempt_table: Table
     server: Any = None
+
+    def controller_row_tables(self, cluster: str) -> ControllerRowTables:
+        """The ``iris.controller_db__*`` tables, writing ``cluster`` (see ``controller_rows.row_cluster``)."""
+        return ControllerRowTables(
+            cluster=cluster,
+            job_table=self.job_table,
+            job_config_table=self.job_config_table,
+            job_task_table=self.job_task_table,
+            task_attempt_table=self.task_attempt_table,
+        )
 
     def close(self) -> None:
         self.client.close()
@@ -124,6 +139,7 @@ def build_log_stack(
         task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
         job_table=client.get_table(JOB_NAMESPACE, IrisJob, storage_policy=JOB_STORAGE_POLICY),
         job_config_table=client.get_table(JOB_CONFIG_NAMESPACE, IrisJobConfig, storage_policy=JOB_CONFIG_STORAGE_POLICY),
+        job_task_table=client.get_table(JOB_TASK_NAMESPACE, IrisJobTask, storage_policy=JOB_TASK_STORAGE_POLICY),
         task_attempt_table=client.get_table(
             TASK_ATTEMPT_NAMESPACE, IrisTaskAttempt, storage_policy=TASK_ATTEMPT_STORAGE_POLICY
         ),

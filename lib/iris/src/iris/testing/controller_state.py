@@ -19,7 +19,7 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
 
-from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller import controller_rows, ops, reads, writes
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -94,6 +94,8 @@ def set_task_state_for_test(
             values["current_worker_id"] = None
             values["current_worker_address"] = None
         cur.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+        # Stands in for a real transition, so it writes the task's controller row too.
+        controller_rows.record_task_changes(cur, [task_id])
 
 
 def create_attempt_for_test(ctrl: ControllerTestState, task_id: JobName, worker_id: WorkerId) -> int:

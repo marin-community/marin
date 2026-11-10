@@ -121,7 +121,7 @@ Tag each root job you submit with what it is for: `--project <effort>`,
 `IrisClient.submit(tags=job_pb2.JobTags(...))`). Suggested categories:
 `data-processing`, `data-generation`, `pre-training`, `post-training`,
 `evaluation`, `external-collaboration`, `infrastructure`. On a child job, each
-tag it leaves unset comes from the parent. The tags go to Finelog `iris.job.tags`.
+tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
 
 Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job
@@ -314,7 +314,7 @@ schemas and bound the time window before querying; see [query-finelog](../../.ag
 | `iris.task` | Per-attempt resource samples; Kubernetes CPU needs consecutive samples, memory peaks reset with the agent, and disk usage is unavailable |
 | `iris.task_event` | Backend verdicts and controller actions, retained up to 30 days; use `task events` first |
 | `iris.task_state` | Task counts and wait ages per root job every 30 seconds; empty `root_job_id` is the cluster rollup, emitted even when idle |
-| `iris.job`, `iris.job_config`, `iris.task_attempt` | Durable copies of the controller's job, job config and attempt rows, one row per state change; keys, `cluster` values and joins are in [controller rows](docs/controller-rows.md) |
+| `iris.controller_db__jobs`, `__job_config`, `__tasks`, `__task_attempts` | Durable copies of the controller DB tables of the same names; keys, `cluster` values, redacted columns and joins are in [controller rows](docs/controller-rows.md) |
 | `iris.admission_probe` | Kubernetes admission canary outcomes every 60 seconds; failure or silence can identify webhook outages |
 | `iris.profile` | CPU/memory/thread captures; filter by `source`, `type`, and time; retention target is seven days |
 | `telemetry_v1.node_agent` | Physical-node gauges, including runtime-filesystem capacity |

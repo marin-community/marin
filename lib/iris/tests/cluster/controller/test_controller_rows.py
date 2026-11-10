@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The controller's durable job, job config and attempt rows in Finelog."""
+"""The controller's durable job, job config, task and attempt rows in Finelog."""
 
 import json
 from dataclasses import dataclass
@@ -16,10 +16,11 @@ from iris.cluster.controller.main import _finelog_forwarding_cluster
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec
-from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisTaskAttempt
+from iris.cluster.stats.tables import IrisJob, IrisJobConfig, IrisJobTask, IrisTaskAttempt
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
+from iris.testing import controller_rows_check
 from iris.testing.controller import (
     fail_worker,
     make_controller_state,
@@ -53,6 +54,10 @@ class RecordedRows:
         return self._rows(self.tables.job_config_table)
 
     @property
+    def tasks(self) -> list[IrisJobTask]:
+        return self._rows(self.tables.job_task_table)
+
+    @property
     def attempts(self) -> list[IrisTaskAttempt]:
         return self._rows(self.tables.task_attempt_table)
 
@@ -62,6 +67,7 @@ def _attach(state: ControllerTestState, cluster: str) -> RecordedRows:
         cluster=cluster,
         job_table=FakeStatsTable(),
         job_config_table=FakeStatsTable(),
+        job_task_table=FakeStatsTable(),
         task_attempt_table=FakeStatsTable(),
     )
     state._db.attach_controller_rows(tables)
@@ -110,6 +116,7 @@ def test_submit_writes_one_job_row_and_one_config_row(state):
     assert job.job_id == "/test-user/train"
     assert job.root_job_id == "/test-user/train"
     assert job.state == "JOB_STATE_PENDING"
+    assert job.placement == "local"
     assert job.tags is None
     assert len(rows.job_configs) == 1
     config = rows.job_configs[0]
@@ -203,6 +210,7 @@ def test_rolled_back_transaction_writes_no_rows(state):
 
 
 def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, monkeypatch):
+    controller_rows_check.uninstall(state._db)  # this test drops rows on purpose
     rows = _attach(state, "marin")
 
     def broken_snapshot(cur, tables, marked):
@@ -218,15 +226,17 @@ def test_failed_snapshot_drops_rows_but_commits_the_controller_change(state, mon
 
 class _ClosedTable(FakeStatsTable):
     def write(self, rows) -> None:
-        raise RuntimeError("Table(iris.job) is closed")
+        raise RuntimeError("Table(iris.controller_db__jobs) is closed")
 
 
 def test_failed_write_commits_and_runs_later_post_commit_hooks(state):
+    controller_rows_check.uninstall(state._db)  # this test drops rows on purpose
     state._db.attach_controller_rows(
         ControllerRowTables(
             cluster="marin",
             job_table=_ClosedTable(),
             job_config_table=FakeStatsTable(),
+            job_task_table=FakeStatsTable(),
             task_attempt_table=FakeStatsTable(),
         )
     )
@@ -356,3 +366,136 @@ def test_every_cluster_config_forwards_under_its_own_name_or_not_at_all(config_p
     # it) or writes straight to the hub with its own name.
     config = load_config(config_path)
     assert _finelog_forwarding_cluster(config) in (None, config.name)
+
+
+@pytest.mark.parametrize(
+    "device, expected",
+    [
+        (job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="H100", count=8)), ("gpu", "H100", 8)),
+        (job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-64", count=4)), ("tpu", "v5p-64", 4)),
+        (None, (None, None, 0)),
+    ],
+    ids=["gpu", "tpu", "cpu-only"],
+)
+def test_job_config_flattens_the_device_request(state, device, expected):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    if device is not None:
+        request.resources.device.CopyFrom(device)
+
+    submit_job(state, "train", request)
+
+    config = rows.job_configs[0]
+    assert (config.accelerator_kind, config.accelerator_type, config.accelerators_per_task) == expected
+
+
+def test_job_config_stores_no_environment_and_redacts_command_lines(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    fake = {name: f"made-up-{name.lower()}" for name in ("HF_TOKEN", "WANDB_API_KEY", "CW_KEY_ID", "CW_KEY_SECRET")}
+    request.environment.secrets.update(fake)
+    request.environment.env_vars.update({"SERVICE_URL": "made-up-env-value"})
+    request.environment.setup_scripts.append(
+        "export HF_TOKEN=made-up-script-token && pip install --index-url https://u:made-up-url-pw@pypi.example/simple x"
+    )
+    request.entrypoint.setup_commands.append("huggingface-cli login --token made-up-login-token")
+    request.entrypoint.run_command.argv[:] = [
+        "python",
+        "train.py",
+        "--hf-token",
+        "made-up-cli-token",
+        "--gcp-key=AIzaSyMADEUPmadeupMADEUPmadeupMADEUP12",
+        "ya29.made-up-oauth",
+    ]
+    request.submit_argv[:] = ["iris", "job", "run", "-e", "SERVICE_URL", "made-up-argv-value", "--", "python"]
+
+    submit_job(state, "train", request)
+
+    config = rows.job_configs[0]
+    assert json.loads(config.setup_scripts_json) == [
+        "export HF_TOKEN= && pip <redacted> --index-url <redacted> <redacted>"
+    ]
+    assert json.loads(config.entrypoint_json)["run_command"]["argv"] == [
+        "python",
+        "<redacted>",
+        "--hf-token",
+        "<redacted>",
+        "--gcp-key",
+        "<redacted>",
+    ]
+    written = repr([*rows.jobs, *rows.job_configs, *rows.attempts])
+    for value in [
+        *fake.values(),
+        "made-up-env-value",
+        "made-up-cli-token",
+        "made-up-argv-value",
+        "made-up-script-token",
+        "made-up-url-pw",
+        "made-up-login-token",
+        "AIzaSyMADEUP",
+        "ya29.",
+    ]:
+        assert value not in written
+    for name in [*fake, "SERVICE_URL"]:
+        assert name not in config.entrypoint_json
+
+
+def test_entrypoint_rows_never_carry_inline_file_contents():
+    entrypoint = {"workdir_files": {"notes.txt": "bWFkZS11cA=="}, "run_command": {"argv": ["python", "t.py"]}}
+
+    stored = json.loads(controller_rows._redacted_entrypoint_json(json.dumps(entrypoint)))
+
+    assert "workdir_files" not in stored
+    assert stored["run_command"]["argv"] == ["python", "<redacted>"]
+
+
+def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
+    rows = _attach(state, "marin")
+    worker_id = register_worker(state, "w1", "w1:1", make_worker_metadata())
+    task = submit_job(state, "train", make_job_request("train", replicas=2))[0]
+    assert sorted(t.task_index for t in rows.tasks) == [0, 1]
+    assert {t.state for t in rows.tasks} == {"TASK_STATE_PENDING"}
+    assert {t.root_job_id for t in rows.tasks} == {"/test-user/train"}
+
+    _run_on_node(state, task, worker_id, "node-a")
+    mine = [t for t in rows.tasks if t.task_id == task.task_id.to_wire()]
+    assert [t.state for t in mine] == ["TASK_STATE_PENDING", "TASK_STATE_ASSIGNED", "TASK_STATE_RUNNING"]
+    assert mine[-1].current_worker_id == str(worker_id)
+
+    written = len(rows.tasks)
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=query_task(state, task.task_id).current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            status_message="made-up pending reason",
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+    assert len(rows.tasks) == written
+
+
+def test_removing_a_worker_writes_the_task_rows_that_pointed_at_it(state):
+    rows = _attach(state, "marin")
+    worker_id = register_worker(state, "w1", "w1:1", make_worker_metadata())
+    task = submit_job(state, "train", make_job_request("train"))[0]
+    _run_on_node(state, task, worker_id, "node-a")
+    written = len(rows.tasks)
+
+    with state._db.transaction() as cur:
+        writes.remove_worker(cur, worker_id, state._health)
+
+    new = rows.tasks[written:]
+    assert [(t.task_id, t.state, t.current_worker_id) for t in new] == [
+        (task.task_id.to_wire(), "TASK_STATE_RUNNING", None)
+    ]

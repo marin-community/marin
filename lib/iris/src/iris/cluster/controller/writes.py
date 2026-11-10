@@ -254,6 +254,7 @@ def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
         for chunk in batched(job_ids, _ID_CHUNK_SIZE):
             tx.execute(update(jobs_table).where(jobs_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
             tx.execute(update(tasks_table).where(tasks_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
+            controller_rows.record_job_changes(tx, chunk)
 
 
 @writes_to(job_config_table)
@@ -622,6 +623,7 @@ def bulk_insert_tasks(tx: Tx, task_rows: list[dict]) -> None:
     if not task_rows:
         return
     tx.execute(insert(tasks_table), task_rows)
+    controller_rows.record_task_changes(tx, [row["task_id"] for row in task_rows])
     for row in task_rows:
         record_federation_change(tx, row["job_id"], task_index=row["task_index"])
 
@@ -695,6 +697,7 @@ def assign_to_worker(
     if priority_band is not None:
         values["priority_band"] = priority_band
     tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+    controller_rows.record_task_changes(tx, [task_id])
     record_federation_change(tx, task_id.parent, task_index=task_id.task_index)
 
 
@@ -732,6 +735,7 @@ def promote_for_dispatch(
             priority_band=priority_band,
         )
     )
+    controller_rows.record_task_changes(tx, [task_id])
 
 
 # ---------------------------------------------------------------------------

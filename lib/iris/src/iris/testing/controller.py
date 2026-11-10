@@ -106,6 +106,7 @@ from iris.cluster.types import (
 from iris.managed_thread import get_thread_container
 from iris.preemption import DEFAULT_TERMINATION_GRACE, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.testing import controller_rows_check
 from iris.testing.backends import make_mock_platform
 from iris.testing.controller_state import (
     ControllerTestState,
@@ -270,6 +271,7 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
+        controller_rows_check.install(db)
         yield ControllerTestState(db, **kwargs)
         db.close()
     finally:
