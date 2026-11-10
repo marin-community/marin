@@ -80,7 +80,7 @@ from marinskyrl.environment_contract import (
     ray_cluster_owner_environment,
 )
 from marinskyrl.hf_model import HuggingFaceModelCache, immutable_model_cache_key, validate_hf_model_weights
-from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME
+from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind, is_hugging_face_commit
@@ -269,6 +269,9 @@ def stage_model(model: HuggingFaceModelCache) -> Path:
         local_path = cache_root / "snapshots" / manifest.revision
         _log(f"Staging bucket mirror on node {_rank()}/{_num_tasks()}: {model.uri} -> {local_path}")
         filesystem, root = fs_and_path(model.uri)
+        for entry in manifest.files:
+            if not filesystem.exists(join_resource_path(root, entry.path)):
+                raise FileNotFoundError(f"Model mirror file missing: {entry.path}")
         inventory = tuple(
             (join_resource_path(root, entry.path), FileEntry(entry.path, entry.size))
             for entry in manifest.files
@@ -455,8 +458,28 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
     return PreparedPolicyTokenizer(local_path)
 
 
-def prepare_draft_model(model: SpeculatorModelConfig) -> SpeculatorModelConfig:
+def _draft_mirror_manifest(model: HuggingFaceModelCache) -> ModelManifest:
+    manifest = load_model_manifest(model.uri)
+    if manifest.identity != model.identity or manifest.model_id != model.model_id:
+        raise ValueError(f"Draft mirror identity mismatch: {model.uri}")
+    filesystem, root = fs_and_path(model.uri)
+    for entry in manifest.files:
+        path = join_resource_path(root, entry.path)
+        if not filesystem.exists(path):
+            raise FileNotFoundError(f"Draft mirror file missing: {path}")
+    return manifest
+
+
+def prepare_draft_model(
+    model: SpeculatorModelConfig, *, model_caches: tuple[HuggingFaceModelCache, ...] = ()
+) -> SpeculatorModelConfig:
     """Validate a CPU-resolved draft locator without contacting the Hub."""
+    cached = next((cache for cache in model_caches if cache.uri == model.source_uri), None)
+    if cached is not None:
+        if model.source_identity != cached.identity:
+            raise ValueError(f"Draft mirror identity mismatch: {model.source_uri}")
+        manifest = _draft_mirror_manifest(cached)
+        return SpeculatorModelConfig(source_uri=cached.uri, source_identity=manifest.identity)
     if model.source_kind is SpeculatorModelSourceKind.LOCAL:
         assert model.local_source_path is not None
         filesystem, root = fs_and_path(model.local_source_path)
@@ -2213,7 +2236,12 @@ def main() -> None:
     policy_tokenizer = prepare_policy_tokenizer(args)
     draft_model = args.draft_model
     if draft_model is not None:
-        draft_model = prepare_draft_model(draft_model)
+        draft_model = prepare_draft_model(
+            draft_model,
+            model_caches=tuple(
+                HuggingFaceModelCache(**_container(cache)) for cache in launch_config.inputs.hugging_face_models
+            ),
+        )
     # Force the policy chat template onto staged metadata or a local model on every
     # node before Ray; the training driver's tokenizer may load anywhere.
     if args.policy_chat_template:

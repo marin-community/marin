@@ -85,7 +85,6 @@ MarinSkyRL launch host
   compose skyrl recipe against ppo_base_config once
   inject canonical model/data/output values
   validate topology, strategy, entrypoint, TP, and batches
-  mirror Hub policy and local teachers to the regional bucket on CPU
                          |
                          v
   resolved launch.yaml ---------> Iris allocation and submission
@@ -97,32 +96,27 @@ Iris task
   stage immutable inputs -> patch task-local paths -> run(cfg.skyrl)
 ```
 
-Before submitting the GPU job, the CPU launch process ensures a regional mirror
-for each Hub policy, `local_inference` teacher, and Hub draft model. The locked cache reuses a
-completed mirror for the same model revision. Before submission, it refreshes every
-object older than 80% of the bucket's lifecycle TTL using a server-side copy. Weight
-shards are refreshed before metadata and the completion manifest. The resolved
-config records the mirror URI and manifest identity in `inputs.hugging_face_models`.
-Every GPU node copies policy and teacher mirrors into its local Hugging Face cache before Ray
-starts; model staging has no direct-Hub fallback. Hub draft locators are rewritten to
-their bucket mirrors before submission, so draft preparation on GPU nodes also avoids the Hub. External teacher endpoints and
-local or object-store model inputs keep their existing loading paths.
+Before submitting the GPU job, the CPU coordinator mirrors each Hub policy,
+`local_inference` teacher, and Hub draft model into the regional bucket. It refreshes objects older than 80% of the actual lifecycle TTL, including a
+bucket-clamped TTL, using server-side self-copies. Weights are refreshed before
+metadata and the completion marker.
+Resolved mirror locators are recorded in `inputs.hugging_face_models`.
 
-`artifacts.hugging_face_cache_ttl_days` controls the mirror retention period
-(default 14 days), including draft-model mirrors. A `wait` coordinator checks its mirrors every 10% of the shortest actual lifecycle
-TTL among them and refreshes objects once they cross 80% of their TTL. The first
-check runs at submission. This interval is shorter than the minimum 20% lifetime
-left after a successful check, leaving time for storage retries. Renewal stops when the GPU job returns. Transient refresh failures are
-logged and retried with backoff while the coordinator stays alive.
+GPU nodes restore policy and teacher snapshots from the mirror into their local
+HF cache before Ray starts. Drafts read their recorded bucket mirror directly.
+Missing markers or files fail with no Hub fallback on an allocated node.
 
-A `detach` launch has no running coordinator to renew its mirrors. Submission still refreshes objects older than 80% of their TTL, so the minimum
-remaining lifetime is roughly 2.8 days at the default 14-day TTL. Relaunch
-through the CPU coordinator if the detached run or its node retries outlast that
-remaining lifetime; nodes report a missing or expired mirror instead of downloading
-from the Hub.
-`prepare` only validates the config. Submitting Hub models requires Iris job context; run the
-[experiment entry point](#experiment-entry-point) with `--run` to start its CPU
-coordinator.
+`artifacts.hugging_face_cache_ttl_days` controls retention (default 14 days).
+WAIT coordinators check mirrors every 10% of the shortest actual TTL and refresh
+objects only after they cross 80%. The timer runs while the GPU job is blocked,
+retries transient storage errors with backoff, and stops when the GPU job returns.
+DETACH launches have no coordinator renewal: their minimum remaining lifetime is
+roughly 2.8 days at the default TTL. Relaunch through the CPU coordinator if a
+mirror expires before a node retry.
+
+`prepare` only validates the config. Submitting Hub models requires Iris job
+context; run the [experiment entry point](#experiment-entry-point) with `--run`
+to start its CPU coordinator. A local launcher fails before downloading weights.
 
 The top-level sections name what they configure: `iris` owns allocation and routing, `ray` owns
 cluster bootstrap, `inputs` owns immutable model and data locators, `artifacts` owns durable and

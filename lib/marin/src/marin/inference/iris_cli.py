@@ -58,6 +58,7 @@ from iris.cluster.types import (
 )
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
+from rigging.secrets import resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.inference.config import (
@@ -432,6 +433,14 @@ def _wait_and_report_endpoint(
     help="Override the task container image. On the GPU path this bypasses the isolated "
     "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
+@click.option(
+    "--secret",
+    "secret_sources",
+    multiple=True,
+    type=(str, str),
+    help="Deliver a named secret to the serving job as a file (NAME SOURCE), e.g. "
+    "--secret PARALLEL_API_KEY env:PARALLEL_API_KEY. Can be repeated.",
+)
 @click.option("--dry-run", is_flag=True, help="Print resources, gang placement and named ports without submitting.")
 @click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
 @click.option(
@@ -476,6 +485,7 @@ def main(
     vllm_source: str,
     extras: tuple[str, ...],
     task_image: str | None,
+    secret_sources: tuple[tuple[str, str], ...],
     dry_run: bool,
     wait: bool,
     wait_timeout: float,
@@ -600,11 +610,15 @@ def main(
         controller_proxy_timeout_seconds=proxy_timeout,
     )
 
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
     if workspace_dir is None:
         outer_extras = () if brokered else plan.worker_extras
-        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)])
+        environment = EnvironmentSpec(
+            setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)],
+            secrets=secrets,
+        )
     else:
-        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
+        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras, secrets=secrets)
 
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not
