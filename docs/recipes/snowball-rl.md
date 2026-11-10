@@ -1,5 +1,17 @@
 # Snowball RL experiments
 
+## The loop
+
+1. [Curate tasks](../references/task-curation.md#run-a-campaign) into an admitted corpus.
+2. [Publish a selection](../references/task-curation.md#rebuild-a-snowball-training-selection)
+   at an immutable version with the required evaluation exclusions.
+3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
+   `--tasks NAME@VERSION`, or choose the preset for the change.
+4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
+   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
+
+## Run a preset
+
 Run an experiment from a named preset. The command binds the versioned task selection,
 Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measurement window.
 

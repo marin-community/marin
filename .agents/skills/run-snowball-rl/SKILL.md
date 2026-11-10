@@ -14,8 +14,10 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 1. Choose the preset from the recipe's [choice table](../../../docs/recipes/snowball-rl.md#which-experiment-to-run).
    When it names two, run the second after the first passes.
 2. Track or stage new source under `experiments/`, `lib/` and `vendor/`. The source tree hash enters
-   the run name. Custom tasks must have an immutable recipe, the same development holdout, the
-   full test panel in `exclusions`, and no AI-judged tasks.
+   the run name. Custom tasks follow the
+   [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
+   They need an immutable recipe, the same development holdout, the full test panel in
+   `exclusions`, and no AI-judged tasks.
 3. Print the plan:
 
    ```bash
