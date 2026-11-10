@@ -103,7 +103,7 @@ def convert_genomeqa(row: RawRow, context: ConversionContext) -> TaskSpec:
             {
                 "expected": ascii_uppercase[data["answer_index"]],
                 "options": ascii_uppercase[: len(data["options"])],
-                "cell_weight": 500 / CELL_COUNTS[f"{data['subtask']}/{data['format']}"],
+                "cell_weight": max(CELL_COUNTS.values()) / CELL_COUNTS[f"{data['subtask']}/{data['format']}"],
             },
             environment=required_grader_environment(context),
         ),

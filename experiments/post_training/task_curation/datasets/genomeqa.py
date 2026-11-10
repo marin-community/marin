@@ -34,6 +34,8 @@ from experiments.post_training.task_curation.evaluation import EvalDataset, cura
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
+MAX_TOKENS = 16384
+
 
 def sources() -> list[RlDataSource[EvalDataset]]:
     return [
@@ -74,7 +76,10 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     version="2026.11.10",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
-                        temperature=0.7, top_p=0.95, max_tokens=16384, chat_template_kwargs={"enable_thinking": True}
+                        temperature=0.7,
+                        top_p=0.95,
+                        max_tokens=MAX_TOKENS,
+                        chat_template_kwargs={"enable_thinking": True},
                     ),
                     trials=TrialPolicy(count=1, seed=42),
                     metrics=(
@@ -91,7 +96,7 @@ def sources() -> list[RlDataSource[EvalDataset]]:
                     context_policy=ContextPolicy(
                         output_fit=OutputFit.REQUIRE,
                         context_reserve=0,
-                        output_budget=OutputBudget(minimum=16384, reserve=0, multiplier=1),
+                        output_budget=OutputBudget(minimum=MAX_TOKENS, reserve=0, multiplier=1),
                     ),
                 ),
                 genomeqa_item,
