@@ -120,9 +120,9 @@ def _stage_run(uri: str, label: str, staging: Path) -> int:
     return sum(p.stat().st_size for p in target.iterdir())
 
 
-def _upload_batch(api: HfApi, repo: str, batch: pd.DataFrame) -> int:
-    """Stage a batch of runs in one temporary folder and upload it as one commit; return its bytes."""
-    with tempfile.TemporaryDirectory(prefix="mariner_upload_") as tmp:
+def _upload_batch(api: HfApi, repo: str, batch: pd.DataFrame, staging: Path) -> int:
+    """Stage a batch of runs in one temporary folder under `staging` and upload it as one commit; return its bytes."""
+    with tempfile.TemporaryDirectory(prefix="mariner_upload_", dir=staging) as tmp:
         size = sum(_stage_run(r.hf_export_uri, r.run_label, Path(tmp)) for r in batch.itertuples())
         labels = list(batch.run_label)
         api.upload_folder(
@@ -131,7 +131,7 @@ def _upload_batch(api: HfApi, repo: str, batch: pd.DataFrame) -> int:
     return size
 
 
-def upload(swarm: str, runs: pd.DataFrame, workers: int, batch: int, limit: int | None) -> None:
+def upload(swarm: str, runs: pd.DataFrame, workers: int, batch: int, limit: int | None, staging: Path) -> None:
     api, repo = HfApi(), repo_id(swarm)
     api.create_repo(repo, repo_type="model", private=False, exist_ok=True)
     api.upload_file(path_or_fileobj=model_card(swarm, runs).encode(), path_in_repo="README.md", repo_id=repo)
@@ -150,7 +150,7 @@ def upload(swarm: str, runs: pd.DataFrame, workers: int, batch: int, limit: int 
     )
     start, sent, count = time.monotonic(), 0, 0
     with ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(_upload_batch, api, repo, b): len(b) for b in batches}
+        futures = {pool.submit(_upload_batch, api, repo, b, staging): len(b) for b in batches}
         for future in as_completed(futures):
             sent += future.result()
             count += futures[future]
@@ -190,6 +190,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--batch", type=int, default=5, help="runs per commit")
     parser.add_argument("--limit", type=int, help="upload at most this many missing runs per swarm")
+    parser.add_argument(
+        "--staging-dir",
+        type=Path,
+        default=Path("."),
+        help="where batches are staged; Iris workers mount /tmp as a RAM-backed tmpfs, so stage on the task's disk",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="the default: list what an upload would send")
     mode.add_argument("--confirm", action="store_true", help="create the public repositories and upload")
@@ -206,7 +212,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{repo_id(swarm)}: {len(runs) - len(found)} of {len(runs)} runs verified", flush=True)
             problems += found
         elif args.confirm:
-            upload(swarm, runs, args.workers, args.batch, args.limit)
+            args.staging_dir.mkdir(parents=True, exist_ok=True)
+            upload(swarm, runs, args.workers, args.batch, args.limit, args.staging_dir)
         else:
             print(model_card(swarm, runs))
             print(f"dry run: {len(runs)} runs for {repo_id(swarm)} (public); --confirm uploads")
