@@ -23,6 +23,7 @@ from connectrpc.errors import ConnectError
 from fray.client import JobHandle, wait_all
 from fray.current_client import current_client
 from fray.types import (
+    ANY_REGION,
     ActorConfig,
     Entrypoint,
     EnvironmentConfig,
@@ -831,10 +832,26 @@ def _populate_model_cache(entries: list[str], iris: IrisConfig) -> None:
     """
     if not entries:
         return
-    if isinstance(iris.worker_resources.device, GpuConfig) and not iris.worker_resources.target_cluster:
+    if (
+        isinstance(iris.worker_resources.device, GpuConfig)
+        and not iris.worker_resources.target_cluster
+        and get_job_info() is None
+    ):
         logger.warning(
             "Skipping CPU model preparation for unpinned GPU placement: serving may auto-federate "
             "while the CPU job stays local. Set target_cluster to prepare the serving cache."
+        )
+        return
+    resources = iris.worker_resources
+    region_is_fixed = (
+        len(resources.regions) == 1 and ANY_REGION not in resources.regions
+        if resources.regions
+        else get_job_info() is not None
+    )
+    if isinstance(resources.device, TpuConfig) and not resources.target_cluster and not region_is_fixed:
+        logger.warning(
+            "Skipping CPU model preparation for unrestricted regional placement: CPU and accelerator "
+            "jobs may use different caches. Pin one region to prepare the serving cache."
         )
         return
     jobs: list[JobHandle] = []
