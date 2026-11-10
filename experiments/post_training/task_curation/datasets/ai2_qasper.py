@@ -4,7 +4,7 @@
 """Shared QASPER data and task construction."""
 
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from typing import Any, TypedDict
 
 import pyarrow.parquet as pq
@@ -40,18 +40,13 @@ PROMPT = (
 )
 
 
-class EvidenceAnnotation(TypedDict):
-    evidence: list[str]
-
-
 class CategoricalAnnotation(TypedDict):
     unanswerable: bool
     yes_no: bool | None
 
 
-def uses_missing_evidence(annotations: Sequence[EvidenceAnnotation]) -> bool:
+def uses_missing_evidence(evidence: Iterable[str]) -> bool:
     """Return whether an answer cites a figure or table unavailable in paper.json."""
-    evidence = (item for answer in annotations for item in answer["evidence"])
     return any(item.startswith("FLOAT SELECTED:") for item in evidence)
 
 

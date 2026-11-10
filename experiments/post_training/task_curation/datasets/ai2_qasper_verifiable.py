@@ -62,8 +62,10 @@ def agreed_answer(annotations: list[CategoricalAnnotation]) -> str | None:
 
 def read_questions(path: StoragePath, _context: ConversionContext) -> Iterator[dict[str, Any]]:
     for row in read_qasper_questions(path):
-        expected = agreed_answer(row["answers"]["answer"])
-        if expected is not None and not uses_missing_evidence(row["answers"]["answer"]):
+        annotations = row["answers"]["answer"]
+        evidence = (item for answer in annotations for item in answer["evidence"])
+        expected = agreed_answer(annotations)
+        if expected is not None and not uses_missing_evidence(evidence):
             yield {**row, "expected": expected}
 
 

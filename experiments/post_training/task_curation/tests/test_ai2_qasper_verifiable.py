@@ -87,7 +87,7 @@ def test_requires_exact_annotation_agreement(annotations, expected):
     ],
 )
 def test_detects_unavailable_figure_and_table_evidence(evidence, expected):
-    assert ai2_qasper.uses_missing_evidence([{"evidence": evidence}]) is expected
+    assert ai2_qasper.uses_missing_evidence(evidence) is expected
 
 
 @pytest.mark.parametrize(
