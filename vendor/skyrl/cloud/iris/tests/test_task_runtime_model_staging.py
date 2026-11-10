@@ -2,11 +2,9 @@ from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from dataclasses import asdict
-import hashlib
 from pathlib import Path
 import shutil
 
-import fsspec
 import huggingface_hub
 import huggingface_hub.constants
 import numpy as np
@@ -19,7 +17,7 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from cloud.iris import hf_model_cache, task_runtime
-from cloud.iris.hf_model_cache import HuggingFaceSnapshot, HuggingFaceSnapshotFile, publish_hugging_face_snapshot
+from cloud.iris.hf_model_cache import publish_hugging_face_snapshot
 from cloud.iris.task_runtime import (
     _write_final_config,
     policy_chat_template_model,
@@ -27,6 +25,7 @@ from cloud.iris.task_runtime import (
     prepare_policy_model,
     prepare_policy_tokenizer,
 )
+from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import RolloutModelLoading
@@ -45,27 +44,10 @@ def test_policy_chat_template_selects_materialized_model(
     assert policy_chat_template_model(prestage_model, model_local_path) == expected
 
 
-def _memory_model_snapshot(root: str) -> HuggingFaceSnapshot:
-    """Write a minimal Hugging Face model (metadata, tokenizer, one weight shard) to the memory filesystem."""
-    filesystem = fsspec.filesystem("memory")
-    payloads = {
-        "config.json": b"{}",
-        "tokenizer.json": b"{}",
-        "tokenizer_config.json": b"{}",
-        "model.safetensors": save({"weight": np.arange(4, dtype=np.float32)}),
-    }
-    files = []
-    for path, payload in payloads.items():
-        with filesystem.open(f"{root}/{path}", "wb") as destination:
-            destination.write(payload)
-        files.append(HuggingFaceSnapshotFile(path=path, size=len(payload), sha256=hashlib.sha256(payload).hexdigest()))
-    return HuggingFaceSnapshot(filesystem=filesystem, root=root, files=tuple(files))
-
-
 def test_manifest_policy_stages_metadata_without_materializing_weights(tmp_path, monkeypatch) -> None:
     policy_uri = str(tmp_path / "published-policy")
     manifest = publish_hugging_face_snapshot(
-        _memory_model_snapshot(f"policy-source/{tmp_path.name}"), policy_uri, model_id="org/policy", revision="a" * 40
+        memory_model_snapshot(f"policy-source/{tmp_path.name}"), policy_uri, model_id="org/policy", revision="a" * 40
     )
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
     args = Namespace(
@@ -90,7 +72,7 @@ def test_manifest_policy_stages_metadata_without_materializing_weights(tmp_path,
 @pytest.mark.parametrize("manifest_identity", [True, False])
 def test_local_rollout_staging_preserves_checkpoint_bytes_and_source(tmp_path, monkeypatch, manifest_identity) -> None:
     policy_uri = str(tmp_path / "published-policy")
-    snapshot = _memory_model_snapshot(f"local-policy-source/{tmp_path.name}")
+    snapshot = memory_model_snapshot(f"local-policy-source/{tmp_path.name}")
     manifest = publish_hugging_face_snapshot(snapshot, policy_uri, model_id="org/policy", revision="a" * 40)
     identity = manifest.identity if manifest_identity else "policy-export/step-57"
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
@@ -272,7 +254,7 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
 def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeypatch, requested_revision):
     mirror = tmp_path / "mirror"
     manifest = publish_hugging_face_snapshot(
-        _memory_model_snapshot(f"staging-source/{tmp_path.name}"),
+        memory_model_snapshot(f"staging-source/{tmp_path.name}"),
         str(mirror),
         model_id="org/policy",
         revision="a" * 40,
@@ -301,7 +283,7 @@ def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeyp
 def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, monkeypatch):
     mirror = tmp_path / "mirror"
     manifest = publish_hugging_face_snapshot(
-        _memory_model_snapshot(f"export-source/{tmp_path.name}"),
+        memory_model_snapshot(f"export-source/{tmp_path.name}"),
         str(mirror),
         model_id="org/policy",
         revision="a" * 40,
@@ -330,7 +312,7 @@ def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, mo
 def test_expired_node_mirror_falls_back_to_the_hub(tmp_path, monkeypatch, missing):
     mirror = tmp_path / "mirror"
     manifest = publish_hugging_face_snapshot(
-        _memory_model_snapshot(f"expired-source/{tmp_path.name}"),
+        memory_model_snapshot(f"expired-source/{tmp_path.name}"),
         str(mirror),
         model_id="org/policy",
         revision="a" * 40,
@@ -358,7 +340,7 @@ def test_expired_node_mirror_falls_back_to_the_hub(tmp_path, monkeypatch, missin
 def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
     mirror = tmp_path / "mirror"
     manifest = publish_hugging_face_snapshot(
-        _memory_model_snapshot(f"concurrent-staging/{tmp_path.name}"),
+        memory_model_snapshot(f"concurrent-staging/{tmp_path.name}"),
         str(mirror),
         model_id="org/policy",
         revision="a" * 40,
@@ -382,7 +364,7 @@ def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
 @pytest.mark.parametrize("missing", [None, "model.safetensors", ".marinskyrl-model-manifest.json"])
 def test_cpu_draft_mirror_avoids_the_hub_until_any_mirror_file_expires(tmp_path, monkeypatch, missing):
     mirror = tmp_path / "draft"
-    snapshot = _memory_model_snapshot(f"draft-fallback/{tmp_path.name}")
+    snapshot = memory_model_snapshot(f"draft-fallback/{tmp_path.name}")
     manifest = publish_hugging_face_snapshot(
         snapshot, str(mirror), model_id="org/draft", revision="d" * 40, tokenizer_mode="policy"
     )
