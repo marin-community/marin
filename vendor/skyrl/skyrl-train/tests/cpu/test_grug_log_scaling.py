@@ -13,7 +13,8 @@ HERO_LOG_SCALING = dict(log_scaling_n_floor=65536, log_scaling_alpha=0.1, log_sc
 @pytest.mark.parametrize("cp_size", [1, 2, 4])
 def test_positions_restart_per_document_on_every_cp_rank(monkeypatch, cp_size):
     stub_megatron_modules()
-    from skyrl_train.distributed.megatron import megatron_utils
+    # Megatron is optional in CPU CI; import its packing utilities after installing the stubs.
+    from skyrl_train.distributed.megatron import megatron_utils  # noqa: PLC0415
 
     # Rows are documents with left and right padding; each valid token holds its position in the document.
     attention_mask = torch.tensor(
