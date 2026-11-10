@@ -211,28 +211,19 @@ class MegatronModelWrapper:
         num_actions: int,
         packed_seq_params,
         candidate_ids: torch.Tensor | None = None,
-        candidate_positions: torch.Tensor | None = None,
     ) -> MegatronForwardResult:
-        """Score response actions and candidates with the same differentiable normalizer.
+        """Return chosen [batch, response] and candidate [batch, response, K] scores.
 
-        Logits already include the scoring temperature. Returned scores use the
-        original response suffix, despite Megatron's compacted model positions.
+        Logits already include the scoring temperature. Candidate rows align with the
+        original padded response suffix; IDs index the vocabulary. Row identities
+        follow model packing; CP sums logit deltas while each rank keeps its local gradients.
         """
         chosen = self._token_logprobs(logits, sequences, attention_mask.to(bool), packed_seq_params)[:, -num_actions:]
         selected = None
         if candidate_ids is not None:
-            if candidate_ids.ndim != 3 or candidate_ids.shape[0] != chosen.shape[0]:
+            if candidate_ids.ndim != 3 or candidate_ids.shape[:2] != chosen.shape:
                 raise ValueError("selected response IDs must align with chosen logprobs")
-            if candidate_positions is None:
-                if candidate_ids.shape[:2] != chosen.shape:
-                    raise ValueError("selected response IDs must align with chosen logprobs")
-                response_positions = torch.arange(num_actions, device=logits.device).expand(chosen.shape[0], -1)
-            else:
-                if candidate_positions.shape != candidate_ids.shape[:2]:
-                    raise ValueError("compact selected response positions must align with candidate IDs")
-                response_positions = candidate_positions.long()
-                if torch.any(response_positions < 0) or torch.any(response_positions >= num_actions):
-                    raise ValueError("compact selected positions are outside the response")
+            response_positions = torch.arange(num_actions, device=logits.device).expand(chosen.shape[0], -1)
             query_start = attention_mask.shape[1] - num_actions - 1
             if query_start < 0:
                 raise ValueError("selected response IDs require at least one prompt token")
@@ -245,37 +236,37 @@ class MegatronModelWrapper:
                 raise ValueError("selected response IDs refer to padded prompt or response positions")
             if torch.any(candidate_ids < INVALID_TOPK_INDEX) or torch.any(candidate_ids[valid] >= logits.shape[-1]):
                 raise ValueError("selected token IDs are outside the student vocabulary")
-            # Carry only query identities through the model's sequence transform.
-            # Zero denotes padding, so invalid compact rows cannot overwrite a query.
-            request_ids = torch.zeros_like(sequences)
+            # Map each flattened [batch, response] candidate row to its causal query.
+            # Zero denotes padding; positive entries are row indices plus one.
+            score_row_map = torch.zeros_like(sequences)
             rows = torch.arange(sequences.shape[0], device=logits.device)[:, None].expand_as(queries)
-            requests = torch.arange(valid_rows.numel(), device=logits.device).view_as(valid_rows)
-            request_ids[rows[valid_rows], queries[valid_rows]] = requests[valid_rows] + 1
+            flat_score_rows = torch.arange(valid_rows.numel(), device=logits.device).view_as(valid_rows)
+            score_row_map[rows[valid_rows], queries[valid_rows]] = flat_score_rows[valid_rows] + 1
             if self.use_sample_packing:
-                local_requests, _ = preprocess_packed_seqs(request_ids, attention_mask.bool(), pre_process=True)
+                local_score_rows, _ = preprocess_packed_seqs(score_row_map, attention_mask.bool(), pre_process=True)
             else:
-                local_requests = compact_left_padded_tokens(request_ids, attention_mask.bool())
-            local_rows, local_positions = local_requests.nonzero(as_tuple=True)
-            local_ids = local_requests[local_rows, local_positions] - 1
+                local_score_rows = compact_left_padded_tokens(score_row_map, attention_mask.bool())
+            local_rows, local_positions = local_score_rows.nonzero(as_tuple=True)
+            score_row_indices = local_score_rows[local_rows, local_positions] - 1
             sampled_ids = sequences[:, -num_actions:].gather(1, response_positions).flatten()
             token_ids = torch.cat(
-                (candidate_ids.flatten(0, 1)[local_ids].clamp_min(0), sampled_ids[local_ids, None]), dim=-1
+                (candidate_ids.flatten(0, 1)[score_row_indices].clamp_min(0), sampled_ids[score_row_indices, None]), dim=-1
             ).long()
             # Gather chosen and head logits together to need just one native-dtype
             # vocabulary gradient buffer for this indexing operation.
-            values = logits[local_rows[:, None], local_positions[:, None], token_ids].float()
-            differences = values[:, :-1] - values[:, -1:]
-            aligned = differences.new_zeros((valid_rows.numel(), candidate_ids.shape[-1]))
-            aligned = aligned.index_copy(0, local_ids, differences)
+            candidate_and_chosen_logits = logits[local_rows[:, None], local_positions[:, None], token_ids].float()
+            local_logit_deltas = candidate_and_chosen_logits[:, :-1] - candidate_and_chosen_logits[:, -1:]
+            logit_deltas = local_logit_deltas.new_zeros((valid_rows.numel(), candidate_ids.shape[-1]))
+            logit_deltas = logit_deltas.index_copy(0, score_row_indices, local_logit_deltas)
             if mpu.get_context_parallel_world_size() > 1:
-                gathered = aligned.detach().clone()
+                gathered = logit_deltas.detach().clone()
                 torch.distributed.all_reduce(gathered, group=mpu.get_context_parallel_group())
                 # Every CP rank evaluates the replicated loss. Keep gradients only
                 # for its own logits; Megatron later sums parameter gradients over CP.
-                aligned = aligned + (gathered - aligned.detach())
+                logit_deltas = logit_deltas + (gathered - logit_deltas.detach())
             # Reuse the differentiable chosen normalizer; save no second FP32 vocabulary tensor.
             selected = (
-                chosen.gather(1, response_positions).unsqueeze(-1) + aligned.view_as(candidate_ids)
+                chosen.gather(1, response_positions).unsqueeze(-1) + logit_deltas.view_as(candidate_ids)
             ).masked_fill(~valid, torch.nan)
         return MegatronForwardResult(chosen, selected)
 
