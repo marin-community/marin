@@ -563,6 +563,21 @@ preserves the selected recipe's model and seed. Report final C4 BPB, throughput
 and memory; the blend keeps both algorithms' work and adds momentum/update
 buffers, so it carries no claim of lower cost than MuonH.
 
+The baseline override is provided as
+`experiments/benchmarks/randrand_muonh_baseline.yaml`, using current Levanter's
+`muonH` optimizer with the historical sweep's settings: body MuonH and head
+AdamH at LR 0.02; embedding/vectors Adam at LR 0.008; WD zero throughout;
+Adam betas (0.9, 0.98), epsilon 1e-15; Muon momentum 0.95, Nesterov, five
+quintic NS steps and epsilon 1e-5; clipping 1; warmup 1000 and cosine floor zero.
+These auxiliary settings intentionally differ from the blend recipe. This is
+a comparison of complete recipes, not an ablation changing only the matrices.
+The blend's internal MuonH candidate LR 0.015 does not set the baseline LR.
+Use the same invocation as the blend, changing the run ID/output path and adding:
+
+```bash
+--optimizer-config experiments/benchmarks/randrand_muonh_baseline.yaml
+```
+
 #### Hybrid-normalization model reference
 
 The reference is Marin's historical MuonH Qwen3 scaling configuration at

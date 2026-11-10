@@ -20,6 +20,9 @@ from levanter.optim.config import OptimizerConfig
 from levanter.optim.randrand import NamedRandRANDState, RandRANDConfig, _pack, _unpack, parameter_layout
 
 
+HYPERBALL_NORM_FLOOR = 1e-10
+
+
 @dataclass(frozen=True)
 class MuonBlendConfig:
     threshold: float = 0.0
@@ -73,7 +76,7 @@ def muonh_direction(matrix, steps=5):
     return x.T if transposed else x
 
 
-def randrand_muon_hybrid(labels, config, switch=MuonBlendConfig(), *, total_steps=4959, schedule=None):
+def randrand_muon_hybrid(labels, config, switch=MuonBlendConfig(), *, total_steps=rr.TOTAL_STEPS, schedule=None):
     """Build the plain-array transform; clipping and scheduling happen once."""
     flat_labels, tree = jax.tree_util.tree_flatten(labels)
     matrix_indices = tuple(i for i, label in enumerate(flat_labels) if label == "matrix")
@@ -148,10 +151,10 @@ def randrand_muon_hybrid(labels, config, switch=MuonBlendConfig(), *, total_step
                 candidate = (
                     p
                     - (switch.learning_rate * ratio)
-                    * (radius / jnp.maximum(jnp.linalg.norm(direction), 1e-10))
+                    * (radius / jnp.maximum(jnp.linalg.norm(direction), HYPERBALL_NORM_FLOOR))
                     * direction
                 )
-                muon_weight = candidate * (radius / jnp.maximum(jnp.linalg.norm(candidate), 1e-10))
+                muon_weight = candidate * (radius / jnp.maximum(jnp.linalg.norm(candidate), HYPERBALL_NORM_FLOOR))
                 return (1 - weight) * rr_weight + weight * muon_weight
 
             new_weight = jax.lax.cond(weight > 0, mix, lambda _: rr_weight, operand=None)
@@ -188,30 +191,21 @@ class NamedHybridState(NamedTuple):
 
 
 def _name_matrix_buffers(buffers, params, layouts):
-    leaves = jax.tree_util.tree_leaves(params, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-    result, cursor = [], 0
-    for leaf, layout in zip(leaves, layouts, strict=True):
-        if layout.kind == "matrix":
-            array = jnp.stack(buffers[cursor : cursor + layout.batch_size]).reshape(layout.ordered_shape)
-            inverse = tuple(layout.permutation.index(i) for i in range(len(layout.permutation)))
-            result.append(hax.NamedArray(jnp.transpose(array, inverse), leaf.axes))
-        else:
-            result.append(None)
-        cursor += layout.batch_size
-    return tuple(result)
+    is_named = lambda x: isinstance(x, hax.NamedArray)
+    leaves = jax.tree_util.tree_leaves(params, is_leaf=is_named)
+    matrix_params = tuple(p for p, layout in zip(leaves, layouts, strict=True) if layout.kind == "matrix")
+    matrix_layouts = tuple(layout for layout in layouts if layout.kind == "matrix")
+    tree = jax.tree_util.tree_structure(matrix_params, is_leaf=is_named)
+    named = iter(_unpack(tuple(b for b in buffers if b is not None), matrix_params, matrix_layouts, tree))
+    return tuple(next(named) if layout.kind == "matrix" else None for layout in layouts)
 
 
 def _pack_matrix_buffers(buffers, layouts):
-    result = []
-    for value, layout in zip(buffers, layouts, strict=True):
-        if layout.kind == "matrix":
-            array = jnp.transpose(value.array, layout.permutation).reshape(
-                layout.batch_size, layout.rows, layout.columns
-            )
-            result.extend(array[i] for i in range(layout.batch_size))
-        else:
-            result.append(None)
-    return tuple(result)
+    matrix_layouts = tuple(layout for layout in layouts if layout.kind == "matrix")
+    packed = iter(_pack(tuple(b for b in buffers if b is not None), matrix_layouts))
+    return tuple(
+        next(packed) if layout.kind == "matrix" else None for layout in layouts for _ in range(layout.batch_size)
+    )
 
 
 def named_hybrid(config, switch, *, total_steps, schedule):
@@ -266,7 +260,7 @@ def named_hybrid(config, switch, *, total_steps, schedule):
 @OptimizerConfig.register_subclass("randrand_muon_hybrid")
 @dataclass(frozen=True)
 class RandRANDMuonHybridConfig(RandRANDConfig):
-    """w_v06_slr0.015 settings; the unchanged parent supplies route configuration."""
+    """w_v06_slr0.015 defaults for body-matrix blending and auxiliary AdamW routes."""
 
     learning_rate: float = 0.006
     matrix_betas: tuple[float, float] = (0.95, 0.95)
