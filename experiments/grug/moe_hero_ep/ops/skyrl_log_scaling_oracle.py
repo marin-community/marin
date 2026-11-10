@@ -29,8 +29,6 @@ from safetensors.torch import save_file
 
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.grug.moe_hero_ep.model import (
-    GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY,
-    GrugModelConfig,
     Transformer,
     grugmoe_inference_state_dict,
 )
@@ -68,7 +66,6 @@ ORACLE_MODEL = dataclasses.replace(
     moe_implementation="fixed_all_to_all",
 )
 DOCUMENT_LENGTHS = (56, 40)
-LOG_SCALING_SCHEMA_VERSION = 3
 LOG_SCALING_FIELDS = ("log_scaling_n_floor", "log_scaling_alpha", "log_scaling_power")
 
 
@@ -105,18 +102,6 @@ def _hf_tensors(model: Transformer, num_experts: int) -> dict[str, torch.Tensor]
     return tensors
 
 
-def _hf_config(config: GrugModelConfig) -> dict:
-    """Schema-3 config: the log_scaling_* fields are always present, null when off.
-
-    Built from the export config with log scaling off, then given schema 3 and the fields, so it
-    does not depend on which schema ``to_hf_config`` writes.
-    """
-    hf_config = bf16_hf_config(dataclasses.replace(config, **dict.fromkeys(LOG_SCALING_FIELDS)))
-    hf_config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] = LOG_SCALING_SCHEMA_VERSION
-    hf_config.update({field: getattr(config, field) for field in LOG_SCALING_FIELDS})
-    return hf_config
-
-
 def write_oracle(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=False)
     rng = np.random.default_rng(23)
@@ -137,7 +122,7 @@ def write_oracle(output: Path) -> None:
                 start += length
         save_file(_hf_tensors(model, ORACLE_MODEL.num_experts), output / "model.safetensors")
     np.savez(output / "observations.npz", **observations)
-    (output / "config.json").write_text(json.dumps(_hf_config(ORACLE_MODEL), indent=2, sort_keys=True) + "\n")
+    (output / "config.json").write_text(json.dumps(bf16_hf_config(ORACLE_MODEL), indent=2, sort_keys=True) + "\n")
 
 
 def main() -> None:
