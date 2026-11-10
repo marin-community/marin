@@ -59,7 +59,7 @@ def load_system_prompt(path: str) -> str:
     raise ValueError("Pinned GenomeQA runner has no SIMPLE_SYSTEM_PROMPT literal")
 
 
-def read_genomeqa(path: StoragePath, context: ConversionContext) -> Iterator[dict]:
+def read_genomeqa(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     """Validate each complete pinned format before publishing its questions."""
     answer_format = str(path).split("/")[-2]
     if file_sha256(path) != FILE_HASHES[answer_format]:
@@ -116,10 +116,11 @@ def genomeqa_item(task: TaskSpec) -> EvaluationItem:
     data = source_evidence(task)
     return chat_item(task, response_selection="final_only").model_copy(
         update={
+            "reference_text": ascii_uppercase[data["answer_index"]],
             "groups": {
                 "subtask": data["subtask"],
                 "format": data["format"],
                 "cell": f"{data['subtask']}/{data['format']}",
-            }
+            },
         }
     )

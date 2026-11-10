@@ -261,8 +261,8 @@ are bundled here. Their upstream reuse licenses are unspecified.
 The protocol specifies one response, temperature 0.7, top-p 0.95, thinking where
 supported, and a 16,384-token output allowance. Configure the run with at least
 that output allowance and the served model's tokenizer. Verify provider-specific
-reasoning controls and token accounting before running. Context preflight retains
-the full prompt and excludes rows that cannot fit; a result with any excluded or
+reasoning controls and token accounting before running. Context preflight requires
+the full output allowance, retains the full prompt, and excludes rows that cannot fit; a result with any excluded or
 missing row is not a full GenomeQA result.
 
 The grader uses final content only, removes completed thinking blocks, and reads

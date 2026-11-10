@@ -17,7 +17,7 @@ from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, infra
 from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 
-def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
+def score(scorer: str, config: dict[str, Any], response: str, *, stop_reason: str = "") -> Reward:
     # Scorers load only the dependencies of the selected dataset's environment.
     if scorer == "genomeqa":
         from .genomeqa import grade_genomeqa
@@ -27,7 +27,7 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
             config["options"],
             config["cell_weight"],
             response,
-            os.environ.get("TASKCOMPENDIUM_STOP_REASON", ""),
+            stop_reason,
         )
     if scorer == "boxed_math":
         from .math import grade_boxed_math
@@ -91,7 +91,12 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 def main() -> None:
     config = json.loads(Path("/tests/config.json").read_text())
     try:
-        result = score(sys.argv[1], config, Path("/app/answer.txt").read_text())
+        result = score(
+            sys.argv[1],
+            config,
+            Path("/app/answer.txt").read_text(),
+            stop_reason=os.environ.get("TASKCOMPENDIUM_STOP_REASON", ""),
+        )
     except InvalidTask as error:
         result = invalid_task(str(error))
     except GradingInfraError as error:
