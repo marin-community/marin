@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import functools
 import math
 from dataclasses import dataclass
 from typing import Literal
@@ -54,6 +55,7 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+RmsNormImpl = Literal["barrier", "custom_vjp"]
 
 
 def _batch_spec() -> P:
@@ -125,6 +127,16 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    rms_norm_impl: RmsNormImpl = "barrier"
+    """How the RMS norms (the weighted ``RMSNorm`` layers and the q/k ``rms_norm``) keep AD from changing the rounding
+    of their float32 statistics. "barrier" puts an optimization barrier on the variance, which splits the reduction
+    from its elementwise users into separate kernels; the scoring forward and the forward of a differentiated step
+    then round alike, bit for bit. "custom_vjp" normalizes through ``rms_normalize``, whose forward computes
+    ``rsqrt(mean(x^2) + eps)`` once and saves it with ``x`` for its backward, so XLA may fuse the reduction with its
+    users. The forward expression is the same, but the fusion rounds it differently (a few float32 ulps), the
+    gradients differ at float32 rounding level, and a scoring forward, which does not output the saved statistic, may
+    be fused differently from the differentiated one (one bfloat16 ulp in a few elements): keep "barrier" where
+    scores must match the trained forward exactly."""
     replicate_attn_weights: bool = False
     """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
     of FSDP-sharded across the data axis. Attention weights are small (~128 KB
@@ -176,8 +188,40 @@ class GrugModelConfig:
         return self.hidden_dim // self.num_heads
 
 
-def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
+def _rms_normalize_fwd(x: jax.Array, eps: float) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
+    x_f32 = x.astype(jnp.float32)
+    inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_f32), axis=-1, keepdims=True) + eps)
+    return x_f32 * inv_rms, (x, inv_rms)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+def rms_normalize(x: jax.Array, eps: float) -> jax.Array:
+    """``x * rsqrt(mean(x^2) + eps)`` over the last dimension, in float32, without a weight.
+
+    The forward computes the inverse RMS once and saves it with ``x``, and the backward uses that saved value, so the
+    gradient follows the forward's rounding of the statistic without an optimization barrier between the reduction
+    and its users (``GrugModelConfig.rms_norm_impl``)."""
+    return _rms_normalize_fwd(x, eps)[0]
+
+
+def _rms_normalize_bwd(eps: float, residuals: tuple[jax.Array, jax.Array], g: jax.Array) -> tuple[jax.Array]:
+    del eps
+    x, inv_rms = residuals
+    x_f32 = x.astype(jnp.float32)
+    g = g.astype(jnp.float32)
+    # d(x * r)/dx with r = rsqrt(mean(x^2) + eps), dr/dx = -r^3 x / D:  r * (g - x * r^2 * mean(g * x)).
+    projection = jnp.mean(g * x_f32, axis=-1, keepdims=True)
+    dx = inv_rms * (g - x_f32 * (inv_rms * inv_rms) * projection)
+    return (dx.astype(x.dtype),)
+
+
+rms_normalize.defvjp(_rms_normalize_fwd, _rms_normalize_bwd)
+
+
+def rms_norm(x: jax.Array, eps: float = 1e-6, *, impl: RmsNormImpl = "barrier") -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
+    if impl == "custom_vjp":
+        return rms_normalize(x, eps).astype(x.dtype)
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
     # AD retains different intermediates; pin the reduction to preserve forward rounding.
     variance = jax.lax.optimization_barrier(variance)
@@ -301,9 +345,9 @@ class CausalSelfAttention(eqx.Module):
             k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
 
-        q = rms_norm(q)
-        k = rms_norm(k)
         cfg = self.cfg
+        q = rms_norm(q, impl=cfg.rms_norm_impl)
+        k = rms_norm(k, impl=cfg.rms_norm_impl)
         if not disable_rope:
             # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
             # Second half is rope-free on every layer.
@@ -346,20 +390,25 @@ class CausalSelfAttention(eqx.Module):
 class RMSNorm(eqx.Module):
     weight: jax.Array
     eps: float = eqx.field(static=True)
+    impl: RmsNormImpl = eqx.field(static=True, default="barrier")
+    """``GrugModelConfig.rms_norm_impl``."""
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+    def init(dim: int, eps: float, impl: RmsNormImpl = "barrier") -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps, impl=impl)
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         weight = unshard(self.weight)
         dtype = x.dtype
-        x = x.astype(jnp.float32)
-        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        # AD retains different intermediates; pin the reduction to preserve forward rounding.
-        variance = jax.lax.optimization_barrier(variance)
-        normed = x * jax.lax.rsqrt(variance + self.eps)
+        if self.impl == "custom_vjp":
+            normed = rms_normalize(x, self.eps)
+        else:
+            x = x.astype(jnp.float32)
+            variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+            # AD retains different intermediates; pin the reduction to preserve forward rounding.
+            variance = jax.lax.optimization_barrier(variance)
+            normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
 
 
@@ -571,10 +620,10 @@ class Block(eqx.Module):
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
         return Block(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_impl),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_impl),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
@@ -672,12 +721,12 @@ class Transformer(eqx.Module):
 
         return Transformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_impl),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
             stacked_blocks=stacked_blocks,
-            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_impl),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
         )
@@ -842,6 +891,7 @@ __all__ = [
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
+    "RmsNormImpl",
     "Transformer",
     "debug_mesh_and_token_pspec",
 ]

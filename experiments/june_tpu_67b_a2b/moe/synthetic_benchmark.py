@@ -47,7 +47,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode, RmsNormImpl
 from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
     GrugTrainerConfig,
@@ -143,6 +143,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
     parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
     parser.add_argument(
+        "--rms-norm-impl",
+        choices=get_args(RmsNormImpl),
+        default="barrier",
+        help="How the RMS norms pin their float32 statistics: an optimization barrier on the variance (barrier), or a "
+        "custom VJP that saves the inverse RMS for the backward, letting XLA fuse the reduction with its users "
+        "(custom_vjp) (GrugModelConfig.rms_norm_impl).",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -187,6 +195,7 @@ def main() -> None:
         attention_implementation=args.attention,
         moe_implementation=args.moe_impl,
         remat_mode=args.remat_mode,
+        rms_norm_impl=args.rms_norm_impl,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
     )
