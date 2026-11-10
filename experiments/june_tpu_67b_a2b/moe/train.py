@@ -137,7 +137,8 @@ class GrugTrainerConfig:
     inside its backward, as soon as that layer's backward is done, so the reductions overlap the backward of the
     layers below it instead of running after the step's last backward. Every weight is still reduced once per step,
     and the gradients are the same as without it. The other weights are reduced after the last microbatch, as
-    without it. Peak memory goes up by about one layer's expert gradients.
+    without it. Peak memory goes up by about one layer's expert gradients. Needs the stacked layer layout
+    (``GrugModelConfig.use_array_stacked_blocks``).
 
     On GPU the overlap needs XLA flags: ``--xla_gpu_all_reduce_combine_threshold_bytes`` above one layer's expert
     gradient bytes (so the per-layer all-reduces of one layer combine into one), stream domains for in-node
@@ -754,6 +755,8 @@ def _per_layer_reduced(params: Transformer) -> Transformer:
     Not the expert weights the layer scan itself marks ``reduced`` (``replicated_grad_reduction="after_scan"`` with
     a size-1 ``expert`` axis and at most ``replicated_grad_max_bytes`` per layer): they are reduced after the scan
     anyway, so they take the same path as the other weights."""
+    if params.stacked_blocks is None:
+        raise ValueError("overlap_last_microbatch needs the stacked layer layout (use_array_stacked_blocks)")
     cfg = params.config
     max_bytes = cfg.replicated_grad_max_bytes if cfg.replicated_grad_reduction == "after_scan" else -1
 

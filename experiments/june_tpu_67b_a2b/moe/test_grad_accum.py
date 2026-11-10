@@ -524,3 +524,25 @@ def test_overlapping_the_last_microbatch_needs_two_microbatches():
             microbatches=1,
             overlap_last_microbatch=True,
         )
+
+
+@pytest.mark.multidevice
+def test_overlapping_the_last_microbatch_needs_stacked_blocks():
+    cfg = dataclasses.replace(
+        BASE,
+        use_array_stacked_blocks=False,
+        replicated_grad_reduction=GrugModelConfig.replicated_grad_reduction,
+        router_stats_reduction=GrugModelConfig.router_stats_reduction,
+    )
+    policy = jmp.get_policy("f32")
+    optimizer = optax.sgd(1e-2)
+    with use_cpu_devices(8), jax.set_mesh(_meshes()["replica4_expert2"]):
+        state = jax.eval_shape(
+            lambda key: june_train.initial_state(cfg, optimizer=optimizer, mp=policy, key=key, ema_beta=None),
+            jax.random.key(0),
+        )
+        train_step = june_train._make_train_step(
+            optimizer, policy, z_loss_weight=0.0, ema_beta=None, microbatches=2, overlap_last_microbatch=True
+        )
+        with pytest.raises(ValueError, match="stacked layer layout"):
+            jax.eval_shape(train_step, state, BATCH)
