@@ -176,13 +176,8 @@ cpu = [
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-# AMD GPUs: Levanter's ROCm JAX stack, with CPU Torch for data tooling.
-rocm = [
-  "marin-levanter[rocm]",
-  "torch==2.11.0",
-  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
-  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
-]
+# AMD GPUs: Levanter's ROCm JAX stack.
+rocm = ["marin-levanter[rocm]"]
 
 # Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
 # See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
@@ -218,7 +213,6 @@ torchvision = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    { index = "pytorch-cpu", extra = "rocm" },
     # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
@@ -228,7 +222,6 @@ torch = [
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    { index = "pytorch-cpu", extra = "rocm" },
 ]
 
 [[tool.uv.index]]
