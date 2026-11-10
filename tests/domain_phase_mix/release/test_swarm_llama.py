@@ -48,10 +48,11 @@ def _rounds_to(value: float, cell: str) -> bool:
 def test_160m_rows_and_components(out):
     t = out["swarm_llama_160m_1p2b"]
     assert len(t) == 281 + 10 and t.observation_id.is_unique
-    assert t.fit_inclusion.sum() == 281 and t[t.fit_inclusion].mixture_id.is_unique
+    assert t.fit_inclusion.sum() == 242 and t[t.fit_inclusion].mixture_id.is_unique
     assert t.components_available.all()
     assert t.design_kind.value_counts().to_dict() == {"sampled": 238, "deletion": 39, "repeat": 10, "baseline": 4}
-    assert (t.fit_inclusion == (t.design_kind != "repeat")).all()
+    # The paper's fits to this swarm use its 242 single-phase runs; the deletions are held-out runs.
+    assert (t.fit_inclusion == t.design_kind.isin(["sampled", "baseline"])).all()
     # Seeds come from the launch manifests; none of the deletions' launch is among the sources.
     launched = t[t.design_kind.isin(["sampled", "baseline"])]
     assert launched.data_seed.notna().all() and (launched.trainer_seed == 0).all()

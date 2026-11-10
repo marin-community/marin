@@ -258,7 +258,10 @@ def _fit_160(ctx: ExportContext) -> pd.DataFrame:
 
 
 def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Series) -> pd.DataFrame:
-    """The 39 single-bucket deletions. No launch manifest of theirs is among the sources, so their seeds stay null."""
+    """The 39 single-bucket deletions, held out rather than fitted: the 160M fit panel is the audit's 242 single-phase
+    runs (`_fit_160`), and these runs are in the frozen held-out cohort. They stay in the swarm table because the
+    transfer figure matches all 280 designs across settings. No launch manifest of theirs is among the sources, so
+    their seeds stay null."""
     audit = tables.read_csv(paths.require(AUDIT_160 / "heldout_observations.csv"))
     deletions = audit[audit.run_name.str.startswith("p60_del_")].reset_index(drop=True)
     assert len(deletions) == 39 and (deletions.intervention_type == "domain_deletion").all()
@@ -276,7 +279,7 @@ def _deletions_160(ctx: ExportContext, native: pd.DataFrame, proportional: pd.Se
     return _rows(
         run_name=hashed,
         label="pctrl_del_" + deletions.target_domain.str.replace("/", "_"),  # the 200M swarm's deletion labels
-        fit=True,
+        fit=False,
         seeds=pd.DataFrame({"data_seed": np.nan, "trainer_seed": np.nan}, index=deletions.index),
         weights=weights,
         uncheatable=_uncheatable(unch, ctx),

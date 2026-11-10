@@ -8,7 +8,8 @@ Observation ids are W&B run ids (`observation_ids`). The 116 validation-launch r
 evaluation-metrics URI, as `validation_3e18` does. 679 frozen runs take the registry's W&B training run id, which for
 the 187 `delphi_archive::` rows is the row id without its prefix. The registry records no W&B run id for the 134 Llama
 200M runs; theirs come from W&B, frozen in LLAMA_200M_RUNS. The Llama swarm tables use the same ids, so the 39 Llama
-160M deletions, rows of both tables, have one id each; the Qwen3 swarm's fit rows are in no held-out cohort.
+160M deletions, rows of both tables, have one id each; the 160M swarm table marks them unfitted, and no swarm's fit
+rows are in a held-out cohort.
 
 Objectives take their public names (`naming.objective_public`): the registry's one baseline, the UniMax-8 run of the
 June ladder at 3e18, has objective `none` and, as in `validation_3e18`, its construction's epoch cap of 8.

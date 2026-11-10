@@ -33,10 +33,19 @@ def test_same_observation_same_values(column, field):
 def test_a_value_missing_from_one_table_is_not_a_disagreement():
     # heldout lacks the OlmoBaseEval Easy components that the 160M swarm table has for the same deletion runs.
     tables = {
-        "swarm_llama_160m_1p2b": pd.DataFrame([_run("obs_a", bpb=0.8)]),
+        "swarm_llama_160m_1p2b": pd.DataFrame([{**_run("obs_a", bpb=0.8), "fit_inclusion": False}]),
         "heldout": pd.DataFrame([_run("obs_a", bpb=float("nan"))]),
     }
     assert checks.consistency(tables) == []
+
+
+def test_a_fit_row_cannot_be_a_held_out_run():
+    # The 160M swarm table once marked its 39 deletions as fit rows while heldout held them in the frozen cohort.
+    tables = {
+        "swarm_llama_160m_1p2b": pd.DataFrame([{**_run("obs_a"), "fit_inclusion": True}]),
+        "heldout": pd.DataFrame([_run("obs_a")]),
+    }
+    assert checks.consistency(tables) == ["swarm_llama_160m_1p2b: obs_a: fit row is also a held-out run"]
 
 
 @pytest.mark.parametrize(
@@ -69,7 +78,12 @@ def test_content_ids_must_hash_the_row():
 def test_run_sets_membership():
     tables = {
         "swarm_qwen3_360m_1p6b": pd.DataFrame(
-            [{"observation_id": "obs_a", "fit_inclusion": True}, {"observation_id": "obs_r", "fit_inclusion": False}]
+            [
+                {"observation_id": "obs_a", "fit_inclusion": True, "design_kind": "sampled"},
+                {"observation_id": "obs_r", "fit_inclusion": False, "design_kind": "repeat"},
+                # A design outside the fit, as the 160M swarm's deletions are, is no repeat.
+                {"observation_id": "obs_u", "fit_inclusion": False, "design_kind": "deletion"},
+            ]
         ),
         "heldout": pd.DataFrame([{"observation_id": "obs_h", "cohort": "frozen", "swarm": "qwen3_360m_1p6b"}]),
         "validation_3e18": pd.DataFrame([{"observation_id": "obs_h", "launch": "frozen_procedure"}]),
@@ -88,6 +102,7 @@ def test_run_sets_membership():
         [
             ("obs_a", "fit_swarm_qwen3_360m_1p6b"),
             ("obs_r", "proportional_repeats_qwen3_360m_1p6b"),
+            ("obs_u", "unfitted_swarm_qwen3_360m_1p6b"),
             ("obs_h", "heldout_frozen"),
             ("obs_h", "validation/frozen_procedure"),
             ("obs_h", "ladder"),

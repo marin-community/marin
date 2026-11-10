@@ -4,9 +4,10 @@
 """Cross-table consistency of the release, and the table of run-set memberships.
 
 A physical training run has one observation id in every table that holds it: the 39 Llama 160M single-bucket deletions
-are rows of `swarm_llama_160m_1p2b` and of `heldout`, 117 validation runs are rows of `heldout`, and the ladder's
-3e18 rung copies validation and swarm rows. `consistency` checks that every copy of a run carries the same weights,
-pool fractions, BPB and seeds, and that every content id hashes its own row.
+are rows of `swarm_llama_160m_1p2b` (unfitted) and of `heldout`, 117 validation runs are rows of `heldout`, and the
+ladder's 3e18 rung copies validation and swarm rows. `consistency` checks that every copy of a run carries the same
+weights, pool fractions, BPB and seeds, that every content id hashes its own row, and that no swarm's fit row is a
+held-out run.
 """
 
 from collections.abc import Iterable
@@ -36,7 +37,21 @@ def consistency(tables: dict[str, pd.DataFrame]) -> list[str]:
     TOLERANCE wherever both have a value; a value that one table lacks is no disagreement (`heldout` lacks components
     that the swarm tables have, and seeds for some runs).
     """
-    return _id_problems(tables) + _value_problems(tables)
+    return _id_problems(tables) + _value_problems(tables) + _fit_heldout_problems(tables)
+
+
+def _fit_heldout_problems(tables: dict[str, pd.DataFrame]) -> list[str]:
+    """A run that a swarm fits cannot also be a held-out run: held-out results would then score fitted runs."""
+    if "heldout" not in tables:
+        return []
+    heldout_ids = set(tables["heldout"].observation_id)
+    return [
+        f"{name}: {oid}: fit row is also a held-out run"
+        for name in SWARMS
+        if name in tables
+        for oid in tables[name].observation_id[tables[name].fit_inclusion]
+        if oid in heldout_ids
+    ]
 
 
 def _id_problems(tables: dict[str, pd.DataFrame]) -> list[str]:
@@ -87,16 +102,22 @@ def _value_problems(tables: dict[str, pd.DataFrame]) -> list[str]:
 def run_sets(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Set memberships (`observation_id, run_set`), one row per run and set.
 
-    Sets: `fit_<swarm table>` (rows with `fit_inclusion`) and `proportional_repeats_<swarm>` (the swarm's proportional
-    repeats, its only rows outside the fit), `heldout_<cohort>`, `validation/<launch>`, `ladder`, and one set for all
-    the runs of the `starcoder` and `domain_sweeps` configs. A run belongs to every set of every table that holds it.
+    Sets: `fit_<swarm table>` (rows with `fit_inclusion`), `proportional_repeats_<swarm>` (the swarm's proportional
+    repeats), `unfitted_<swarm table>` (its other rows outside the fit: the Llama 160M/1.2B single-bucket deletions,
+    which are held-out runs), `heldout_<cohort>`, `validation/<launch>`, `ladder`, and one set for all the runs of the
+    `starcoder` and `domain_sweeps` configs. A run belongs to every set of every table that holds it.
     """
     parts = []
     for name in SWARMS:
         if name in tables:
             t = tables[name]
+            repeat = (t.design_kind == "repeat").to_numpy()
+            fit = t.fit_inclusion.to_numpy(bool)
+            if (repeat & fit).any():
+                raise ValueError(f"{name}: a proportional repeat is marked as a fit row")
             repeats = f"proportional_repeats_{name.removeprefix('swarm_')}"
-            parts.append(_members(t.observation_id, np.where(t.fit_inclusion, f"fit_{name}", repeats)))
+            sets = np.where(fit, f"fit_{name}", np.where(repeat, repeats, f"unfitted_{name}"))
+            parts.append(_members(t.observation_id, sets))
     if "heldout" in tables:
         heldout = tables["heldout"]
         parts.append(_members(heldout.observation_id, ("heldout_" + heldout.cohort).to_numpy()))
