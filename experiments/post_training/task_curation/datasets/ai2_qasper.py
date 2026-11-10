@@ -4,8 +4,8 @@
 """Shared QASPER data and task construction."""
 
 import json
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Iterator, Sequence
+from typing import Any, TypedDict
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
@@ -21,24 +21,35 @@ from experiments.post_training.task_curation.pipeline import environment_require
 REPOSITORY = "allenai/qasper"
 REVISION = "06806e4608976fc2fac0a090ac425d5b2b29caf4"
 TRAIN_FILE = "qasper/train/0000.parquet"
+PAPER_PATH = "/app/paper.json"
 ANSWER_PATH = "/app/answer.json"
 PAPER_FIELDS = ("id", "title", "abstract", "full_text", "figures_and_tables")
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
 )
 
-PROMPT = """Access and read the research paper located at `/app/paper.json`. Answer the following question using only information from the paper.
+PROMPT = (
+    "Access and read the research paper located at `{paper_path}`. "
+    "Answer the following question using only information from the paper.\n\n"
+    "Write your answer to `{answer_path}` using this format:\n\n"
+    '{{"answer": "<answer>"}}\n\n'
+    "If the question can be answered succinctly with yes or no, use exactly `yes` or `no` as the answer value. "
+    "If the paper does not provide enough information to answer the question, use exactly `unanswerable`. "
+    "Otherwise, provide a clear, concise answer supported by the paper.\n\n"
+    "Question: {question}"
+)
 
-Write your answer to `/app/answer.json` using this format:
 
-{{"answer": "<answer>"}}
-
-If the question can be answered succinctly with yes or no, use exactly `yes` or `no` as the answer value. If the paper does not provide enough information to answer the question, use exactly `unanswerable`. Otherwise, provide a clear, concise answer supported by the paper.
-
-Question: {question}"""
+class EvidenceAnnotation(TypedDict):
+    evidence: list[str]
 
 
-def uses_missing_evidence(annotations: list[dict[str, Any]]) -> bool:
+class CategoricalAnnotation(TypedDict):
+    unanswerable: bool
+    yes_no: bool | None
+
+
+def uses_missing_evidence(annotations: Sequence[EvidenceAnnotation]) -> bool:
     """Return whether an answer cites a figure or table unavailable in paper.json."""
     evidence = (item for answer in annotations for item in answer["evidence"])
     return any(item.startswith("FLOAT SELECTED:") for item in evidence)
@@ -69,12 +80,25 @@ def build_task(row: RawRow, package: GraderPackage, tags: tuple[str, ...]) -> Ta
     return TaskSpec(
         id=row.id,
         source=row.source,
-        context=ConversationInput(events=(TextMessage(role="user", content=PROMPT.format(question=data["question"])),)),
+        context=ConversationInput(
+            events=(
+                TextMessage(
+                    role="user",
+                    content=PROMPT.format(
+                        paper_path=PAPER_PATH,
+                        answer_path=ANSWER_PATH,
+                        question=data["question"],
+                    ),
+                ),
+            )
+        ),
         environment_requirements=shell_environment(environment_requirements(AGENT_IMAGE)).model_copy(
             update={"working_directory": "/app"}
         ),
         resources=ResourceGroups(
-            worker=(inline_resource("app/paper.json", json.dumps(data["paper"], ensure_ascii=False).encode()),),
+            worker=(
+                inline_resource(PAPER_PATH.removeprefix("/"), json.dumps(data["paper"], ensure_ascii=False).encode()),
+            ),
             verifier=package.resources,
         ),
         output_paths=(ANSWER_PATH,),

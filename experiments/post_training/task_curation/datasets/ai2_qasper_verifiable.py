@@ -10,16 +10,17 @@ from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import grade_script, script_package
+from taskcompendium.grader import grader_config
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Controls, IntendedUse, RawRow, WorkspaceFiles
-from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.ai2_qasper import (
     ANSWER_PATH,
     REPOSITORY,
     REVISION,
     TRAIN_FILE,
+    CategoricalAnnotation,
     build_task,
     uses_missing_evidence,
 )
@@ -43,8 +44,11 @@ intentional and should not be treated as a quality defect.
 """
 
 
-def agreed_answer(annotations: list[dict[str, Any]]) -> str | None:
-    """This function returns the answers the annotators agreed on. If there was disagreement, it returns None."""
+def agreed_answer(annotations: list[CategoricalAnnotation]) -> str | None:
+    """This function returns the answers the annotators agreed on. If there was disagreement, it returns None.
+
+    Empty annotations and non-categorical answers also return None.
+    """
     labels = []
     for answer in annotations:
         if answer["unanswerable"]:
@@ -72,6 +76,7 @@ def convert(row: RawRow, context: ConversionContext) -> TaskSpec:
             "paper_id": data["paper"]["id"],
             "question_id": data["question_id"],
             "annotations": data["answers"],
+            "answer_path": ANSWER_PATH,
         },
         environment=required_grader_environment(context),
         timeout=10,
@@ -81,8 +86,7 @@ def convert(row: RawRow, context: ConversionContext) -> TaskSpec:
 
 
 def golden_answer(task: TaskSpec) -> WorkspaceFiles:
-    config = json.loads(resource_bytes(next(file for file in task.resources.verifier if file.path == "config.json")))
-    answer = json.dumps({"answer": config["expected"]}).encode()
+    answer = json.dumps({"answer": grader_config(task)["expected"]}).encode()
     return WorkspaceFiles({ANSWER_PATH: answer})
 
 

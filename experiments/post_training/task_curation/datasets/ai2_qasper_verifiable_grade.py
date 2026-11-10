@@ -10,14 +10,14 @@ from pathlib import Path
 def score(path: Path, expected: str) -> int:
     try:
         answer = json.loads(path.read_text())["answer"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
         return 0
     return int(isinstance(answer, str) and answer.strip().casefold() == expected)
 
 
 def main() -> None:
-    expected = json.loads(Path("/tests/config.json").read_text())["expected"]
-    print(score(Path("/app/answer.json"), expected))
+    config = json.loads(Path("/tests/config.json").read_text())
+    print(score(Path(config["answer_path"]), config["expected"]))
 
 
 if __name__ == "__main__":
