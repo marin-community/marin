@@ -35,7 +35,7 @@ from levanter.testing.devices import use_cpu_devices
 from experiments.june_tpu_67b_a2b.moe import train as june_train
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
-from tests.test_june_grad_accum import BASE, BATCH, _meshes, leaves, replica_reductions
+from experiments.june_tpu_67b_a2b.moe.train_test_support import BASE, BATCH, _meshes, leaves, replica_reductions
 
 # Eight experts, so that they split over expert=2 x replica_dcn=4.
 ZERO1_CFG = dataclasses.replace(BASE, num_experts=8, remat_mode="save_moe")
