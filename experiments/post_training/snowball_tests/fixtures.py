@@ -34,6 +34,11 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
+def write_receipt(root: Path, receipt: dict) -> None:
+    write_json(root / "terminal.json", receipt)
+    write_json(root / "resolved-launch.yaml", {"config": receipt["config"]})
+
+
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
@@ -134,7 +139,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     )
 
     def write(
-        preset,
+        preset_name: str,
         name,
         *,
         speed=100.0,
@@ -145,7 +150,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         fingerprint="",
         legacy=False,
     ):
-        preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
+        preset = presets.PRESETS[preset_name]
         root = tmp_path / name / presets.PRESET_REVISION
         root.mkdir(parents=True, exist_ok=True)
         native = deepcopy(NATIVE_RECORD["receipt"])
@@ -322,8 +327,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 "engine": {"vllm_version": "fixture-vllm"},
             },
         )
-        write_json(root / "terminal.json", native)
-        write_json(root / "resolved-launch.yaml", {"config": launch})
+        write_receipt(root, native)
         return root
 
     return write

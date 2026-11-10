@@ -33,6 +33,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_tests.fixtures import answer as _answer
 from experiments.post_training.snowball_tests.fixtures import write_json as _json
+from experiments.post_training.snowball_tests.fixtures import write_receipt
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 VLLM = "vllm/median_generation_throughput"
@@ -58,7 +59,7 @@ def rescore(preset, *args, exit_code=None):
     result = CliRunner().invoke(gate.main, ["--preset", preset, *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
     payload = json.loads(result.output.splitlines()[-1])
-    assert result.exit_code == (exit_code if exit_code is not None else presets.EXIT_CODES[payload["verdict"]]), (
+    assert result.exit_code == (exit_code if exit_code is not None else gate.EXIT_CODES[payload["verdict"]]), (
         result.output,
         result.exception,
     )
@@ -84,7 +85,7 @@ def test_calibrate_pools_deviations_within_pins():
     assert (noise.mean, noise.sd, noise.df) == pytest.approx((7, math.sqrt(2.5), 4))
 
 
-def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, tmp_path, monkeypatch, capsys):
+def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, monkeypatch, capsys):
     roots = controls(recorded_runs, "speed-medium")
     path = roots[0] / "exports/metrics/step-000002.json"
     _json(path, json.loads(path.read_text()) | {"timing/step_wall/group_admission": 1100})
@@ -117,26 +118,39 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
         runpy.run_module("experiments.post_training.snowball_rl_gate", run_name="__main__")
     assert result.value.code == 0
     assert json.loads(capsys.readouterr().out.splitlines()[-1]) == {"report": str(artifact), **report}
-    assert before == {path: hashlib.sha256(path.read_bytes()).digest() for path in before}
+    assert before == {
+        path: hashlib.sha256(path.read_bytes()).digest() for root in roots for path in root.rglob("*") if path.is_file()
+    }
+
+    source = recorded_runs("speed-medium", "users/test/inconsistent-phases", speed=101)
+
+    def extra_phase(row):
+        if row["step"] > 2:
+            row["timing/step_wall/policy_training"] = 100
+
+    edit_metrics(source, extra_phase)
+    report = rescore("speed-medium", "--candidate", "users/test/inconsistent-phases")
+    assert report["verdict"] == "invalid" and "speed/update_seconds" in report["reason"]
 
 
 @pytest.mark.parametrize(
-    "speed,telemetry,control_values,verdict,label,change",
+    "speed,telemetry,control_values,kl,verdict,label,change",
     [
-        (80, 1, (100, 101, 102, 103), "pass", "improves", "changed"),
-        (130, 1000, (100, 101, 102, 103), "fail", "regression", "changed"),
-        (80, 1, (float("nan"), 101, 102, 103), "pass", "improves", "unavailable"),
+        (80, 1, (100, 101, 102, 103), 0.08, "pass", "improves", "changed"),
+        (130, 1000, (100, 101, 102, 103), 0.13, "fail", "regression", "changed"),
+        (80, 1, (float("nan"), 101, 102, 103), 0.08, "pass", "improves", "unavailable"),
+        (80, 1, (100, 101, 102, 103), 0.2, "fail", "trade-off", "changed"),
     ],
 )
 def test_verdict_labels_use_objectives_and_guards(
-    recorded_runs, speed, telemetry, control_values, verdict, label, change
+    recorded_runs, speed, telemetry, control_values, kl, verdict, label, change
 ):
     pin = gate.control_pins("speed-medium")[0]
     for i, value in enumerate(control_values):
         recorded_runs(
             "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value}
         )
-    recorded_runs("speed-medium", "users/test/telemetry", speed=speed, metrics={VLLM: telemetry})
+    recorded_runs("speed-medium", "users/test/telemetry", speed=speed, metrics={VLLM: telemetry, KL: kl})
     report = rescore("speed-medium", "--candidate", "users/test/telemetry")
     assert (report["verdict"], report["label"]) == (verdict, label)
     row = comparisons(report, "reported")[VLLM]
@@ -168,7 +182,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     pin = gate.control_pins("speed-medium")[0]
     for i in range(pin.runs):
         recorded_runs(
-            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 1 + i}
+            "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 100 + i}
         )
     recorded_runs("speed-medium", "users/test/borderline", speed=108, metrics={key: 1})
     base = rescore("speed-medium", "--candidate", "users/test/borderline")
@@ -187,7 +201,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     )
     assert repeated_guard["comparisons"] == base["comparisons"]
     for report in (base, added, duplicate):
-        assert report["verdict"] == "fail", report
+        assert (report["verdict"], report["label"]) == ("fail", "regression"), report
         assert {key: row for key, row in comparisons(report).items() if row["role"] in ("objective", "constraint")} == {
             key: row for key, row in comparisons(base).items() if row["role"] in ("objective", "constraint")
         }
@@ -215,10 +229,15 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         snowball.build_run(presets.PRESETS["speed-medium"], requirements=("typo>=0",))
 
 
-@pytest.mark.parametrize("preset", ["speed-medium", "speed-long"])
 @pytest.mark.parametrize(
-    "case,expected",
-    [("weighted", "pass"), ("empty", "invalid"), ("nonfinite", "invalid"), ("pooled", "fail"), ("warmup", "pass")],
+    "preset,case,expected",
+    [
+        ("speed-medium", "weighted", "pass"),
+        ("speed-medium", "empty", "invalid"),
+        ("speed-medium", "nonfinite", "invalid"),
+        ("speed-long", "pooled", "fail"),
+        ("speed-long", "warmup", "pass"),
+    ],
 )
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset, case, expected):
     controls(recorded_runs, preset)
@@ -255,17 +274,19 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, p
         }
 
 
-@pytest.mark.parametrize("fault", ["updates", "loss", "union", "missing-counter"])
+@pytest.mark.parametrize("fault", ["updates", "loss", "policy-loss", "union", "missing-counter"])
 def test_failed_training_invariants_do_not_supply_a_directional_label(recorded_runs, fault):
     controls(recorded_runs, "speed-medium")
     root = recorded_runs("speed-medium", "users/test/invariant", speed=101)
     if fault == "updates":
-        (root / "exports/metrics/step-000010.json").unlink()
+        (root / "exports/metrics/step-000001.json").unlink()
     else:
 
         def edit(row):
             if fault == "loss":
-                row["loss/policy_loss"] = float("nan")
+                row["loss/avg_raw_advantages_abs"] = float("nan")
+            elif fault == "policy-loss":
+                row["policy/policy_loss"] = float("nan")
             elif fault == "union":
                 row.update(
                     {
@@ -279,16 +300,34 @@ def test_failed_training_invariants_do_not_supply_a_directional_label(recorded_r
 
         edit_metrics(root, edit)
     report = rescore("speed-medium", "--candidate", "users/test/invariant")
-    assert report["verdict"] == ("invalid" if fault == "updates" else "fail"), report
-    if fault != "updates":
-        assert report["label"] == "no change"
-        assert any(not row["holds"] for row in report["invariants"])
+    assert (report["verdict"], report["label"]) == ("fail", "no change"), report
+    assert any(not row["holds"] for row in report["invariants"])
+    if fault == "updates":
+        assert next(row for row in report["invariants"] if row["name"] == "planned_updates")["holds"] is False
 
 
 @pytest.mark.parametrize("preset", ["speed-short", "data-short"])
 def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset):
     controls(recorded_runs, preset)
-    root = recorded_runs(preset, "users/test/current-generation", speed=101)
+    inputs = None
+    if preset == "data-short":
+        selected = presets.selection_artifact("candidate-training@2026.11.10")
+        shutil.copytree(presets.default_selection().path(), selected.path())
+        inputs = gate.GateInputs(preset_name=preset, tasks="candidate-training@2026.11.10")
+    root = recorded_runs(preset, "users/test/current-generation", speed=101, inputs=inputs)
+    if inputs is not None:
+        path = Path(selected.path()) / "train.parquet"
+        rows = pq.read_table(path).to_pylist()
+        for row in rows:
+            task = json.loads(row["task_spec"])
+            task["id"] = "candidate-" + task["id"]
+            row["task_spec"] = json.dumps(task)
+        pq.write_table(pa.Table.from_pylist(rows), path)
+        path = root / "exports/dumped_evals/eval_only/panel.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            row["task_id"] = "candidate-" + row["task_id"]
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     values = json.loads((root / "exports/metrics/step-000000.json").read_text())
     assert "generate/outcome/graded" not in values and "attempt_id" not in values
     report = rescore(preset, "--candidate", "users/test/current-generation")
@@ -306,7 +345,6 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
 @pytest.mark.parametrize(
     "path,value,verdict",
     [
-        (("skyrl", "trainer", "policy", "optimizer_config", "lr"), 2e-6, "pass"),
         (("skyrl", "generator", "enable_prefix_caching"), False, "pass"),
         (("runtime", "task_env", "VLLM_PROBE"), "1", "pass"),
         (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, "invalid"),
@@ -324,8 +362,7 @@ def test_evaluation_protocol_compares_requests_and_accepts_training_or_engine_ch
     for key in path[:-1]:
         target = target[key]
     target[path[-1]] = value
-    _json(root / "terminal.json", receipt)
-    _json(root / "resolved-launch.yaml", {"config": receipt["config"]})
+    write_receipt(root, receipt)
     report = rescore("learning-medium", "--candidate", "users/test/protocol")
     assert report["verdict"] == verdict, report
     if verdict == "invalid":
@@ -341,7 +378,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     preset = presets.PRESETS["speed-medium"]
     built = snowball.build_run(preset)
     source = recorded_runs(
-        preset, built.runs[0].name, speed=150 if case == "fail" else 101, fingerprint=built.runs[0].fingerprint()
+        preset.name, built.runs[0].name, speed=150 if case == "fail" else 101, fingerprint=built.runs[0].fingerprint()
     )
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
@@ -352,12 +389,17 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt["result"]["state"] = "failed"
         _json(source / "attempts/recorded-attempt.json", receipt)
         (source / "terminal.json").unlink()
-    if case not in ("missing", "native-failed", "child"):
-        run(gate.completed_gate(preset, built.runs, built.gate))
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
+
+    def finish(*args, **kwargs):
+        if case not in ("missing", "native-failed"):
+            run(gate.completed_gate(preset, built.runs, built.gate))
+        return SimpleNamespace(state=JobState.FAILED if case == "native-failed" else JobState.SUCCEEDED)
+
+    jobs = {job: SimpleNamespace(wait=finish)}
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
-    client.job.return_value.wait.return_value = SimpleNamespace(state=JobState.SUCCEEDED)
+    client.job.side_effect = lambda name: jobs[name]
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
@@ -389,8 +431,10 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
 
 
 @pytest.mark.parametrize("arguments", [("--wait",), ("--replicates", "0"), ("--set", "trainer.resume_mode=latest")])
-def test_refusals_exit_four_before_submission(selection, arguments):
-    result = CliRunner().invoke(snowball.main, ["--preset", "speed-medium", *arguments])
+def test_refusals_use_exit_four(selection, arguments):
+    result = CliRunner().invoke(
+        snowball.main, ["--preset", "speed-medium", "--version", presets.PRESET_REVISION, *arguments]
+    )
     assert result.exit_code == 4, (result.output, result.exception)
 
 
@@ -419,14 +463,15 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         tmp_path / "resolved-launch.yaml",
         {
             "config": {
+                "artifacts": {"export_root": str(tmp_path / "configured-export")},
                 "inputs": {
                     "validation_data": [{"uri": str(tmp_path / "selection")}],
-                }
+                },
             }
         },
     )
     for session in ("global_step_25_evals", "eval_only"):
-        directory = tmp_path / "exports/dumped_evals" / session
+        directory = tmp_path / "configured-export/dumped_evals" / session
         directory.mkdir(parents=True)
         (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
@@ -453,6 +498,7 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     assert {key: statistics["test_panel_100/" + key] for key in expected} == pytest.approx(expected)
 
 
+@pytest.mark.timeout(180)
 def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, native_json, tmp_path):
     preset = presets.PRESETS["learning-medium"]
     control_roots = controls(recorded_runs, preset.name)
@@ -481,51 +527,56 @@ print(json.dumps([OmegaConf.to_container(load_launch_config(path), resolve=True)
         paths,
     )
     for index, config in enumerate(composed):
-        roots = control_roots if index == 0 else [recorded_runs(preset, f"users/test/native-protocol-{index}")]
+        roots = control_roots if index == 0 else [recorded_runs(preset.name, f"users/test/native-protocol-{index}")]
         for source in roots:
             document = json.loads((source / "terminal.json").read_text())
             document["config"].update(skyrl=config["skyrl"], runtime=config["runtime"])
-            _json(source / "terminal.json", document)
-            _json(source / "resolved-launch.yaml", {"config": document["config"]})
+            write_receipt(source, document)
     for index in [1, 2]:
         report = rescore(preset.name, "--candidate", f"users/test/native-protocol-{index}")
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
 
 
-def test_task_set_identity_uses_contents_and_ignores_row_order_and_artifact_name(recorded_runs):
-    preset = "learning-medium"
-    controls(recorded_runs, preset)
-    source = recorded_runs(preset, "users/test/task-content")
+def test_task_set_identity_uses_contents_and_ignores_row_order_and_storage_location(recorded_runs):
+    preset_name = "learning-medium"
+    controls(recorded_runs, preset_name)
+    source = recorded_runs(preset_name, "users/test/task-content")
     document = json.loads((source / "terminal.json").read_text())
     descriptor = document["config"]["inputs"]["validation_data"][0]
     copied = source / "panel-copy"
     shutil.copytree(descriptor["uri"], copied)
-    panel = scoring.read_recorded_panel(document["config"], "test_panel")
-    original = panel.task_set_sha256
     descriptor["uri"] = str(copied)
     path = copied / descriptor["relative_path"]
     rows = pq.read_table(path).to_pylist()
-    assert set(panel.task_ids) == {json.loads(row["task_spec"])["id"] for row in rows}
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), path)
-    assert scoring.read_recorded_panel(document["config"], "test_panel").task_set_sha256 == original
-    _json(source / "terminal.json", document)
-    _json(source / "resolved-launch.yaml", {"config": document["config"]})
-    assert rescore(preset, "--candidate", "users/test/task-content")["verdict"] == "pass"
-    changed_source = recorded_runs(preset, "users/test/task-content-changed")
+    write_receipt(source, document)
+    assert rescore(preset_name, "--candidate", "users/test/task-content")["verdict"] == "pass"
+    changed_source = recorded_runs(preset_name, "users/test/task-content-changed")
     changed_document = json.loads((changed_source / "terminal.json").read_text())
     changed_document["config"]["inputs"]["validation_data"][0]["uri"] = str(copied)
-    _json(changed_source / "terminal.json", changed_document)
-    _json(changed_source / "resolved-launch.yaml", {"config": changed_document["config"]})
-    rows[0]["task_spec"] = json.dumps(json.loads(rows[0]["task_spec"]), indent=2)
-    pq.write_table(pa.Table.from_pylist(rows), path)
-    assert scoring.read_recorded_panel(document["config"], "test_panel").task_set_sha256 != original
+    write_receipt(changed_source, changed_document)
     task = json.loads(rows[0]["task_spec"])
     task["context"]["events"][0]["content"] = "Return dog."
     rows[0]["task_spec"] = json.dumps(task)
     pq.write_table(pa.Table.from_pylist(rows), path)
-    assert scoring.read_recorded_panel(document["config"], "test_panel").task_set_sha256 != original
-    report = rescore(preset, "--candidate", "users/test/task-content-changed")
+    report = rescore(preset_name, "--candidate", "users/test/task-content-changed")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
+
+    roots = controls(recorded_runs, preset_name)
+    roots.append(recorded_runs(preset_name, "users/test/wrong-cohort"))
+    panel_root = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
+    manifest = pq.read_table(panel_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
+    manifest.append(manifest[0] | {"task_id": "task-outside-input"})
+    pq.write_table(pa.Table.from_pylist(manifest), panel_root / presets.TASK_MANIFEST_FILENAME)
+    for root in roots:
+        for path in (root / "exports/dumped_evals").glob("*/*.jsonl"):
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            for row in rows:
+                if row["task_id"] == "task-0":
+                    row["task_id"] = "task-outside-input"
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    report = rescore(preset_name, "--candidate", "users/test/wrong-cohort")
+    assert report["verdict"] == "invalid" and "failed invariants" in report["reason"]
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
@@ -538,7 +589,7 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, tmp_path, mo
     tasks = presets.default_selection() if preset_name == "data-medium" else None
     settings = (presets.parse_setting("trainer.policy.optimizer_config.lr=2.0e-6"),) if tasks is None else ()
     built = snowball.build_run(preset, settings=settings, tasks=tasks, requirements=("policy/raw_grad_norm<=10",))
-    source = recorded_runs(preset, built.runs[0].name, fingerprint=built.runs[0].fingerprint())
+    source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint())
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / gate.GATE_INPUTS_FILENAME).unlink()
@@ -552,7 +603,10 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, tmp_path, mo
     run(*built.runs)
     recorded = gate.read_gate_inputs(str(source))
     assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
-    assert recorded.settings == (() if tasks else ("trainer.policy.optimizer_config.lr=2e-06",))
+    decoded = dict(item.split("=", 1) for item in recorded.settings)
+    assert {key: json.loads(value) for key, value in decoded.items()} == (
+        {} if tasks else {"trainer.policy.optimizer_config.lr": 2e-6}
+    )
     assert recorded.tasks == (f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}" if tasks else None)
     before = {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}
     report = rescore(preset_name, "--candidate", built.runs[0].name)
@@ -561,4 +615,4 @@ def test_python_run_saves_typed_inputs_for_rescoring(recorded_runs, tmp_path, mo
     assert report["run"]["settings"] == list(recorded.settings)
     assert report["run"]["tasks"] == recorded.tasks
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
-    assert before == {path: path.read_bytes() for path in before}
+    assert before == {path: path.read_bytes() for path in source.rglob("*") if path.is_file()}

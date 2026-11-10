@@ -203,7 +203,9 @@
     "trainer/global_step": 25,
     "loss/avg_final_rewards": 0.5360991954803467,
     "loss/avg_raw_advantages": -0.036095861345529556,
-    "loss/avg_raw_advantages_abs": 0.17298416793346405
+    "loss/avg_raw_advantages_abs": 0.17298416793346405,
+    "policy/policy_loss": 0.036096494673984125,
+    "policy/final_loss": 0.036096494673984125
   },
   "answer": {
     "task_id": "evalchemy-math500-e0e801c17c28fe6a983b1ff184d743c77a8ecd05dca96300d5ba2147b026d4fe",

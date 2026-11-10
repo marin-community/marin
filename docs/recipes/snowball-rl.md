@@ -93,7 +93,7 @@ The collected configurations and training/generation numerical path remain the c
 For each built-in guard, tolerance is
 `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with fixed `k = len(preset.guards)`.
 Candidate and control means must differ in the worse direction by more than that tolerance to
-fail the guard. Update time uses the median over the measured updates. Staleness-0 KL uses the
+fail the guard. Update time uses the median over the measured updates; inconsistent timing-phase evidence is INVALID. Staleness-0 KL uses the
 selected-token-weighted mean over the entire measured window, requires finite observations for
 nonempty updates, and treats an empty window as INVALID. Pooled KL is telemetry.
 
@@ -111,7 +111,7 @@ key against control r0's computed metrics. Train-long and controls refuse requir
 Python callers use `build_run(requirements=(...))`. Requirements affect report identity, while
 training names and configurations stay fixed.
 
-All planned updates must finish, training loss and gradients must be finite, panel coverage
+All planned updates must finish, training policy/final loss, policy loss, logged loss statistics and gradients must be finite, panel coverage
 must reach 99%, grader infrastructure failures must be at most 1%, and fixed-length speed
 replies must have the prescribed length. The grader-error check uses the conservative upper
 bound on overlapping error and rollout-failure counts; a bound above 1% fails. Missing or
@@ -127,7 +127,9 @@ uv run python -m experiments.post_training.snowball_rl_gate \
   --preset speed-medium --leave-out r0
 ```
 
-Re-scoring appends requirements to the saved inputs. Leave-one-out uses a control pin's fixed
+Automatic gates use the requirements on the current command. A cached native run retains its
+original saved inputs; standalone re-scoring appends requirements to those original inputs.
+Leave-one-out uses a control pin's fixed
 default inputs and compares that replicate against the remaining controls. Reports use the
 caller's namespace under `MARIN_PREFIX`; controls are read-only. Status lists changed RL paths
 against the control commit, or gives the reason a local git comparison is unavailable.

@@ -25,12 +25,11 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import NamedTuple
 
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
@@ -51,9 +50,9 @@ from experiments.post_training.snowball_rl_scoring import InvalidComparison
 GATE_REVISION = "2026.11.10"
 GATE_INPUTS_FILENAME = "gate_inputs.json"
 GATE_REPORT_FILENAME = "gate_report.json"
+GATE_MARKDOWN_FILENAME = "gate_report.md"
 GRADER_ERROR_LIMIT = 0.01
 OUTCOME_PREFIX = "generate/outcome/"
-REWARD_PREFIX = "reward/domain/"
 
 
 @dataclass(frozen=True)
@@ -85,6 +84,10 @@ class Verdict(StrEnum):
     PASS = "pass"
     FAIL = "fail"
     INVALID = "invalid"
+
+
+EXIT_CODES = {Verdict.PASS: 0, Verdict.FAIL: 1, Verdict.INVALID: 2, None: 3}
+REFUSAL_EXIT_CODE = 4
 
 
 class Label(StrEnum):
@@ -303,13 +306,7 @@ def _comparison(
     )
 
 
-class VerdictResult(NamedTuple):
-    verdict: Verdict
-    label: Label | None
-    reason: str | None
-
-
-def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison]) -> VerdictResult:
+def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison]) -> tuple[Verdict, Label]:
     verdict = (
         Verdict.FAIL
         if any(not row.holds for row in invariants) or any(row.passes is False for row in comparisons)
@@ -323,7 +320,7 @@ def _verdict(invariants: Sequence[Invariant], comparisons: Sequence[Comparison])
         if better and worse
         else Label.IMPROVES if better else Label.REGRESSION if worse else Label.NO_CHANGE
     )
-    return VerdictResult(verdict, label, None)
+    return verdict, label
 
 
 def _mismatch_counts(rows: Sequence[Mapping[str, float]], prefix: str) -> list[float] | None:
@@ -335,11 +332,11 @@ def _mismatch_counts(rows: Sequence[Mapping[str, float]], prefix: str) -> list[f
 
 def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> dict[str, float]:
     rows = [metrics.get(step, {}) for step in preset.measured]
-    phases = [
+    phases = sorted(
         key
-        for key in rows[0]
+        for key in set().union(*(row.keys() for row in rows))
         if key.startswith("timing/step_wall/") and key.rsplit("/", 1)[-1] not in ("evaluation", "checkpoint_work")
-    ]
+    )
     values = {}
     declared = {metric.key: metric.window for metric in (*preset.guards, *preset.objectives)}
     extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys() - {"step", "attempt_id"}
@@ -363,7 +360,7 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
             ):
                 values[key] = math.fsum(count / total * row[key] for row, count in nonempty)
             continue
-        if key == "speed/update_seconds":
+        if key == presets.UPDATE_SECONDS_METRIC:
             series = [math.fsum(row[key] for key in phases) for row in rows if phases and set(phases) <= set(row)]
         else:
             series = [row[key] for row in rows if key in row]
@@ -396,11 +393,16 @@ def _grader_errors(
 
 
 def _session_invariants(
-    name: str, table: pa.Table, evaluation: presets.Evaluation, preset: presets.Preset, expected: int
+    name: str,
+    table: pa.Table,
+    evaluation: presets.Evaluation,
+    preset: presets.Preset,
+    expected: int,
+    task_ids: Sequence[str],
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["item"] for row in rows)
-    holds = len(rows) == expected and set(counts.values()) == {evaluation.answers}
+    holds = len(rows) == expected and set(counts.values()) == {evaluation.answers} and set(counts) == set(task_ids)
     result = [Invariant(name=f"{name}/batch_finished", value=len(rows), limit=expected, holds=holds)]
     if any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards):
         coverage = len({row["item"] for row in rows if row["scored"]}) / (expected // evaluation.answers)
@@ -486,7 +488,10 @@ def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[st
     ]
     if not generating:
         finite = all(
-            "policy/raw_grad_norm" in row
+            all(
+                math.isfinite(row.get(key, math.nan))
+                for key in ("policy/raw_grad_norm", "policy/policy_loss", "policy/final_loss")
+            )
             and any(key.startswith("loss/") for key in row)
             and all(math.isfinite(row[key]) for key in row if key.startswith("loss/") or key == "policy/raw_grad_norm")
             for row in training
@@ -520,13 +525,12 @@ def _load_run(
     attempt = launch["run"]["attempt_id"]
     tracking = read_skyrl_attempt_tracking(path, attempt)
     try:
+        recorded_panels = {
+            evaluation.name: scoring.read_recorded_panel(launch, evaluation.name) for evaluation in preset.evaluations
+        }
         identities = {
             evaluation.name: (
-                (
-                    scoring.read_recorded_panel(launch, evaluation.name).task_set_sha256
-                    if evaluation.file != scoring.TRAIN_STEM
-                    else None
-                ),
+                (recorded_panels[evaluation.name].task_set_sha256 if evaluation.file != scoring.TRAIN_STEM else None),
                 scoring.evaluation_protocol(launch, evaluation.name),
             )
             for evaluation in preset.evaluations
@@ -557,7 +561,11 @@ def _load_run(
             sessions.append((evaluation.name + "/initial", initial, 0))
         prefix = scoring.native_prefix(launch, evaluation.name) + "all/outcome/"
         for session_name, session, metric_step in sessions:
-            invariants.extend(_session_invariants(session_name, session, evaluation, preset, expected))
+            invariants.extend(
+                _session_invariants(
+                    session_name, session, evaluation, preset, expected, recorded_panels[evaluation.name].task_ids
+                )
+            )
             if quality:
                 invariants.append(
                     _grader_errors(
@@ -600,9 +608,12 @@ def _load_run(
             allocation = launch["iris"]["allocation"]
             h100_hours = seconds * allocation["num_nodes"] * allocation["gpus_per_node"] / 3600
     slices = {key: len({row["item"] for row in rows}) for key, rows in scoring.score_slices(final).items()}
+    record = read_record(path)
+    if record is None:
+        raise FileNotFoundError(f"no artifact record at {path}")
     return RunData(
         path=path,
-        version=presets.artifact_record(path).version,
+        version=record.version,
         panel=panel,
         provenance=terminal.result.provenance,
         values=values,
@@ -849,8 +860,7 @@ def _write_gate(
         if any(candidate.missing_tokens for candidate in (*runs, *controls)):
             raise InvalidComparison("mismatch guard has missing or zero selected-token counts")
         comparisons = _compare(preset, runs, grouped, inputs.requirements)
-        decision = _verdict(invariants, comparisons)
-        verdict, label, reason = decision
+        verdict, label = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
         reason = str(error)
     report = GateReport(
@@ -869,7 +879,7 @@ def _write_gate(
             GATE_REPORT_FILENAME,
             json.dumps(report.model_dump(mode="json", exclude={"path"}), indent=2, allow_nan=False) + "\n",
         ),
-        ("gate_report.md", _render_markdown(report)),
+        (GATE_MARKDOWN_FILENAME, _render_markdown(report)),
     ):
         fs, key = filesystem_for(str(StoragePath(output) / name))
         fs.makedirs(key.rsplit("/", 1)[0], exist_ok=True)
@@ -899,17 +909,6 @@ def control_path(preset: presets.Preset, pin: ControlPin, index: int) -> str:
     )
 
 
-def receipt_evidence(path: str | None) -> tuple[str | None, str | None, str | None]:
-    """Return the path, native state and attempt ID used by the gate identity."""
-    if path is None:
-        return None, None, None
-    try:
-        receipt = read_skyrl_launch_receipt(path)
-        return (path, receipt.result.state, receipt.config["run"]["attempt_id"]) if receipt else (path, None, None)
-    except (FileNotFoundError, SkyRLReceiptLookupError):
-        return path, "unresolved", None
-
-
 def _gate_artifact(
     name: str,
     preset: presets.Preset,
@@ -932,7 +931,16 @@ def _gate_artifact(
         for pin in pins
     )
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
-    attempts = [(identity, *receipt_evidence(path)[1:]) for identity, path in zip(candidates, run_paths, strict=True)]
+    attempts = []
+    for identity, path in zip(candidates, run_paths, strict=True):
+        try:
+            receipt = read_skyrl_launch_receipt(path)
+        except (FileNotFoundError, SkyRLReceiptLookupError):
+            state, attempt = "unresolved", None
+        else:
+            state = receipt.result.state if receipt else None
+            attempt = receipt.config["run"]["attempt_id"] if receipt else None
+        attempts.append({"run": identity, "native_state": state, "attempt_id": attempt})
     name += "-evidence-" + fingerprint_hash(canonical_json(attempts))
     step = apply(
         name,
@@ -980,7 +988,7 @@ class SnowballCommand(click.Command):
         try:
             return super().make_context(*args, **kwargs)
         except click.UsageError as error:
-            error.exit_code = presets.REFUSAL_EXIT_CODE
+            error.exit_code = REFUSAL_EXIT_CODE
             raise
 
     def invoke(self, context):
@@ -988,7 +996,7 @@ class SnowballCommand(click.Command):
         try:
             return super().invoke(context)
         except click.UsageError as error:
-            error.exit_code = presets.REFUSAL_EXIT_CODE
+            error.exit_code = REFUSAL_EXIT_CODE
             raise
 
 
@@ -1060,15 +1068,15 @@ def main(
             run_paths=(source,),
         )
     except (InvalidComparison, FileNotFoundError) as error:
-        click.echo(json.dumps({"preset": preset_name, "verdict": "invalid", "reason": str(error)}))
-        raise click.exceptions.Exit(presets.REFUSAL_EXIT_CODE) from error
+        click.echo(json.dumps({"preset": preset_name, "verdict": Verdict.INVALID.value, "reason": str(error)}))
+        raise click.exceptions.Exit(REFUSAL_EXIT_CODE) from error
     report = run(step)[0]
     payload = {
         "report": str(StoragePath(report.path) / GATE_REPORT_FILENAME),
         **report.model_dump(mode="json", exclude={"path"}),
     }
     click.echo(json.dumps(payload))
-    raise click.exceptions.Exit(presets.EXIT_CODES[report.verdict])
+    raise click.exceptions.Exit(EXIT_CODES[report.verdict])
 
 
 def completed_gate(

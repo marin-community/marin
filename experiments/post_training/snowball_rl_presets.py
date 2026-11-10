@@ -20,7 +20,7 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, is_mutable_version
+from marin.execution.artifact import Artifact, is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
@@ -54,6 +54,7 @@ from experiments.post_training.task_curation.inventory import (
 REPO_ROOT = find_project_root(Path(__file__))
 PRESET_REVISION = "2026.11.06.1"
 RUN_PREFIX = "checkpoints/snowball-rl"
+UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 # Fraction of a native panel that must be scored before its scores count.
 MINIMUM_PANEL_COVERAGE = 0.99
@@ -347,7 +348,7 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.MEDIUM,
-                objectives=(Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
                 recipe=replace(
                     _LEARNING,
                     fixed_reply_tokens=4096,
@@ -356,7 +357,7 @@ PRESETS = MappingProxyType(
                 updates=10,
                 measured=range(2, 11),
                 guards=(
-                    Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
+                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
@@ -365,12 +366,12 @@ PRESETS = MappingProxyType(
             Preset(
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
-                objectives=(Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
                 recipe=_ASYNC_P40,
                 updates=20,
                 measured=range(3, 21),
                 guards=(
-                    Metric("speed/update_seconds", False, WindowStatistic.MEDIAN),
+                    Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
@@ -581,10 +582,6 @@ def artifact_prefix(cluster: str) -> str:
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
 
 
-def artifact_record(path: str) -> ArtifactRecord:
-    return ArtifactRecord.model_validate_json((StoragePath(path) / RECORD_FILENAME).read_text())
-
-
 def selection_artifact(value: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
@@ -601,10 +598,9 @@ def published_artifact(value: str) -> ArtifactStep:
     root = str(StoragePath(artifact_prefix(P40.cluster)) / name / version)
     if (StoragePath(root) / RESOLVED_LAUNCH_FILENAME).exists():
         return ArtifactStep.adopt(name, version, root, kind=SkyRLRun)
-    path = StoragePath(root) / RECORD_FILENAME
-    if path.exists():
-        record = artifact_record(root)
-        kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
+    record = read_record(root)
+    if record is not None:
+        kind = SkyRLRun if record.result_type == result_type_name(SkyRLRun) else LevanterCheckpoint
         return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
 
@@ -631,7 +627,3 @@ def panel_evaluation(preset: Preset) -> Evaluation | None:
 def utc_millis(value: str) -> int:
     """Parse a native receipt's UTC timestamp for duration and dashboard windows."""
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
-
-
-EXIT_CODES = {"pass": 0, "fail": 1, "invalid": 2, None: 3}
-REFUSAL_EXIT_CODE = 4

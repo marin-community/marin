@@ -138,7 +138,7 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     "changed_file,expected",
     [
-        (path, "experiments/moe/test_optimizer.py")
+        (path, ["experiments/moe/test_optimizer.py"])
         for path in (
             "experiments/moe/test_optimizer.py",
             "experiments/moe/optimizer.py",
@@ -146,7 +146,13 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
         )
     ]
     + [
-        (path, "experiments/post_training/snowball_tests/test_snowball_rl.py")
+        (
+            path,
+            [
+                "experiments/post_training/snowball_tests/test_snowball_rl.py",
+                "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
+            ],
+        )
         for path in (
             "vendor/skyrl/cloud/iris/launch_config.py",
             "vendor/skyrl/skyrl-train/skyrl_train/config/ppo_base_config.yaml",
@@ -154,7 +160,7 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     ],
 )
 def test_experiment_tests_run_for_test_and_dependency_changes(
-    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str, expected: str
+    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str, expected: list[str]
 ) -> None:
     write(tmp_path, "lib/levanter/src/levanter/optim.py", "RATE = 1\n")
     write(tmp_path, "experiments/moe/optimizer.py", "from levanter.optim import RATE\n")
@@ -169,9 +175,14 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
     write(
         tmp_path, "experiments/post_training/snowball_tests/test_snowball_rl.py", "def test_native_config():\n    pass\n"
     )
+    write(
+        tmp_path,
+        "experiments/post_training/snowball_tests/test_snowball_rl_gate.py",
+        "def test_native_protocol():\n    pass\n",
+    )
     selection = select_tests([changed_file], tmp_path)
 
-    assert leg_paths(selection.matrix, "marin") == [expected]
+    assert leg_paths(selection.matrix, "marin") == expected
 
 
 @pytest.mark.parametrize(

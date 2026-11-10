@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -48,13 +47,13 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
-from marin.execution.artifact import is_mutable_version
+from marin.execution.artifact import is_mutable_version, read_record
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
-from marin.rl.cli import rl_build_options, submit_or_run
+from marin.rl.cli import submit_or_run
 from marin.rl.skyrl import (
     BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
@@ -98,7 +97,7 @@ RUN_TIMEOUT_HOURS = 72
 
 DEFAULT_WANDB_ENTITY = "marin-community"
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
-_FAILED_RUN_STATES = {"failed", "killed", "worker_failed", "unschedulable"}
+_FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 
 
 def training_config(
@@ -216,10 +215,10 @@ def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
         )
         return ArtifactHfModel(model, presets.MODEL_ID, presets.MODEL_REVISION, relative_path="")
     if init.artifact_type is SkyRLRun:
-        try:
-            result = presets.artifact_record(init.path()).result or {}
-        except FileNotFoundError as error:
-            raise click.BadParameter("the initializer requires a completed published artifact record") from error
+        record = read_record(init.path())
+        if record is None:
+            raise click.BadParameter("the initializer requires a completed published artifact record")
+        result = record.result or {}
         if not result.get("hf_model_uri"):
             raise click.BadParameter("the initializer run has no HF export")
         return SkyRLPolicyModel(init)
@@ -230,8 +229,8 @@ def _provenance(*, control: bool) -> Provenance:
     root = presets.REPO_ROOT
     provenance = Provenance.capture(root)
     if (root / ".git").exists():
-        untracked = subprocess.check_output(
-            ["git", "ls-files", "--others", "--exclude-standard", "experiments", "lib", "vendor"], cwd=root, text=True
+        untracked = git_output(
+            ["ls-files", "--others", "--exclude-standard", "experiments", "lib", "vendor"], cwd=root
         ).splitlines()
         if untracked:
             raise click.BadParameter(f"stage source files before naming a run: {', '.join(untracked)}")
@@ -330,10 +329,8 @@ def _run_step(
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=RUN_TIMEOUT_HOURS,
             job_timeout_seconds=RUN_TIMEOUT_HOURS * 3600,
-            wandb_entity=wandb_entity,
-            required_env_vars=(
-                ("WANDB_API_KEY", _WANDB_ENTITY_ENV) if os.environ.get(_WANDB_ENTITY_ENV) else ("WANDB_API_KEY",)
-            ),
+            wandb_entity=wandb_entity or DEFAULT_WANDB_ENTITY,
+            required_env_vars=(("WANDB_API_KEY", _WANDB_ENTITY_ENV) if wandb_entity else ("WANDB_API_KEY",)),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
         export_hf=export_hf,
@@ -357,7 +354,7 @@ def build_run(
     requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
-    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV) or DEFAULT_WANDB_ENTITY
+    wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
     learning = (
         preset.focus in (presets.Focus.LEARNING, presets.Focus.DATA) and not preset.recipe.layout.role_plan.generate_only
     )
@@ -523,15 +520,15 @@ def _completed_update(path: str, *, generating: bool) -> int | None:
     return None
 
 
-def _comparison_line(row: dict, *, constraint: bool = False) -> str:
-    if row.get("run") is None or row.get("control") is None:
-        return f"{row['metric']}: unavailable"
-    values = f"{row['metric']}: {row['control']:.6g} -> {row['run']:.6g}"
-    if constraint:
-        return values + ("; within bound" if row["passes"] else "; outside bound")
-    delta = f"{row['delta_percent']:+.1f}%" if row["delta_percent"] is not None else "unavailable"
-    noise = f"{row['noise_percent']:.1f}%" if row["noise_percent"] is not None else "unavailable"
-    return f"{values}; {delta}; noise +/-{noise}; {row['change']}"
+def _comparison_line(row: snowball_rl_gate.Comparison) -> str:
+    if row.run is None or row.control is None:
+        return f"{row.metric}: unavailable"
+    values = f"{row.metric}: {row.control:.6g} -> {row.run:.6g}"
+    if row.role in (snowball_rl_gate.ComparisonRole.CONSTRAINT, snowball_rl_gate.ComparisonRole.REQUIREMENT):
+        return values + ("; within bound" if row.passes else "; outside bound")
+    delta = f"{row.delta_percent:+.1f}%" if row.delta_percent is not None else "unavailable"
+    noise = f"{row.noise_percent:.1f}%" if row.noise_percent is not None else "unavailable"
+    return f"{values}; {delta}; noise +/-{noise}; {row.change}"
 
 
 def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = False) -> dict:
@@ -588,6 +585,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
             }
         )
     verdict = {}
+    report = None
     if run.gate is not None:
         path = (
             StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster)))
@@ -597,7 +595,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
             report = snowball_rl_gate.GateReport.model_validate_json(path.read_text())
             verdict = {
                 "report": str(path),
-                **report.model_dump(mode="json", include={"verdict", "label", "reason", "comparisons", "invariants"}),
+                **report.model_dump(mode="json", include={"verdict", "label", "reason"}),
             }
             changes, reason = _changed_paths(
                 report.control.commit,
@@ -610,26 +608,39 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
         crashed = next((row for row in rows if str(row["state"]).lower() in _FAILED_RUN_STATES), None)
         if crashed is not None:
             verdict = {
-                "verdict": "invalid",
+                "verdict": snowball_rl_gate.Verdict.INVALID.value,
                 "reason": f"native job {crashed['iris_job_id']} is {crashed['state']}",
                 "iris_job_id": crashed["iris_job_id"],
             }
-    comparisons = verdict.pop("comparisons", ())
-    objectives = [row for row in comparisons if row["role"] == "objective"] or [
-        {"metric": metric.key} for metric in preset.objectives
+    objective_rows = (
+        [row for row in report.comparisons if row.role == snowball_rl_gate.ComparisonRole.OBJECTIVE] if report else ()
+    )
+    constraint_rows = (
+        [
+            row
+            for row in report.comparisons
+            if row.role in (snowball_rl_gate.ComparisonRole.CONSTRAINT, snowball_rl_gate.ComparisonRole.REQUIREMENT)
+        ]
+        if report
+        else ()
+    )
+    objectives = [_comparison_line(row) for row in objective_rows] or [
+        f"{metric.key}: unavailable" for metric in preset.objectives
     ]
-    constraints = [row for row in comparisons if row["role"] in ("constraint", "requirement")] or [
-        {"metric": metric.key} for metric in preset.guards if metric.key not in {item.key for item in preset.objectives}
+    constraints = [_comparison_line(row) for row in constraint_rows] or [
+        f"{metric.key}: unavailable"
+        for metric in preset.guards
+        if metric.key not in {item.key for item in preset.objectives}
     ]
     invariant_lines = [
-        f"r{row['replicate']} {row['name']}: {row['value']} (required {row['limit']}); "
-        + ("within bound" if row["holds"] else "outside bound")
-        for row in verdict.pop("invariants", [])
+        f"r{row.replicate} {row.name}: {row.value} (required {row.limit}); "
+        + ("within bound" if row.holds else "outside bound")
+        for row in (report.invariants if report else ())
     ]
     return {
         "preset": preset.name,
-        "objectives": [_comparison_line(row) for row in objectives],
-        "constraints": [*(_comparison_line(row, constraint=True) for row in constraints), *invariant_lines],
+        "objectives": objectives,
+        "constraints": [*constraints, *invariant_lines],
         "result": (
             f"{verdict['verdict']} ({verdict['label']})" if verdict.get("label") else verdict.get("verdict", "pending")
         ),
@@ -678,60 +689,57 @@ def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Pre
         snapshot["reason"] = f"coordinator {job} is {parent.state}; required verdict unavailable"
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if "report" in snapshot:
-        click.echo(StoragePath(snapshot["report"].removesuffix(".json") + ".md").read_text())
+        click.echo((StoragePath(snapshot["report"]).parent / snowball_rl_gate.GATE_MARKDOWN_FILENAME).read_text())
     verdict = snapshot.get("verdict")
     if verdict is None and run.gate is None and parent.state == JobState.SUCCEEDED:
-        verdict = "pass"
-    raise click.exceptions.Exit(presets.EXIT_CODES[verdict])
+        verdict = snowball_rl_gate.Verdict.PASS.value
+    raise click.exceptions.Exit(snowball_rl_gate.EXIT_CODES[verdict])
 
 
 def _run_command(function: Callable) -> click.Command:
-    command = click.command(cls=snowball_rl_gate.SnowballCommand, help=__doc__)(rl_build_options(function))
-
     @wraps(function)
-    def callback(*args, wait: bool = False, **kwargs):
-        if wait and not kwargs.get("do_run"):
+    def checked(*args, wait: bool = False, **kwargs):
+        if wait and not click.get_current_context().params["do_run"]:
             raise click.BadParameter("--wait requires --run")
-
-        def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-            try:
-                if get_job_info() is None:
-                    job = submit_or_run(
-                        "experiments.post_training.snowball_rl",
-                        handles,
-                        max_concurrent,
-                        os.environ,
-                    )
-                else:
-                    planned = _from_handles(handles)
-                    build_artifacts(*planned.runs, max_concurrent=max_concurrent)
-                    preset = presets.PRESETS[kwargs["preset_name"]]
-                    completed = replace(
-                        planned, gate=snowball_rl_gate.completed_gate(preset, planned.runs, planned.gate)
-                    )
-                    if completed.gate is not None:
-                        build_artifacts(completed.gate, max_concurrent=max_concurrent)
-                    job = None
-                if wait and job is not None:
-                    preset = presets.PRESETS[kwargs["preset_name"]]
-                    _wait_for_run(job, handles, preset)
-            except click.exceptions.Exit:
-                raise
-            except Exception as error:
-                if not wait:
-                    raise
-                traceback.print_exc()
-                click.echo(yaml.safe_dump({"preset": kwargs["preset_name"], "reason": str(error)}))
-                raise click.exceptions.Exit(3) from error
-
         try:
-            return build_options_with_runner(function, runner)(*args, **kwargs)
+            return function(*args, **kwargs)
         except scoring.InvalidComparison as error:
-            click.echo(json.dumps({"preset": kwargs["preset_name"], "verdict": "invalid", "reason": str(error)}))
-            raise click.exceptions.Exit(presets.REFUSAL_EXIT_CODE) from error
+            click.echo(
+                json.dumps(
+                    {
+                        "preset": kwargs["preset_name"],
+                        "verdict": snowball_rl_gate.Verdict.INVALID.value,
+                        "reason": str(error),
+                    }
+                )
+            )
+            raise click.exceptions.Exit(snowball_rl_gate.REFUSAL_EXIT_CODE) from error
 
-    command.callback = callback
-    return command
+    def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
+        options = click.get_current_context().params
+        preset = presets.PRESETS[options["preset_name"]]
+        try:
+            if get_job_info() is None:
+                job = submit_or_run("experiments.post_training.snowball_rl", handles, max_concurrent, os.environ)
+            else:
+                planned = _from_handles(handles)
+                build_artifacts(*planned.runs, max_concurrent=max_concurrent)
+                gate = snowball_rl_gate.completed_gate(preset, planned.runs, planned.gate)
+                if gate is not None:
+                    build_artifacts(gate, max_concurrent=max_concurrent)
+                job = None
+            if options["wait"] and job is not None:
+                _wait_for_run(job, handles, preset)
+        except click.exceptions.Exit:
+            raise
+        except Exception as error:
+            if not options["wait"]:
+                raise
+            traceback.print_exc()
+            click.echo(yaml.safe_dump({"preset": options["preset_name"], "reason": str(error)}))
+            raise click.exceptions.Exit(snowball_rl_gate.EXIT_CODES[None]) from error
+
+    return click.command(cls=snowball_rl_gate.SnowballCommand, help=__doc__)(build_options_with_runner(checked, runner))
 
 
 @_run_command
@@ -832,7 +840,7 @@ def main(
     snapshot = _status(run, preset, stored_only=do_run)
     click.echo(yaml.safe_dump(snapshot, sort_keys=False, width=1000))
     if not do_run and "verdict" in snapshot:
-        raise click.exceptions.Exit(presets.EXIT_CODES[snapshot["verdict"]])
+        raise click.exceptions.Exit(snowball_rl_gate.EXIT_CODES[snapshot["verdict"]])
     return (*run.runs, *((run.gate,) if run.gate else ()))
 
 

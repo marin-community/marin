@@ -74,7 +74,8 @@ def _evaluation_answers(dump_root: StoragePath) -> list[EvaluationAnswer]:
 
 
 def evaluation_answers(run_output: str) -> list[EvaluationAnswer]:
-    return _evaluation_answers(StoragePath(run_output) / "exports/dumped_evals")
+    launch = read_skyrl_launch_config(run_output)
+    return _evaluation_answers(StoragePath(launch["artifacts"]["export_root"]) / "dumped_evals")
 
 
 def recorded_sources(launch: dict, name: str) -> list[dict]:
@@ -150,7 +151,7 @@ def panel_scores(
     launch = read_skyrl_launch_config(run_output)
     sources = recorded_sources(launch, evaluation.name)
     answers = (
-        _evaluation_answers(StoragePath(run_output) / "exports" / evaluation.name / "dumped_evals")
+        _evaluation_answers(StoragePath(launch["artifacts"]["export_root"]) / evaluation.name / "dumped_evals")
         if native_prefix(launch, evaluation.name) != "eval/"
         else evaluation_answers(run_output) if primary_answers is None else primary_answers
     )

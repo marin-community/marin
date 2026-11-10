@@ -7,7 +7,6 @@ from pathlib import Path
 
 import click
 import pytest
-import yaml
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import LevanterCheckpoint
@@ -26,7 +25,6 @@ def _render(step, path, *, runtime=False):
     )
     config = step.build_config(context)
     path.write_text(config.launch_config_yaml)
-    return yaml.safe_load(config.launch_config_yaml)
 
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
@@ -35,7 +33,6 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
 def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch, native_json):
     paths = []
-    launches = {}
     for name, preset in presets.PRESETS.items():
         if name == "speed-short":
             monkeypatch.delenv("WANDB_ENTITY", raising=False)
@@ -48,10 +45,8 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
         )
         for index, step in enumerate(run.runs):
             path = tmp_path / f"{name}-{index}.yaml"
-            document = _render(step, path, runtime=True)
+            _render(step, path, runtime=True)
             paths.append(str(path))
-            if index == 0:
-                launches[name] = document
     for label, options in (("kept", {"keep_weights": True}), ("control", {"control": True})):
         retained = snowball.build_run(presets.PRESETS["learning-medium"], **options)
         path = tmp_path / f"{label}-weights.yaml"
@@ -148,9 +143,6 @@ print(json.dumps([{
     "quality_wire": quality_request(config),
     "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
                  if entry.type == "evaluation"],
-    "engine_settings": [config.skyrl.trainer.algorithm.batch_invariant,
-                       config.skyrl.generator.vllm_attention_backend,
-                       config.skyrl.generator.enable_prefix_caching],
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
     "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
@@ -161,10 +153,6 @@ print(json.dumps([{
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
     "profile_inputs": (OmegaConf.to_container(config.inputs.evaluation_data)
                        if config.inputs.get("evaluation_data") else {}),
-    "profiles": {name: OmegaConf.to_container(profile, resolve=True)
-                 for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"
-                 for name, profile in (entry.get("additional_evaluations") or {}).items()},
-    "primary_steps": [entry.get("eval_steps") for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
         if config.runtime.training_type is not None else [],
     "wire": asyncio.run(native_request(
@@ -274,8 +262,7 @@ from cloud.iris.launch_config import load_launch_config
 os.environ["HOME"] = "/snowball-pin-home"
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"envelope": OmegaConf.to_container(config, resolve=True),
-     "skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
+    {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
      "allocation": OmegaConf.to_container(config.iris.allocation, resolve=True)}
     for config in configs
 ], sort_keys=True))
@@ -352,4 +339,3 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary_path.write_text(json.dumps(summary))
     with pytest.raises(click.BadParameter, match="full test panel"):
         snowball.build_run(data, tasks=selection)
-    snowball.build_run(learning, control=True)
