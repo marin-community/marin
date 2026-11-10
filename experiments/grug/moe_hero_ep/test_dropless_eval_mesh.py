@@ -53,16 +53,19 @@ def test_dropless_eval_mesh_reuses_training_device_groups_at_cp4(replica, expert
         }
         tree = {key: jax.device_put(values, NamedSharding(train_mesh, spec)) for key, spec in kept.items()}
         # The routed-expert weights, as the hero shards them: experts over (expert, context), and the
-        # hidden dimension over data, which the eval mesh widens to the training (data, expert) size.
+        # hidden dimension over data. At training data 1 they must also stay put: moving them runs a
+        # collective on a communicator training lacks, whose NCCL buffers outlive the eval. At 262K
+        # CP4 x EP16 those buffers left the next train step 1.6 GiB short.
         expert_specs = MoEExpertMlpPspecs(expert=model._EXPERT_WEIGHT_AXES)
-        moved_keys = {"w_gate_up": expert_specs.w_gate_up, "w_down": expert_specs.w_down}
-        for key, spec in moved_keys.items():
+        expert_keys = {"w_gate_up": expert_specs.w_gate_up, "w_down": expert_specs.w_down}
+        for key, spec in expert_keys.items():
             tree[key] = jax.device_put(values, NamedSharding(train_mesh, spec))
-        moved = train._reshard_tree_to_mesh(tree, eval_mesh)
-        for key in (*kept, *moved_keys):
+        moved = train._move_tree_to_eval_mesh(tree, train_mesh)
+        for key in (*kept, *expert_keys):
             assert moved[key].sharding.mesh == eval_mesh
             np.testing.assert_array_equal(np.asarray(moved[key]), values)
-        for key in kept:
+        stationary = (*kept, *expert_keys) if data == 1 else kept
+        for key in stationary:
             before = {shard.device: np.asarray(shard.data) for shard in tree[key].addressable_shards}
             after = {shard.device: np.asarray(shard.data) for shard in moved[key].addressable_shards}
             assert before.keys() == after.keys()

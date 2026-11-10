@@ -7,7 +7,7 @@ import sys
 import threading
 from collections.abc import Generator
 
-import pytest  # pyrefly: ignore[missing-import]  # Loaded only by pytest from the root test configuration.
+import pytest  # pyrefly: ignore[missing-import]  # Loaded by both pytest configurations.
 from pytest_timeout import Settings, is_debugging  # pyrefly: ignore[missing-import]
 
 HARD_KILL_DELAY = 5.0

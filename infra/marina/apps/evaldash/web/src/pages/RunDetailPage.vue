@@ -12,7 +12,7 @@ import {
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
-import { isPartialCoverage } from '@/utils/panel'
+import { UNVERSIONED_COHORT, isPartialCoverage } from '@/utils/panel'
 import { metricView, type MetricRow } from '@/utils/runMetrics'
 import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
@@ -138,7 +138,7 @@ async function copyPath() {
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
           <RouterLink
-            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? 'unversioned' } }"
+            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? UNVERSIONED_COHORT } }"
             class="font-mono text-accent hover:underline"
           >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>

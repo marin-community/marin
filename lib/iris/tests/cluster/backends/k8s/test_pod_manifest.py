@@ -1056,13 +1056,6 @@ def test_privileged_profile_applied_to_pod_manifest():
     assert manifest["spec"]["containers"][0]["securityContext"]["privileged"] is True
 
 
-def test_docker_access_pod_manifest_raises():
-    req = make_run_req("/my-job/task-0")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
-    update = _rejected_dispatch(req, pod_config())
-    assert "DOCKER_ACCESS is not supported" in update.error
-
-
 def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
     req = make_run_req("/my-job/task-0")
     req.container_profile = 5

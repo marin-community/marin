@@ -2,7 +2,7 @@
 //!
 //! Callers use the [`ObjectStore`] interface. Cache membership and filesystem
 //! layout stay private to these wrappers. `local_path` materializes a file;
-//! `scan_source` pins an existing cached file or chooses the remote scan path.
+//! Range readers pin cached files while they are in use and read misses remotely.
 //!
 //! Writes are dual-ported: the bytes an upload already holds also land in the
 //! cache, so the flush → query path never re-downloads its own output. Cache
@@ -20,9 +20,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::errors::StatsError;
+use crate::read_work::ReadWorkers;
 use crate::store::object_store::{
     DeleteManyOutcome, ObjectId, ObjectMetadata, ObjectPrefix, ObjectReference, ObjectStore,
     ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
@@ -34,6 +35,7 @@ use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
 pub(crate) const MAX_PARALLEL_FETCHES: usize = 8;
+const MAX_PARALLEL_CACHE_READS: usize = 8;
 
 /// Files kept resident for a read, independent of query warming policy.
 #[derive(Default)]
@@ -161,6 +163,8 @@ pub struct CachedObjectStore {
     cache: FileCache,
     /// Bounds concurrent cache-miss downloads.
     fetches: Arc<Semaphore>,
+    read_workers: Arc<ReadWorkers>,
+    fill_workers: Arc<ReadWorkers>,
     /// Bounds write-through uploads independently of reads and flush encoding.
     uploads: Arc<Semaphore>,
     /// Total cache bytes to retain; `None` retains everything.
@@ -184,6 +188,8 @@ impl CachedObjectStore {
             source,
             cache: FileCache::new(root)?,
             fetches: Arc::new(Semaphore::new(MAX_PARALLEL_FETCHES)),
+            read_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_CACHE_READS)),
+            fill_workers: Arc::new(ReadWorkers::new(MAX_PARALLEL_FETCHES)),
             uploads: Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS)),
             capacity_bytes,
             last_gc: Arc::new(Mutex::new(None)),
@@ -197,11 +203,10 @@ impl CachedObjectStore {
     async fn lookup(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
         let cache = self.cache.clone();
         let reference = reference.clone();
-        let path = tokio::task::spawn_blocking(move || cache.cached_path(&reference))
-            .await
-            .map_err(|error| {
-                StatsError::Internal(format!("object cache lookup task: {error}"))
-            })??;
+        let path = self
+            .read_workers
+            .run(move || cache.cached_path(&reference))
+            .await?;
         let counter = if path.is_some() {
             &self.diagnostics.hits
         } else {
@@ -215,10 +220,13 @@ impl CachedObjectStore {
         if let Some(path) = self.lookup(reference).await? {
             return Ok(path);
         }
-        let _permit = self.fetches.acquire().await.map_err(|error| {
-            StatsError::Internal(format!("object cache fetch semaphore: {error}"))
-        })?;
-        self.materialize_reserved(reference, FillReason::Required)
+        let permit = Arc::clone(&self.fetches)
+            .acquire_owned()
+            .await
+            .map_err(|error| {
+                StatsError::Internal(format!("object cache fetch semaphore: {error}"))
+            })?;
+        self.materialize_reserved(reference, FillReason::Required, permit)
             .await
     }
 
@@ -227,6 +235,7 @@ impl CachedObjectStore {
         &self,
         reference: &ObjectReference,
         reason: FillReason,
+        permit: OwnedSemaphorePermit,
     ) -> Result<PathBuf, StatsError> {
         // A concurrent fetch of the same object may have won while this one
         // waited for a download slot.
@@ -248,13 +257,14 @@ impl CachedObjectStore {
         let cache = self.cache.clone();
         let reference = reference.clone();
         let diagnostics = self.diagnostics.clone();
-        tokio::task::spawn_blocking(move || {
-            let path = cache.write(&reference, &object.bytes)?;
-            diagnostics.fills(reason).record(object.bytes.len() as u64);
-            Ok(path)
-        })
-        .await
-        .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))?
+        self.fill_workers
+            .run(move || {
+                let _permit = permit;
+                let path = cache.write(&reference, &object.bytes)?;
+                diagnostics.fills(reason).record(object.bytes.len() as u64);
+                Ok(path)
+            })
+            .await
     }
 
     /// Evict least-recently-used cache files until the cache fits its capacity.
@@ -361,10 +371,9 @@ impl CachedObjectStore {
         let reference = reference.clone();
         let deadline = query.fill_deadline();
         let task = tokio::spawn(async move {
-            let _permit = permit;
             let fill = async {
                 let result = store
-                    .materialize_reserved(&reference, FillReason::Query)
+                    .materialize_reserved(&reference, FillReason::Query, permit)
                     .await;
                 if let Err(error) = &result {
                     store
@@ -414,39 +423,40 @@ impl ObjectStore for CachedObjectStore {
         let cache = self.cache.clone();
         let reference_for_cache = reference.clone();
         let local_ranges = ranges.to_vec();
-        let local = tokio::task::spawn_blocking(move || {
-            let Some(pin) = cache.pin(&reference_for_cache)? else {
-                return Ok(None);
-            };
-            let read = || -> std::io::Result<Vec<bytes::Bytes>> {
-                let file = std::fs::File::open(&pin.path)?;
-                local_ranges
-                    .into_iter()
-                    .map(|range| {
-                        let len = usize::try_from(range.end.checked_sub(range.start).ok_or_else(
-                            || {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::InvalidInput,
-                                    "reversed object range",
-                                )
-                            },
-                        )?)
-                        .map_err(std::io::Error::other)?;
-                        let mut bytes = vec![0; len];
-                        file.read_exact_at(&mut bytes, range.start)?;
-                        Ok(bytes::Bytes::from(bytes))
-                    })
-                    .collect()
-            };
-            read().map(Some).map_err(|error| {
-                StatsError::Internal(format!(
-                    "read cached ranges {}: {error}",
-                    pin.path.display()
-                ))
+        let local = self
+            .read_workers
+            .run(move || {
+                let Some(pin) = cache.pin(&reference_for_cache)? else {
+                    return Ok(None);
+                };
+                let read = || -> std::io::Result<Vec<bytes::Bytes>> {
+                    let file = std::fs::File::open(&pin.path)?;
+                    local_ranges
+                        .into_iter()
+                        .map(|range| {
+                            let len = usize::try_from(
+                                range.end.checked_sub(range.start).ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidInput,
+                                        "reversed object range",
+                                    )
+                                })?,
+                            )
+                            .map_err(std::io::Error::other)?;
+                            let mut bytes = vec![0; len];
+                            file.read_exact_at(&mut bytes, range.start)?;
+                            Ok(bytes::Bytes::from(bytes))
+                        })
+                        .collect()
+                };
+                read().map(Some).map_err(|error| {
+                    StatsError::Internal(format!(
+                        "read cached ranges {}: {error}",
+                        pin.path.display()
+                    ))
+                })
             })
-        })
-        .await
-        .map_err(|error| StatsError::Internal(format!("read cached ranges task: {error}")))??;
+            .await?;
         if local.is_some() {
             return Ok(local);
         }
@@ -552,9 +562,7 @@ impl ObjectStore for CachedObjectStore {
     ) -> Result<Option<PathBuf>, StatsError> {
         let cache = self.cache.clone();
         let reference = reference.clone();
-        let pin = tokio::task::spawn_blocking(move || cache.pin(&reference))
-            .await
-            .map_err(|error| StatsError::Internal(format!("pin object cache task: {error}")))??;
+        let pin = self.read_workers.run(move || cache.pin(&reference)).await?;
         let counter = if pin.is_some() {
             &self.diagnostics.hits
         } else {
@@ -747,7 +755,6 @@ mod tests {
     use crate::query::{make_ctx, run_query_over, RegisteredProvider};
     use crate::store::object_store::build_remote_object_store;
     use crate::store::object_store::ObjectVersion;
-    use crate::store::object_store::ScanSource;
     use crate::store::table::query_view::SegmentObjects;
     use crate::store::table_state::ArtifactReferences;
     use crate::test_support::{
@@ -896,22 +903,28 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let query = QueryCacheAdmission::default();
-        let ScanSource::Local(path) = store.scan_source(&pinned, &query).await.unwrap() else {
-            panic!("cached source expected");
-        };
+        let pins = CachePins::default();
+        let path = store
+            .pin_cached_path(&pinned, &pins)
+            .await
+            .unwrap()
+            .unwrap();
         store
             .remove_cached_paths(vec![path.clone(), store.cache.path(&unpinned.id)])
             .await
             .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"pinned");
         assert!(store.cached_path(&unpinned).await.unwrap().is_none());
-        let other_query = QueryCacheAdmission::default();
-        assert!(matches!(
-            store.scan_source(&unpinned, &other_query).await.unwrap(),
-            ScanSource::Remote(_)
-        ));
-        drop(query);
+        assert_eq!(
+            store
+                .read_range(&unpinned, 0..9)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_ref(),
+            b"unrelated"
+        );
+        drop(pins);
         store.remove_cached_paths(vec![path.clone()]).await.unwrap();
         assert!(!path.exists());
         for root in roots {
