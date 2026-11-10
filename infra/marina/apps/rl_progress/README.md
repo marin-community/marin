@@ -21,7 +21,7 @@ Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
 publication refreshes that attempt's record; a missing issue preserves its stored
 issue link. Other attempts remain separate.
 
-The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET api/runs` returns stored records and lists malformed rows in `skipped_records`. See the
+The shared `marin.rl.rl_progress.RunSummary` validates each record. `GET /api/runs` returns stored records and lists malformed rows in `skipped_records`. See the
 [Snowball publication rules](../../../../docs/recipes/snowball-rl.md#dashboard-publication)
 for record semantics, retries and publishing pinned controls.
 
