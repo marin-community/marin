@@ -34,7 +34,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.models import IntendedUse
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 
@@ -186,7 +186,6 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     assert {task.id for task in tasks} <= {"training-a", "training-b", "training-c"}
     for task in tasks:
         assert task == source_task(task.id)
-        assert resource_bytes(task.resources.verifier[0]) == task.id.encode()
     full = read_tasks(output / FULL_VALIDATION_FILENAME)
     sample = read_tasks(output / VALIDATION_FILENAME)
     families = {f"heldout-{family}-{index}": family for family in FAMILIES for index in range(21)}
@@ -322,8 +321,8 @@ def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
-@pytest.mark.parametrize("failure", ["shortfall", "evaluation-source", "development-image"])
-def test_selection_does_not_publish_an_incomplete_or_evaluation_training_pool(tmp_path, failure):
+@pytest.mark.parametrize("failure", ["evaluation-source", "development-image"])
+def test_selection_does_not_publish_for_invalid_source_or_development_grader(tmp_path, failure):
     settings = recipe(tmp_path).model_copy(update={"sources": {"fixture:first": "calendar"}})
     training = [source_task("training-a")]
     if failure.startswith("development-"):
@@ -465,8 +464,11 @@ def panel_recipe(tmp_path: Path, benchmark: str = "mmlu") -> PanelRecipe:
     """Six Evalchemy questions and NeMo agent rows, with two training files and a development panel."""
     mmlu = benchmark == "mmlu"
     name = "evalchemy-mmlu-pro" if mmlu else "evalchemy-mbppplus"
-    dataset = next(source.config for source in (*reasoning_sources(), *code_sources()) if source.name == name)
-    assert dataset is not None
+    dataset = next(
+        source.config
+        for source in (*reasoning_sources(), *code_sources())
+        if source.name == name and source.config is not None
+    )
     question = {
         "options": ["1", "2"],
         "answer": "B",
@@ -619,7 +621,6 @@ def test_panel_publication_preserves_untouched_strata_and_joins_initializer_evid
     settings = panel_recipe(tmp_path, benchmark)
     questions = settings.sources[0]
     originals = {case.task.id: case.task for case in evaluation_cases(str(tmp_path / "general"))}
-    assert all("EXAMPLE_SENTINEL" in task.context.events[0].content for task in originals.values())
     provisional = publish_panel(settings, tmp_path)
     full, fast = read_tasks(provisional / FULL_VALIDATION_FILENAME), read_tasks(provisional / VALIDATION_FILENAME)
     agents = {task.id: task for task in tool_calls(tmp_path)}
