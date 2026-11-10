@@ -76,6 +76,7 @@ class MegatronForwardMicroBatch:
     ftpo_chosen_mask: torch.Tensor | None = None
     probe_row_indices: Optional[torch.Tensor] = None
     score_topk_indices: Optional[torch.Tensor] = None
+    score_probe_positions: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -211,18 +212,29 @@ class MegatronModelWrapper:
         num_actions: int,
         packed_seq_params,
         candidate_ids: torch.Tensor | None = None,
+        candidate_positions: torch.Tensor | None = None,
     ) -> MegatronForwardResult:
-        """Return chosen [batch, response] and candidate [batch, response, K] scores.
+        """Return chosen [batch, response] and candidate [batch, positions, K] scores.
 
-        Logits already include the scoring temperature. Candidate rows align with the
-        original padded response suffix; IDs index the vocabulary.
+        Logits already include the scoring temperature. Candidate rows cover the
+        response unless candidate_positions selects offsets in its original
+        padded suffix. IDs index the vocabulary.
         """
         chosen = self._token_logprobs(logits, sequences, attention_mask.to(bool), packed_seq_params)[:, -num_actions:]
         selected = None
         if candidate_ids is not None:
-            if candidate_ids.ndim != 3 or candidate_ids.shape[:2] != chosen.shape:
+            if candidate_ids.ndim != 3 or candidate_ids.shape[0] != chosen.shape[0]:
                 raise ValueError("selected response IDs must align with chosen logprobs")
-            response_positions = torch.arange(num_actions, device=logits.device).expand(chosen.shape[0], -1)
+            if candidate_positions is None:
+                if candidate_ids.shape[:2] != chosen.shape:
+                    raise ValueError("selected response IDs must align with chosen logprobs")
+                response_positions = torch.arange(num_actions, device=logits.device).expand(chosen.shape[0], -1)
+            else:
+                if candidate_positions.shape != candidate_ids.shape[:2]:
+                    raise ValueError("compact selected response positions must align with candidate IDs")
+                response_positions = candidate_positions.long()
+                if torch.any(response_positions < 0) or torch.any(response_positions >= num_actions):
+                    raise ValueError("compact selected positions are outside the response")
             query_start = attention_mask.shape[1] - num_actions - 1
             if query_start < 0:
                 raise ValueError("selected response IDs require at least one prompt token")
@@ -235,7 +247,7 @@ class MegatronModelWrapper:
                 raise ValueError("selected response IDs refer to padded prompt or response positions")
             if torch.any(candidate_ids < INVALID_TOPK_INDEX) or torch.any(candidate_ids[valid] >= logits.shape[-1]):
                 raise ValueError("selected token IDs are outside the student vocabulary")
-            # Map each flattened [batch, response] candidate row to its causal query.
+            # Map each flattened candidate row to its original causal query.
             # Zero denotes padding; positive entries are row indices plus one.
             score_row_map = torch.zeros_like(sequences)
             rows = torch.arange(sequences.shape[0], device=logits.device)[:, None].expand_as(queries)
@@ -494,6 +506,7 @@ class MegatronModelWrapper:
                 data.num_actions,
                 packed_seq_params,
                 data.score_topk_indices,
+                data.score_probe_positions,
             )
             result = {"scores": response.scores}
             if response.selected_logprobs is not None:

@@ -12,6 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
 from marinskyrl.distillation import (
+    DistillationPlan,
     DistillationObjectiveKind,
     DistillationRewardMode,
     compile_distillation_plan_from_config,
@@ -26,6 +27,9 @@ from marinskyrl.runtime_options import (
     PolicyLossType,
     ftpo_requested,
 )
+
+SCORE_CENTERING_PROBE_TOKENS = 32
+
 
 class KLEstimator(StrEnum):
     K1 = "k1"
@@ -189,6 +193,41 @@ def _score_centering_megatron_supported(cfg: DictConfig) -> bool:
     )
 
 
+def score_centering_unsupported_reason(cfg: DictConfig, plan: DistillationPlan | None) -> str | None:
+    """Return the support restriction shared by score centering and its probes."""
+    algorithm = cfg.trainer.algorithm
+    try:
+        score_centering_tis_cap(algorithm)
+    except ValueError as error:
+        return str(error)
+    if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
+        return "score centering requires regular PPO without distillation or auxiliary FTPO"
+    if not _score_centering_megatron_supported(cfg):
+        return (
+            "score centering requires Megatron with tensor and sequence parallel size one; "
+            "context parallelism requires sample packing"
+        )
+    if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
+        return "score centering requires local vLLM behavior top-K capture"
+    return None
+
+
+def score_centering_probe_unavailable_reason(cfg: DictConfig) -> str | None:
+    """Explain why periodic hypothetical probes cannot run in this configuration."""
+    algorithm = cfg.trainer.algorithm
+    probe = algorithm.get("score_centering_probe")
+    if probe is None or not probe.interval:
+        return "disabled (score_centering_probe.interval=0)"
+    if algorithm.get("score_centering_enabled", False):
+        return "score centering is enabled"
+    reason = score_centering_unsupported_reason(cfg, compile_distillation_plan_from_config(cfg))
+    if reason is not None:
+        return reason
+    if cfg.generator.sampling_params.logprobs not in (None, 0):
+        return "requires ordinary sampled-token logprobs"
+    return None
+
+
 @dataclass(frozen=True)
 class TopKLossParams:
     objective: DistillationObjectiveKind
@@ -341,17 +380,15 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     candidates = algorithm.score_centering_top_k
     if isinstance(candidates, bool) or not isinstance(candidates, int) or candidates <= 0:
         raise ValueError("score_centering_top_k must be a positive integer")
+    probe = algorithm.get("score_centering_probe")
+    if probe is not None:
+        interval = probe.interval
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
+            raise ValueError("score_centering_probe.interval must be a nonnegative integer")
     if algorithm.get("score_centering_enabled", False):
-        score_centering_tis_cap(algorithm)
-        if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
-            raise ValueError("score centering requires regular PPO without distillation or auxiliary FTPO")
-        if not _score_centering_megatron_supported(cfg):
-            raise ValueError(
-                "score centering requires Megatron with tensor and sequence parallel size one; "
-                "context parallelism requires sample packing"
-            )
-        if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
-            raise ValueError("score centering requires local vLLM behavior top-K capture")
+        reason = score_centering_unsupported_reason(cfg, plan)
+        if reason is not None:
+            raise ValueError(reason)
         if cfg.generator.sampling_params.logprobs not in (None, 0, candidates):
             raise ValueError(
                 f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}"

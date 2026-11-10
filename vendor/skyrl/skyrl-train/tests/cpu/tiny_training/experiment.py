@@ -110,6 +110,7 @@ def tiny_training_config(
                 "use_kl_loss": False,
                 "policy_loss_type": POLICY_LOSS_TYPE[mode],
                 "off_policy_correction": "tis" if mode is TrainingMode.SYNC else "none",
+                "score_centering_probe": {"interval": 0},
                 "group_admission": {"stall_timeout": STALL_TIMEOUT_SECONDS},
             },
             "rollout_buffer": {
