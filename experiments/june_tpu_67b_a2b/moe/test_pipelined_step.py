@@ -27,7 +27,7 @@ from levanter.tracker.tracker import Tracker
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.june_tpu_67b_a2b.moe import train as june_train
-from tests.test_june_grad_accum import BASE, LOSS_WEIGHT, TOKENS, Batch, _meshes, leaves
+from experiments.june_tpu_67b_a2b.moe.train_test_support import BASE, LOSS_WEIGHT, TOKENS, Batch, _meshes, leaves
 
 NUM_STEPS = 5
 
