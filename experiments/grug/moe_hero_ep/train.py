@@ -70,6 +70,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
+from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -390,6 +391,8 @@ class GrugTrainerConfig:
     router_bias_mode: RouterBiasMode = RouterBiasMode.UPDATE
     # SFT from a pretrained checkpoint: reseed chat-token rows once and train them faster.
     special_tokens: SpecialTokenInit | None = None
+    # Renumber the routed experts of the placement's source checkpoint once, when the run restores it.
+    expert_placement: ExpertPlacement | None = None
 
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
@@ -1223,6 +1226,98 @@ def reseed_special_token_columns(
     return reset(state)
 
 
+# Expert-indexed leaves of the stacked MoE block, by the attribute names that end their key path, and the
+# axis of each that indexes experts. Every leaf is stacked over layers on axis 0.
+_MOE_PATH = ("stacked_blocks", "stacked", "mlp")
+_EXPERT_AXES: dict[tuple[str, ...], int] = {
+    (*_MOE_PATH, "router"): 2,
+    (*_MOE_PATH, "router_bias"): 1,
+    (*_MOE_PATH, "expert_mlp", "w_gate"): 1,
+    (*_MOE_PATH, "expert_mlp", "w_up"): 1,
+    (*_MOE_PATH, "expert_mlp", "w_down"): 1,
+}
+
+
+def _attribute_names(path) -> tuple[str, ...]:
+    return tuple(entry.name for entry in path if isinstance(entry, jax.tree_util.GetAttrKey))
+
+
+def _expert_axis(path, leaf: jax.Array, num_experts: int) -> int | None:
+    """The expert axis of an expert-indexed leaf, or None; raise on an unlisted MoE leaf with an expert axis."""
+    names = _attribute_names(path)
+    for suffix, axis in _EXPERT_AXES.items():
+        if names[-len(suffix) :] == suffix:
+            if leaf.shape[axis] != num_experts:
+                raise ValueError(f"{jax.tree_util.keystr(path)} has shape {leaf.shape}, no expert axis {axis}")
+            return axis
+    inside_moe = any(names[i : i + len(_MOE_PATH)] == _MOE_PATH for i in range(len(names)))
+    if inside_moe and num_experts in leaf.shape[1:]:
+        raise ValueError(f"{jax.tree_util.keystr(path)} looks expert-indexed but has no placement rule")
+    return None
+
+
+@functools.partial(jax.jit, static_argnums=(2,), donate_argnums=(0,))
+def _take_experts(leaf: jax.Array, order: jax.Array, axis: int) -> jax.Array:
+    sharding = jax.typeof(leaf).sharding
+    layer_spec = P(*sharding.spec[1:]) if sharding.spec else P()
+
+    def take(layer_and_order):
+        x, o = layer_and_order
+        return x.at[o].get(out_sharding=layer_spec) if axis == 1 else x.at[:, o].get(out_sharding=layer_spec)
+
+    # A gather along the expert-sharded axis all-gathers its operand, so map over layers one at a time:
+    # a vmap would gather every layer's experts onto each device at once.
+    return jax.lax.map(take, (leaf, order))
+
+
+def _permute_tree(tree, order: jax.Array, num_experts: int):
+    def permute(path, leaf):
+        if not eqx.is_array(leaf):
+            return leaf
+        axis = _expert_axis(path, leaf, num_experts)
+        if axis is None:
+            return leaf
+        on_host = leaf.sharding.memory_kind == "pinned_host"
+        # One leaf at a time, donated, so the device holds at most one extra copy of the largest leaf.
+        moved = _tree_to_memory_kind(leaf, "device") if on_host else leaf
+        permuted = _take_experts(moved, order, axis)
+        return _tree_to_memory_kind(permuted, "pinned_host") if on_host else permuted
+
+    return jax.tree_util.tree_map_with_path(permute, tree)
+
+
+def permute_experts(state: GrugTrainState, placement: ExpertPlacement) -> GrugTrainState:
+    """Renumber each layer's routed experts: slot ``i`` takes expert ``placement.order[layer][i]``.
+
+    Moves the router columns, router bias, pending QB betas, expert weights, and every optimizer leaf
+    of those parameters together, so the model computes the same function and the optimizer continues
+    from the same moments.
+    """
+    order = jnp.asarray(placement.order, dtype=jnp.int32)
+    num_experts = placement.num_experts
+    if _count_expert_leaves(state.params, num_experts) != len(_EXPERT_AXES):
+        raise ValueError("the model does not hold every expert-indexed leaf the placement must move")
+    permute = functools.partial(_permute_tree, order=order, num_experts=num_experts)
+    params = permute(state.params)
+    pending = jax.vmap(lambda betas, o: betas[o])(state.pending_qb_betas, order)
+    return dataclasses.replace(
+        state,
+        params=params,
+        master_params=None if state.master_params is None else permute(state.master_params),
+        ema_params=None if state.ema_params is None else permute(state.ema_params),
+        opt_state=permute(state.opt_state),
+        pending_qb_betas=pending,
+    )
+
+
+def _count_expert_leaves(tree, num_experts: int) -> int:
+    return sum(
+        _expert_axis(path, leaf, num_experts) is not None
+        for path, leaf in jax.tree_util.tree_leaves_with_path(tree)
+        if eqx.is_array(leaf)
+    )
+
+
 def _final_checkpoint_committed(checkpointer: Checkpointer, step: int) -> bool:
     """Whether a complete permanent checkpoint of ``step`` exists under the checkpointer's permanent root."""
     # Every process must take the same branch around the collective save, so process 0 decides for all.
@@ -1316,20 +1411,51 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if released_initial_state:
             state = restore_template_from(state)
 
+        expert_placement = config.trainer.expert_placement
+        if expert_placement is not None:
+            if config.model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+                raise ValueError(f"expert placement balances {RAGGED_MOE_IMPLEMENTATION} capacity blocks only")
+            expert_placement.validate_for(
+                num_layers=config.model.num_layers,
+                num_experts=config.model.num_experts,
+                expert_axis_size=config.trainer.expert_axis_size,
+            )
+        # Restore tries candidates newest first and returns the first that loads, so the last one it asked
+        # a template for is the one it loaded.
+        attempted_candidates: list[str] = []
+
+        def candidate_template(candidate: str):
+            attempted_candidates.append(candidate)
+            return template_for_candidate_layout(state, candidate, config.trainer.master_param_mode)
+
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
-            template_for_candidate=lambda candidate: template_for_candidate_layout(
-                state, candidate, config.trainer.master_param_mode
-            ),
+            template_for_candidate=candidate_template,
         )
         if config.trainer.master_param_mode == MasterParamMode.DEVICE:
             state = take_master_as_params(state)
-        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+        restored_nothing = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
+        if released_initial_state and restored_nothing:
             state = _init_state(model_key)
+        if expert_placement is not None and not restored_nothing and attempted_candidates:
+            # Only the source checkpoint is in the old order; the run's own saves are already placed.
+            if expert_placement.permutes(attempted_candidates[-1]):
+                state = permute_experts(state, expert_placement)
+                logger.info(
+                    "Placed routed experts by %s on %d-expert capacity blocks",
+                    expert_placement.loads_from,
+                    expert_placement.block_experts,
+                )
+            else:
+                logger.info(
+                    "Restored %s, not the placement source %s; treating its experts as already placed",
+                    attempted_candidates[-1],
+                    expert_placement.source_checkpoint,
+                )
         special_tokens = config.trainer.special_tokens
         # Reseeding at the start step is idempotent, so a restart that restores a save from that step stays exact.
         if special_tokens is not None and int(state.step) == special_tokens.start_step:
