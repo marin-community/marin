@@ -774,10 +774,9 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, m
     ), (repeated.output, repeated.exception)
     recovered = yaml.safe_load("preset:" + repeated.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
+    assert all(row["issue"] == 74 for row in recovered["runs"])
     if case in {"parent-early", "mixed-native-failed"}:
         retry = next(row for row in published if row["attempt_id"] == "native-retry")
-        assert retry["status"] == "succeeded" and retry["verdict"] == "pass"
+        assert retry["status"] == "succeeded" and retry["verdict"] == "pass" and retry["issue"] == 74
     else:
-        assert any(
-            row["attempt_id"] == "native-0" and row["issue"] == recovered["runs"][0]["issue"] for row in published
-        )
+        assert any(row["attempt_id"] == "native-0" and row["issue"] == 74 for row in published)

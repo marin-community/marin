@@ -181,8 +181,8 @@ def publish_runs(
             result.errors.append(str(error))
     report = None
     report_error = None
-    if gate_complete(gate_path):
-        try:
+    try:
+        if gate_complete(gate_path):
             report = gate.GateReport.model_validate_json(
                 (StoragePath(gate_path) / gate.GATE_REPORT_FILENAME).read_text()
             )
@@ -191,13 +191,13 @@ def publish_runs(
             )
             if report.run.replicates != len(outputs) or report.run.attempt_ids != current_ids:
                 raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
-        except Exception as error:
-            report = None
-            report_error = str(error)
+    except Exception as error:
+        report = None
+        report_error = str(error)
     for path, (current_id, attempts) in snapshots.items():
-        if not attempts:
+        if current_id not in attempts:
             result.unserved_records.append(path)
-            result.errors.append(f"No stored native receipt at {path}")
+            result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
         for attempt_id, receipt in attempts.items():
             destination = str(StoragePath(path) / "exports/attempts" / attempt_id)
             try:

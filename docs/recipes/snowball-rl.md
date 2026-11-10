@@ -60,9 +60,8 @@ Speed presets and data-short publish nothing. Native failures and failed trainin
 source and engine facts, and the launcher's issue. The dashboard copies climbed metrics
 (`control → run`, change and noise), constraints, invariants, verdict and label from the gate report.
 Replicate counts identify aggregate results; historical attempts carry their own native facts.
-Updates or lineage duration are unknown when stored evidence cannot attribute them. Controls and
-train-long have no gate verdict. Native receipts persist under the configured export root.
-`--run --wait` publishes when the coordinator ends; repeat it to publish a run started without `--wait`.
+Updates or lineage duration are unknown when stored evidence cannot attribute them.
+Native receipts persist under the configured export root.
 
 ## Change one input
 

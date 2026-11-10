@@ -36,10 +36,9 @@ def create_api(services):
     def runs():
         records = []
         skipped = []
-        updated_at = None
         with engine.connect() as connection:
             rows = connection.execute(
-                text("SELECT run_id, attempt_id, record, imported_at FROM rl_runs ORDER BY run_id, attempt_id")
+                text("SELECT run_id, attempt_id, record FROM rl_runs ORDER BY run_id, attempt_id")
             ).mappings()
             for row in rows:
                 try:
@@ -59,8 +58,6 @@ def create_api(services):
                     skipped.append({"run_id": row["run_id"], "attempt_id": row["attempt_id"], "error": reason})
                     continue
                 records.append(row["record"])
-                imported_at = row["imported_at"]
-                updated_at = imported_at if updated_at is None else max(updated_at, imported_at)
-        return {"runs": records, "updated_at": updated_at, "skipped_records": skipped}
+        return {"runs": records, "skipped_records": skipped}
 
     return api
