@@ -372,12 +372,15 @@ Each selected evaluation runs as its own step against shared inference. An evalu
 a record for that eval; other steps continue. For a Hugging Face model with caching enabled,
 `remote_inference` checks the completion marker in-process when the coordinator and serving
 workers share a cluster and region. A hit skips CPU preparation. A miss, or a different or
-unrestricted serving placement, submits a CPU job on the serving cluster before reserving
-GPUs or TPUs. Both paths use the worker's model resolver. The job receives the serving
+unrestricted serving placement, submits a CPU job with the serving placement constraints before
+reserving GPUs or TPUs. Unpinned GPU placement skips preparation with a warning: the GPU job
+can auto-federate while a CPU prepare job stays local. Pin `target_cluster` to prepare its cache. Both paths use the worker's model resolver.
+The job receives the serving
 worker's environment, including `HF_TOKEN`, and gets one retry for a failure. Preparation
 has one four-hour wait budget; a preparation timeout does not trigger a serving-startup retry.
 With different cache prefixes or unrestricted multi-region placement, preparation can warm a
 cache the serving worker cannot use, and that worker may still download on an accelerator.
+An unpinned TPU job launched from a CoreWeave coordinator can also use a different GCP cache.
 Candidate and hosted-judge preparation are separate: cold judge preparation can hold already
 reserved candidate accelerators. A preparation or
 server startup failure marks every pending eval as an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
