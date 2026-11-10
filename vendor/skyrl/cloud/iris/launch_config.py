@@ -9,7 +9,7 @@ import posixpath
 import tempfile
 from typing import Any, Mapping
 
-from omegaconf import MISSING, DictConfig, OmegaConf
+from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
 from skyrl_train.evaluation_profiles import named_evaluation_profiles
 
@@ -179,10 +179,13 @@ class SkyRLLaunchConfig:
 
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
-    """Compose a raw mapping into the strict structured launch schema."""
+    """Compose the structured launch schema, omitting empty named evaluation data."""
     schema = OmegaConf.structured(SkyRLLaunchConfig)
     composed = OmegaConf.merge(schema, raw)
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
+    if not composed.inputs.evaluation_data:
+        with open_dict(composed.inputs):
+            del composed.inputs.evaluation_data
     return composed
 
 

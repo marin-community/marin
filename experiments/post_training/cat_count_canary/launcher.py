@@ -19,6 +19,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
+    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -33,7 +34,6 @@ from marin.rl.skyrl import (
     run_skyrl,
     skyrl_step,
 )
-from marin.rl.skyrl_records import IRIS_HUB_CLUSTER_CONFIG
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b

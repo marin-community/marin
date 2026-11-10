@@ -4,22 +4,12 @@
 """Readers for saved SkyRL launch receipts, tracking and metrics."""
 
 import json
-from collections.abc import Mapping
-from contextlib import ExitStack
-from pathlib import Path
-from typing import Any
 
 import yaml
-from iris.cli.connect import connect_controller, rpc_client
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import JobName, is_job_finished
-from iris.rpc import controller_pb2, job_pb2
 from pydantic import BaseModel
-from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 RESOLVED_LAUNCH_FILENAME = "resolved-launch.yaml"
 TERMINAL_RECEIPT_FILENAME = "terminal.json"
 TRACKING_FILENAME = "tracking.json"
@@ -59,22 +49,9 @@ class SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-class SkyRLReceiptLookupError(ValueError):
-    """The recorded Iris job cannot be identified uniquely."""
-
-
 class SkyRLLaunchReceipt(BaseModel):
     config: dict
     result: SkyRLLaunchResponse
-
-
-def named_evaluation_profiles(config: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    return {
-        name: profile
-        for callback in config.get("trainer", {}).get("callbacks") or []
-        if callback.get("type") == "evaluation"
-        for name, profile in (callback.get("additional_evaluations") or {}).items()
-    }
 
 
 def read_skyrl_launch_config(run_output: str) -> dict:
@@ -165,51 +142,3 @@ def read_skyrl_metrics(run_output: str) -> dict[int, dict]:
     fs, key = filesystem_for(prefix_join(config["artifacts"]["export_root"], METRICS_PATTERN))
     rows = [json.loads(fs.cat(path)) for path in sorted(fs.glob(key))]
     return {int(row["step"]): row for row in rows}
-
-
-def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
-    """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
-
-    Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
-    controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
-    """
-    receipt, config = _stored_skyrl_receipt(run_output)
-    if receipt is not None:
-        return receipt
-    if config is None:
-        return None
-    name = config["iris"]["job_name"]
-    info = get_job_info()
-    with ExitStack() as stack:
-        if info is not None and info.controller_address:
-            address, credentials = info.controller_address, info.credentials
-        else:
-            root = find_project_root(Path(__file__))
-            if root is None:
-                raise RuntimeError("Iris receipt discovery requires a Marin checkout")
-            endpoint = stack.enter_context(connect_controller(config_file=root / IRIS_HUB_CLUSTER_CONFIG))
-            address, credentials = endpoint.url, endpoint.credentials
-        client = stack.enter_context(rpc_client(address, credentials))
-        response = client.list_jobs(
-            controller_pb2.Controller.ListJobsRequest(
-                query=controller_pb2.Controller.JobQuery(name_filter=name, limit=500)
-            )
-        )
-        jobs = response.jobs
-    matches = [job for job in jobs if str(JobName.from_wire(job.job_id)).rsplit("/", 1)[-1] == name]
-    if len(matches) != 1:
-        raise SkyRLReceiptLookupError(f"cannot identify the Iris job {name}; its state is unavailable")
-    job = matches[0]
-    state = "submitted"
-    if is_job_finished(job.state):
-        state = "succeeded" if job.state == job_pb2.JOB_STATE_SUCCEEDED else "failed"
-    return SkyRLLaunchReceipt.model_validate(
-        {
-            "config": config,
-            "result": {
-                "state": state,
-                "iris_job_id": str(JobName.from_wire(job.job_id)),
-                "model": None,
-            },
-        }
-    )
