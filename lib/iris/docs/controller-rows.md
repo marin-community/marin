@@ -16,6 +16,17 @@ name. A controller whose Finelog does not forward sets `cluster` itself:
 on a regional store, filter on `cluster = ''`; on the hub, on the cluster
 name.
 
+They copy every column of those tables, with these exceptions. Treat the
+changed columns as redacted, never as the controller's own values:
+
+| Column | Differs from the controller DB |
+| --- | --- |
+| `iris.job.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
+| `iris.job_config.setup_scripts_json` | Replaces `environment_json`: only the setup scripts, with sensitive `NAME=value` assignments and token-like strings redacted. Environment variables and secrets are not copied, neither names nor values |
+| `iris.job_config.entrypoint_json` | The command with the values of flags whose names look sensitive (`--hf-token X`, `--api-key=X`) and prefixed or high-entropy tokens redacted; setup commands as setup scripts. Not caught: a secret passed as a plain positional argument, in an ordinary-looking URL, or as a flag value that starts with `-`. Workdir file contents are never stored |
+| `iris.job_config.submit_argv_json` | Every `-e`/`--env-vars` value and `--secret` source redacted, whatever its name (a `--secret` name may be redacted too); then the whole command line as in `entrypoint_json`, since the command may follow the flags without `--` |
+| `iris.job_config.accelerator_*` | Added: the device request flattened (below) |
+
 Keys: a job is `(cluster, root_job_id, root_submitted_at_ms, job_id,
 submitted_at_ms)`, because job ids are reused after a job ends, and a live
 parent can resubmit a finished child under the same name (the child keeps its

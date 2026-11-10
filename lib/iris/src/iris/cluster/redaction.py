@@ -8,6 +8,8 @@ adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
 for ``iris job run``) into a form the shared redactor can consume.
 """
 
+import re
+
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from iris.rpc import controller_pb2
@@ -92,3 +94,94 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
         i = val_idx + 1
     return out
+
+
+_SECRET_FLAG = "--secret"
+
+
+def _flag_name(token: str) -> str | None:
+    """The name of a ``--name`` / ``--name=value`` / ``-n`` token, or None."""
+    if not token.startswith("-") or token == "-" or token == "--":
+        return None
+    return token.lstrip("-").split("=", 1)[0]
+
+
+def redact_command_argv(argv: list[str]) -> list[str]:
+    """Redact a user command for long-term storage.
+
+    A value after a flag whose name looks sensitive (``--hf-token X``,
+    ``--api-key=X``) is replaced. Every other token passes through the shared
+    string redactor, which catches prefixed and high-entropy tokens. A secret
+    passed as a plain positional argument or inside a URL with an ordinary
+    shape is not caught.
+    """
+    out: list[str] = []
+    redact_next = False
+    for token in argv:
+        if redact_next and not token.startswith("-"):
+            out.append(REDACTED_VALUE)
+            redact_next = False
+            continue
+        redact_next = False
+        name = _flag_name(token)
+        if name is not None and is_sensitive_key_name(name):
+            if "=" in token:
+                out.append(token.split("=", 1)[0] + "=" + REDACTED_VALUE)
+            else:
+                out.append(token)
+                redact_next = True
+            continue
+        out.append(redact_string(token))
+    return out
+
+
+def redact_stored_submit_argv(argv: list[str]) -> list[str]:
+    """Redact an ``iris job run`` command line for long-term storage, failing closed.
+
+    Every ``-e``/``--env-vars`` value and every ``--secret`` source is replaced,
+    whatever its name, in the bare and attached forms. Then the whole argv goes
+    through :func:`redact_command_argv`, since the command may follow the flags
+    without ``--``.
+    """
+    out = list(argv)
+    i = 0
+    while i < len(out):
+        token = out[i]
+        next_token = out[i + 1] if i + 1 < len(out) else None
+        if token == "--":
+            break
+        if _env_var_flag_key(token, next_token) is not None:
+            attached = token not in (_ENV_VAR_LONG_FLAG, _ENV_VAR_SHORT_FLAG)
+            value_index = i + 1 if attached else i + 2
+            if value_index < len(out):
+                out[value_index] = REDACTED_VALUE
+            i = value_index + 1
+            continue
+        if token == _SECRET_FLAG or token.startswith(_SECRET_FLAG + "="):
+            value_index = i + 1 if "=" in token else i + 2
+            if value_index < len(out):
+                out[value_index] = REDACTED_VALUE
+            i = value_index + 1
+            continue
+        i += 1
+    # ``iris job run`` accepts the command without ``--``, so the sensitive-flag
+    # rule covers the whole argv. It may also hide a --secret NAME; that fails closed.
+    return redact_command_argv(out)
+
+
+_ASSIGNMENT_RE = re.compile(r"""\b([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)""")
+
+
+def redact_script(script: str) -> str:
+    """Redact a shell script or command string for long-term storage.
+
+    The value of a ``NAME=value`` assignment whose NAME looks sensitive
+    (``export WANDB_API_KEY=...``) is replaced, and the rest goes through the
+    shared string redactor.
+    """
+
+    def assignment(match: re.Match[str]) -> str:
+        name = match.group(1)
+        return f"{name}={REDACTED_VALUE}" if is_sensitive_key_name(name) else match.group(0)
+
+    return redact_string(_ASSIGNMENT_RE.sub(assignment, script))

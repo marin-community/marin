@@ -270,6 +270,11 @@ class IrisJob:
     exit_code: int | None
     error: str | None
     num_tasks: int
+    scheduling_deadline_at: datetime | None
+    backend_id: str
+    # The controller DB's jobs.cluster: "local", or the peer the job was handed to.
+    # Named placement because this table's cluster is the writing controller.
+    placement: str
     ts: datetime
     # Reserved for submit-time job tags as a JSON object, e.g. {"project": ...,
     # "category": ...}. Always NULL until Iris accepts job tags at submit.
@@ -278,7 +283,11 @@ class IrisJob:
 
 @dataclass
 class IrisJobConfig:
-    """A job's resource request, written once when the job is submitted."""
+    """A job's config, written once when the job is submitted.
+
+    Every controller ``job_config`` column is copied except the environment,
+    of which only the setup scripts are kept; command lines are redacted.
+    """
 
     key_column: ClassVar[str] = "root_job_id"
 
@@ -299,12 +308,32 @@ class IrisJobConfig:
     accelerators_per_task: int
     constraints_json: str | None
     has_coscheduling: bool
+    coscheduling_group_by: str
     priority_band: str
     preemption_policy: str
+    existing_job_policy: str
     max_retries_failure: int
     max_retries_preemption: int
+    max_task_failures: int
     timeout_ms: int | None
+    scheduling_timeout_ms: int | None
+    termination_grace_ms: int
     task_image: str
+    name: str
+    # The environment's setup scripts only, redacted. Environment variables and
+    # secrets are not copied, neither names nor values.
+    setup_scripts_json: str
+    # The command, with values of sensitively named flags and token-like strings
+    # redacted; workdir file contents are not stored.
+    entrypoint_json: str
+    # The submitter's command line: -e and --secret values and sensitive flag values redacted.
+    submit_argv_json: str
+    bundle_id: str
+    ports_json: str
+    fail_if_exists: bool
+    container_profile: str
+    egress_policy: str
+    egress_allow_json: str
     ts: datetime
 
 
@@ -341,6 +370,7 @@ class IrisTaskAttempt:
     node_name: str
     pod_name: str
     pod_uid: str
+    backend_id: str
     ts: datetime
 
 

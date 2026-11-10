@@ -3,6 +3,7 @@
 
 """The controller's durable job, job config and attempt rows in Finelog."""
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -110,6 +111,7 @@ def test_submit_writes_one_job_row_and_one_config_row(state):
     assert job.job_id == "/test-user/train"
     assert job.root_job_id == "/test-user/train"
     assert job.state == "JOB_STATE_PENDING"
+    assert job.placement == "local"
     assert job.tags is None
     assert len(rows.job_configs) == 1
     config = rows.job_configs[0]
@@ -351,3 +353,40 @@ def test_job_config_flattens_the_device_request(state, device, expected):
 
     config = rows.job_configs[0]
     assert (config.accelerator_kind, config.accelerator_type, config.accelerators_per_task) == expected
+
+
+def test_job_config_stores_no_environment_and_redacts_command_lines(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    fake = {name: f"made-up-{name.lower()}" for name in ("HF_TOKEN", "WANDB_API_KEY", "CW_KEY_ID", "CW_KEY_SECRET")}
+    request.environment.secrets.update(fake)
+    request.environment.env_vars.update({"SERVICE_URL": "made-up-env-value"})
+    request.environment.setup_scripts.append("export HF_TOKEN=made-up-script-token && uv sync")
+    request.entrypoint.run_command.argv[:] = ["python", "train.py", "--hf-token", "made-up-cli-token"]
+    request.submit_argv[:] = ["iris", "job", "run", "-e", "SERVICE_URL", "made-up-argv-value", "--", "python"]
+
+    submit_job(state, "train", request)
+
+    config = rows.job_configs[0]
+    assert json.loads(config.setup_scripts_json) == ["export HF_TOKEN=[REDACTED] && uv sync"]
+    assert "--hf-token" in json.loads(config.entrypoint_json)["run_command"]["argv"]
+    written = repr([*rows.jobs, *rows.job_configs, *rows.attempts])
+    for value in [
+        *fake.values(),
+        "made-up-env-value",
+        "made-up-cli-token",
+        "made-up-argv-value",
+        "made-up-script-token",
+    ]:
+        assert value not in written
+    for name in [*fake, "SERVICE_URL"]:
+        assert name not in config.entrypoint_json
+
+
+def test_entrypoint_rows_never_carry_inline_file_contents():
+    entrypoint = {"workdir_files": {"notes.txt": "bWFkZS11cA=="}, "run_command": {"argv": ["python", "t.py"]}}
+
+    stored = json.loads(controller_rows._redacted_entrypoint_json(json.dumps(entrypoint)))
+
+    assert "workdir_files" not in stored
+    assert stored["run_command"]["argv"] == ["python", "t.py"]

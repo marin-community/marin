@@ -9,7 +9,14 @@ adaptation: argv parsing for ``iris job run -e KEY VALUE`` in every Click
 syntax variant.
 """
 
-from iris.cluster.redaction import REDACTED_VALUE, redact_submit_argv
+import pytest
+from iris.cluster.redaction import (
+    REDACTED_VALUE,
+    redact_command_argv,
+    redact_script,
+    redact_stored_submit_argv,
+    redact_submit_argv,
+)
 
 
 def test_redact_submit_argv_redacts_short_flag():
@@ -148,3 +155,54 @@ def test_redact_submit_argv_mixed_forms():
 def test_redact_submit_argv_attached_long_form_missing_value():
     argv = ["iris", "--env-vars=HF_TOKEN"]
     assert redact_submit_argv(argv) == argv
+
+
+_RUN = ["iris", "job", "run"]
+_CMD = ["--", "python", "t.py"]
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["-e", "SERVICE_URL", "made-up-value"],
+        ["-eSERVICE_URL", "made-up-value"],
+        ["--env-vars", "SERVICE_URL", "made-up-value"],
+        ["--env-vars=SERVICE_URL", "made-up-value"],
+        ["--secret", "SERVICE_KEY", "made-up-value"],
+        ["--secret=SERVICE_KEY", "made-up-value"],
+    ],
+    ids=["e", "e-attached", "env-vars", "env-vars-attached", "secret", "secret-attached"],
+)
+def test_stored_submit_argv_drops_every_env_and_secret_value(flags):
+    redacted = redact_stored_submit_argv([*_RUN, *flags, *_CMD])
+
+    assert "made-up-value" not in redacted
+    assert redacted[: len(_RUN)] == _RUN
+    assert redacted[len(_RUN)].split("=")[0] == flags[0].split("=")[0]
+    assert redacted[-len(_CMD) :] == _CMD
+
+
+def test_stored_submit_argv_redacts_a_command_given_without_double_dash():
+    redacted = redact_stored_submit_argv([*_RUN, "python", "train.py", "--hf-token", "made-up-token"])
+
+    assert redacted == [*_RUN, "python", "train.py", "--hf-token", REDACTED_VALUE]
+
+
+def test_command_argv_redacts_values_of_sensitive_flags():
+    argv = ["python", "t.py", "--hf-token", "made-up-1", "--api-key=made-up-2", "--epochs", "3"]
+
+    assert redact_command_argv(argv) == [
+        "python",
+        "t.py",
+        "--hf-token",
+        REDACTED_VALUE,
+        f"--api-key={REDACTED_VALUE}",
+        "--epochs",
+        "3",
+    ]
+
+
+def test_script_redacts_sensitive_assignments_only():
+    script = "export WANDB_API_KEY=made-up-key && export LOG_LEVEL=debug && uv sync"
+
+    assert redact_script(script) == f"export WANDB_API_KEY={REDACTED_VALUE} && export LOG_LEVEL=debug && uv sync"
