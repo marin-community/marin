@@ -36,7 +36,7 @@ schedule. It failed after its first update in the checkpoint sampling helper and
 has not been restarted. The supplied SFT manifest restores all 19 schedule phases.
 50B denotes scheduled packed positions, not 50B distinct supervised tokens.
 
-All jobs remain on RNO2A at **interactive** priority, with at most **256 H100**.
+New jobs run on RNO2A at **production** priority, with at most **256 H100**.
 Missing inputs and failed qualification gates stop the run. A failed stage is not
 replayed automatically. Keep this PR draft; no merge approval is implied.
 
@@ -57,3 +57,28 @@ Campaign status and evidence live in
 `artifacts/run-spec-20261109/`. The original copy-based archive job was cancelled;
 the replacement HF publication and evidence archive verified. Historical trace
 sampling and telemetry gaps remain documented there.
+
+## RL-only continuation
+
+After SFT commits, pin its selection, checkpoint metadata/manifest, consumed config,
+source lineage, and payload inventory in an `adopted_sft` file. Reference that file
+by path and SHA-256 in the run spec. Use a fresh runtime version. Missing or changed
+checkpoint evidence fails the adoption stage; it never starts a replacement SFT.
+
+```bash
+uv run python -m experiments.post_training.long_loop \
+  --spec /absolute/path/to/continuation-spec/round1.yaml \
+  --smoke --through rl --version 2026.11.10.1 \
+  --validation-output /absolute/path/to/continuation-validation
+```
+
+This constructs the same pinned RL recipe with scale-only overrides and stops after
+RL. It excludes eval/archive allocations, but retains data admission, CP4, context,
+GS8, exact 32/32 consumed-group quotas and native first-update qualification gates.
+`--run` submits only after preflight passes. GPU execution must fit the aggregate
+256-H100 cap; a running 256-H100 SFT leaves no room for a simultaneous smoke.
+
+The CPU tests cover actual quota-buffer behavior, 102,400-token collation, and
+checkpoint-adoption failures. They do not certify natural-long GPU forward,
+backward, optimizer, or save/restore behavior. Full downstream runs still require
+the recorded runtime qualifications and the eval/archive preparation checks.

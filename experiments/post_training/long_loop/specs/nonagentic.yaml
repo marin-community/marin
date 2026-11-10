@@ -1,10 +1,20 @@
-uri: s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04
-data_file: train.parquet
-source_names: []
+uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1
+data_file: nonagentic-train.parquet
+source_names:
+- PRIME-RL/Eurus-2-RL-Data
+- nvidia/Nemotron-RL-Ultra-Training-Blends
+- nvidia/OpenScience
+- https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
+- open-athena/Snowball-Smartie-RL-2026.10.15.32-Data
+- open-thoughts/TaskTrove
 files:
-- uri: s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04/train.parquet
-  sha256: d825279aa1fc48311f74bf489dc42175ad8fb91a0badb2cfa1a7070795f8dbd5
-- uri: s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04/task_manifest.parquet
-  sha256: fe3f9227cf587855e663c3c32e45fec1ee39cf1e267d4bba18ce704f6f93bd62
-admission_pending:
-- Confirm intended nonagentic cohort and enumerate source_names
+- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/nonagentic-train.parquet
+  sha256: c8948b3c13957ee054b4b8b5553127f75c44a50577b5b2b798261e9f8a5abc45
+- uri: s3://marin-us-east-02a/marin/users/benfeuer/long-loop/rl-data/smartie-mixed-20261110-v1/manifest.json
+  sha256: 94f21b06fedc6dce7184e783dab1349f1c14fed05fab3d47fcace61d2386701a
+admission_pending: []
+runtime_qualification_pending:
+- Pass same-spec original-Harbor runtime and natural-long CP4 learner gates
+overlap_admission:
+  path: /Users/benfeuer/Documents/experiments/active/long-loop-prototype/artifacts/run-spec-20261109/overlap-admission-20261110.json
+  sha256: ac2e5c18c94222404cbc39b58077572e225efdaa125a11eb5a0375d152e83872

@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 import yaml
+from marin.experiment.cli import graph_handles
 
 from experiments.post_training.long_loop.__main__ import validate_graph
-from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec
+from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
@@ -76,3 +77,18 @@ def test_new_submission_rejects_stale_interactive_priority(stage):
     runtime["priority"] = "interactive"
     with pytest.raises(ValueError, match="production"):
         allocation_peaks(resolved)
+
+
+def test_rl_smoke_stops_before_eval_and_never_replays_sft(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    assert stage_blockers(resolved, "archive")
+    assert not stage_blockers(resolved, "rl")
+    with pytest.raises(ValueError, match="adopted_sft"):
+        build_spec_graph(resolved, "2026.11.10.1", through="rl")
+    resolved["adopted_sft"] = {"version": "2026.11.09.12"}
+    terminal = build_spec_graph(resolved, "2026.11.10.1", through="rl")
+    names = [step.name for step in graph_handles([terminal])]
+    assert any(name.endswith("/adopt-sft") for name in names)
+    assert not any(name.endswith("/sft") or "micro-" in name or "archive" in name for name in names)
+    assert terminal.runtime_args["skyrl_execution"].priority == "production"

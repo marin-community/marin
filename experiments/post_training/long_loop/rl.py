@@ -3,12 +3,13 @@
 
 """Experiment-owned asynchronous GS8 RL recipe and artifact binding."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
@@ -18,6 +19,7 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
+    SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
@@ -126,7 +128,7 @@ def configured_rl_step(
     quotas = buffer.get("consumed_route_quotas", {})
     if quotas and set(buffer.get("source_routes", {}).values()) != set(quotas):
         raise ValueError("RL route admission is incomplete: supply verified source manifests and classifications")
-    return skyrl_step(
+    step = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"checkpoints/{name}"),
             version=version,
@@ -146,6 +148,27 @@ def configured_rl_step(
         execution,
         export_hf=True,
     )
+
+    original_builder = step.build_config
+
+    def bind_runtime(context: StepContext) -> SkyRLRunConfig:
+        launch = original_builder(context)
+        document = yaml.safe_load(launch.launch_config_yaml)
+        recipe = document["skyrl"]
+        for callback in recipe["trainer"].get("callbacks", []):
+            if callback["type"] == "best_checkpoint":
+                callback["initial_model_uri"] = document["inputs"]["model"]["uri"]
+        traces = prefix_join(document["artifacts"]["attempts_root"], "traces")
+        retention = recipe["generator"].get("trajectory_retention")
+        if retention is not None:
+            retention["output_path"] = prefix_join(traces, "rl")
+            retention["run_id"] = document["run"]["id"]
+        installed = recipe.get("terminal_bench", {}).get("installed_agent")
+        if installed is not None:
+            installed["output_path"] = prefix_join(traces, "installed-agent")
+        return replace(launch, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
+
+    return replace(step, build_config=bind_runtime)
 
 
 FULL_PLAN = SkyRLRolePlan(

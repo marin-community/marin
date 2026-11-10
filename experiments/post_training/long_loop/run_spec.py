@@ -44,6 +44,7 @@ class RunSpec:
     tokenizer: FilePin
     execution: FilePin
     smoke_overrides: dict[str, int]
+    adopted_sft: FilePin | None = None
 
 
 # Geometry, context, group mix and data are deliberately absent. A smoke must
@@ -83,6 +84,7 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
             result["blockers"].append(f"Missing admitted {name} manifest")
             continue
         result["datasets"][name] = read_pin(pin, directory)
+    result["adopted_sft"] = read_pin(spec.adopted_sft, directory) if spec.adopted_sft is not None else None
     sft_manifest = result["datasets"]["sft"]
     for field, pin in sft_manifest["sections"].items():
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
@@ -93,6 +95,10 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
         **{key: result[key] for key in ("rl", "evaluation", "archive", "initializer")},
     }.items():
         result["blockers"].extend(f"{name}: {reason}" for reason in document.get("admission_pending", []))
+    if result["adopted_sft"] is not None:
+        result["blockers"].extend(
+            f"adopted_sft: {reason}" for reason in result["adopted_sft"].get("admission_pending", [])
+        )
     unknown = set(spec.smoke_overrides) - SCALE_PATHS.keys()
     if unknown:
         raise ValueError(f"Smoke cannot change data or semantics: {sorted(unknown)}")
@@ -161,8 +167,14 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
 
 
 def stage_blockers(resolved: dict, through: str) -> list[str]:
-    if through == "archive":
-        return resolved["blockers"]
+    if through in {"rl", "archive"}:
+        blockers = list(resolved["blockers"])
+        if through == "rl":
+            blockers = [item for item in blockers if not item.startswith(("archive:", "evaluation:"))]
+        if not resolved.get("smoke"):
+            for name, document in {**resolved["datasets"], "rl": resolved["rl"]}.items():
+                blockers.extend(f"{name}: {reason}" for reason in document.get("runtime_qualification_pending", []))
+        return blockers
     documents = {
         "sft": resolved["datasets"]["sft"],
         "initializer": resolved["initializer"],

@@ -1,10 +1,4 @@
-admission_pending:
-- agentic training manifest with immutable rows and exclusions
-- verified source_routes from admitted manifests
-- validation cohort size from heldout manifest (100 below is the existing quick-loop
-  panel, not a mixed-cohort claim)
-- initial_model_uri bound to preceding SFT export
-- trace output/run ID and coordinator name bound to run
+admission_pending: []
 name: long-loop-full-rl
 seed: 20261020
 retained: -1
@@ -27,9 +21,12 @@ config:
       task_spec:
         session:
           max_turns: 128
-          attempt_timeout: 1800
+          attempt_timeout: 2520
           total_turn_timeout: 1800
           model_turn_timeout: 1800
+        harness_by_dataset:
+          long-loop-smartie-swesmith: harbor_trial
+          long-loop-smartie-calibforge: harbor_trial
   trainer:
     strategy: megatron
     flash_attn: false
@@ -104,7 +101,16 @@ config:
       consumed_route_quotas:
         agentic: 32
         nonagentic: 32
-      source_routes: {}
+      source_routes:
+        long-loop-smartie-swesmith: agentic
+        long-loop-smartie-calibforge: agentic
+        PRIME-RL/Eurus-2-RL-Data: nonagentic
+        nvidia/Nemotron-RL-Ultra-Training-Blends: nonagentic
+        nvidia/OpenScience: nonagentic
+        ? https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl
+        : nonagentic
+        open-athena/Snowball-Smartie-RL-2026.10.15.32-Data: nonagentic
+        open-thoughts/TaskTrove: nonagentic
     eval_before_train: false
     ckpt_interval: 1
     eval_num_prompts: null
@@ -130,8 +136,8 @@ config:
       eval_on_train_end: true
     - type: best_checkpoint
       initial_model_uri: PENDING_PRECEDING_SFT_EXPORT
-      expected_tasks: 100
-      minimum_scored_tasks: 100
+      expected_tasks: 140
+      minimum_scored_tasks: 140
       ema_window: 5
     - type: hf_model_save
       save_steps: -1
@@ -222,6 +228,32 @@ config:
     NCCL_NET: Socket
     NCCL_IB_DISABLE: '1'
     NCCL_SOCKET_FAMILY: AF_INET
+  terminal_bench:
+    harbor:
+      environment_type: daytona
+      daytona_api_key_env: DAYTONA_RL_API_KEY
+      eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
+      override_timeout_sec: 1800
+      eval_timeout_override_sec: 1800
+      trial_attempt_timeout_sec: 2520
+      n_concurrent_trials: 256
+      max_retries: 1
+      enable_reward_shaping: false
+    installed_agent:
+      agent:
+        name: mini-swe-agent
+        override_setup_timeout_sec: 300
+        kwargs:
+          version: 2.1.0
+          max_turns: 32
+          temperature: 1.0
+      setup_timeout: 300
+      run_timeout: 1800
+      cleanup_timeout: 120
+      service_startup_timeout: 60
+      service_shutdown_timeout: 60
+      trial_reward_key: reward
+      output_path: PENDING_RUN_AGENT_TRACE_URI
 role_plan:
   colocate_all: false
   policy_num_nodes: 16
@@ -258,3 +290,6 @@ execution:
   - TOGETHER_API_KEY
   - MARIN_PREFIX
   container_profile: 4
+runtime_qualification_pending:
+- Observe natural-long CP4 backward/optimizer/save-restore and full-turn masks on
+  the adopted SFT checkpoint

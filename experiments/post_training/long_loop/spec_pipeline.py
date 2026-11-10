@@ -16,6 +16,7 @@ from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecuti
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_selected_run
 from experiments.post_training.long_loop.endpoint_probe import probe
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
@@ -40,7 +41,9 @@ def verify_inputs(*, output: str, manifests: dict) -> None:
     """Verify the bytes named by admission manifests before any training starts."""
     verified = []
     for name, manifest in manifests.items():
-        for entry in manifest["files"]:
+        if "data_file" in manifest and not manifest.get("files"):
+            raise ValueError(f"Dataset {name} has no pinned payload files")
+        for entry in manifest.get("files", ()):
             fs, key = filesystem_for(entry["uri"])
             with fs.open(key, "rb") as source:
                 actual = hashlib.file_digest(source, "sha256").hexdigest()
@@ -54,6 +57,8 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     blockers = stage_blockers(resolved, through)
     if blockers:
         raise ValueError("Run is not admitted: " + "; ".join(blockers))
+    if resolved.get("smoke") and through in {"rl", "archive"} and resolved.get("adopted_sft") is None:
+        raise ValueError("Downstream smoke requires an explicit committed adopted_sft input; SFT will not be replayed")
     datasets = resolved["datasets"]
     name = resolved["name"]
     execution = resolved["execution"]
@@ -73,22 +78,41 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             ),
         )
     )
-    base_manifest = resolved["initializer"]
-    base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
     recipe = resolved["sft"]
-    run_id = f"{name.replace('/', '-')}-sft-{version}"
-    fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=run_id)
-    trained = timed(
-        apply(
-            f"{name}/sft",
-            sft_run,
-            version=version,
-            output=OUT,
-            initializer=base,
-            recipe=recipe,
-            run_id=run_id,
+    adopted = resolved.get("adopted_sft")
+    if adopted is not None:
+        if through == "sft":
+            raise ValueError("An adopted SFT input is for downstream continuation, not an SFT stage")
+        if adopted["version"] == version:
+            raise ValueError("Downstream continuation requires a fresh runtime version")
+        trained = timed(
+            apply(
+                f"{name}/adopt-sft",
+                remote(verify_adopted_sft, resources=resources["inputs"]),
+                version=version,
+                output=OUT,
+                pin=adopted,
+                model=recipe["model"],
+                tokenizer_revision=resolved["tokenizer"]["revision"],
+            )
         )
-    )
+    else:
+        base_manifest = resolved["initializer"]
+        base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
+        recipe = resolved["sft"]
+        run_id = f"{name.replace('/', '-')}-sft-{version}"
+        fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=run_id)
+        trained = timed(
+            apply(
+                f"{name}/sft",
+                sft_run,
+                version=version,
+                output=OUT,
+                initializer=base,
+                recipe=recipe,
+                run_id=run_id,
+            )
+        )
     trained = replace(trained, deps=(*trained.deps, verified))
     coordinator = runtime_execution(execution["coordinator"])
     coordinator = replace(coordinator, coordinator_name=f"{coordinator.coordinator_name}-{version}")
@@ -149,6 +173,8 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         seed=rl["seed"],
     )
     learned = timed(replace(learned, deps=(*learned.deps, endpoint)))
+    if through == "rl":
+        return replace(learned, runtime_args={**learned.runtime_args, "skyrl_execution": coordinator})
     evaluation = resolved["evaluation"]
     data = datasets["evaluation"]
     eval_inputs = timed(

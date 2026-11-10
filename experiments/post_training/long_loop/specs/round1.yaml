@@ -6,10 +6,16 @@ datasets:
     sha256: 006350cde6a1a7f5e9622158e2d35ef232037975512399df4e37fb8997d11bf2
   nonagentic:
     path: nonagentic.yaml
-    sha256: 0ffad1a79b1ea3920b28a8db22194339cb742825a9ec6221bb9b24117dfb0fc5
-  agentic: null
-  heldout: null
-  exclusions: null
+    sha256: 33d8cb19de3a5675ca820d2bef86cfa23854b26667937ab9f0f688f18d3ff75e
+  agentic:
+    path: agentic.yaml
+    sha256: ba0b5c689fee9ef9c935a87cc9a862930336d68fe9bacb913ab4acb4945407be
+  heldout:
+    path: heldout.yaml
+    sha256: a47e11b247260d57f3d2915d3c1bca71d6964a09eb7540b74bf9b71d8a4e0ac3
+  exclusions:
+    path: exclusions.yaml
+    sha256: 6ef9e6cc7f7265683a94cc987b12b0ca38e49be042e255c42105458e987a5896
   evaluation:
     path: evaluation-data.yaml
     sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
@@ -33,7 +39,7 @@ archive:
   sha256: 6dd83160188df69c54466bf067921800bbebb91935145ae0144cea45581bd776
 rl:
   path: rl.yaml
-  sha256: 49a7ec7f7734e9c0d2af1b4264cc6f37ee03e9795ba04962e9790de0e1e431dc
+  sha256: a36983c30e854684cf0c8b55e4426f9e76edfec084c8856e1d8814a2e16876f6
 evaluation:
   path: evaluation.yaml
   sha256: 67357ed6c9f24912a8402986817ff6bfb198c6cecc3938478aae55931c51dea0
