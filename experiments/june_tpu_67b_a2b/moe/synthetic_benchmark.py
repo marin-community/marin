@@ -47,7 +47,14 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
+from experiments.june_tpu_67b_a2b.moe.model import (
+    FusedNormImpl,
+    GatedNormImpl,
+    GatedNormRemat,
+    GrugModelConfig,
+    HeadGateRemat,
+    RematMode,
+)
 from experiments.june_tpu_67b_a2b.moe.train import (
     GrugRunConfig,
     GrugTrainerConfig,
@@ -143,6 +150,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compilation-cache-dir", help="Persistent JAX compilation cache directory.")
     parser.add_argument("--remat-mode", choices=get_args(RematMode), default="recompute_all")
     parser.add_argument(
+        "--fused-norm-impl",
+        choices=get_args(FusedNormImpl),
+        default="off",
+        help="Run each RMS norm with its GatedNorm (and the residual add before the MLP norm) as one custom VJP whose "
+        "backward does the whole RMS-norm backward in one pass, in JAX ops (xla) or Pallas-Triton kernels (pallas); "
+        "off keeps the separate modules (GrugModelConfig.fused_norm_impl).",
+    )
+    parser.add_argument(
+        "--gated-norm-impl",
+        choices=get_args(GatedNormImpl),
+        default="xla",
+        help="With a fused norm, run GatedNorm's up projection, sigmoid and product, and its gate backward, as JAX ops "
+        "(xla) or as two Pallas-Triton kernels that write no extra [B, S, D] tensors under remat (pallas) "
+        "(GrugModelConfig.gated_norm_impl).",
+    )
+    parser.add_argument(
+        "--gated-norm-remat",
+        choices=get_args(GatedNormRemat),
+        default="recompute",
+        help="Save GatedNorm's rank-128 down projection in the per-block checkpoint so the backward's rerun of the "
+        "block skips that GEMM (save_hidden), or rerun it (recompute) (GrugModelConfig.gated_norm_remat).",
+    )
+    parser.add_argument(
+        "--head-gate-remat",
+        choices=get_args(HeadGateRemat),
+        default="recompute",
+        help="Save the attention's head-gate logits in the per-block checkpoint so the backward's rerun of the block "
+        "skips that GEMM (save), or rerun it (recompute) (GrugModelConfig.head_gate_remat).",
+    )
+    parser.add_argument(
         "--watch-interval", type=int, default=10, help="Steps between gradient watch steps (0 disables)."
     )
     parser.add_argument(
@@ -187,6 +224,10 @@ def main() -> None:
         attention_implementation=args.attention,
         moe_implementation=args.moe_impl,
         remat_mode=args.remat_mode,
+        fused_norm_impl=args.fused_norm_impl,
+        gated_norm_impl=args.gated_norm_impl,
+        gated_norm_remat=args.gated_norm_remat,
+        head_gate_remat=args.head_gate_remat,
         pooled_transport_capacity_factor=args.pooled_transport_capacity_factor,
         num_expert_waves=args.num_expert_waves,
     )
