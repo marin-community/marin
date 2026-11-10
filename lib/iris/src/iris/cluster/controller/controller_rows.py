@@ -264,7 +264,6 @@ def _snapshot(cur: RowCursor, tables: ControllerRowTables, marked: _Marked) -> N
 
 
 def _snapshot_jobs(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
-    """Job rows for ``marked.jobs``."""
     j = jobs_table.c
     for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
         for r in cur.execute(select(jobs_table).where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)):
@@ -340,7 +339,6 @@ def _snapshot_configs(cur: RowCursor, tables: ControllerRowTables, marked: _Mark
 
 
 def _snapshot_tasks(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
-    """Task rows for ``marked.tasks``."""
     j, t = jobs_table.c, tasks_table.c
     for chunk in batched(marked.tasks, _ID_CHUNK_SIZE):
         query = (
@@ -383,7 +381,6 @@ def _snapshot_tasks(cur: RowCursor, tables: ControllerRowTables, marked: _Marked
 
 
 def _snapshot_attempts(cur: RowCursor, tables: ControllerRowTables, marked: _Marked, ts: datetime) -> None:
-    """Attempt rows for ``marked.attempts``."""
     j, a, t = jobs_table.c, task_attempts_table.c, tasks_table.c
     for chunk in batched(marked.attempts, _ID_CHUNK_SIZE):
         query = (

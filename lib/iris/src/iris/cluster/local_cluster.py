@@ -56,6 +56,9 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 
+# The cluster name of a local cluster whose config leaves `name` empty.
+DEFAULT_LOCAL_CLUSTER_NAME = "local"
+
 
 def create_local_autoscaler(
     config: IrisClusterConfig,
@@ -228,7 +231,7 @@ class LocalCluster:
             host="127.0.0.1",
             port=port,
             remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
-            cluster_id=self._config.name or "local",
+            cluster_id=self._config.name or DEFAULT_LOCAL_CLUSTER_NAME,
             local_state_dir=Path(self._db_dir.name),
             auth_verifier=auth.verifier,
             auth_provider=auth.provider,
@@ -274,7 +277,7 @@ class LocalCluster:
         assert auth.jwt_manager is not None  # create_controller_auth always builds one
         jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
 
-        cluster_name = self._config.name or "local"
+        cluster_name = self._config.name or DEFAULT_LOCAL_CLUSTER_NAME
         save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url))
         self._auto_login_token = jwt_token
 

@@ -23,8 +23,13 @@ name.
 They copy a chosen set of columns, not a mirror. **The rule:** copy a column
 when the controller or a fixed vocabulary writes its value (ids, keys, states,
 enums, times, counts, resource numbers, policies, placement). Do not copy a
-column whose value is text the user wrote. The free-text `error` and
-`status_message` columns are the one exception, below. Rows are kept forever, so
+column whose value is text the user wrote. Identifiers the user chose that
+name or place the work, such as the job name, user, `task_image` and
+`constraints_json`, are copied, since queries group and filter by them.
+`task_image` is an image reference (`registry/path:tag`), which is needed to
+know what ran; a container runtime rejects credentials in a reference, and
+registry auth comes from the node's credential helper. The
+free-text `error` and `status_message` columns are the one exception, below. Rows are kept forever, so
 a column that fails the rule is left out, not redacted and kept.
 
 Not copied, all from `job_config`:
@@ -55,7 +60,7 @@ dropped DB column that was copied moves to RETIRED: its Finelog field stays,
 becomes `| None = None`, and reads NULL from then on; add its name and the date
 to the list below. Finelog columns are never removed or renamed.
 
-Retired columns: none yet.
+Retired columns (DB column → Finelog field, NULL since): none yet.
 
 **Free text:** the `error` columns of jobs, tasks and attempts, and
 `tasks.status_message` (the backend's reason a task is not running yet, such as

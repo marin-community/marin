@@ -392,13 +392,27 @@ def test_job_config_stores_no_environment_command_lines_or_other_user_text(state
         assert value not in written
 
 
-# Every column of the four controller DB tables, classified by the rule in
-# docs/controller-rows.md ("Which columns are copied"). COPIED maps a DB column to
-# its Finelog field; EXCLUDED gives the reason a column is not copied; RETIRED
-# holds DB columns that were copied and no longer exist, whose Finelog fields stay
-# and read NULL.
-_COLUMNS: dict[str, tuple[type, dict[str, str], dict[str, str], set[str]]] = {
-    "jobs": (
+@dataclass(frozen=True)
+class _Classified:
+    """One controller DB table's columns, classified by the rule in
+    docs/controller-rows.md ("Which columns are copied")."""
+
+    row_class: type
+    # DB column -> the Finelog field it is copied to.
+    copied: dict[str, str]
+    # DB column -> why it is not copied.
+    excluded: dict[str, str]
+    # Finelog fields not copied from a DB column: the keys from the job, the
+    # writing cluster, the snapshot time and values derived in the copy.
+    derived: frozenset[str]
+    # DB column that was copied and no longer exists -> its Finelog field,
+    # which stays and reads NULL.
+    retired: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+_JOB_KEY = frozenset({"cluster", "ts", "root_job_id", "root_submitted_at_ms", "submitted_at_ms"})
+_COLUMNS: dict[str, _Classified] = {
+    "jobs": _Classified(
         IrisJob,
         {
             "job_id": "job_id",
@@ -421,9 +435,9 @@ _COLUMNS: dict[str, tuple[type, dict[str, str], dict[str, str], set[str]]] = {
             "cluster": "placement",
         },
         {},
-        set(),
+        frozenset({"cluster", "ts", "tags"}),
     ),
-    "job_config": (
+    "job_config": _Classified(
         IrisJobConfig,
         {
             "job_id": "job_id",
@@ -457,9 +471,9 @@ _COLUMNS: dict[str, tuple[type, dict[str, str], dict[str, str], set[str]]] = {
             "egress_allow_json": "user-text",
             "coscheduling_group_by": "user-text",
         },
-        set(),
+        _JOB_KEY | {"accelerator_kind", "accelerator_type", "accelerators_per_task"},
     ),
-    "tasks": (
+    "tasks": _Classified(
         IrisJobTask,
         {
             "task_id": "task_id",
@@ -486,9 +500,9 @@ _COLUMNS: dict[str, tuple[type, dict[str, str], dict[str, str], set[str]]] = {
             "cluster": "placement",
         },
         {},
-        set(),
+        _JOB_KEY,
     ),
-    "task_attempts": (
+    "task_attempts": _Classified(
         IrisTaskAttempt,
         {
             "task_id": "task_id",
@@ -508,7 +522,7 @@ _COLUMNS: dict[str, tuple[type, dict[str, str], dict[str, str], set[str]]] = {
             "terminal_reason": "terminal_reason",
         },
         {},
-        set(),
+        _JOB_KEY | {"job_id"},
     ),
 }
 _THIS_TEST = "lib/iris/tests/cluster/controller/test_controller_rows.py"
@@ -517,7 +531,8 @@ _RULE = 'lib/iris/docs/controller-rows.md, "Which columns are copied"'
 
 @pytest.mark.parametrize("table", sorted(_COLUMNS))
 def test_every_controller_db_column_is_classified(tmp_path, table):
-    row_class, copied, excluded, retired = _COLUMNS[table]
+    classified = _COLUMNS[table]
+    copied, excluded, retired = classified.copied, classified.excluded, classified.retired
     ControllerDB(db_dir=tmp_path).close()
     with closing(sqlite3.connect(tmp_path / ControllerDB.DB_FILENAME)) as conn:
         db_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -530,13 +545,21 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
     gone = sorted((copied.keys() | excluded.keys()) - db_columns)
     assert not gone, (
         f"controller DB table {table!r} no longer has column(s) {gone}: drop an EXCLUDED one, and move a "
-        f"COPIED one to RETIRED with its field made `| None = None` and a doc line, in {_THIS_TEST}; see {_RULE}"
+        f"COPIED one to RETIRED (column -> field) with its field made `| None = None` and a doc line, in "
+        f"{_THIS_TEST}; see {_RULE}"
     )
-    fields = {field.name: field for field in dataclasses.fields(row_class)}
-    assert set(copied.values()) <= fields.keys()
-    for column in retired:
+    fields = {field.name: field for field in dataclasses.fields(classified.row_class)}
+    sources = set(copied.values()) | set(retired.values()) | classified.derived
+    # Exact, so an EXCLUDED column copied anyway, or under a new name, fails too.
+    assert fields.keys() == sources, (
+        f"{classified.row_class.__name__} fields without a classified source: {sorted(fields.keys() - sources)}; "
+        f"classified sources without a field: {sorted(sources - fields.keys())}; see {_RULE}"
+    )
+    for column, field in retired.items():
         assert column not in db_columns
-        assert fields[column].default is None, f"retired field {row_class.__name__}.{column} must default to None"
+        assert (
+            fields[field].default is None
+        ), f"retired field {classified.row_class.__name__}.{field} must default to None"
 
 
 def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
