@@ -108,7 +108,8 @@ def _hf_tensors(model: Transformer, num_experts: int) -> dict[str, torch.Tensor]
 def _hf_config(config: GrugModelConfig) -> dict:
     """Schema-3 config: the log_scaling_* fields are always present, null when off.
 
-    Built from the schema-2 export config because ``to_hf_config`` does not yet write schema 3.
+    Built from the export config with log scaling off, then given schema 3 and the fields, so it
+    does not depend on which schema ``to_hf_config`` writes.
     """
     hf_config = bf16_hf_config(dataclasses.replace(config, **dict.fromkeys(LOG_SCALING_FIELDS)))
     hf_config[GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] = LOG_SCALING_SCHEMA_VERSION
