@@ -1,25 +1,22 @@
 from pathlib import Path
 
 import pytest
-
 from harbor.job import Job
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.job.config import JobConfig
+from harbor.models.trial.config import AgentConfig, ResourceMode, TaskConfig
 from harbor.models.trial.config import (
     EnvironmentConfig as RuntimeEnvironmentConfig,
 )
-from harbor.models.trial.config import ResourceMode, TaskConfig
 
 
 def _write_task(tmp_path: Path) -> Path:
     task_dir = tmp_path / "task"
     task_dir.mkdir()
-    (task_dir / "task.toml").write_text(
-        """
+    (task_dir / "task.toml").write_text("""
 [task]
 name = "test-org/test-task"
-"""
-    )
+""")
     return task_dir
 
 
@@ -29,6 +26,7 @@ def _job_config(
     environment: RuntimeEnvironmentConfig,
 ) -> JobConfig:
     return JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="resource-preflight-test",
         jobs_dir=tmp_path / "jobs",
         tasks=[TaskConfig(path=task_dir)],
