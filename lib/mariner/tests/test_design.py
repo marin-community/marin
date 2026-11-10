@@ -144,7 +144,7 @@ def test_swarm_table_lists_baselines_candidates_removals_then_repeats():
         "run_00000",
         "run_00001",
         "deletion_a",
-        "deletion_b/c",
+        "deletion_b_c",
         "deletion_d",
         "proportional_repeat_00",
         "proportional_repeat_01",

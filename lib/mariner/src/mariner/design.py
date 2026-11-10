@@ -51,7 +51,7 @@ DEDUPLICATION_DECIMALS = 4
 
 UNIMAX = "unimax"  # the recipe's other baselines, beside the calibrating PROPORTIONAL of mariner.data
 STRATIFIED = "stratified"
-SAMPLED_RUN_PREFIX = "run_"  # run labels run_00000, ..., deletion_<bucket_id> and proportional_repeat_00, ...
+SAMPLED_RUN_PREFIX = "run_"  # run labels run_00000, ..., deletion_<bucket> and proportional_repeat_00, ...
 DELETION_RUN_PREFIX = "deletion_"
 REPEAT_RUN_INFIX = "_repeat_"
 DESIGN_TRAINER_SEED = 0  # the trainer seed of every run of a designed swarm
@@ -135,6 +135,12 @@ def sobol_candidates(
 # ---------------------------------------------------------------------------------------------------------------
 # Baselines and removals
 # ---------------------------------------------------------------------------------------------------------------
+
+
+def deletion_label(bucket_id: str) -> str:
+    """The run label of the mixture that removes ``bucket_id``, with the bucket id's ``/`` written ``_`` so that the
+    label can name a folder: ``deletion_cc_art_and_design_high`` for ``cc/art_and_design_high``."""
+    return f"{DELETION_RUN_PREFIX}{bucket_id.replace('/', '_')}"
 
 
 def proportional(pool_tokens: np.ndarray) -> np.ndarray:
@@ -223,8 +229,8 @@ def swarm_table(
     - one ``baseline_<name>`` row (``design_kind`` ``baseline``) for each of ``baselines``, which must contain
       ``proportional``;
     - ``run_00000``, ``run_00001``, ... (``sampled``) for each row of ``candidates``;
-    - ``deletion_<bucket_id>`` (``deletion``) for each bucket, the ``removal_base`` mixture with that bucket removed,
-      unless ``removal_base`` is None;
+    - ``deletion_<bucket>`` (``deletion``) for each bucket, the bucket id with ``/`` written ``_``, the
+      ``removal_base`` mixture with that bucket removed, unless ``removal_base`` is None;
     - ``repeats`` rows ``proportional_repeat_00``, ... (``repeat``) of the proportional baseline, which have
       ``fit_inclusion`` false; every other row has it true. The anchors need at least two, for a standard deviation.
 
@@ -256,7 +262,7 @@ def swarm_table(
     if removal_base is not None:
         groups.append(
             RunGroup(
-                [f"{DELETION_RUN_PREFIX}{bucket}" for bucket in bucket_ids],
+                [deletion_label(bucket) for bucket in bucket_ids],
                 DELETION,
                 fit_inclusion=True,
                 weights=removals(removal_base),

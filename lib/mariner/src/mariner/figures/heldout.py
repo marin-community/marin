@@ -290,7 +290,7 @@ def draw_scale_transfer(root: Path) -> FigureData:
 
 # Sources of designed interventions rather than proposed mixtures: the conditional epoch dose-response design and an
 # archived launch of the baseline mixtures. The paper's analysis of the best held-out mixtures leaves them out.
-EXCLUDED_SOURCES = ("designed_conditional_epoch_dose", "archive::delphi_baseline_mixtures_issue6607_20260623")
+EXCLUDED_SOURCES = ("designed_conditional_epoch_dose", "baseline_mixtures")
 
 
 class FrontierBank(NamedTuple):

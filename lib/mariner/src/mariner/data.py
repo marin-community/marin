@@ -131,10 +131,10 @@ COEFFICIENT_PREFIX = "coef__"
 # objective's aggregate as the row without a task id, and OlmoBaseEval Easy's tasks with their subtasks collapsed.
 RELIABILITY_TABLE = "fits_reliability"
 RELIABILITY_SOURCES: dict[str, str] = {
-    ObjectiveName.UNCHEATABLE: "snr_fit_uncheatable_delphi",
-    ObjectiveName.OBE_EASY: "snr_fit_components_delphi",
+    ObjectiveName.UNCHEATABLE: "snr_fit_uncheatable",
+    ObjectiveName.OBE_EASY: "snr_fit_components",
 }
-RELIABILITY_COLLAPSED_SOURCE = "snr_fit_tasks_delphi"
+RELIABILITY_COLLAPSED_SOURCE = "snr_fit_tasks"
 # Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
 # differ from their calibration run by 3.1e-16 at most.
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12
