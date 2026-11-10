@@ -76,11 +76,13 @@ def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owne
     assert metadata["models"] == fresh["models"]
 
 
-def test_api_defaults_to_the_current_verified_cohort(client):
-    expected = "eval-policy-2026-09-24-verified"
-    assert client.get("/panel").json()["request"]["cohort_version"] == expected
-    assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
-    assert client.get("/panel", params={"cohort": "all"}).json()["request"]["cohort_version"] is None
+def test_a_request_without_a_cohort_reads_the_newest_result_across_cohorts(client):
+    assert client.get("/meta").json()["default_cohort"] == "all"
+    for params in ({}, {"cohort": ""}, {"cohort": "all"}):
+        request = client.get("/panel", params=params).json()["request"]
+        assert (request["cohort"], request["cohort_version"]) == ("latest_valid", None)
+    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b"})
+    assert comparison.status_code == 200
 
 
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):

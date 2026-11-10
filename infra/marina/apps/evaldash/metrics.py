@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
-from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import POLICIES, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -506,7 +506,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
         "models": all_models,
         "run_facets": run_facets,
         "metric_policy": PUBLICATION_METRIC_POLICY,
-        "default_cohort": SEPTEMBER_24_VERSION,
+        "default_cohort": ALL_COHORTS,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
@@ -605,10 +605,10 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
 def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
 
-    ``current_version`` is the version of the model's most recent non-smoke run -- the cohort the view
-    opens on -- and ``cohorts`` lists one entry per distinct version, both excluding ``-smoke`` suites
-    as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
-    and ``runs`` spans every run for the model (smoke included), newest first.
+    ``current_version`` is the version of the model's most recent non-smoke run, and ``cohorts``
+    lists one entry per distinct version, both excluding ``-smoke`` suites as the headline panel
+    does. ``history`` is the per-eval score-over-time across every scored run, and ``runs`` spans
+    every run for the model (smoke included), newest first.
     """
     protocols = declared_protocols(dashboard_measurements(_panel_records(records)))
     model_records = [record for record in records if record.model.name == model]

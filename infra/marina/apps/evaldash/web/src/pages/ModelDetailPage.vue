@@ -39,9 +39,10 @@ onViewRefresh(() => {
 const ALL = '__all__'
 const scope = computed<string | null>(() => {
   const selected = route.query.cohort
-  if (selected === ALL_COHORTS) return ALL
-  if (selected === UNVERSIONED_COHORT) return null
-  return typeof selected === 'string' && selected ? selected : (meta.value?.default_cohort ?? data.value?.current_version ?? null)
+  const cohort = typeof selected === 'string' && selected ? selected : meta.value?.default_cohort
+  if (cohort === ALL_COHORTS) return ALL
+  if (cohort === UNVERSIONED_COHORT) return null
+  return cohort ?? data.value?.current_version ?? null
 })
 watch(
   [() => data.value?.model, () => meta.value?.default_cohort, () => route.query.cohort, () => props.model],
