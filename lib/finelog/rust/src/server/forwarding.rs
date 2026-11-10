@@ -934,7 +934,7 @@ where
         }
     }
 
-    /// One bounded batch of locally-written rows of `name` in `(cursor, persisted]`
+    /// One bounded batch of the rows of `name` in `(cursor, persisted]`
     /// as a batch ready to ship (its `seq` column dropped, its origin column stamped),
     /// alongside the seqs those rows carry. When eviction has already archived the rows
     /// just above `cursor`, `resume_at` names the seq to resume from instead.
@@ -1420,7 +1420,7 @@ struct Progress {
     batches: u64,
     /// `seq` positions the forwarder passed over because local retention evicted them or
     /// the hub permanently rejected their batch. This is an upper bound on rows lost:
-    /// some positions held rows the scan would have filtered out anyway.
+    /// some positions are gaps that held no row.
     skipped_seqs: i64,
     pending: ForwardingDeltas,
     last_report: Instant,

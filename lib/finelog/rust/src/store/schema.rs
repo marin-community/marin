@@ -1430,8 +1430,9 @@ fn validate_and_align_batch_with_policy(
 /// federation gap where a namespace whose schema on the sending finelog predates
 /// the implicit `cluster` column forwards its rows unstamped (the forwarder only
 /// stamps when its local schema carries the column). Overwriting — rather than
-/// filling blanks or rejecting a mismatch — is both simpler and safer: the
-/// forwarder already stamps every row it ships with its own cluster, so the
+/// filling blanks or rejecting a mismatch — is both simpler and safer: a
+/// forwarder whose table has the column stamps every row it ships with its own
+/// cluster, and one whose table predates it sends no cluster at all, so the
 /// batch's cluster carries nothing to preserve, and a JWT writer can then only
 /// ever attribute rows to its own cluster.
 pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {

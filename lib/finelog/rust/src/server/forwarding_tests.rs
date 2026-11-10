@@ -1204,37 +1204,18 @@ async fn push_named(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_row_named_with_its_own_cluster_is_forwarded_and_keeps_the_name() {
-    // A server may stamp its own rows with its cluster name. The forwarder sends those
-    // rows like any other, so a named row reaches the hub under the same name.
+async fn named_rows_are_forwarded_under_the_senders_cluster() {
+    // The forwarder sends every row, including rows a local writer already labeled, and
+    // stamps each with its own cluster on the way out. A row named with the sender's own
+    // cluster keeps that name; a row labeled for another cluster arrives attributed to
+    // the server that sent it.
     let fx = Fixture::new("named").await;
 
-    push_named(&fx.source_client, "/user/job/t", "named", SOURCE_CLUSTER).await;
-    push(&fx.source_client, "/user/job/t", &["unnamed"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
-    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
-
-    assert_eq!(
-        fx.hub_log_rows().await,
-        vec![
-            ("/user/job/t".to_string(), "named".to_string()),
-            ("/user/job/t".to_string(), "unnamed".to_string()),
-        ]
-    );
-    assert_eq!(hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await, 2);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_row_named_for_another_cluster_is_forwarded_under_the_senders_name() {
-    // The forwarder sends every row and stamps each with its own cluster on the way out,
-    // so a row a local writer labeled for some other cluster still reaches the hub,
-    // attributed to the server that sent it.
-    let fx = Fixture::new("relabel").await;
-
+    push_named(&fx.source_client, "/user/job/t", "own", SOURCE_CLUSTER).await;
     push_named(
         &fx.source_client,
         "/user/job/t",
-        "labeled",
+        "other",
         "some-other-cluster",
     )
     .await;
@@ -1245,11 +1226,12 @@ async fn a_row_named_for_another_cluster_is_forwarded_under_the_senders_name() {
     assert_eq!(
         fx.hub_log_rows().await,
         vec![
-            ("/user/job/t".to_string(), "labeled".to_string()),
+            ("/user/job/t".to_string(), "own".to_string()),
+            ("/user/job/t".to_string(), "other".to_string()),
             ("/user/job/t".to_string(), "unnamed".to_string()),
         ]
     );
-    assert_eq!(hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await, 2);
+    assert_eq!(hub_log_count_for_cluster(&fx, SOURCE_CLUSTER).await, 3);
     assert_eq!(
         hub_log_count_for_cluster(&fx, "some-other-cluster").await,
         0
