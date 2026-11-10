@@ -38,6 +38,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeImplementation,
     QBRoutedMoE,
+    reduce_moe_routing_stats,
     validate_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -51,9 +52,14 @@ _GATED_NORM_RANK = 128
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+# Batch axes that split the tokens into QB balancing groups under ``qb_balance="per_node"``: everything but
+# ``expert``, which spans one node when expert parallelism fills it.
+_QB_GROUP_AXES: tuple[str, ...] = ("replica_dcn", "data")
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+ScanReduction = Literal["per_layer", "after_scan"]
+QbBalance = Literal["global", "per_node"]
 
 
 def _batch_spec() -> P:
@@ -145,6 +151,24 @@ class GrugModelConfig:
     at scale where the unrolled program OOMs at compile time."""
     scan_unroll: int = 1
     """Layers per iteration of the stacked-blocks scan. Larger values expose more layers to XLA's scheduler."""
+    replicated_grad_reduction: ScanReduction = "per_layer"
+    """Where the gradients of the block weights replicated over the batch axes (RMSNorm, GatedNorm, router, and the
+    attention and shared-expert weights when not sharded) are reduced across the batch shards: in every layer
+    ("per_layer"), or once after the layer scan ("after_scan", stacked blocks only): the weights are marked
+    ``reduced`` over the batch axes before the scan, so their cotangents stay ``unreduced`` (per-device partial
+    sums) through it. Only weights up to ``replicated_grad_max_bytes`` per layer: those reductions are
+    latency-bound, while larger ones overlap with the backward in the scan and only lose that overlap after it."""
+    replicated_grad_max_bytes: int = 4 << 20
+    """Per-layer size limit for ``replicated_grad_reduction="after_scan"``. The default 4 MiB covers the norms,
+    GatedNorm, router and attention gate at d=2560 and leaves the attention and shared-expert weights in the scan."""
+    router_stats_reduction: ScanReduction = "per_layer"
+    """Where routing statistics and QB thresholds are reduced across the batch shards: in every layer
+    ("per_layer"), or once after the layer scan from per-shard partials ("after_scan", stacked blocks only). Both
+    give the same values; nothing in a layer reads them (QB thresholds apply at the next step)."""
+    qb_balance: QbBalance = "global"
+    """QB load balancing over all tokens ("global"), or per group of batch shards along ``replica_dcn`` and
+    ``data`` ("per_node": one group per node when ``expert`` spans it), each group with its own router bias.
+    Needs ``router_stats_reduction="after_scan"``; the trainer's ``qb_sync_interval`` averages the groups."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -166,6 +190,15 @@ class GrugModelConfig:
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         validate_moe_implementation(self.moe_implementation)
+        stacked_only = {
+            "replicated_grad_reduction": self.replicated_grad_reduction,
+            "router_stats_reduction": self.router_stats_reduction,
+        }
+        for name, where in stacked_only.items():
+            if where == "after_scan" and not self.use_array_stacked_blocks:
+                raise ValueError(f'{name}="after_scan" needs use_array_stacked_blocks=True')
+        if self.qb_balance == "per_node" and self.router_stats_reduction != "after_scan":
+            raise ValueError('qb_balance="per_node" needs router_stats_reduction="after_scan"')
 
     @property
     def inferred_head_dim(self) -> int:
@@ -355,13 +388,20 @@ class RMSNorm(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        weight = unshard(self.weight)
+        reduced = bool(jax.typeof(self.weight).sharding.spec.reduced)
+        weight = self.weight if reduced else unshard(self.weight)
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
         # AD retains different intermediates; pin the reduction to preserve forward rounding.
         variance = jax.lax.optimization_barrier(variance)
         normed = x * jax.lax.rsqrt(variance + self.eps)
+        if reduced:
+            # An elementwise op cannot mix a reduced weight with batch-sharded activations; broadcasting it to the
+            # activations' sharding can, and its transpose leaves the weight's gradient unreduced.
+            weight = jax.lax.broadcast_in_dim(
+                weight, normed.shape, (normed.ndim - 1,), out_sharding=jax.typeof(normed).sharding
+            )
         return (normed * weight).astype(dtype)
 
 
@@ -512,7 +552,7 @@ class MoEMLP(eqx.Module):
             router=reshard(
                 _init_weight(k_router, (cfg.hidden_dim, cfg.num_experts), cfg.initializer_std), P(None, None)
             ),
-            router_bias=jnp.zeros((cfg.num_experts,)),
+            router_bias=_init_router_bias(cfg, mesh),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=cfg.hidden_dim,
@@ -528,6 +568,8 @@ class MoEMLP(eqx.Module):
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,
                 batch_axes=_BATCH_AXES,
+                local_stats=cfg.router_stats_reduction == "after_scan",
+                bias_group_axes=_QB_GROUP_AXES if cfg.qb_balance == "per_node" else (),
             ),
             cfg=cfg,
         )
@@ -553,6 +595,75 @@ class MoEMLP(eqx.Module):
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+def qb_group_count(cfg: GrugModelConfig, mesh: jax.sharding.AbstractMesh | None = None) -> int:
+    """QB balancing groups: 1 for global balancing, else the product of the group axes' sizes."""
+    if cfg.qb_balance == "global":
+        return 1
+    mesh = mesh if mesh is not None else get_abstract_mesh()
+    return math.prod(_mesh_axis_size(mesh, axis) for axis in _QB_GROUP_AXES)
+
+
+def qb_betas_spec(cfg: GrugModelConfig) -> P:
+    """Sharding of the per-layer QB thresholds: [L, E], or [L, G, E] sharded over the groups."""
+    return P(None, _QB_GROUP_AXES, None) if cfg.qb_balance == "per_node" else P(None, None)
+
+
+def _init_router_bias(cfg: GrugModelConfig, mesh: jax.sharding.AbstractMesh) -> jax.Array:
+    if cfg.qb_balance == "global":
+        return jnp.zeros((cfg.num_experts,))
+    return reshard(jnp.zeros((qb_group_count(cfg, mesh), cfg.num_experts)), P(_QB_GROUP_AXES, None))
+
+
+def _reduce_qb_betas_per_group(stats: dict[str, jax.Array], groups: int) -> jax.Array:
+    """Valid-token-weighted QB thresholds per group from the scan-stacked per-shard partials: [L, G, E]."""
+    beta, weight = stats["qb_beta_local"], stats["qb_beta_weight_local"].astype(jnp.float32)
+    layers, shards, experts = beta.shape
+    inner_axes = _BATCH_AXES[len(_QB_GROUP_AXES) :]
+    beta = beta.reshape(
+        (layers, groups, shards // groups, experts), out_sharding=P(None, _QB_GROUP_AXES, inner_axes, None)
+    )
+    weight = weight.reshape((layers, groups, shards // groups), out_sharding=P(None, _QB_GROUP_AXES, inner_axes))
+    out = jnp.sum(beta * weight[..., None], axis=2) / jnp.maximum(jnp.sum(weight, axis=2), 1)[..., None]
+    return reshard(out, P(None, _QB_GROUP_AXES, None))
+
+
+def _without_unit_axes(spec: P, mesh: jax.sharding.AbstractMesh) -> P | None:
+    """``spec`` with size-1 mesh axes dropped, or None when it shards over a batch axis of size > 1."""
+    out = []
+    for p in spec:
+        axes = tuple(a for a in (p if isinstance(p, tuple) else (p,)) if p is not None and _mesh_axis_size(mesh, a) > 1)
+        if set(axes) & set(_BATCH_AXES):
+            return None
+        out.append(axes[0] if len(axes) == 1 else (axes or None))
+    return P(*out)
+
+
+def _mark_reduced(blocks: "Block", max_bytes: int) -> "Block":
+    """Mark the stacked block weights that are replicated over the batch axes ``reduced`` over them.
+
+    Their cotangents then stay unreduced through the layer scan; the transpose of this reshard reduces each once,
+    after the scan, instead of one all-reduce per weight in every iteration. This covers the norms, GatedNorm and
+    the router, and any other replicated block weight up to ``max_bytes`` per layer. Larger ones (attention and
+    shared expert when not sharded, e.g. ``replica_axis`` > 1 with ``data`` 1) keep their per-layer reduction,
+    which overlaps with the backward; so do the expert weights, sharded over ``expert``. ``router_bias`` is excluded:
+    it is added elementwise and has no gradient.
+    """
+    mesh = get_abstract_mesh()
+
+    def mark(path, x):
+        if not isinstance(x, jax.Array) or any(getattr(k, "name", None) == "router_bias" for k in path):
+            return x
+        if x.size * x.dtype.itemsize // x.shape[0] > max_bytes:  # stacked: leading axis is the layer
+            return x
+        spec = _without_unit_axes(jax.typeof(x).sharding.spec, mesh)
+        if spec is None:
+            return x
+        # Every batch axis, size-1 ones included: a dot's unreduced output must name its contracting dim's axes.
+        return reshard(x, P(*spec, reduced=frozenset(_BATCH_AXES)))
+
+    return jax.tree_util.tree_map_with_path(mark, blocks)
 
 
 class Block(eqx.Module):
@@ -746,12 +857,25 @@ class Transformer(eqx.Module):
                     carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope, position_ids
                 )
 
+            stacked = self.stacked_blocks.stacked
+            if cfg.replicated_grad_reduction == "after_scan":
+                stacked = _mark_reduced(stacked, cfg.replicated_grad_max_bytes)
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers,
                 hidden,
-                xs=(self.stacked_blocks.stacked, mask_schedule),
+                xs=(stacked, mask_schedule),
                 unroll=cfg.scan_unroll,
             )
+            if cfg.router_stats_reduction == "after_scan":
+                # One cross-device reduction for the whole layer stack (moe_routing_stats_local).
+                reduced_stats = reduce_moe_routing_stats(
+                    stacked_router_stats,
+                    num_experts=cfg.num_experts,
+                    num_experts_per_token=cfg.num_experts_per_token,
+                )
+                if cfg.qb_balance == "per_node":
+                    reduced_stats["qb_beta"] = _reduce_qb_betas_per_group(stacked_router_stats, qb_group_count(cfg))
+                stacked_router_stats = {**stacked_router_stats, **reduced_stats}
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
                 "routing_counts_per_layer": stacked_router_stats["routing_counts"],

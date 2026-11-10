@@ -219,6 +219,52 @@ def qb_beta_topk_shard(
     return jnp.where(valid_count > 0, beta, 0), valid_count
 
 
+def qb_beta_topk_local(
+    s_minus_alpha: Float[Array, "T E"],
+    token_valid: Bool[Array, "T"],
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    batch_axes: tuple[str, ...],
+    num_experts_per_token: int,
+    num_experts: int,
+) -> tuple[Float[Array, "S E"], Int[Array, "S"]]:
+    """Per-shard QB thresholds and their valid-token weights, one row per batch shard.
+
+    The cross-shard weighted mean is left to the caller: :func:`reduce_moe_routing_stats` after the layer scan,
+    or a reduction over a subset of the shards (per-group balancing).
+    """
+
+    def _local(s_local: jax.Array, valid_local: jax.Array) -> tuple[jax.Array, jax.Array]:
+        physical_count = qb_topk_physical_count(
+            s_local.shape[0], num_experts_per_token=num_experts_per_token, num_experts=num_experts
+        )
+        beta, valid_count = qb_beta_topk_shard(
+            s_local,
+            valid_local,
+            physical_count=physical_count,
+            num_experts_per_token=num_experts_per_token,
+            num_experts=num_experts,
+        )
+        return beta[None, :], valid_count[None]
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(P(batch_axes, None), P(batch_axes)),
+        out_specs=(P(batch_axes, None), P(batch_axes)),
+    )(s_minus_alpha, token_valid)
+
+
+def replicate_keeping_reduced(x: jax.Array) -> jax.Array:
+    """Replicate ``x`` over every mesh axis, keeping the axes it is ``reduced`` over.
+
+    A weight marked ``reduced`` gets an ``unreduced`` cotangent, so its gradient reduction can wait until the caller
+    reshards it (e.g. once after a layer scan). Resharding it to a plain replicated spec would reduce it here.
+    """
+    reduced = jax.typeof(x).sharding.spec.reduced
+    return reshard(x, P(*([None] * x.ndim), reduced=reduced))
+
+
 def estimate_qb_beta_topk(
     s_minus_alpha: Float[Array, "T E"],
     token_valid: Bool[Array, "T"],
@@ -271,6 +317,13 @@ class QBRoutedMoE(eqx.Module):
     # This is part of the QB routing recipe, rather than an independently tuned
     # model hyperparameter: selected sigmoid weights are normalized to this sum.
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
+    # Return shard-local routing statistics and QB partials (``moe_routing_stats_local`` keys plus
+    # ``qb_beta_local``/``qb_beta_weight_local``) instead of reducing them across the batch shards here; the caller
+    # reduces them once, e.g. after the layer scan. Nothing in this layer reads them.
+    local_stats: bool = eqx.field(static=True, default=False)
+    # Leading batch axes that index ``router_bias`` rows when it is [G, E]: per-group QB balancing, G the product of
+    # these axes' sizes. Tokens are sharded over ``batch_axes`` in order, so these must be its first axes.
+    bias_group_axes: tuple[str, ...] = eqx.field(static=True, default=())
 
     @named_call
     def __call__(
@@ -279,7 +332,7 @@ class QBRoutedMoE(eqx.Module):
         token_valid: Bool[Array, "T"],
         *,
         router: Float[Array, "D E"],
-        router_bias: Float[Array, "E"],
+        router_bias: Float[Array, "E"] | Float[Array, "G E"],
         expert_mlp: "MoEExpertMlp",
         mesh: jax.sharding.AbstractMesh,
         report_capacity_overflow: bool = True,
@@ -298,8 +351,8 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
         with jax.named_scope("moe_route"):
-            router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
-            biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
+            router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
+            biased_logits = self._add_router_bias(router_logits, jax.lax.stop_gradient(router_bias), mesh)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
             qb_alpha = topk_logits[:, -1:]
@@ -312,25 +365,41 @@ class QBRoutedMoE(eqx.Module):
             combine_weights = combine_weights.astype(x.dtype)
 
         with jax.named_scope("moe_router_stats"):
-            router_stats = moe_routing_stats(
-                selected_experts,
-                router_probs,
-                router_logits,
-                token_valid,
-                num_experts=router.shape[1],
-                num_experts_per_token=self.num_experts_per_token,
-            )
+            if self.local_stats:
+                token_spec = P(self.batch_axes, None)
+                router_stats = moe_routing_stats_local(
+                    reshard(selected_experts, token_spec),
+                    reshard(router_probs, token_spec),
+                    reshard(router_logits, token_spec),
+                    reshard(token_valid, P(self.batch_axes)),
+                    mesh,
+                    batch_axes=self.batch_axes,
+                    num_experts=router.shape[1],
+                )
+            else:
+                router_stats = moe_routing_stats(
+                    selected_experts,
+                    router_probs,
+                    router_logits,
+                    token_valid,
+                    num_experts=router.shape[1],
+                    num_experts_per_token=self.num_experts_per_token,
+                )
 
         with jax.named_scope("moe_qb_beta"):
             s_minus_alpha = reshard(router_logits - qb_alpha, P(self.batch_axes, None))
-            router_stats["qb_beta"] = estimate_qb_beta_topk(
-                s_minus_alpha,
-                reshard(token_valid, P(self.batch_axes)),
-                mesh,
+            qb_args = (s_minus_alpha, reshard(token_valid, P(self.batch_axes)), mesh)
+            qb_kwargs = dict(
                 batch_axes=self.batch_axes,
                 num_experts_per_token=self.num_experts_per_token,
                 num_experts=router.shape[1],
             )
+            if self.local_stats:
+                router_stats["qb_beta_local"], router_stats["qb_beta_weight_local"] = qb_beta_topk_local(
+                    *qb_args, **qb_kwargs
+                )
+            else:
+                router_stats["qb_beta"] = estimate_qb_beta_topk(*qb_args, **qb_kwargs)
 
         with jax.named_scope("moe_experts"):
             moe_out = expert_mlp(
@@ -355,6 +424,22 @@ class QBRoutedMoE(eqx.Module):
                 token_valid, topk=self.num_experts_per_token
             ).astype(jnp.float32)
         return routed, router_stats
+
+    def _add_router_bias(
+        self, logits: Float[Array, "T E"], bias: Float[Array, "E"] | Float[Array, "G E"], mesh
+    ) -> Float[Array, "T E"]:
+        """Add the QB router bias: one row for all tokens, or one row per group of batch shards."""
+        if bias.ndim == 1:
+            return logits + bias
+        if self.batch_axes[: len(self.bias_group_axes)] != self.bias_group_axes:
+            raise ValueError(f"bias_group_axes {self.bias_group_axes} must lead batch_axes {self.batch_axes}")
+        groups, tokens, experts = bias.shape[0], logits.shape[0], logits.shape[1]
+        inner_axes = self.batch_axes[len(self.bias_group_axes) :]
+        grouped = logits.reshape(
+            (groups, tokens // groups, experts), out_sharding=P(self.bias_group_axes, inner_axes, None)
+        )
+        grouped = grouped + reshard(bias, P(self.bias_group_axes, None))[:, None, :]
+        return grouped.reshape((tokens, experts), out_sharding=P(self.batch_axes, None))
 
 
 class MoEExpertMlp(eqx.Module):

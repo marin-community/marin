@@ -23,7 +23,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
@@ -47,7 +47,14 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
-from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer, _long_layer_schedule
+from experiments.june_tpu_67b_a2b.moe.model import (
+    Block,
+    GrugModelConfig,
+    Transformer,
+    _long_layer_schedule,
+    qb_betas_spec,
+    qb_group_count,
+)
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -92,6 +99,10 @@ class GrugTrainerConfig:
     timeout. When one device fails inside a step, for example an allocator OOM, the other devices wait in a
     collective that never times out, and without this the job sits until its scheduler time limit. None disables
     it."""
+
+    qb_sync_interval: int = 0
+    """With per-node QB balancing (``GrugModelConfig.qb_balance="per_node"``): every this many steps, replace each
+    node's QB thresholds by the mean over nodes, so the nodes' router biases cannot drift apart. 0 never averages."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -319,8 +330,22 @@ def initial_state(
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=_initial_qb_betas(model_config, num_moe_layers),
     )
+
+
+def _initial_qb_betas(model_config: GrugModelConfig, num_moe_layers: int) -> jax.Array:
+    """Zero QB thresholds: [L, E], or [L, G, E] sharded over the groups with per-node balancing."""
+    if model_config.qb_balance == "global":
+        return jnp.zeros((num_moe_layers, model_config.num_experts))
+    zeros = jnp.zeros((num_moe_layers, qb_group_count(model_config), model_config.num_experts))
+    return reshard(zeros, qb_betas_spec(model_config))
+
+
+def _average_qb_betas_over_groups(betas: jax.Array) -> jax.Array:
+    """[L, G, E] per-group QB thresholds -> their mean over the groups, broadcast back to every group."""
+    mean = jnp.mean(betas, axis=1, keepdims=True)
+    return reshard(jnp.broadcast_to(mean, betas.shape), jax.typeof(betas).sharding.spec)
 
 
 def init_weights_only_from_checkpoint(
@@ -360,6 +385,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     diagnose_numerics: bool = False,
+    qb_sync_interval: int = 0,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -433,13 +459,21 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
+        pending_qb_betas = metrics["qb_beta_per_layer"]
+        if qb_sync_interval > 0 and pending_qb_betas.ndim == 3:
+            pending_qb_betas = jax.lax.cond(
+                (state.step + one) % qb_sync_interval == 0,
+                _average_qb_betas_over_groups,
+                lambda betas: betas,
+                pending_qb_betas,
+            )
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=pending_qb_betas,
         )
 
         return next_state, metrics, watch_stats
@@ -499,6 +533,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         diagnose_numerics=config.trainer.diagnose_numerics,
+        qb_sync_interval=config.trainer.qb_sync_interval,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
