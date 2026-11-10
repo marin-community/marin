@@ -423,3 +423,31 @@ def test_hub_draft_is_mirrored_and_rewritten_before_gpu_submission(tmp_path, mon
     finally:
         set_job_info(previous)
     assert opened == [("org/draft", "d" * 40)]
+
+
+def test_unsupported_policy_layout_fails_before_gpu_submission(tmp_path, monkeypatch):
+    path = _hub_config_path(tmp_path)
+    snapshot = _hub_snapshot(tmp_path)
+    unsupported = HuggingFaceSnapshot(
+        snapshot.filesystem,
+        snapshot.root,
+        tuple(entry for entry in snapshot.files if not entry.path.endswith(".safetensors")),
+    )
+    monkeypatch.setattr(
+        hf_model_cache,
+        "_open_hugging_face_snapshot",
+        lambda model_id, _: unsupported if model_id == "org/policy" else snapshot,
+    )
+    monkeypatch.setattr(
+        hf_model_cache, "marin_temp_bucket", lambda _ttl, *, prefix, source_prefix: str(tmp_path / "mirrors" / prefix)
+    )
+    monkeypatch.setattr("cloud.iris.launch.StoragePath.exists", lambda _path: False)
+    backend = RecordingBackend()
+    previous = get_job_info()
+    set_job_info(JobInfo(task_id=JobName.from_wire("/user/coordinator/0")))
+    try:
+        with pytest.raises(hf_model_cache.UnsupportedHuggingFaceSnapshot, match="requires safetensors"):
+            execute_launch(path, backend=backend)
+        assert not backend.launched
+    finally:
+        set_job_info(previous)

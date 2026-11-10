@@ -79,7 +79,12 @@ from marinskyrl.environment_contract import (
     ensure_debug_artifact_directories,
     ray_cluster_owner_environment,
 )
-from marinskyrl.hf_model import HuggingFaceModelCache, immutable_model_cache_key, validate_hf_model_weights
+from marinskyrl.hf_model import (
+    MODEL_CACHE_SUFFIXES,
+    HuggingFaceModelCache,
+    immutable_model_cache_key,
+    validate_hf_model_weights,
+)
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
@@ -119,7 +124,6 @@ except ImportError as error:
         return contextlib.nullcontext()
 
 
-MODEL_CACHE_SUFFIXES = (".safetensors", ".json", ".txt", ".model", ".py", ".jinja")
 RENDEZVOUS_FILENAME = "ray_head.json"
 DONE_FILENAME = "ray_head.done"
 HEAD_RESULT_SUCCEEDED = "succeeded"

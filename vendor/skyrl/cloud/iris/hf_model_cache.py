@@ -33,6 +33,7 @@ from cloud.iris.artifacts import (
     read_json,
 )
 from marinskyrl.hf_model import (
+    MODEL_CACHE_SUFFIXES,
     HuggingFaceModelCache,
     TOKENIZER_CONFIG_NAME,
     TOKENIZER_JSON_NAME,
@@ -73,6 +74,10 @@ _STREAM_CHUNK_BYTES = 8 * 2**20
 _MAX_METADATA_BYTES = 256 * 2**20
 _MODEL_CONFIG_NAME = "config.json"
 _MODEL_METADATA_FILES = (_MODEL_CONFIG_NAME, TOKENIZER_JSON_NAME, TOKENIZER_CONFIG_NAME)
+
+
+class UnsupportedHuggingFaceSnapshot(ValueError):
+    """A Hub layout that cannot be mirrored as a safetensors model."""
 
 
 def _is_safetensors(path: str) -> bool:
@@ -263,6 +268,36 @@ def _read_source_bytes(
         return payload
 
     return call_with_hugging_face_retry(read, operation=f"read Hugging Face metadata {path}")
+
+
+def _snapshot_model_files(
+    source: HuggingFaceSnapshot, files: dict[str, HuggingFaceSnapshotFile], model_source: str
+) -> dict[str, HuggingFaceSnapshotFile]:
+    selected = {path: entry for path, entry in files.items() if path.endswith(MODEL_CACHE_SUFFIXES)}
+    if index_file := selected.get(HF_WEIGHT_INDEX_FILENAME):
+        payload = _read_source_bytes(
+            source.filesystem, posixpath.join(source.root, index_file.path), expected_size=index_file.size
+        )
+        index = json.loads(payload)
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if (
+            not isinstance(weight_map, dict)
+            or not weight_map
+            or not all(isinstance(path, str) for path in weight_map.values())
+        ):
+            raise ValueError(f"Invalid safetensors weight map: {model_source}")
+        shards = set(weight_map.values())
+        if missing := shards - selected.keys():
+            raise ValueError(f"Safetensors index lists missing shards in {model_source}: {sorted(missing)}")
+        selected = {path: entry for path, entry in selected.items() if not _is_safetensors(path) or path in shards}
+    elif "model.safetensors" in selected:
+        # Transformers uses the canonical single-file weights when there is no index.
+        selected = {
+            path: entry for path, entry in selected.items() if not _is_safetensors(path) or path == "model.safetensors"
+        }
+    if not any(_is_safetensors(path) for path in selected):
+        raise UnsupportedHuggingFaceSnapshot(f"Hugging Face mirror requires safetensors weights: {model_source}")
+    return selected
 
 
 def _write_bytes(filesystem: AbstractFileSystem, path: str, payload: bytes) -> None:
@@ -479,6 +514,7 @@ def publish_hugging_face_snapshot(
         raise ValueError(f"Hugging Face snapshot contains duplicate paths: {model_source}")
     if MODEL_MANIFEST_FILENAME in files_by_path:
         raise ValueError(f"Hugging Face snapshot uses reserved path {MODEL_MANIFEST_FILENAME}")
+    files_by_path = _snapshot_model_files(snapshot, files_by_path, model_source)
     validate_model_file_names(set(files_by_path), model_source, tokenizer_mode)
 
     destination_filesystem, destination_root = fs_and_path(destination_uri)
