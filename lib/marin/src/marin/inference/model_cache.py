@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, replace
 
 from fray.client import Client, JobHandle, wait_all
-from fray.types import Entrypoint, EnvironmentConfig, GpuConfig, JobRequest, ResourceConfig
+from fray.types import ANY_REGION, Entrypoint, EnvironmentConfig, GpuConfig, JobRequest, ResourceConfig, TpuConfig
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
@@ -68,10 +68,28 @@ def prepare_hf_models(
         pinned.entries
         and isinstance(iris.worker_resources.device, GpuConfig)
         and not iris.worker_resources.target_cluster
+        and get_job_info() is None
     ):
         logger.warning(
             "Skipping CPU model preparation for unpinned GPU placement: serving may auto-federate "
             "while the CPU job stays local. Set target_cluster to prepare the serving cache."
+        )
+        return pinned.model, pinned.engine
+    resources = iris.worker_resources
+    region_is_fixed = (
+        len(resources.regions) == 1 and ANY_REGION not in resources.regions
+        if resources.regions
+        else get_job_info() is not None
+    )
+    if (
+        pinned.entries
+        and isinstance(resources.device, TpuConfig)
+        and not resources.target_cluster
+        and not region_is_fixed
+    ):
+        logger.warning(
+            "Skipping CPU model preparation for unrestricted regional placement: CPU and accelerator "
+            "jobs may use different caches. Pin one region to prepare the serving cache."
         )
         return pinned.model, pinned.engine
     jobs: list[JobHandle] = []

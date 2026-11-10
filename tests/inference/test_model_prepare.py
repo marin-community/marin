@@ -13,7 +13,7 @@ import marin.inference.iris_cli as cli_module
 import marin.inference.model_cache as cache_module
 import pytest
 from click.testing import CliRunner
-from fray.types import CpuConfig, JobStatus, ResourceConfig, create_environment
+from fray.types import ANY_REGION, CpuConfig, JobStatus, ResourceConfig, create_environment
 from iris.resources.state import JobState
 from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from marin.evaluation.runner import _inference_session
@@ -249,21 +249,49 @@ def test_prepare_timeout_is_not_retried_as_a_serving_readiness_timeout(serving):
     assert len(serving.requests) == 1
 
 
-@pytest.mark.parametrize("device", ["gpu", "tpu"])
-def test_unpinned_gpu_skips_preparation_but_tpu_keeps_it(serving, caplog, device):
+@pytest.mark.parametrize(
+    "device,regions,target_cluster,prepares",
+    [
+        ("gpu", ["us-east1"], None, True),
+        ("tpu", [ANY_REGION], None, False),
+        ("tpu", ["us-east1", "us-west1"], None, False),
+        ("tpu", ["us-east1"], None, True),
+        ("tpu", None, None, True),
+        ("gpu", [ANY_REGION], "cw-rno2a", True),
+        ("gpu", [ANY_REGION], None, True),
+    ],
+)
+def test_preparation_requires_a_matchable_serving_placement(serving, caplog, device, regions, target_cluster, prepares):
     config = _config(REVISION)
     resources = (
-        ResourceConfig.with_gpu("H100", count=1, regions=["us-east1"])
+        ResourceConfig.with_gpu("H100", count=1, regions=regions, target_cluster=target_cluster)
         if device == "gpu"
-        else ResourceConfig.with_tpu("v4-8", regions=["us-east1"])
+        else ResourceConfig.with_tpu("v4-8", regions=regions, target_cluster=target_cluster)
     )
     config = replace(config, iris=replace(config.iris, worker_resources=resources))
     with remote_inference(config):
         pass
-    assert serving.events == (["gpu"] if device == "gpu" else ["prepare", "gpu"])
-    assert len(serving.downloads) == (0 if device == "gpu" else 1)
-    if device == "gpu":
-        assert "Skipping CPU model preparation for unpinned GPU placement" in caplog.text
+    assert serving.events == (["prepare", "gpu"] if prepares else ["gpu"])
+    assert len(serving.downloads) == int(prepares)
+    if not prepares:
+        assert "Skipping CPU model preparation" in caplog.text
+
+
+@pytest.mark.parametrize("device", ["gpu", "tpu"])
+def test_root_unpinned_accelerator_does_not_submit_a_prepare_job(serving, monkeypatch, caplog, device):
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: None)
+    monkeypatch.setattr(cache_module, "get_job_info", lambda: None)
+    config = _config(REVISION)
+    resources = (
+        ResourceConfig.with_gpu("H100", count=1, regions=["us-east1"])
+        if device == "gpu"
+        else ResourceConfig.with_tpu("v4-8")
+    )
+    config = replace(config, iris=replace(config.iris, worker_resources=resources))
+    iris_module._prepared_inference_config(config)
+    assert serving.requests == []
+    assert serving.downloads == []
+    assert "Skipping CPU model preparation" in caplog.text
 
 
 @pytest.mark.parametrize(
