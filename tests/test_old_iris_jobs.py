@@ -83,6 +83,8 @@ def test_report_lists_each_old_job_once_and_defers_jobs_beyond_the_message_size(
     oldest_first = sorted(old_jobs, key=lambda job: job.started_at_ms)
     posted_first = [job for job in oldest_first if job.key in first_reported]
     assert 0 < len(posted_first) < len(old_jobs)
+    # Loom rejects a Slack post above 4,000 bytes.
+    assert len(first_message.encode()) <= 4_000
     assert posted_first == oldest_first[: len(posted_first)]
     assert all(str(job.root) in first_message for job in posted_first)
     assert all(str(job.root) in second_message for job in old_jobs if job.key not in first_reported)

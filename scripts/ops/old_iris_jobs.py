@@ -34,10 +34,10 @@ from rigging.timing import Timestamp
 
 ACTIVE_TASK_STATES = (TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING)
 MS_PER_DAY = 86_400_000
-# Keeps one Slack post readable; jobs that do not fit go in the next report.
-MAX_MESSAGE_CHARS = 3_500
+# Loom's Slack post accepts at most 4,000 bytes; jobs that do not fit go in the next report.
+MAX_MESSAGE_BYTES = 3_500
 # Room kept for the closing line that counts the deferred jobs.
-DEFERRED_LINE_CHARS = 60
+DEFERRED_LINE_BYTES = 60
 
 
 def job_key(cluster: str, root: JobName) -> str:
@@ -134,11 +134,11 @@ def _compose_message(new_jobs: Sequence[OldJob], now_ms: int, min_age_days: floa
         "Each job is listed once while it stays active.",
         "",
     ]
-    size = sum(len(line) + 1 for line in header) + DEFERRED_LINE_CHARS
+    size = sum(len(line.encode()) + 1 for line in header) + DEFERRED_LINE_BYTES
     posted: list[OldJob] = []
     for job in sorted(new_jobs, key=lambda job: job.started_at_ms):
-        size += len(_job_line(job, now_ms)) + 1
-        if size > MAX_MESSAGE_CHARS:
+        size += len(_job_line(job, now_ms).encode()) + 1
+        if size > MAX_MESSAGE_BYTES:
             break
         posted.append(job)
     lines = header + [_job_line(job, now_ms) for job in sorted(posted, key=lambda job: (job.cluster, job.started_at_ms))]

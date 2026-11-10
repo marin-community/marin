@@ -553,7 +553,7 @@ config:
       repo: marin-community/marin
       promptFile: watches/belay.md
       slackChannels: []
-    # Posts Iris root jobs active for more than 7 days, once per job (#11113).
+    # Posts Iris root jobs active for more than 7 days, once per job.
     old-iris-jobs:
       enabled: true
       cron: "0 9 * * 1-5"

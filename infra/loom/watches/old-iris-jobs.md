@@ -1,4 +1,4 @@
-Post the report of old active Iris jobs to Slack channel `C0BN20081CH`.
+Post the report of old active Iris jobs to the watch's allowed Slack channel.
 
 1. Create the directory `/tmp/old-iris-jobs`. Call `watch_state` with no value
    and note its version. If it holds a value, write that JSON value to
@@ -14,7 +14,7 @@ Post the report of old active Iris jobs to Slack channel `C0BN20081CH`.
    If it fails, end the session with its error. Do not post, and do not change
    the watch state.
 3. If `/tmp/old-iris-jobs/message.md` is not empty, post its text unchanged with
-   `messaging_slack_post` to `C0BN20081CH`, with the action key
+   `messaging_slack_post` to the allowed Slack channel, with the action key
    `old-iris-jobs:<scheduled occurrence time>`. If the delivery is not
    confirmed, end the session without changing the watch state.
 4. Replace the watch state with the JSON object in
