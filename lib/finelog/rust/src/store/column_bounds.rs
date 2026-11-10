@@ -132,29 +132,31 @@ pub fn missing(bounds: &ColumnBounds, columns: &[String]) -> bool {
 }
 
 /// Encode `source` for `object_segments.source_json`, with `bounds` under an
-/// extra key that `ObjectRef` decoding ignores.
+/// extra key that `ObjectRef` decoding ignores. Without bounds this is the plain
+/// `ObjectRef` encoding, byte for byte.
 pub fn source_json(source: &ObjectRef, bounds: &ColumnBounds) -> Result<String, StatsError> {
     let encode_error = |error: serde_json::Error| {
         StatsError::Internal(format!("serialize object segment source: {error}"))
     };
-    let mut value = serde_json::to_value(source).map_err(encode_error)?;
-    if !bounds.is_empty() {
-        let object = value.as_object_mut().ok_or_else(|| {
-            StatsError::Internal("object segment source is not a JSON object".to_string())
-        })?;
-        let stored: Vec<_> = bounds
-            .iter()
-            .map(|(column, &(min, max))| StoredColumnBounds {
-                column: column.clone(),
-                min,
-                max,
-            })
-            .collect();
-        object.insert(
-            SOURCE_JSON_KEY.to_string(),
-            serde_json::to_value(stored).map_err(encode_error)?,
-        );
+    if bounds.is_empty() {
+        return serde_json::to_string(source).map_err(encode_error);
     }
+    let mut value = serde_json::to_value(source).map_err(encode_error)?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        StatsError::Internal("object segment source is not a JSON object".to_string())
+    })?;
+    let stored: Vec<_> = bounds
+        .iter()
+        .map(|(column, &(min, max))| StoredColumnBounds {
+            column: column.clone(),
+            min,
+            max,
+        })
+        .collect();
+    object.insert(
+        SOURCE_JSON_KEY.to_string(),
+        serde_json::to_value(stored).map_err(encode_error)?,
+    );
     serde_json::to_string(&value).map_err(encode_error)
 }
 
