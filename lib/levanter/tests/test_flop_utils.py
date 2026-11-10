@@ -57,3 +57,17 @@ def test_model_minus_attention_is_independent_of_context_and_window():
         for seq_len in (512, 1024)
     ]
     assert rest == pytest.approx([rest[0]] * len(rest))
+
+
+def test_explicit_head_dim_sets_the_attention_width():
+    seq_len, head_dim = 1024, 32
+    hidden, heads, kv_heads, layers = (SHAPE[k] for k in ("hidden_dim", "num_heads", "num_kv_heads", "num_layers"))
+    attention = lm_attention_flops_per_token(**ATTENTION_SHAPE, seq_len=seq_len, head_dim=head_dim)
+    assert attention.noncausal == pytest.approx(layers * seq_len * (4 * heads * head_dim + 3 * heads))
+
+    model_increase = lm_flops_per_token(**SHAPE, seq_len=seq_len, head_dim=head_dim) - lm_flops_per_token(
+        **SHAPE, seq_len=seq_len
+    )
+    assert model_increase == pytest.approx(
+        layers * (4 * seq_len * heads + 2 * hidden * (2 * heads + 2 * kv_heads)) * (head_dim - hidden / heads)
+    )
