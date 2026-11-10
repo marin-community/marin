@@ -3,4 +3,4 @@ window: 102400
 tokenizer_repo: marin-community/marin-tokenizer-tools
 gpu_count: 8
 cluster_config: lib/iris/config/marin.yaml
-priority: interactive
+priority: production

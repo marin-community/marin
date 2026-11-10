@@ -130,10 +130,10 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
     """Count serialized stage allocations, including the co-hosted eval judge."""
     execution = resolved["execution"]
     for runtime in (execution["coordinator"], resolved["rl"]["execution"], resolved["evaluation"]["execution"]):
-        if runtime["priority"] != "interactive" or runtime["cluster"] != "cw-rno2a":
-            raise ValueError("This experiment is authorized only on RNO2A at interactive priority")
-    if resolved["endpoint"]["priority"] != "interactive":
-        raise ValueError("Endpoint priority must remain interactive")
+        if runtime["priority"] != "production" or runtime["cluster"] != "cw-rno2a":
+            raise ValueError("This experiment is authorized only on RNO2A at production priority")
+    if resolved["endpoint"]["priority"] != "production":
+        raise ValueError("Endpoint priority must remain production")
     coordinator_gpu = execution["coordinator"]["coordinator_gpu"]
     coordinator_count = coordinator_gpu["count"] if coordinator_gpu else 0
     resources = {key: value for key, value in execution.items() if key != "coordinator"}

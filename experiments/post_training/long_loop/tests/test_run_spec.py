@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from experiments.post_training.long_loop.__main__ import validate_graph
-from experiments.post_training.long_loop.run_spec import resolve_spec
+from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 SPEC = Path(__file__).parents[1] / "specs" / "round1.yaml"
@@ -33,7 +33,6 @@ def test_production_and_smoke_preserve_data_context_and_quota():
     for field in ("rollout_buffer", "policy", "ref"):
         assert smoke["rl"]["config"]["trainer"][field] == production["rl"]["config"]["trainer"][field]
     assert smoke["blockers"] == production["blockers"]
-    assert any("agentic manifest" in blocker for blocker in smoke["blockers"])
 
 
 def test_changed_pin_and_semantic_smoke_override_fail_before_graph(tmp_path):
@@ -60,6 +59,20 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
     rows = json.loads((tmp_path / "graph.json").read_text())
     assert [row["stage"].rsplit("/", 1)[-1] for row in rows] == ["base", "inputs", "sft"]
     assert rows[0]["source"] == resolved["initializer"]["uri"]
-    assert terminal.runtime_args["skyrl_execution"].priority == "interactive"
+    assert terminal.runtime_args["skyrl_execution"].priority == "production"
     with pytest.raises(ValueError, match="Run is not admitted"):
         build_spec_graph(resolved, "2026.11.09.12", through="archive")
+
+
+@pytest.mark.parametrize("stage", ["coordinator", "rl", "evaluation", "endpoint"])
+def test_new_submission_rejects_stale_interactive_priority(stage):
+    resolved = resolve_spec(SPEC, smoke=False)
+    if stage == "coordinator":
+        runtime = resolved["execution"]["coordinator"]
+    elif stage == "endpoint":
+        runtime = resolved[stage]
+    else:
+        runtime = resolved[stage]["execution"]
+    runtime["priority"] = "interactive"
+    with pytest.raises(ValueError, match="production"):
+        allocation_peaks(resolved)

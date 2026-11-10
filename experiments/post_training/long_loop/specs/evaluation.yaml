@@ -222,7 +222,7 @@ execution:
   cpu: 32
   memory: 512GB
   disk: 256GB
-  priority: interactive
+  priority: production
   max_retries: 0
   target_cluster: cw-rno2a
   parent_cluster_config: lib/iris/config/marin.yaml

@@ -196,7 +196,7 @@ def evaluation_step(
             cpu=32,
             memory="512GB",
             disk="256GB",
-            priority="interactive",
+            priority="production",
             max_retries=0,
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,

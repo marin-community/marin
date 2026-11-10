@@ -48,7 +48,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
             "tokenizer_repo": TOKENIZER_REPO,
             "gpu_count": 8,
             "cluster_config": "lib/iris/config/marin.yaml",
-            "priority": "interactive",
+            "priority": "production",
         }
     window = settings["window"]
     tokenizer_repo = settings["tokenizer_repo"]

@@ -32,7 +32,7 @@ def test_explicit_binding_preserves_configuration_and_admitted_data(monkeypatch)
         cpu=24,
         memory="900GB",
         disk="1TB",
-        priority="interactive",
+        priority="production",
         max_retries=0,
         target_cluster=None,
         parent_cluster_config=None,

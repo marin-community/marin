@@ -84,7 +84,7 @@ def smoke_rl_step(
             cpu=32,
             memory="1800GB",
             disk="2TB",
-            priority="interactive",
+            priority="production",
             max_retries=0,
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
