@@ -164,9 +164,26 @@ def test_panel_can_be_pinned_to_one_cohort():
         _record("m", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.70),
     ]
 
-    (row,) = build_panel(records, panel_request(cohort_version="v1"))["rows"]
+    (row,) = build_panel(records, panel_request(cohort="v1"))["rows"]
 
     assert row["cells"]["mmlu"]["value"] == pytest.approx(0.50)
+
+
+def test_unversioned_records_form_their_own_selectable_and_comparable_cohort():
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.40),
+        _record("b", "mmlu", None, "2026-01-02T00:00:00+00:00", 0.60),
+        _record("a", "mmlu", "v1", "2026-02-01T00:00:00+00:00", 0.90),
+    ]
+    request = panel_request(cohort="unversioned")
+
+    rows = {row["model"]: row for row in build_panel(records, request)["rows"]}
+    comparison = build_comparison(records, request, ("a", "b"))
+
+    assert rows["a"]["cells"]["mmlu"]["value"] == pytest.approx(0.40)
+    assert {cell["version"] for row in rows.values() for cell in row["cells"].values()} == {None}
+    assert comparison["shared"] == ["mmlu"]
+    assert build_meta(records)["versions"][-1] == "unversioned"
 
 
 @pytest.mark.parametrize("cohort", ["v1", "v2"])
@@ -180,7 +197,7 @@ def test_panel_rows_and_gap_explanations_stay_within_the_selected_cohort(cohort)
         _record("b", "math500", "v2", "2026-02-01T00:00:00+00:00", 0.8),
     ]
 
-    panel = build_panel(records, panel_request(cohort_version=cohort))
+    panel = build_panel(records, panel_request(cohort=cohort))
     rows = {row["model"]: row for row in panel["rows"]}
 
     assert set(rows) == ({"a", "failed", "zero"} if cohort == "v1" else {"a", "b", "failed", "zero"})
@@ -781,7 +798,7 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
         }
     )
     records = [first, second, invalid, other_invalid, previous_cohort, smoke]
-    request = panel_request(cohort_version="eval-policy-2026-09-24-verified", model_query="same-name")
+    request = panel_request(cohort="eval-policy-2026-09-24-verified", model_query="same-name")
     panel = build_panel(records, request)
 
     assert len(panel["rows"]) == 1
@@ -844,7 +861,7 @@ def test_panel_groups_tau_context_override_with_other_evals_despite_archived_con
     assert tau_model.config is not None
     store.set_model_archived(f"grug@{model_config_digest(tau_model.config)[:12]}", True, None)
 
-    panel = store.panel(panel_request(cohort_version="test-cohort"), None, False)
+    panel = store.panel(panel_request(cohort="test-cohort"), None, False)
 
     assert len(panel["rows"]) == 1
     assert panel["rows"][0]["model"] == "grug"
@@ -873,7 +890,7 @@ def test_compare_complete_panel_ignores_benchmarks_unique_to_unselected_models()
 def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
     historical = _record("a", "mmlu", "eval-policy-updated", "2026-09-25T01:00:00+00:00", 0.6)
 
-    panel = build_panel([historical], panel_request(cohort_version="eval-policy-updated"))
+    panel = build_panel([historical], panel_request(cohort="eval-policy-updated"))
 
     assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
     assert panel["policy_rejections"] == []
