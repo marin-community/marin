@@ -76,7 +76,7 @@ harness selection and verifier machines. The curation
 [task-selection artifact](task-curation.md#final-task-selection) uses the
 assistant-prefix harness for `structure-closure` tasks and Shellbox for the other
 families. Image graders use the configured image verifier backend; package
-graders use the configured local verifier. The inventory artifact contains the
+graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
 
