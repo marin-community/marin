@@ -124,6 +124,17 @@ or an extra GPU probe. The aggregate allocation remains at most 256 H100.
 CPU tests cover quota-buffer behavior, 102,400-token collation and checkpoint
 adoption. Actual learner execution provides the GPU behavior evidence.
 
+### Starting RL from a published HF export
+
+An `adopted_sft` file with `kind: hf_export` names an HF repository, its full
+revision, the in-region copy's URI, and the size and SHA-256 of every object in that
+copy. `specs/adopted-sft-20261005.yaml` pins the 2026-10-05 SFT release mirrored to
+RNO2A. The adoption stage hashes every object, requires the exact object set, checks
+the model geometry against the SFT recipe, the expert tensors against the declared
+schema (1 = stacked, 2 = split), `tokenizer.json` against the loop tokenizer, and both
+EOS tokens. RL then reads the copy in place; there is no export stage. Use
+`--through rl`: this form has no native SFT run evidence for the archive.
+
 ## Evaluation and archive evidence
 
 The loop sets `run.finalization: any_terminal`: once the RL child is terminal,

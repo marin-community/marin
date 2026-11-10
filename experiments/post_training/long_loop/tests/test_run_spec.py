@@ -370,3 +370,38 @@ def test_smoke_cannot_bypass_allocation_controls_by_scaling_eval(tmp_path):
     )
     assert resolved["gpu_peaks"]["evaluation"] == 16
     assert resolved["experimental_controls"]["changes"] == [{"control": "gpus/evaluation", "default": 136, "actual": 16}]
+
+
+def test_hf_export_adoption_hands_the_mirror_to_rl_without_export(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    resolved = resolve_spec(SPEC, smoke=True)
+    # The committed pin, pointed at a local copy whose root holds the model config launch validation reads.
+    mirror_root = tmp_path / "mirror"
+    mirror_root.mkdir()
+    (mirror_root / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "grug_moe",
+                "num_attention_heads": 20,
+                "num_key_value_heads": 5,
+                "num_hidden_layers": 26,
+                "global_every": 4,
+            }
+        )
+    )
+    pin = yaml.safe_load((SPEC.parent / "adopted-sft-20261005.yaml").read_text())
+    resolved["adopted_sft"] = {**pin, "uri": str(mirror_root)}
+    terminal = build_spec_graph(resolved, "2026.11.10.1", through="rl")
+    steps = {step.name: step for step in graph_handles([terminal])}
+    mirror = steps["long-loop/round1/sft-hf"]
+    assert mirror.adopt_source == resolved["adopted_sft"]["uri"]
+    assert "long-loop/round1/adopt-sft" in steps
+    assert not any(name.endswith(("/sft", "/sft-handoff", "/base")) or "micro-" in name for name in steps)
+    assert steps["long-loop/round1/adopt-sft"] in mirror.deps
+    assert mirror in terminal.deps
+    validate_graph(terminal, tmp_path / "rl-graph", "s3://marin-us-east-02a/marin/")
+    rows = json.loads((tmp_path / "rl-graph/graph.json").read_text())
+    assert {"stage": mirror.name, "status": "adopted", "source": mirror.adopt_source} in rows
+    with pytest.raises(ValueError, match="stop at --through rl"):
+        build_spec_graph({**resolved, "blockers": []}, "2026.11.10.1", through="archive")
