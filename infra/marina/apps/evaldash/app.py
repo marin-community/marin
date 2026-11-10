@@ -43,7 +43,7 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -71,6 +71,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import review, samples
 from .db_migrations import apply_migrations
 from .metrics import (
+    ALL_COHORTS,
     RUN_FACETS,
     build_comparison,
     build_meta,
@@ -78,6 +79,7 @@ from .metrics import (
     build_panel,
     dashboard_measurements,
     display_status,
+    in_cohort,
     panel_request,
     record_headline,
 )
@@ -476,8 +478,7 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
-        if request.cohort_version is not None:
-            records = [record for record in records if record.version == request.cohort_version]
+        records = [record for record in records if in_cohort(record, request)]
         archived = self.archived_models()
         if archived and not include_archived:
             records = [record for record in records if record.model.name not in archived]
@@ -1302,10 +1303,9 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
-    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=None if cohort == "all" else cohort,
+        cohort=params.get("cohort") or ALL_COHORTS,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),
@@ -1393,8 +1393,6 @@ def _analysis_router(store: RecordStore) -> APIRouter:
             selection = _selection(params)
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        if selection.cohort_version is None:
-            return JSONResponse({"error": "Choose one cohort before comparing models."}, status_code=400)
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 
