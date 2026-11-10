@@ -17,6 +17,7 @@ from pathlib import Path
 import requests
 from rigging.timing import Duration, ExponentialBackoff
 
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import WORKER_PYTHON_VERSION, VllmRouterConfig
 
 logger = logging.getLogger(__name__)
@@ -111,14 +112,14 @@ def vllm_router(
     environment.pop("UV_CONSTRAINT", None)
     environment.pop("UV_OVERRIDE", None)
     process = subprocess.Popen(command, env=environment, start_new_session=True)
-    router = RunningVllmRouter(f"http://{host}:{port}/v1", process, log_dir, command)
+    router = RunningVllmRouter(f"http://{host}:{port}{OPENAI_API_SUFFIX}", process, log_dir, command)
     try:
 
         def ready() -> bool:
             check_dependencies()
             router.check_alive()
             try:
-                root = router.server_url.removesuffix("/v1")
+                root = router.server_url.removesuffix(OPENAI_API_SUFFIX)
                 return (
                     all(requests.get(f"{worker}/health", timeout=5).status_code == 200 for worker in worker_urls)
                     and requests.get(f"{root}/health", timeout=5).status_code == 200
