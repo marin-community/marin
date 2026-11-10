@@ -50,6 +50,7 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
     arms = launch.build_arms(
         specs=tuple(launch.ARMS.values()), scale=preset.label, policy=policy, version="2026.10.19.1"
     )
+    assert "naive" in arms
     paths = []
     for name, arm in arms.items():
         config = arm.rl.build_config(StepContext.for_fingerprint(arm.rl.runtime_args, arm.rl.deps))
