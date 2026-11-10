@@ -17,7 +17,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
-from experiments.post_training.long_loop.archive_stage import archive_selected_run
+from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.endpoint_probe import probe
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
 from experiments.post_training.long_loop.rl import configured_rl_step
@@ -78,12 +78,13 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             ),
         )
     )
+    sft_evidence = [verified]
     recipe = resolved["sft"]
-    adopted = resolved.get("adopted_sft")
-    if adopted is not None:
+    sft_pin = resolved.get("adopted_sft")
+    if sft_pin is not None:
         if through == "sft":
             raise ValueError("An adopted SFT input is for downstream continuation, not an SFT stage")
-        if adopted["version"] == version:
+        if sft_pin["version"] == version:
             raise ValueError("Downstream continuation requires a fresh runtime version")
         trained = timed(
             apply(
@@ -91,7 +92,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 remote(verify_adopted_sft, resources=resources["inputs"]),
                 version=version,
                 output=OUT,
-                pin=adopted,
+                checkpoint_pin=sft_pin,
                 model=recipe["model"],
                 tokenizer_revision=resolved["tokenizer"]["revision"],
             )
@@ -99,6 +100,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     else:
         base_manifest = resolved["initializer"]
         base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
+        sft_evidence.append(base)
         recipe = resolved["sft"]
         run_id = f"{name.replace('/', '-')}-sft-{version}"
         fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=run_id)
@@ -204,15 +206,23 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             expected_step=None,
             gpu_variant=evaluation["gpu_variant"],
             capability_origin=evaluation["capability_origin"],
-            context_proof=evaluation["context_proof"],
             data_relative_path=evaluation["data_relative_path"],
             judge_gpu_count=evaluation["judge_gpu_count"],
         )
     )
     report = report_step(
         version,
-        [verified, base, trained, exported, endpoint, learned, eval_inputs, evaluated],
+        [*sft_evidence, trained, exported, endpoint, learned, eval_inputs, evaluated],
         expected_rollouts=evaluation["expected_rollouts"],
+        evaluation_selection=eval_inputs,
+        additional_timing=[
+            item
+            for item in [
+                *resolved["archive"].get("additional_evidence", []),
+                *(resolved.get("adopted_sft") or {}).get("additional_evidence", []),
+            ]
+            if item["category"] == "timing" and item["source"].endswith(".jsonl")
+        ],
         sft_geometry=(
             f"Spec {resolved['resolved_sha256']}: {recipe['stop_after_steps']} SFT updates "
             f"at {recipe['model']['max_seq_len']} positions."
@@ -220,11 +230,23 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     )
     archived = apply(
         f"{name}/archive",
-        remote(archive_selected_run, resources=resources["archive"]),
+        remote(archive_graph_run, resources=resources["archive"]),
         version=version,
         output=OUT,
-        plan=resolved["archive"],
+        settings=resolved["archive"],
+        resolved_spec=resolved,
+        artifacts={
+            "inputs": verified,
+            "sft": sft_pin["uri"] if sft_pin else trained,
+            **({"sft_adoption": trained} if sft_pin else {"base": base}),
+            "export": exported,
+            "endpoint": endpoint,
+            "rl": learned,
+            "eval_inputs": eval_inputs,
+            "eval": evaluated,
+        },
         trained=learned,
+        evaluated=evaluated,
         completed_report=report,
     )
     return replace(

@@ -12,14 +12,24 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 
-def audit(result_uri: str, expected_rollouts: int) -> dict:
+def audit(
+    result_uri: str,
+    expected_rollouts: int,
+    expected_by_data_source: dict[str, int] | None = None,
+    expected_identities: list[dict] | None = None,
+) -> dict:
     fs, pattern = filesystem_for(str(StoragePath(result_uri) / "exports" / "dumped_evals" / "eval_only" / "*.jsonl"))
     summaries = []
     failures = Counter()
+    source_counts = Counter()
+    identities = Counter()
     for path in sorted(fs.glob(pattern)):
         if path.endswith("/aggregated_results.jsonl"):
             continue
         rows = [json.loads(line) for line in fs.cat_file(path).decode().splitlines() if line.strip()]
+        source_counts.update(row["data_source"] for row in rows)
+        if expected_identities is not None:
+            identities.update((row["data_source"], str(row["uid"])) for row in rows)
         verified = [row for row in rows if row["verification"]["status"] == "verified"]
         for row in rows:
             if row["verification"]["status"] != "verified":
@@ -37,11 +47,19 @@ def audit(result_uri: str, expected_rollouts: int) -> dict:
             }
         )
     completed = sum(row["rollouts"] for row in summaries)
+    coverage_matches = expected_by_data_source is None or dict(source_counts) == expected_by_data_source
+    identities_match = expected_identities is None or identities == Counter(
+        (row["data_source"], row["dataset_row_uid"]) for row in expected_identities
+    )
     return {
+        "identity_coverage_matches": identities_match,
         "result_uri": result_uri,
         "expected_rollouts": expected_rollouts,
         "completed_rollouts": completed,
-        "all_verified": completed == expected_rollouts and not failures,
+        "all_verified": completed == expected_rollouts and not failures and coverage_matches and identities_match,
+        "attempts_by_data_source": dict(source_counts),
+        "expected_by_data_source": expected_by_data_source,
+        "source_coverage_matches": coverage_matches,
         "unverified_types": dict(failures),
         "benchmarks": summaries,
     }

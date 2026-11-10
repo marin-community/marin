@@ -3,12 +3,14 @@
 
 """Micro210 preparation and Snowball evaluation using the existing Mini runtime."""
 
+import hashlib
+import json
 import os
 import subprocess
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from pathlib import Path
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 from fray.types import ResourceConfig
@@ -35,11 +37,11 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive_selection import trace_retention
-from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
-from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION, SKIPPED_BENCHMARKS
+from experiments.post_training.long_loop.eval_runtime.profile import DATASET, REVISION
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
+from experiments.post_training.long_loop.eval_runtime.selection import selected_rollouts
 from experiments.post_training.long_loop.rl_selection import validate_full_selection
 from experiments.post_training.long_loop.serving import check_context_limit, snowball_context_override
 from experiments.post_training.long_loop.sft import read_json
@@ -55,17 +57,14 @@ def prepare_micro(
     table = pq.read_table(path)
     if table.num_rows != 210:
         raise ValueError("Pinned Micro210 must contain 210 unique tasks")
-    chosen = []
-    seen = {}
-    for i, row in enumerate(table.to_pylist()):
-        benchmark = row["benchmark"]
-        if seen.get(benchmark, 0) < tasks_per_benchmark:
-            chosen.append(i)
-            seen[benchmark] = seen.get(benchmark, 0) + 1
-    if len(chosen) != 21 * tasks_per_benchmark:
-        raise ValueError("Micro smoke must cover all 21 benchmark paths")
-    chosen = [i for i in chosen if table["benchmark"][i].as_py() not in SKIPPED_BENCHMARKS]
-    smoke = repaired_table(table.take(pa.array(chosen)), wheels_revision)
+    expanded_path = hf_hub_download(dataset, "data/validation-rollouts.parquet", repo_type="dataset", revision=revision)
+    expanded, receipt = selected_rollouts(table, pq.read_table(expanded_path), tasks_per_benchmark)
+    smoke = repaired_table(expanded, wheels_revision)
+    receipt.update(dataset=dataset, revision=revision, wheels_revision=wheels_revision)
+    receipt["unique_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    receipt["expanded_source_sha256"] = hashlib.sha256(Path(expanded_path).read_bytes()).hexdigest()
+    receipt_fs, receipt_key = filesystem_for(prefix_join(output, "selection.json"))
+    receipt_fs.pipe_file(receipt_key, json.dumps(receipt, indent=2).encode())
     fs, key = filesystem_for(prefix_join(output, "rollouts.parquet"))
     with fs.open(key, "wb") as target:
         pq.write_table(smoke, target)
@@ -212,7 +211,6 @@ def evaluation_step(
         expected_step=expected_step,
         gpu_variant="H100",
         capability_origin=cluster["dashboard_url"],
-        context_proof=context_evidence(),
         data_relative_path="rollouts.parquet",
     )
 
@@ -232,7 +230,6 @@ def configured_evaluation_step(
     expected_step: int | None,
     gpu_variant: str,
     capability_origin: str,
-    context_proof: dict,
     data_relative_path: str,
 ) -> ArtifactStep:
     """Bind an explicit evaluation recipe to pinned data and the committed model."""
@@ -280,14 +277,6 @@ def configured_evaluation_step(
             model_checkpoint_step=expected_step if ctx.is_fingerprint else ctx.resolved(trained).global_step,
         )
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
-        if not ctx.is_fingerprint:
-            exact_config = read_json(prefix_join(model["uri"], "config.json"))
-            validate_context_evidence(
-                exact_config,
-                config["generator"]["engine_init_kwargs"].get("hf_overrides", {}),
-                config["context_budget"]["request_window_tokens"],
-                context_proof,
-            )
         if not ctx.is_fingerprint:
             validate_replayable_model_reference(model["local_path"], model["uri"], model["identity"])
         if not ctx.is_fingerprint:

@@ -20,34 +20,34 @@ def pinned_json(uri: str, sha256: str) -> dict:
     return json.loads(content)
 
 
-def verify_adopted_sft(*, output: str, pin: dict, model: dict, tokenizer_revision: str) -> None:
+def verify_adopted_sft(*, output: str, checkpoint_pin: dict, model: dict, tokenizer_revision: str) -> None:
     """Publish a verified selection only after all pinned inputs and payloads exist."""
-    root = pin["uri"]
-    selected = pinned_json(prefix_join(root, "selected.json"), pin["selected_sha256"])
-    checkpoint = prefix_join(root, f"checkpoints/step-{pin['step']}")
-    if selected["checkpoint"] != checkpoint or selected["step"] != pin["step"]:
+    root = checkpoint_pin["uri"]
+    selected = pinned_json(prefix_join(root, "selected.json"), checkpoint_pin["selected_sha256"])
+    checkpoint = prefix_join(root, f"checkpoints/step-{checkpoint_pin['step']}")
+    if selected["checkpoint"] != checkpoint or selected["step"] != checkpoint_pin["step"]:
         raise ValueError("Adopted SFT selection is not the explicitly requested final checkpoint")
-    metadata = pinned_json(prefix_join(checkpoint, "metadata.json"), pin["metadata_sha256"])
-    if metadata["step"] != pin["step"] or metadata["is_temporary"] is not False:
+    metadata = pinned_json(prefix_join(checkpoint, "metadata.json"), checkpoint_pin["metadata_sha256"])
+    if metadata["step"] != checkpoint_pin["step"] or metadata["is_temporary"] is not False:
         raise ValueError("Adopted SFT checkpoint is not permanently committed at the required step")
     if selected["metadata_digest"] != digest(metadata):
         raise ValueError("Adopted SFT selection metadata binding changed")
-    manifest = pinned_json(prefix_join(checkpoint, "manifest.json"), pin["manifest_sha256"])
+    manifest = pinned_json(prefix_join(checkpoint, "manifest.json"), checkpoint_pin["manifest_sha256"])
     if manifest["format_version"] != 1 or not manifest["arrays"]:
         raise ValueError("Adopted SFT array manifest is empty or unsupported")
-    consumed = pinned_json(prefix_join(root, "consumed-config.json"), pin["consumed_config_sha256"])
+    consumed = pinned_json(prefix_join(root, "consumed-config.json"), checkpoint_pin["consumed_config_sha256"])
     if consumed["model"] != model:
         raise ValueError("Adopted SFT consumed model configuration differs from the export recipe")
-    lineage = pinned_json(pin["lineage_uri"], pin["lineage_sha256"])
+    lineage = pinned_json(checkpoint_pin["lineage_uri"], checkpoint_pin["lineage_sha256"])
     if (
-        lineage["marin_revision"] != pin["source_revision"]
+        lineage["marin_revision"] != checkpoint_pin["source_revision"]
         or lineage["tokenizer_revision"] != tokenizer_revision
         or lineage["model_sha256"] != digest(model)
-        or lineage["source_job"] != pin["source_job"]
-        or lineage["version"] != pin["version"]
+        or lineage["source_job"] != checkpoint_pin["source_job"]
+        or lineage["version"] != checkpoint_pin["version"]
     ):
         raise ValueError("Adopted SFT model/tokenizer/source lineage does not match the pinned run")
-    inventory = pinned_json(pin["payload_inventory_uri"], pin["payload_inventory_sha256"])
+    inventory = pinned_json(checkpoint_pin["payload_inventory_uri"], checkpoint_pin["payload_inventory_sha256"])
     if inventory["checkpoint"] != checkpoint or not inventory["files"]:
         raise ValueError("Adopted SFT payload inventory is empty or refers to a different checkpoint")
     fs, checkpoint_key = filesystem_for(checkpoint)
@@ -71,5 +71,5 @@ def verify_adopted_sft(*, output: str, pin: dict, model: dict, tokenizer_revisio
     destination.mkdirs(exist_ok=True)
     (destination / "selected.json").write_text(json.dumps(selected))
     (destination / "adoption.json").write_text(
-        json.dumps({"pin": pin, "verified_payload_bytes": payload_bytes}, indent=2)
+        json.dumps({"checkpoint_pin": checkpoint_pin, "verified_payload_bytes": payload_bytes}, indent=2)
     )

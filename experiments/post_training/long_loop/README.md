@@ -82,3 +82,23 @@ The CPU tests cover actual quota-buffer behavior, 102,400-token collation, and
 checkpoint-adoption failures. They do not certify natural-long GPU forward,
 backward, optimizer, or save/restore behavior. Full downstream runs still require
 the recorded runtime qualifications and the eval/archive preparation checks.
+
+## Evaluation and archive evidence
+
+Evaluation preserves the pinned suite's published repetitions: 200 supported tasks
+produce 440 attempts, and the one-task-per-path smoke produces 44 attempts across
+20 paths. `selection.json` records task IDs, repetition indices, runtime row IDs
+and source names. Completion requires every selected attempt, not just an equal
+row count. The selected model's actual config passes the pinned vLLM context
+resolver before judge allocation.
+
+The archive derives its inventory from committed stage outputs and consumed
+configs, including retention ledgers, exact evaluation selection and native result
+rows. SkyRL writes the initialized W&B identity to `exports/wandb-run.json`.
+For adopted SFT, `additional_evidence` accepts explicit `source`, `name`, `category`
+and `sha256` pins. Use `kind: wandb-run-reference` for an independently verified
+SFT W&B receipt and `native-sft-journal` / `native-sft-attempt-archive` for preserved
+native timing evidence. Missing native timing coverage or strict W&B history
+verification produces an explicitly partial archive and prevents checkpoint
+cleanup. Model exports go to public Hugging Face repositories; native optimizer
+payloads remain location/TTL references.

@@ -3,6 +3,7 @@
 
 """Persist coordinator wall spans without confusing them with GPU work time."""
 
+import hashlib
 import json
 import tempfile
 from dataclasses import replace
@@ -37,7 +38,15 @@ def timed(step: ArtifactStep) -> ArtifactStep:
     return replace(step, run=execute)
 
 
-def write_report(*, output: str, stages: list[str], expected_rollouts: int, sft_geometry: str) -> None:
+def write_report(
+    *,
+    output: str,
+    stages: list[str],
+    expected_rollouts: int,
+    sft_geometry: str,
+    evaluation_selection: str | None = None,
+    additional_timing: list[dict] | None = None,
+) -> None:
     events = []
     sources = []
     for stage in stages:
@@ -45,6 +54,15 @@ def write_report(*, output: str, stages: list[str], expected_rollouts: int, sft_
         for key in sorted(fs.glob(prefix_join(prefix, "**/*.jsonl"))):
             events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
             sources.append(fs.unstrip_protocol(key))
+    for item in additional_timing or []:
+        if item["source"] in sources:
+            continue
+        source_fs, source_key = filesystem_for(item["source"])
+        content = source_fs.cat_file(source_key)
+        if hashlib.sha256(content).hexdigest() != item["sha256"]:
+            raise ValueError(f"Pinned native timing journal changed: {item['source']}")
+        events.extend(Event(**json.loads(line)) for line in content.decode().splitlines() if line.strip())
+        sources.append(item["source"])
     # Reused stage artifacts have different original run IDs; preserve those in the sources.
     original_runs = sorted({event.run for event in events})
     text = report([replace(event, run=output) for event in events], synthetic=False)
@@ -58,7 +76,21 @@ def write_report(*, output: str, stages: list[str], expected_rollouts: int, sft_
     fs, root = filesystem_for(output)
     fs.pipe_file(prefix_join(root, "timing.md"), text.encode())
     fs.pipe_file(prefix_join(root, "timing-sources.json"), json.dumps(sources, indent=2).encode())
-    evaluation = audit(stages[-1], expected_rollouts=expected_rollouts)
+    expected_by_data_source = None
+    expected_identities = None
+    if evaluation_selection is not None:
+        selection_fs, selection_key = filesystem_for(prefix_join(evaluation_selection, "selection.json"))
+        selection = json.loads(selection_fs.cat_file(selection_key))
+        if selection["attempts"] != expected_rollouts:
+            raise ValueError("Prepared evaluation attempt count differs from the resolved run spec")
+        expected_by_data_source = selection["attempts_per_data_source"]
+        expected_identities = selection["identities"]
+    evaluation = audit(
+        stages[-1],
+        expected_rollouts=expected_rollouts,
+        expected_by_data_source=expected_by_data_source,
+        expected_identities=expected_identities,
+    )
     evaluation["excluded_benchmarks"] = SKIPPED_BENCHMARKS
     fs.pipe_file(prefix_join(root, "evaluation.json"), json.dumps(evaluation, indent=2).encode())
     if not evaluation["all_verified"]:
@@ -71,6 +103,8 @@ def report_step(
     archive_plan: dict | None = None,
     *,
     expected_rollouts: int = SMOKE_PATH_COUNT,
+    evaluation_selection: ArtifactStep | None = None,
+    additional_timing: list[dict] | None = None,
     sft_geometry: str = "Plumbing SFT (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.",
 ) -> ArtifactStep:
     completed = apply(
@@ -81,5 +115,7 @@ def report_step(
         stages=stages,
         expected_rollouts=expected_rollouts,
         sft_geometry=sft_geometry,
+        evaluation_selection=evaluation_selection,
+        additional_timing=additional_timing,
     )
     return archive_step(version, archive_plan, completed) if archive_plan is not None else completed

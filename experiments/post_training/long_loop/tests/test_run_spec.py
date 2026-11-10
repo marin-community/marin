@@ -82,13 +82,26 @@ def test_new_submission_rejects_stale_interactive_priority(stage):
 def test_rl_smoke_stops_before_eval_and_never_replays_sft(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     resolved = resolve_spec(SPEC, smoke=True)
-    assert stage_blockers(resolved, "archive")
     assert not stage_blockers(resolved, "rl")
     with pytest.raises(ValueError, match="adopted_sft"):
         build_spec_graph(resolved, "2026.11.10.1", through="rl")
-    resolved["adopted_sft"] = {"version": "2026.11.09.12"}
+    resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}
     terminal = build_spec_graph(resolved, "2026.11.10.1", through="rl")
     names = [step.name for step in graph_handles([terminal])]
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or "micro-" in name or "archive" in name for name in names)
     assert terminal.runtime_args["skyrl_execution"].priority == "production"
+
+
+def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    # Isolate graph wiring; this does not waive the live artifact-admission checks.
+    resolved["blockers"] = []
+    resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}
+    terminal = build_spec_graph(resolved, "2026.11.10.1", through="archive")
+    names = [step.name for step in graph_handles([terminal])]
+    validate_graph(terminal, tmp_path / "full-graph")
+    assert "long-loop/report" in names
+    assert any(name.endswith("/adopt-sft") for name in names)
+    assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)

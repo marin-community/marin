@@ -122,9 +122,13 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
             if evaluation["role_plan"]["reference_num_nodes"] is None:
                 placement["ref_num_nodes"] = replicas
         if "eval_tasks_per_benchmark" in spec.smoke_overrides:
-            result["evaluation"]["expected_rollouts"] = (
-                result["evaluation"]["tasks_per_benchmark"] * result["evaluation"]["supported_path_count"]
+            result["evaluation"]["expected_rollouts"] = result["evaluation"]["tasks_per_benchmark"] * sum(
+                result["evaluation"]["attempts_per_selected_task"].values()
             )
+            result["evaluation"]["expected_source_rows"] = result["evaluation"]["tasks_per_benchmark"] * len(
+                result["evaluation"]["attempts_per_selected_task"]
+            )
+            result["evaluation"]["expected_expanded_attempt_count"] = result["evaluation"]["expected_rollouts"]
     # Dataset manifests are the sole data authority, independent of stage files.
     result["sft"]["data"] = copy.deepcopy(result["datasets"]["sft"]["data"])
     result["gpu_peaks"] = allocation_peaks(result)

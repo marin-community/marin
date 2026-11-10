@@ -7,7 +7,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from marin.execution.artifact import write_artifact
+import yaml
+from marin.execution.artifact import RECORD_FILENAME, write_artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
@@ -18,7 +19,11 @@ from experiments.post_training.long_loop.archive import (
     seal_archive,
     verify_archive,
 )
-from experiments.post_training.long_loop.archive_stage import REQUIRED_CATEGORIES, archive_selected_run
+from experiments.post_training.long_loop.archive_stage import (
+    REQUIRED_CATEGORIES,
+    archive_selected_run,
+    derive_archive_plan,
+)
 from experiments.post_training.long_loop.graph import execute_local_graph
 from experiments.post_training.long_loop.hf_archive import file_identity, upload_checkpoint
 from experiments.post_training.long_loop.tests.test_hf_archive import upload_config
@@ -83,7 +88,8 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
     assert (keep / "weight").read_bytes() == b"best"
 
 
-def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_path, monkeypatch, hub):
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_path, monkeypatch, hub, incomplete):
 
     report = tmp_path / "report"
     report.mkdir()
@@ -111,6 +117,9 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
             },
         },
     }
+    if incomplete:
+        plan["provenance"]["missing_evidence"] = {"timing": "Native journal coverage incomplete"}
+        plan["provenance"]["cleanup_blockers"] = ["Native journal coverage incomplete"]
     native = tmp_path / "native-eval"
     native.mkdir()
     (native / "bench.jsonl").write_text(
@@ -187,4 +196,75 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
     assert manifest["provenance"]["checkpoint_inventory"]["ttl"] == "14d"
     assert not any("weight" in item["destination"] for item in manifest["objects"])
     assert weight.read_bytes() == b"selected-native-weights"
-    assert not (prior / "weights.distcp").exists()
+    assert (prior / "weights.distcp").exists() == incomplete
+    assert Path(root, "cleanup-blocked.json").exists() == incomplete
+
+
+def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(tmp_path):
+    def document(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        return str(path)
+
+    settings = yaml.safe_load(Path("experiments/post_training/long_loop/specs/archive.yaml").read_text())
+    roots = {stage: str(tmp_path / stage) for stage in settings["stage_files"]}
+    trained = roots["rl"]
+    run = SkyRLRun(
+        hf_model_uri=str(tmp_path / "hf"),
+        global_step=5,
+        tokenizer_uri="test",
+        tokenizer_revision="a" * 40,
+        checkpoint_root=str(tmp_path / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri="test",
+        iris_job_id="test",
+    )
+    write_artifact(run.result_payload(), trained)
+    record = json.loads((Path(trained) / RECORD_FILENAME).read_text())
+    document(Path(trained) / RECORD_FILENAME, {**record, "version": "2026.11.10"})
+    for stage, entries in settings["stage_files"].items():
+        for entry in entries:
+            document(Path(roots[stage]) / entry["path"], {})
+    document(
+        Path(roots["sft"]) / "consumed-config.json",
+        {
+            "trainer": {"trainer": {"tracker": {"entity": None, "project": "test", "id": None}}},
+            "resources": {"replicas": 2},
+            "processes_per_task": 4,
+        },
+    )
+    for stage in ("rl", "eval"):
+        retention = tmp_path / ("retention-" + stage)
+        document(retention / "_retention_ledger.json", {"archives": {"trace.zip": {"bytes": 3}}, "records": {"id": {}}})
+        (retention / "trace.zip").write_bytes(b"zip")
+        document(
+            Path(roots[stage]) / "resolved-launch.yaml",
+            {
+                "config": {
+                    "generator": {"trajectory_retention": {"output_path": str(retention)}},
+                    "trainer": {"export_path": str(tmp_path / ("exports-" + stage)), "project_name": "test"},
+                }
+            },
+        )
+    document(Path(roots["eval"]) / "exports/dumped_evals/eval_only/bench.jsonl", {"uid": "id"})
+    document(Path(roots["report"]) / "timing-sources.json", [])
+    document(
+        Path(roots["report"]) / "evaluation.json",
+        {"all_verified": True, "result_uri": roots["eval"], "completed_rollouts": 44},
+    )
+    spec = {"marin_revision": "a" * 40, "name": "test", "datasets": {"rows": "pinned"}, "rl": {"execution": {}}}
+    plan = derive_archive_plan(
+        output=str(tmp_path / "archive"),
+        settings=settings,
+        resolved_spec=spec,
+        artifacts=roots,
+        trained=trained,
+        evaluated=roots["eval"],
+        completed_report=roots["report"],
+    )
+    assert plan["hf_upload"]["repo_id"].endswith("-2026.11.10")
+    assert set(plan["provenance"]["missing_evidence"]) == {"timing", "wandb"}
+    assert any(item["name"] == "eval_inputs/selection.json" for item in plan["inputs"])
+    assert sum(item["name"].endswith("trace.zip") for item in plan["inputs"]) == 2
+    evidence = json.loads((tmp_path / "archive/derived-inputs/evidence-status.json").read_text())
+    assert evidence["native_sft_timing_coverage"]["native-sft-journal"]["expected"] == 8

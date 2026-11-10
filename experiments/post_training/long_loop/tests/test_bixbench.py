@@ -28,6 +28,7 @@ def write_results(root, names, failed=()):
     for name in names:
         row = {
             "uid": "1",
+            "data_source": name,
             "prompt_token_ids": [3, 7],
             "response_token_ids": [8],
             "stop_reason": "stop",

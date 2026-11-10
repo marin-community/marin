@@ -5,19 +5,34 @@
 
 import hashlib
 import json
+import os
 import re
+import subprocess
+import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import click
+import yaml
 from fray.types import ResourceConfig
 from marin.evaluation.records import EvalRunRecord
+from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.secrets import require_secret
 
-from experiments.post_training.long_loop.archive import ArchiveInput, checkpoint_cleanup, seal_archive, write_once
+from experiments.grug.moe_hero_ep.ops.upload_hf import RESPONSIBLE_USE, WARNING
+from experiments.post_training.long_loop.archive import (
+    ArchiveInput,
+    checkpoint_cleanup,
+    digest,
+    seal_archive,
+    write_once,
+)
 from experiments.post_training.long_loop.eval_archive import publish_evaluation
 from experiments.post_training.long_loop.hf_archive import (
     HfUpload,
@@ -37,7 +52,8 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         raise ValueError("Completed report has unverified evaluation paths")
     inputs = [ArchiveInput(**item) for item in plan["inputs"]]
     missing = REQUIRED_CATEGORIES - {item.category for item in inputs}
-    if missing:
+    declared_missing = plan["provenance"].get("missing_evidence", {})
+    if missing - declared_missing.keys():
         raise ValueError(f"Archive lacks required evidence categories: {sorted(missing)}")
     provenance = dict(plan["provenance"])
     revision = provenance["marin_commit"]
@@ -77,6 +93,20 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         )
     seal_archive(output, inputs, provenance)
     inventory = provenance["checkpoint_inventory"]
+    blockers = provenance.get("cleanup_blockers", [])
+    if missing or declared_missing or blockers:
+        write_once(
+            prefix_join(output, "cleanup-blocked.json"),
+            json.dumps(
+                {
+                    "missing_categories": sorted(missing | declared_missing.keys()),
+                    "blockers": blockers,
+                    "archive_complete": False,
+                },
+                sort_keys=True,
+            ).encode(),
+        )
+        return
     checkpoint_cleanup(
         output,
         inventory["root"],
@@ -151,6 +181,347 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     resolved["provenance"]["checkpoint_selection"] = {"receipt": best_uri, "result": best}
     write_once(prefix_join(output, "resolved-plan.json"), json.dumps(resolved, sort_keys=True, indent=2).encode())
     archive_run(output=output, plan=resolved, completed_report=completed_report)
+
+
+def _read_document(uri: str) -> Any:
+    fs, key = filesystem_for(uri)
+    return yaml.safe_load(fs.cat_file(key))
+
+
+def _input(source: str, name: str, category: str) -> dict:
+    fs, key = filesystem_for(source)
+    if not fs.isfile(key):
+        raise ValueError(f"Required archive evidence is absent: {source}")
+    if source.endswith((".distcp", ".safetensors")):
+        raise ValueError("Evidence inventory cannot contain model weights")
+    return {"source": source, "name": name, "category": category}
+
+
+def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[list[dict], list[dict]]:
+    """Run the pinned, strict exporter only for fully identified training runs."""
+    inputs, status = [], []
+    for ref in refs:
+        if not all(ref.get(key) for key in ("entity", "project", "id")):
+            status.append({**ref, "status": "unresolved_run_identity"})
+            continue
+        run_path = "/".join(ref[key] for key in ("entity", "project", "id"))
+        identity = hashlib.sha256(json.dumps({"ref": ref, "settings": settings}, sort_keys=True).encode()).hexdigest()
+        marker = prefix_join(destination, identity + ".json")
+        marker_fs, marker_key = filesystem_for(marker)
+        if marker_fs.exists(marker_key):
+            saved = json.loads(marker_fs.cat_file(marker_key))
+            for item in saved["files"]:
+                if digest(item["source"])[1] != item["sha256"]:
+                    raise ValueError("Previously verified W&B export changed")
+                inputs.append({key: item[key] for key in ("source", "name", "category")})
+            status.append(saved["status"])
+            continue
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory)
+            config = {
+                "source": {"entity": ref["entity"], "projects": {"include": [ref["project"]]}},
+                "destination": {"type": "local", "path": str(local / "archive")},
+                "archive": {
+                    "strict": True,
+                    "include": settings["include"],
+                    "security": {"profile": "private", "on_sensitive_value": "fail"},
+                },
+            }
+            path = local / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            command = ["uv", "tool", "run", "--from", settings["package"], "wandb-archive", "--quiet"]
+            env = {**os.environ, "WANDB_API_KEY": require_secret("WANDB_API_KEY")}
+            backup = subprocess.run([*command, "backup", str(path), "--run", run_path], env=env, capture_output=True)
+            if backup.returncode:
+                status.append(
+                    {
+                        **ref,
+                        "status": "strict_export_failed",
+                        "exit_code": backup.returncode,
+                        "diagnostic_sha256": hashlib.sha256(backup.stderr).hexdigest(),
+                    }
+                )
+                continue
+            verified = subprocess.run([*command, "verify", str(path), "--deep"], env=env, capture_output=True)
+            summary = json.loads(verified.stdout) if verified.returncode == 0 else {}
+            if not summary.get("ok") or summary.get("run_count") != 1:
+                status.append({**ref, "status": "export_verification_failed", "verification": summary})
+                continue
+            generation = hashlib.sha256((local / "archive" / "archive.json").read_bytes()).hexdigest()
+            files = []
+            for file in sorted((local / "archive").rglob("*")):
+                if not file.is_file():
+                    continue
+                name = prefix_join(prefix_join(ref["stage"], generation), file.relative_to(local / "archive").as_posix())
+                uri = prefix_join(destination, name)
+                write_once(uri, file.read_bytes())
+                item = _input(uri, prefix_join("wandb", name), "wandb")
+                inputs.append(item)
+                files.append({**item, "sha256": hashlib.sha256(file.read_bytes()).hexdigest()})
+            result = {**ref, "status": "strict_export_verified", "verification": summary}
+            status.append(result)
+            write_once(marker, json.dumps({"files": files, "status": result}, sort_keys=True).encode())
+    return inputs, status
+
+
+def derive_archive_plan(
+    *,
+    output: str,
+    settings: dict,
+    resolved_spec: dict,
+    artifacts: dict[str, str],
+    trained: str,
+    evaluated: str,
+    completed_report: str,
+) -> dict:
+    """Resolve evidence only from graph outputs, consumed configs and explicit file pins."""
+    roots = {**artifacts, "rl": trained, "eval": evaluated, "report": completed_report}
+    run = SkyRLRun.raw_load(trained)
+    if run.hf_model_uri is None:
+        raise ValueError("Archive requires a committed selected HF export")
+    revision = resolved_spec["marin_revision"]
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError("Source revision must be an exact commit")
+    inputs, documents, limitations, blockers = [], {}, [], []
+    for stage, entries in settings["stage_files"].items():
+        root = roots[stage]
+        for entry in entries:
+            uri = prefix_join(root, entry["path"])
+            inputs.append(_input(uri, prefix_join(stage, entry["path"]), entry["category"]))
+            if entry["path"].endswith((".json", ".yaml")):
+                documents[(stage, entry["path"])] = _read_document(uri)
+    records = {}
+    for stage, root in sorted(roots.items()):
+        uri = prefix_join(root, RECORD_FILENAME)
+        fs, key = filesystem_for(uri)
+        if fs.isfile(key):
+            inputs.append(_input(uri, prefix_join("artifact-records", stage + ".json"), "source"))
+            records[stage] = _read_document(uri)
+    metadata_root = prefix_join(output, "derived-inputs")
+
+    def record(name: str, value: dict, category: str) -> None:
+        uri = prefix_join(metadata_root, name)
+        write_once(uri, json.dumps(value, sort_keys=True, indent=2).encode())
+        inputs.append(_input(uri, name, category))
+
+    record(
+        "source.json",
+        {
+            "repository": settings["source_repository"],
+            "marin_revision": revision,
+            "artifacts": roots,
+            "adopted_sft": resolved_spec.get("adopted_sft"),
+        },
+        "source",
+    )
+    record("resolved-spec.json", resolved_spec, "config")
+    record("dataset-referents.json", resolved_spec["datasets"], "dataset")
+    for stage in ("rl", "eval"):
+        launch = documents[(stage, "resolved-launch.yaml")]
+        retention = launch["config"]["generator"]["trajectory_retention"]
+        prefix = retention["output_path"]
+        ledger_uri = prefix_join(prefix, "_retention_ledger.json")
+        ledger = _read_document(ledger_uri)
+        inputs.append(
+            _input(
+                ledger_uri, prefix_join(stage, "retention-ledger.json"), "eval_trace" if stage == "eval" else "rl_trace"
+            )
+        )
+        for path, item in sorted(ledger["archives"].items()):
+            if StoragePath(path).scheme or ".." in StoragePath(path).segments or path.startswith("/"):
+                raise ValueError("Retention archive must be relative to the consumed retention root")
+            uri = prefix_join(prefix, path)
+            fs, key = filesystem_for(uri)
+            if fs.size(key) != item["bytes"]:
+                raise ValueError(f"Retention archive size mismatch: {uri}")
+            inputs.append(
+                _input(uri, prefix_join(stage + "/retention", path), "eval_trace" if stage == "eval" else "rl_trace")
+            )
+        if stage == "eval" and not ledger["records"]:
+            raise ValueError("Completed evaluation lacks retained trace records")
+    eval_source = prefix_join(evaluated, "exports/dumped_evals/eval_only")
+    eval_fs, eval_prefix = filesystem_for(eval_source)
+    native_rows = sorted(eval_fs.glob(prefix_join(eval_prefix, "*.jsonl")))
+    if not native_rows:
+        raise ValueError("Completed evaluation lacks native result rows")
+    for key in native_rows:
+        inputs.append(
+            _input(eval_fs.unstrip_protocol(key), prefix_join("eval/native", StoragePath(key).name), "eval_trace")
+        )
+    timing_sources = documents[("report", "timing-sources.json")]
+    for index, uri in enumerate(timing_sources):
+        inputs.append(_input(uri, f"timing/journals/{index:06d}.jsonl", "timing"))
+    limitations.append("Stage timing journals do not establish complete native phase or allocation coverage.")
+    launch = documents[("rl", "resolved-launch.yaml")]
+    order_root = prefix_join(launch["config"]["trainer"]["export_path"], "training_order")
+    order_fs, order_prefix = filesystem_for(order_root)
+    orders = sorted(order_fs.glob(prefix_join(order_prefix, "step-*.json")))
+    for key in orders:
+        inputs.append(
+            _input(order_fs.unstrip_protocol(key), prefix_join("training-order", StoragePath(key).name), "dataset")
+        )
+    if not orders:
+        limitations.append(
+            "Observed RL learner-batch order is unavailable; dataset order is not observed training order."
+        )
+    extra = settings["additional_evidence"] + (resolved_spec.get("adopted_sft") or {}).get("additional_evidence", [])
+    for item in extra:
+        if digest(item["source"])[1] != item["sha256"]:
+            raise ValueError(f"Pinned additional evidence changed: {item['name']}")
+        inputs.append(_input(item["source"], prefix_join("additional", item["name"]), item["category"]))
+    sft = documents[("sft", "consumed-config.json")]["trainer"]["trainer"]
+    tracker = sft["tracker"]
+    refs = [
+        {
+            "stage": "sft",
+            "entity": tracker.get("entity"),
+            "project": tracker.get("project"),
+            "id": tracker.get("id"),
+            "identity_source": prefix_join(roots["sft"], "consumed-config.json"),
+        },
+        {
+            "stage": "rl",
+            "entity": resolved_spec["rl"]["execution"].get("wandb_entity"),
+            "project": launch["config"]["trainer"].get("project_name"),
+            "id": None,
+            "experiment_name": launch["config"]["trainer"].get("run_name"),
+            "identity_source": prefix_join(trained, "resolved-launch.yaml"),
+        },
+    ]
+    rl_wandb = prefix_join(launch["config"]["trainer"]["export_path"], "wandb-run.json")
+    wandb_fs, wandb_key = filesystem_for(rl_wandb)
+    if wandb_fs.isfile(wandb_key):
+        ref = _read_document(rl_wandb)
+        ref = {**ref, "stage": "rl", "identity_source": rl_wandb}
+        inputs.append(_input(rl_wandb, "wandb/rl-run-reference.json", "provenance"))
+        refs = [entry for entry in refs if entry["stage"] != "rl"] + [ref]
+    for item in extra:
+        if item.get("kind") == "wandb-run-reference":
+            ref = _read_document(item["source"])
+            refs = [entry for entry in refs if entry["stage"] != ref["stage"]] + [ref]
+    wandb_inputs, wandb_status = _wandb_export(refs, settings["wandb"], prefix_join(metadata_root, "wandb"))
+    inputs.extend(wandb_inputs)
+    record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
+    missing = {}
+    full_sft = documents[("sft", "consumed-config.json")]
+    expected_timing = {
+        "native-sft-attempt-archive": full_sft["resources"]["replicas"],
+        "native-sft-journal": full_sft["resources"]["replicas"] * full_sft["processes_per_task"],
+    }
+    timing_coverage = {
+        kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}
+        for kind, count in expected_timing.items()
+    }
+    if any(item["observed"] != item["expected"] for item in timing_coverage.values()):
+        missing["timing"] = (
+            "Native SFT attempt archive/journal coverage is incomplete; stage-wall journals do not substitute."
+        )
+        blockers.append(missing["timing"])
+    if any(item["status"] != "strict_export_verified" for item in wandb_status):
+        missing["wandb"] = (
+            "One or more exact W&B identities or strict native-history exports unavailable; see wandb-status.json."
+        )
+        blockers.append(missing["wandb"])
+    record(
+        "evidence-status.json",
+        {
+            "missing_evidence": missing,
+            "limitations": limitations,
+            "native_sft_timing_coverage": timing_coverage,
+            "cleanup_blockers": blockers,
+        },
+        "provenance",
+    )
+    evaluation = documents[("report", "evaluation.json")]
+    if not evaluation["all_verified"] or evaluation["result_uri"] != evaluated:
+        raise ValueError("Evaluation report is incomplete or belongs to another run")
+    card = (
+        "---\nlicense: openmdw-1.1\n---\n\n# Long-loop selected checkpoint\n\n"
+        + WARNING
+        + "\n\n"
+        + f"Selected RL step: {run.global_step}. Selection: five-step EMA validation reward. "
+        + f"Marin source commit: `{revision}`. Verified evaluation attempts: {evaluation['completed_rollouts']}.\n\n"
+        + "This is an experimental training result, not a quality-parity claim. "
+        + "Exact private dataset/config/provenance records are retained in the internal evidence archive.\n\n"
+        + RESPONSIBLE_USE
+        + "\n"
+    )
+    card_uri = prefix_join(metadata_root, "README.md")
+    write_once(card_uri, card.encode())
+    version = records["rl"]["version"]
+    return {
+        "inputs": inputs,
+        "hf_upload": {
+            "source": run.hf_model_uri,
+            "repo_id": settings["hf_upload"]["repo_prefix"] + "-" + version,
+            "local_directory": settings["hf_upload"]["local_directory"],
+            "model_card": card_uri,
+            "license_file": settings["hf_upload"]["license_file"],
+            "native_checkpoint": "resolved-from-best-checkpoint",
+            "workers": settings["hf_upload"]["workers"],
+        },
+        "native_checkpoint_ttl": settings["native_checkpoint_ttl"],
+        "provenance": {
+            "marin_commit": revision,
+            "evaluation_complete": True,
+            "missing_evidence": missing,
+            "cleanup_blockers": blockers,
+            "limitations": limitations,
+        },
+        "evaldash": {
+            "source": eval_source,
+            "records_prefix": settings["evaldash"]["records_prefix"],
+            "record": {
+                "run_id": settings["evaldash"]["run_prefix"] + "-" + version,
+                "group_id": resolved_spec["name"],
+                "created_at": datetime.now(UTC).isoformat(),
+                "user": settings["evaldash"]["user"],
+                "model": {"name": settings["evaldash"]["model_name"], "location": run.hf_model_uri, "backend": "vllm"},
+                "eval": {"name": settings["evaldash"]["eval_name"], "mechanism": "skyrl"},
+                "hardware": settings["evaldash"]["hardware"],
+                "status": "succeeded",
+                "error": None,
+                "results_path": prefix_join(output, "evaluation"),
+                "metrics": {},
+                "jobs": {},
+                "log_tails": {},
+                "provenance": {"git_sha": revision, "launch_host": "archive-postprocessing"},
+            },
+        },
+    }
+
+
+def archive_graph_run(
+    *,
+    output: str,
+    settings: dict,
+    resolved_spec: dict,
+    artifacts: dict[str, str],
+    trained: str,
+    evaluated: str,
+    completed_report: str,
+) -> None:
+    """Archive a completed graph without replaying any producing stage."""
+    request = {
+        "settings": settings,
+        "resolved_spec": resolved_spec,
+        "artifacts": artifacts,
+        "trained": trained,
+        "evaluated": evaluated,
+        "completed_report": completed_report,
+    }
+    request_sha = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    uri = prefix_join(output, "runtime-plan.json")
+    fs, key = filesystem_for(uri)
+    if fs.exists(key):
+        saved = json.loads(fs.cat_file(key))
+        if saved["request_sha256"] != request_sha:
+            raise ValueError("Runtime archive inputs changed on resume")
+        plan = saved["plan"]
+    else:
+        plan = derive_archive_plan(output=output, **request)
+        write_once(uri, json.dumps({"request_sha256": request_sha, "plan": plan}, sort_keys=True, indent=2).encode())
+    archive_selected_run(output=output, plan=plan, trained=trained, completed_report=completed_report)
 
 
 def selected_archive_step(

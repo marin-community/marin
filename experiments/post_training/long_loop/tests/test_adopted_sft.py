@@ -59,11 +59,11 @@ def recorded_selection(tmp_path):
 def test_committed_selection_requires_exact_step_and_does_not_fall_back(recorded_selection, tmp_path):
     pin, model, _ = recorded_selection
     output = tmp_path / "verified"
-    verify_adopted_sft(output=str(output), pin=pin, model=model, tokenizer_revision="b" * 40)
+    verify_adopted_sft(output=str(output), checkpoint_pin=pin, model=model, tokenizer_revision="b" * 40)
     assert json.loads((output / "selected.json").read_text())["step"] == 15
     with pytest.raises(ValueError, match="requested final checkpoint"):
         verify_adopted_sft(
-            output=str(tmp_path / "wrong"), pin={**pin, "step": 746}, model=model, tokenizer_revision="b" * 40
+            output=str(tmp_path / "wrong"), checkpoint_pin={**pin, "step": 746}, model=model, tokenizer_revision="b" * 40
         )
     assert not (tmp_path / "wrong/selected.json").exists()
 
@@ -71,8 +71,10 @@ def test_committed_selection_requires_exact_step_and_does_not_fall_back(recorded
 def test_missing_payload_or_wrong_tokenizer_prevents_handoff(recorded_selection, tmp_path):
     pin, model, checkpoint = recorded_selection
     with pytest.raises(ValueError, match="lineage"):
-        verify_adopted_sft(output=str(tmp_path / "wrong"), pin=pin, model=model, tokenizer_revision="c" * 40)
+        verify_adopted_sft(output=str(tmp_path / "wrong"), checkpoint_pin=pin, model=model, tokenizer_revision="c" * 40)
     (checkpoint / "manifest.ocdbt").unlink()
     with pytest.raises(ValueError, match="exact checkpoint file set"):
-        verify_adopted_sft(output=str(tmp_path / "missing"), pin=pin, model=model, tokenizer_revision="b" * 40)
+        verify_adopted_sft(
+            output=str(tmp_path / "missing"), checkpoint_pin=pin, model=model, tokenizer_revision="b" * 40
+        )
     assert not (tmp_path / "missing/selected.json").exists()

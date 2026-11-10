@@ -151,55 +151,6 @@ config:
 seed: 20261030
 gpu_variant: H100
 capability_origin: https://iris.oa.dev
-context_proof:
-  vllm: 0.0.0.dev20260929+marin.39e62869693c
-  config_sha256: 552ee1f97e9a17e74f4d892ca7fe7279dfa16083e0ba85c6fcd8e46dbf9b317b
-  cases:
-  - name: old
-    accepted: false
-    error: "1 validation error for ModelConfig\n  Value error, User-specified max_model_len\
-      \ (65536) is greater than the derived max_model_len (max_seq_len=32768.0 or\
-      \ model_max_length=None in model's config.json). To allow overriding this maximum,\
-      \ set the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN=1. VLLM_ALLOW_LONG_MAX_MODEL_LEN\
-      \ must be used with extreme caution. If the model uses relative position encoding\
-      \ (RoPE), positions exceeding derived_max_model_len lead to nan. If the model\
-      \ uses absolute position encoding, positions exceeding derived_max_model_len\
-      \ will cause a CUDA array out-of-bounds error. [type=value_error, input_value=ArgsKwargs((),\
-      \ {'model': ...n_embeddings': 262144}}), input_type=ArgsKwargs]\n    For further\
-      \ information visit https://errors.pydantic.dev/2.13/v/value_error"
-    config_digest: 88bfc4cd7d8ff43694470604d7fd7cfb54d16e4e5226bf4a66cb65c847c1dfc6
-    overrides:
-      max_position_embeddings: 262144
-    requested_window: 65536
-  - name: fixed
-    accepted: true
-    max_model_len: 65536
-    config_digest: 88bfc4cd7d8ff43694470604d7fd7cfb54d16e4e5226bf4a66cb65c847c1dfc6
-    overrides:
-      max_position_embeddings: 262144
-      max_seq_len: 262144
-    requested_window: 65536
-  - name: other-alias
-    accepted: false
-    error: "1 validation error for ModelConfig\n  Value error, User-specified max_model_len\
-      \ (65536) is greater than the derived max_model_len (n_positions=32768.0 or\
-      \ model_max_length=None in model's config.json). To allow overriding this maximum,\
-      \ set the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN=1. VLLM_ALLOW_LONG_MAX_MODEL_LEN\
-      \ must be used with extreme caution. If the model uses relative position encoding\
-      \ (RoPE), positions exceeding derived_max_model_len lead to nan. If the model\
-      \ uses absolute position encoding, positions exceeding derived_max_model_len\
-      \ will cause a CUDA array out-of-bounds error. [type=value_error, input_value=ArgsKwargs((),\
-      \ {'model': ... 'n_positions': 32768}}), input_type=ArgsKwargs]\n    For further\
-      \ information visit https://errors.pydantic.dev/2.13/v/value_error"
-    config_digest: 88bfc4cd7d8ff43694470604d7fd7cfb54d16e4e5226bf4a66cb65c847c1dfc6
-    overrides:
-      max_position_embeddings: 262144
-      max_seq_len: 262144
-      n_positions: 32768
-    requested_window: 65536
-  vllm_commit: 39e62869693c46402b1a95fde4fc55ca1aab9ae1
-  job: /benfeuer/long-loop-context-proof-2026.11.09.1
-  log_sha256: f4f68bcbb5f132f0f2b245a52951d31bdb9d61a11ac13f0661734f5fe666032d
 data_relative_path: rollouts.parquet
 judge_gpu_count: 8
 role_plan:
@@ -293,11 +244,28 @@ judge:
   evalchemy_num_concurrent: null
 tasks_per_benchmark: 10
 expected_source_rows: 200
-expected_expanded_attempt_count: null
-admission_pending:
-- Confirm expanded evaluation attempt count from the exact prepared200-row dataset,
-  including installed-agent expansion.
-- Regenerate exact pinned-vLLM context proof for the future selected RL export config;
-  included proof covers historical plumbing config only.
+expected_expanded_attempt_count: 440
+admission_pending: []
 supported_path_count: 20
-expected_rollouts: 200
+expected_rollouts: 440
+attempts_per_selected_task:
+  NUPA: 1
+  aime24: 10
+  bfclparity-pi: 1
+  bixbench-pi: 1
+  cruxeval: 1
+  ds-1000-local: 1
+  gpqa-diamond: 3
+  gsm8k-0shot: 1
+  humanevalplus: 1
+  ifbench: 1
+  math500: 1
+  mbppplus: 1
+  mmlu-pro: 1
+  mrcr: 1
+  olympiadbench: 10
+  ot-tblite-recovery: 3
+  swebench-verified: 1
+  tb2-recovery: 3
+  triviaqa: 1
+  truthfulqa: 1

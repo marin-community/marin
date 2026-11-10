@@ -6,6 +6,7 @@
 import json
 import os
 import tempfile
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -21,7 +22,7 @@ from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.post_training.long_loop.launch_validation import validate_before_allocation
+from experiments.post_training.long_loop.launch_validation import validate_before_allocation, validate_selected_context
 from experiments.post_training.long_loop.timing import EventLog
 
 
@@ -48,6 +49,9 @@ def run_with_existing_judge(config: SkyRLRunConfig) -> SkyRLRun:
 
 def run_judged(config: JudgedEvaluation) -> SkyRLRun:
     validation = validate_before_allocation(config.skyrl.launch_config_yaml)
+    context_started = time.monotonic()
+    validation["selected_context"] = validate_selected_context(config.skyrl.launch_config_yaml)
+    validation["selected_context_seconds"] = time.monotonic() - context_started
     launch = yaml.safe_load(config.skyrl.launch_config_yaml)
     validation_fs, validation_key = filesystem_for(
         str(StoragePath(launch["artifacts"]["terminal_manifest_uri"]).parent / "preallocation-validation.json")
