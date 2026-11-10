@@ -78,6 +78,17 @@ GS8, exact 32/32 consumed-group quotas and native first-update qualification gat
 `--run` submits only after preflight passes. GPU execution must fit the aggregate
 256-H100 cap; a running 256-H100 SFT leaves no room for a simultaneous smoke.
 
+### Starting RL from a published HF export
+
+An `adopted_sft` file with `kind: hf_export` names an HF repository, its full
+revision, the in-region copy's URI, and the size and SHA-256 of every object in that
+copy. `specs/adopted-sft-20261005.yaml` pins the 2026-10-05 SFT release mirrored to
+RNO2A. The adoption stage hashes every object, requires the exact object set, checks
+the model geometry against the SFT recipe, the expert tensors against the declared
+schema (1 = stacked, 2 = split), `tokenizer.json` against the loop tokenizer, and both
+EOS tokens. The endpoint check and RL then read the copy in place; there is no export
+stage. Use `--through rl`: this form has no native SFT run evidence for the archive.
+
 The CPU tests cover actual quota-buffer behavior, 102,400-token collation, and
 checkpoint-adoption failures. They do not certify natural-long GPU forward,
 backward, optimizer, or save/restore behavior. Full downstream runs still require

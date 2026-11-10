@@ -16,14 +16,14 @@ from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecuti
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
+from experiments.post_training.long_loop.adopted_sft import is_hf_export, verify_adopted_hf_export, verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.endpoint_probe import probe
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
-from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
+from experiments.post_training.long_loop.sft import HANDOFF_DIR, export_sft, fresh_sft_config, sft_run
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
@@ -81,9 +81,25 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     sft_evidence = [verified]
     recipe = resolved["sft"]
     sft_pin = resolved.get("adopted_sft")
-    if sft_pin is not None:
-        if through == "sft":
-            raise ValueError("An adopted SFT input is for downstream continuation, not an SFT stage")
+    hf_pin = sft_pin if sft_pin is not None and is_hf_export(sft_pin) else None
+    tokenizer = resolved["tokenizer"]
+    if sft_pin is not None and through == "sft":
+        raise ValueError("An adopted SFT input is for downstream continuation, not an SFT stage")
+    if hf_pin is not None:
+        if through == "archive":
+            raise ValueError("An adopted HF export has no native SFT run evidence to archive; stop at --through rl")
+        trained = timed(
+            apply(
+                f"{name}/adopt-sft",
+                remote(verify_adopted_hf_export, resources=resources["inputs"]),
+                version=version,
+                output=OUT,
+                export_pin=hf_pin,
+                model=recipe["model"],
+                tokenizer_uri=tokenizer["uri"],
+            )
+        )
+    elif sft_pin is not None:
         if sft_pin["version"] == version:
             raise ValueError("Downstream continuation requires a fresh runtime version")
         trained = timed(
@@ -120,20 +136,30 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     coordinator = replace(coordinator, coordinator_name=f"{coordinator.coordinator_name}-{version}")
     if through == "sft":
         return replace(trained, runtime_args={**trained.runtime_args, "skyrl_execution": coordinator})
-    tokenizer = resolved["tokenizer"]
-    exported = timed(
-        apply(
-            f"{name}/sft-handoff",
-            remote(export_sft, resources=resources["export"], env_vars={"JAX_PLATFORMS": "cpu"}),
-            version=version,
-            output=OUT,
-            trained=trained,
-            model=recipe["model"],
-            source_revision=resolved["marin_revision"],
-            tokenizer_uri=tokenizer["uri"],
-            context_limit=tokenizer["context_limit"],
+    if hf_pin is not None:
+        # The verified in-region copy is the handoff; its files sit at the root.
+        exported = ArtifactStep.adopt(
+            f"{name}/sft-hf",
+            version,
+            hf_pin["uri"],
+            config={"repository": hf_pin["repository"], "revision": hf_pin["revision"]},
         )
-    )
+        handoff_dir = ""
+    else:
+        exported = timed(
+            apply(
+                f"{name}/sft-handoff",
+                remote(export_sft, resources=resources["export"], env_vars={"JAX_PLATFORMS": "cpu"}),
+                version=version,
+                output=OUT,
+                trained=trained,
+                model=recipe["model"],
+                source_revision=resolved["marin_revision"],
+                tokenizer_uri=tokenizer["uri"],
+                context_limit=tokenizer["context_limit"],
+            )
+        )
+        handoff_dir = HANDOFF_DIR
     endpoint = timed(
         apply(
             f"{name}/endpoint",
@@ -143,8 +169,11 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             model_root=exported,
             tokenizer_revision=tokenizer["revision"],
             settings=resolved["endpoint"],
+            relative_path=handoff_dir,
         )
     )
+    if hf_pin is not None:
+        endpoint = replace(endpoint, deps=(*endpoint.deps, trained))
     adopted = {
         key: ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
         for key in ("agentic", "nonagentic", "heldout")
@@ -162,7 +191,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             step=exported,
             tokenizer_uri=tokenizer["repo"],
             tokenizer_revision=tokenizer["revision"],
-            relative_path="hf",
+            relative_path=handoff_dir,
         ),
         train_data=tuple(
             ArtifactDataSource(adopted[k], relative_path=datasets[k]["data_file"]) for k in ("agentic", "nonagentic")
