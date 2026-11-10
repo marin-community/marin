@@ -17,7 +17,8 @@ import sys
 from pathlib import Path
 from cloud.iris.launch_config import load_launch_config
 
-assert Path(load_launch_config.__code__.co_filename).resolve().is_relative_to(Path(sys.argv[1]) / "vendor/skyrl")
+composer = Path(load_launch_config.__code__.co_filename).resolve()
+assert composer == Path(sys.argv[1]) / "vendor/skyrl/cloud/iris/launch_config.py"
 rows = []
 for path in sys.argv[2:]:
     config = load_launch_config(Path(path))
