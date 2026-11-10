@@ -1,33 +1,24 @@
-"""Final-answer grading for GenomeQA, retaining response and failure evidence."""
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""GenomeQA final-answer parsing and equal-cell scoring."""
 
 import re
-from collections.abc import Sequence
-from typing import Any
 
-from eval.completion_response import CompletionContentPolicy, CompletionText
-from eval.contracts.eval_spec import EvalSpec, Grade
-from eval.graders.answer_extraction import final_response_text
+from verifyit.adapters.completion import final_text
+from verifyit.grade import Reward, scored
 
 _ANSWER_HEADING = "### Answer"
 _ANSWER = re.compile(
-    r"\bAnswer\s*:\s*\**\s*\[?"
-    r"([A-Za-z](?![A-Za-z])(?:\]?\**\s*(?:or|and|/|,)\s*\**\[?[A-Za-z](?![A-Za-z]))*)\]?",
+    r"\bAnswer\s*:\s*\**\s*\[?" r"([A-Za-z](?![A-Za-z])(?:\]?\**\s*(?:or|and|/|,)\s*\**\[?[A-Za-z](?![A-Za-z]))*)\]?",
     re.IGNORECASE,
 )
 _LETTER = re.compile(r"(?<![A-Za-z])([A-Z])(?![A-Za-z])")
 
 
-def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
-    response = responses[-1]
-    selected = str(response)
-    failure = None
-    if isinstance(response, CompletionText):
-        completion = response.response
-        selected = completion.normalized_content(CompletionContentPolicy.FINAL_ONLY)
-        if completion.finish_reason == "length":
-            failure = "truncation"
-        elif completion.raw_choice.get("message", {}).get("refusal") or completion.finish_reason == "content_filter":
-            failure = "refusal"
+def grade_genomeqa(expected: str, options: str, cell_weight: float, response: str, stop_reason: str) -> Reward:
+    selected = response
+    failure = "truncation" if stop_reason == "length" else "refusal" if stop_reason == "content_filter" else None
     # An unterminated explicit thinking block contains no usable final answer.
     if any(
         selected.rfind(start) > selected.rfind(end)
@@ -37,7 +28,7 @@ def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
         )
     ):
         selected = ""
-    selected = final_response_text(selected)
+    selected = final_text(selected)
     has_heading = _ANSWER_HEADING in selected
     if has_heading:
         selected = selected.rsplit(_ANSWER_HEADING, 1)[1]
@@ -49,13 +40,14 @@ def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
             failure = "conflicting_answers" if len(candidates) > 1 else "missing_answer"
         else:
             candidate = candidates.pop()
-            if candidate not in spec.grader.reference["options"]:
+            if candidate not in options:
                 failure = "invalid_option"
             else:
                 answer = candidate
-    correct = float(failure is None and answer == spec.target)
-    return Grade(
-        {
+    correct = float(failure is None and answer == expected)
+    return scored(
+        correct,
+        metrics={
             "accuracy": correct,
             "genomeqa_macro": correct,
             "unanswered": float(not answer),
@@ -63,7 +55,6 @@ def genomeqa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
             "refusal": float(failure == "refusal"),
             "parse_failure": float(failure in {"missing_answer", "conflicting_answers", "invalid_option"}),
         },
-        audit={"genomeqa_parsing": {"selected_span": selected, "answer": answer, "failure": failure}},
-        weights={"genomeqa_macro": spec.grader.reference["cell_weight"]},
-        filtered_resps=[answer],
+        metric_weights={"genomeqa_macro": cell_weight},
+        genomeqa_parsing={"selected_span": selected, "answer": answer, "failure": failure},
     )

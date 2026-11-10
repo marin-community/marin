@@ -1,7 +1,6 @@
 """Explicit registry of dataset sources; imports stay lazy until selection."""
 
 SOURCES = {
-    "GenomeQA": ("eval.chat_benchmarks.GenomeQA.eval_instruct", "GenomeQABenchmark"),
     'AIME24': ('eval.chat_benchmarks.AIME24.eval_instruct', 'AIME24Benchmark'),
     'AIME25': ('eval.chat_benchmarks.AIME25.eval_instruct', 'AIME25Benchmark'),
     'AIW': ('eval.chat_benchmarks.AIW.eval_instruct', 'AIWBenchmark'),

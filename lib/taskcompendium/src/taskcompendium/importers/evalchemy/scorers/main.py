@@ -7,6 +7,7 @@
 # ruff: noqa: PLC0415
 
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -18,6 +19,16 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
     # Scorers load only the dependencies of the selected dataset's environment.
+    if scorer == "genomeqa":
+        from .genomeqa import grade_genomeqa
+
+        return grade_genomeqa(
+            config["expected"],
+            config["options"],
+            config["cell_weight"],
+            response,
+            os.environ.get("TASKCOMPENDIUM_STOP_REASON", ""),
+        )
     if scorer == "boxed_math":
         from .math import grade_boxed_math
 

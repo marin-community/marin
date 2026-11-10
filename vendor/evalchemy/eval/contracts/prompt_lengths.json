@@ -222,7 +222,6 @@
     "MixEval": "IndexError: list index out of range",
     "NUPA-Loose": "canonical prompt corpus contains 238926 remote-source examples",
     "RepoBench": "TimeoutError: rendering exceeded 900s",
-    "WildBench": "AttributeError: 'WildBenchConfig' object has no attribute 'max_tokens'",
-    "GenomeQA": "External pinned prompt and HF data; explicit 16384 output cap. Runtime preflight measures the full corpus with the served model tokenizer."
+    "WildBench": "AttributeError: 'WildBenchConfig' object has no attribute 'max_tokens'"
   }
 }

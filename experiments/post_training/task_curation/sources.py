@@ -5,6 +5,7 @@
 
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
+    genomeqa,
     structure_closure,
     thoughtcrime,
     unconverted,
@@ -45,6 +46,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 def all_sources() -> dict[str, RlDataSource]:
     sources = [
+        *genomeqa.sources(),
         *eval_code.sources(),
         *eval_harness.sources(),
         *eval_instructions.sources(),
