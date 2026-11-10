@@ -681,13 +681,13 @@ the seven chat special-token columns of the LM head from single-token anchors.
 | `--replay-fraction` | Target replay share of each mixture block |
 | `--dp-racks` | Data-parallel racks, 16 sequences each |
 | `--router-bias` | `frozen` (default) keeps the restored router bias; `update` keeps quantile balancing on |
-| `--capacity-factor` | Routed expert capacity per shard; the hero trained at 1.5 |
+| `--capacity-factor` | Routed expert capacity per shard; 1.625 (default) is the highest that fits in HBM, and the hero trained at 1.5 |
 | `--stop-after-steps` | Stop after this many updates; unset runs the full epoch |
 | `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
 | `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
 | `--expert-placement` | Expert placement JSON that renumbers the start checkpoint's routed experts |
 
-Every option above except `--router-bias` and the last four is required. `GrugTrainerConfig`
+Every option above except `--router-bias`, `--capacity-factor` and the last four is required. `GrugTrainerConfig`
 gains `router_bias_mode`, `special_tokens` (`SpecialTokenInit`), and `expert_placement` (`ExpertPlacement`);
 their defaults leave pretraining unchanged.
 
@@ -740,7 +740,7 @@ python -m experiments.grug.moe_hero_ep.launch_hero_sft \
   --run-id hero-sft-smoke \
   --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
   --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
-  --dp-racks 1 --capacity-factor 1.5 --stop-after-steps 20 --eval-every 393511 \
+  --dp-racks 1 --stop-after-steps 20 --eval-every 393511 \
   --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
   --version dev
 ```
