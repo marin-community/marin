@@ -7,7 +7,8 @@ This is the Grug-code counterpart of ``experiments/grug/snowball_synthetic``: th
 model (``experiments/june_tpu_67b_a2b/moe/model.py``) and training loop, on the same shape, batch and portable
 kernels (reference or ``xla_flash`` attention, XLA ``ragged_dot``), so the two code paths can be compared on
 hardware that has no CUDA or TPU kernels. Every step sees fresh uniform-random tokens with no repeats, so the
-loss cannot fall below ln(vocab_size) and a lower value means something leaks the targets. No checkpoint is
+loss cannot fall below ln(vocab_size) and a lower value means something leaks the targets (``--repeat-batches``
+cycles through a small pool of batches instead, so the loss can fall, for convergence checks). No checkpoint is
 written.
 
 Example, 8 GPUs, full 67B shape, expert parallelism over all 8, profile of steps 10-12::
@@ -106,6 +107,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, help="Global batch in sequences (default: one per device).")
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument(
+        "--repeat-batches",
+        type=int,
+        default=0,
+        help="Draw the tokens from this many batches' worth of sequences, repeated over the run, so the loss can "
+        "fall (a convergence check); 0 = fresh tokens every step.",
+    )
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
     parser.add_argument(
@@ -236,8 +244,13 @@ def main() -> None:
         log_xla_hlo=False,
         watch=WatchConfig(interval=args.watch_interval),
     )
-    # One fresh example per sequence, and a mixture block exactly as long as the dataset so nothing repeats.
-    examples = synthetic_examples(args.steps * batch_size, model.max_seq_len, model.vocab_size)
+    # By default one fresh example per sequence, and a mixture block exactly as long as the dataset so nothing
+    # repeats (MixtureDataset caps the block at 2^16 sequences, so at most 65535 / batch steps). With
+    # --repeat-batches N the dataset holds only N batches' worth of sequences and the mixture's restart strategy
+    # cycles through them, so the model can memorize them, the loss falls below ln(vocab_size) and convergence
+    # differences show.
+    distinct = args.steps if args.repeat_batches == 0 else min(args.repeat_batches, args.steps)
+    examples = synthetic_examples(distinct * batch_size, model.max_seq_len, model.vocab_size)
     data = LmDataConfig(
         components={"synthetic": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
         tokenizer="passthrough",
