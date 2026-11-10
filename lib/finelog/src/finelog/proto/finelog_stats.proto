@@ -246,7 +246,8 @@ message CatalogSegment {
 }
 
 // One column's inclusive min/max over a segment's non-null values. A min
-// greater than the max means the segment holds no non-null value.
+// greater than the max means the range is empty or unknown: the column is all
+// null, absent, or lacks footer statistics. Planning always scans such a segment.
 message CatalogColumnBounds {
   string column = 1;
   int64 min = 2;

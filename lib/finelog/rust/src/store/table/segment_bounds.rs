@@ -88,15 +88,9 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
             recovered_key
         };
         let missing_columns = column_bounds::missing_columns(&record.column_bounds, bounds_columns);
+        // Every missing column gets an entry, if only `ALWAYS_SCAN`, so a
+        // footer without statistics cannot hold a backfill slot forever.
         let columns = column_bounds::from_parquet(input.metadata(), &missing_columns);
-        if columns.len() < missing_columns.len() {
-            tracing::warn!(
-                table = runtime.name(),
-                segment = %row.path,
-                "object segment footer lacks statistics for a catalog-bounds column"
-            );
-            unresolved = true;
-        }
         if key.is_none() && columns.is_empty() {
             continue;
         }

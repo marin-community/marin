@@ -26,11 +26,12 @@ use crate::proto::finelog::stats::{CatalogColumnBounds, ObjectRef};
 /// Column name to the segment's inclusive `(min, max)` over its non-null values.
 pub type ColumnBounds = BTreeMap<String, (i64, i64)>;
 
-/// The bounds of a column with no non-null value in the segment: all null, or
-/// absent from a file written before the column existed. Planning keeps a
-/// segment whose min exceeds its max, so such a segment is scanned as before;
-/// recording it still ends the segment's backfill.
-pub const NO_VALUES: (i64, i64) = (i64::MAX, i64::MIN);
+/// Recorded for a column the segment's range cannot be known or used for: all
+/// null, absent from a file written before the column existed, or without
+/// footer statistics. Planning keeps a segment whose min exceeds its max, so
+/// such a segment is scanned as before; recording it still ends the segment's
+/// backfill, so it never holds a backfill slot again.
+pub const ALWAYS_SCAN: (i64, i64) = (i64::MAX, i64::MIN);
 
 /// The `source_json` key that carries the bounds beside the `ObjectRef` fields.
 const SOURCE_JSON_KEY: &str = "columnBounds";
@@ -56,8 +57,8 @@ fn widen(bounds: &mut Option<(i64, i64)>, low: i64, high: i64) {
 }
 
 /// The bounds of `columns` over `batches`, computed while the rows are still in
-/// memory (flush and merge outputs). A column the batches do not hold has no
-/// values; a column that is not Int64 gets no bounds and is always scanned.
+/// memory (flush and merge outputs). A column the batches do not hold, or that
+/// is not Int64, is always scanned.
 pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds {
     let mut bounds = ColumnBounds::new();
     for column in columns {
@@ -78,16 +79,15 @@ pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds
                 }
             }
         }
-        if typed {
-            bounds.insert(column.clone(), range.unwrap_or(NO_VALUES));
-        }
+        let range = if typed { range } else { None };
+        bounds.insert(column.clone(), range.unwrap_or(ALWAYS_SCAN));
     }
     bounds
 }
 
 /// The bounds of `columns` from a Parquet footer's row-group statistics, for
 /// segments written before their table flagged a column. A column whose
-/// statistics are missing in any non-empty row group gets no bounds.
+/// statistics are missing in any non-empty row group is always scanned.
 pub fn from_parquet(metadata: &ParquetMetaData, columns: &[String]) -> ColumnBounds {
     let schema = metadata.file_metadata().schema_descr();
     let mut bounds = ColumnBounds::new();
@@ -95,12 +95,11 @@ pub fn from_parquet(metadata: &ParquetMetaData, columns: &[String]) -> ColumnBou
         let Some(index) = (0..schema.num_columns())
             .find(|&i| schema.column(i).path().parts() == [column.as_str()])
         else {
-            bounds.insert(column.clone(), NO_VALUES);
+            bounds.insert(column.clone(), ALWAYS_SCAN);
             continue;
         };
-        if let Some(range) = footer_int64_bounds(metadata, index) {
-            bounds.insert(column.clone(), range);
-        }
+        let range = footer_int64_bounds(metadata, index).unwrap_or(ALWAYS_SCAN);
+        bounds.insert(column.clone(), range);
     }
     bounds
 }
@@ -122,7 +121,7 @@ fn footer_int64_bounds(metadata: &ParquetMetaData, column: usize) -> Option<(i64
         };
         widen(&mut range, minimum, maximum);
     }
-    Some(range.unwrap_or(NO_VALUES))
+    Some(range.unwrap_or(ALWAYS_SCAN))
 }
 
 /// The flagged `columns` that `bounds` has no entry for, which the backfill
@@ -204,6 +203,9 @@ mod tests {
 
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use parquet::file::reader::{FileReader, SerializedFileReader};
 
     use super::*;
 
@@ -234,14 +236,32 @@ mod tests {
     }
 
     #[test]
-    fn an_all_null_or_absent_column_has_no_values_and_a_string_column_no_bounds() {
+    fn an_all_null_absent_or_non_int64_column_is_always_scanned() {
         let bounds = from_batches(
             &[batch(vec![None, None])],
             &columns(&["epoch_ms", "added_later", "key"]),
         );
-        assert_eq!(bounds.get("epoch_ms"), Some(&NO_VALUES));
-        assert_eq!(bounds.get("added_later"), Some(&NO_VALUES));
-        assert_eq!(bounds.get("key"), None);
+        assert_eq!(bounds.get("epoch_ms"), Some(&ALWAYS_SCAN));
+        assert_eq!(bounds.get("added_later"), Some(&ALWAYS_SCAN));
+        assert_eq!(bounds.get("key"), Some(&ALWAYS_SCAN));
+    }
+
+    #[test]
+    fn a_footer_without_statistics_is_always_scanned() {
+        let input = batch(vec![Some(5), Some(9)]);
+        let properties = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+        let mut encoded = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut encoded, input.schema(), Some(properties)).unwrap();
+        writer.write(&input).unwrap();
+        writer.close().unwrap();
+        let reader = SerializedFileReader::new(bytes::Bytes::from(encoded)).unwrap();
+        let bounds = from_parquet(reader.metadata(), &columns(&["epoch_ms", "added_later"]));
+        assert_eq!(bounds.get("epoch_ms"), Some(&ALWAYS_SCAN));
+        assert_eq!(bounds.get("added_later"), Some(&ALWAYS_SCAN));
+        assert!(missing_columns(&bounds, &columns(&["epoch_ms", "added_later"])).is_empty());
     }
 
     #[test]
@@ -269,7 +289,7 @@ mod tests {
     fn checkpoint_form_round_trips_and_drops_incomplete_entries() {
         let bounds = ColumnBounds::from([
             ("epoch_ms".to_string(), (10, 20)),
-            ("empty".to_string(), NO_VALUES),
+            ("empty".to_string(), ALWAYS_SCAN),
         ]);
         assert_eq!(from_proto(&to_proto(&bounds)), bounds);
         let incomplete = CatalogColumnBounds {

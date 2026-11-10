@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema};
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::{Expr, Operator};
 
@@ -67,24 +67,32 @@ pub fn half_open_int_range(predicate: &Expr) -> Option<HalfOpenIntRange> {
 /// Strict comparisons are widened to include their boundary. Callers use these
 /// ranges only to skip disjoint segment summaries, so widening preserves scan
 /// correctness while still excluding segments outside bounded time windows.
-pub fn int_column_ranges(filters: &[Expr]) -> HashMap<String, InclusiveIntRange> {
+/// `schema` types the columns a float comparison casts; see [`float_cast_range`].
+pub fn int_column_ranges(
+    filters: &[Expr],
+    schema: &ArrowSchema,
+) -> HashMap<String, InclusiveIntRange> {
     let mut ranges = HashMap::new();
     for filter in filters {
-        collect_int_ranges(filter, &mut ranges);
+        collect_int_ranges(filter, schema, &mut ranges);
     }
     ranges
 }
 
-fn collect_int_ranges(expr: &Expr, ranges: &mut HashMap<String, InclusiveIntRange>) {
+fn collect_int_ranges(
+    expr: &Expr,
+    schema: &ArrowSchema,
+    ranges: &mut HashMap<String, InclusiveIntRange>,
+) {
     if let Expr::BinaryExpr(binary) = expr {
         if binary.op == Operator::And {
-            collect_int_ranges(&binary.left, ranges);
-            collect_int_ranges(&binary.right, ranges);
+            collect_int_ranges(&binary.left, schema, ranges);
+            collect_int_ranges(&binary.right, schema, ranges);
             return;
         }
     }
     let Some(comparison) = int_comparison(expr) else {
-        if let Some((column, widened)) = float_cast_range(expr) {
+        if let Some((column, widened)) = float_cast_range(expr, schema) {
             let range = ranges.entry(column).or_default();
             if let Some(lower) = widened.lower {
                 tighten_lower(&mut range.lower, lower);
@@ -162,7 +170,10 @@ const F64_EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
 /// its ceiling for an upper bound. That never excludes a matching row, so it is
 /// for segment pruning only, like the rest of [`int_column_ranges`]; exact
 /// planners keep using [`int_comparison`].
-fn float_cast_range(expr: &Expr) -> Option<(String, InclusiveIntRange)> {
+///
+/// Only an integer column qualifies. A user may cast a string column, and the
+/// text bounds of a string key do not bound its numeric values.
+fn float_cast_range(expr: &Expr, schema: &ArrowSchema) -> Option<(String, InclusiveIntRange)> {
     let Expr::BinaryExpr(binary) = expr else {
         return None;
     };
@@ -189,6 +200,12 @@ fn float_cast_range(expr: &Expr) -> Option<(String, InclusiveIntRange)> {
             (column, operator, value)
         }
     };
+    if !schema
+        .field_with_name(&column)
+        .is_ok_and(|field| field.data_type().is_integer())
+    {
+        return None;
+    }
     // Past 2^53 the cast column itself rounds, so floor and ceiling no longer
     // bound the integers that compare true.
     if !value.is_finite() || value.abs() >= F64_EXACT_INTEGER_LIMIT {
@@ -243,6 +260,7 @@ fn int_literal(expr: &Expr) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::Field;
     use datafusion::prelude::{cast, col, lit};
 
     use super::*;
@@ -251,8 +269,15 @@ mod tests {
         cast(col("epoch_ms"), DataType::Float64)
     }
 
+    fn schema() -> ArrowSchema {
+        ArrowSchema::new(vec![
+            Field::new("epoch_ms", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+        ])
+    }
+
     fn range(filter: Expr) -> Option<InclusiveIntRange> {
-        int_column_ranges(&[filter]).remove("epoch_ms")
+        int_column_ranges(&[filter], &schema()).remove("epoch_ms")
     }
 
     #[test]
@@ -315,6 +340,15 @@ mod tests {
             None
         );
         assert_eq!(range(epoch_as_float().not_eq(lit(10.5_f64))), None);
+    }
+
+    #[test]
+    fn a_float_cast_of_a_non_integer_column_gives_no_range() {
+        // Text bounds of a string key do not bound its numeric values.
+        let filter = cast(col("key"), DataType::Float64).gt(lit(7.5_f64));
+        assert!(int_column_ranges(&[filter], &schema()).is_empty());
+        let unknown = cast(col("missing"), DataType::Float64).gt(lit(7.5_f64));
+        assert!(int_column_ranges(&[unknown], &schema()).is_empty());
     }
 
     #[test]

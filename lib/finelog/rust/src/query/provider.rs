@@ -332,7 +332,7 @@ impl NamespaceProvider {
     }
 
     pub(crate) fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
-        let int_ranges = crate::query::predicate::int_column_ranges(filters);
+        let int_ranges = crate::query::predicate::int_column_ranges(filters, &self.schema);
         let string_ranges = crate::query::trigram_prune::string_column_ranges(filters);
         let int_key_range = self
             .segment_key_column
@@ -373,8 +373,8 @@ impl NamespaceProvider {
                             });
                             int_matches && string_matches
                         });
-                // A min above the max records a segment with no non-null value
-                // in the column; it is scanned, as without bounds.
+                // A min above the max records a column whose range is empty or
+                // unknown for the segment; it is scanned, as without bounds.
                 let column_matches =
                     self.segment_column_bounds
                         .get(path.as_str())
@@ -657,7 +657,8 @@ impl TableProvider for NamespaceProvider {
                 let mut segment_paths = self.segment_paths_for_scan(filters, limit);
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-                let integer_ranges = crate::query::predicate::int_column_ranges(filters);
+                let integer_ranges =
+                    crate::query::predicate::int_column_ranges(filters, &self.schema);
                 let admission = state.config().get_extension::<QueryCacheAdmission>();
                 if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
                 {
@@ -1190,6 +1191,22 @@ mod tests {
     }
 
     #[test]
+    fn a_float_cast_of_a_string_key_never_prunes_by_its_text_bounds() {
+        // A segment holding "1", "10" and "5" has text key bounds ("1", "5"),
+        // which do not bound the numeric value 10 that matches.
+        let paths = vec!["/planned/seg_0.parquet".to_string()];
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_key_bounds(
+                "worker_id",
+                BTreeMap::from([(paths[0].clone(), ("1".to_string(), "5".to_string()))]),
+            );
+        let filter =
+            datafusion::logical_expr::cast(col("worker_id"), DataType::Float64).gt(lit(7.5_f64));
+        assert_eq!(provider.segment_paths_for_filters(&[filter]), paths);
+    }
+
+    #[test]
     fn column_bounds_drop_only_segments_whose_recorded_range_misses_the_filter() {
         let paths: Vec<String> = (0..4)
             .map(|index| format!("/planned/seg_{index}.parquet"))
@@ -1203,7 +1220,7 @@ mod tests {
                 // paths[2] has no bounds yet, as before its backfill.
                 (
                     paths[3].clone(),
-                    bounds(crate::store::column_bounds::NO_VALUES),
+                    bounds(crate::store::column_bounds::ALWAYS_SCAN),
                 ),
             ]));
         let selected = |filters: &[Expr]| {
