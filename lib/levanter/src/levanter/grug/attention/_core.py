@@ -154,7 +154,10 @@ class AttentionMask(eqx.Module):
 
         if self.fa4_bounds is not None:
             # Inclusive per-query key lower bounds; they carry a per-layer window and document starts.
-            lower_bounds, _ = self.fa4_bounds
+            # Padding queries hold a kernel tile-skip hint (up to a ``seq_len`` sentinel) rather than a
+            # bound, which would mask the whole row, so they keep only the other mask terms.
+            lower_bounds, valid = self.fa4_bounds
+            lower_bounds = jnp.where(valid, lower_bounds, 0)
             allowed = jnp.arange(k_len)[None, None, :] >= lower_bounds[:, :, None]
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
