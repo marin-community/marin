@@ -141,6 +141,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         changed | {"baseline": None},
         changed | {"elapsed_seconds": float("nan")},
         changed | {"extra": float("inf")},
+        changed | {"extra": "\x00"},
         changed | {"gate_result": {"comparisons": "invalid"}},
     ):
         response = client.post(api_path, content=json.dumps(invalid), headers={"Content-Type": "application/json"})

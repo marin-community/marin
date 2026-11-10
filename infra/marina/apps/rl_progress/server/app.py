@@ -11,6 +11,7 @@ from marin.rl.rl_progress import RunSummary
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import ProgrammingError
 
 
 def migrate(connection: Connection) -> None:
@@ -44,19 +45,25 @@ def create_api(services):
             ) from error
         except ValueError as error:
             raise HTTPException(422, detail=str(error)) from error
-        with engine.begin() as connection:
-            return connection.execute(
-                text(
-                    """INSERT INTO rl_runs (run_id, attempt_id, record)
-                    VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
-                    ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = jsonb_set(
-                        EXCLUDED.record, '{issue}',
-                        COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
-                                 rl_runs.record -> 'issue', 'null'::jsonb))
-                    RETURNING record"""
-                ),
-                {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": encoded},
-            ).scalar_one()
+        try:
+            with engine.begin() as connection:
+                return connection.execute(
+                    text(
+                        """INSERT INTO rl_runs (run_id, attempt_id, record)
+                        VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
+                        ON CONFLICT (run_id, attempt_id) DO UPDATE SET record = jsonb_set(
+                            EXCLUDED.record, '{issue}',
+                            COALESCE(NULLIF(EXCLUDED.record -> 'issue', 'null'::jsonb),
+                                     rl_runs.record -> 'issue', 'null'::jsonb))
+                        RETURNING record"""
+                    ),
+                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": encoded},
+                ).scalar_one()
+        except ProgrammingError as error:
+            details = error.orig.args[0]
+            if not isinstance(details, dict) or details.get("C") not in {"22P02", "22P05"}:
+                raise
+            raise HTTPException(422, detail="Record contains text PostgreSQL cannot store as JSON.") from error
 
     @api.get("/runs")
     def runs():
