@@ -179,7 +179,9 @@ a cell whose metric or kind differs is rejected rather than ranked against unlik
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`.
+The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
+benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
+a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
@@ -187,10 +189,12 @@ in the selected cohort and benchmarks. Compare's searchable Add model dropdown s
 selections, with controls to remove one model or clear the set. Model names wrap in the picker,
 comparison results, and model cards; config digests remain visible on a separate line.
 
-Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
-benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
-it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
-are not verified as comparable. A named verified cohort admits only records with its approved
+Historical cohort labels remain selectable. `cohort=unversioned` selects runs launched without a
+version label (`version: null`); the selector lists it whenever such runs exist. `cohort=all`
+selects the newest admissible run per benchmark across cohorts. Panel and Compare accept it, so
+models whose newest runs sit in different cohorts can be compared, and each compared cell names its
+cohort and links its source run. The UI marks all-cohort and unverified historical views with an
+asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved
 benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
 the selected cohort, including benchmark-specific serving overrides. Each run retains its source
 configuration and digest.
@@ -311,8 +315,8 @@ EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
-Click `Rescan` to load the records. Fixture cohorts predate verified policies; select
-`Newest per benchmark (all cohorts)*` to view them. To inspect real
+Click `Rescan` to load the records. The panel opens on `Newest per benchmark (all cohorts)*`,
+which shows every fixture cohort. To inspect real
 runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
 local to avoid production writes. After edits, stop the preview with Ctrl-C and
 rerun the `release --local` command to build and install the new package.

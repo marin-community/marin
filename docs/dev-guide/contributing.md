@@ -51,10 +51,11 @@ live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`
 `-m` replaces the whole default expression, so it re-selects the cluster and
 Docker tests it looks like it is narrowing.
 
-The root pytest configuration loads `marin.pytest_timeout_guard`. Keep that package
-importable in any selected test environment. The guard dumps thread state and starts a
-delayed hard-kill timer when a signal-based timeout cannot stop a test; an import failure
-is a test-environment error, not a product-test failure.
+The root and standalone Levanter pytest configurations load
+`infra.ci.pytest_timeout_guard` from the checkout through their configured Python
+paths. The guard dumps thread state and starts a delayed hard-kill timer when a
+signal-based timeout cannot stop a test; an import failure is a test-environment
+error, not a product-test failure.
 
 ### Opening a pull request
 

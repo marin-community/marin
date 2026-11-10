@@ -46,7 +46,7 @@ dependencies = [
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "transformers>=5.5.3,<6.0",
+    "transformers>=5.10.0,<6.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
     "wandb>0.24.0",
@@ -144,6 +144,9 @@ gcp = [
 
 [dependency-groups]
 test = [
+  "fastapi>=0.100.0",
+  "uvicorn[standard]>=0.23.0",
+  "openai>=1.0.0",
   "pytest",
   "pytest-forked",
   "pytest-asyncio",
@@ -155,6 +158,7 @@ test = [
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
   "pytest-xdist",
+  "pytest-timeout",
   "trackio>=0.5.0",
   # need this or else the resolver gets a bad version
   "numba>=0.62.1"
@@ -219,8 +223,9 @@ line-length = 119
 target-version = ["py312"]
 
 [tool.pytest.ini_options]
-addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
-pythonpath = ["src", "tests"]
+timeout = 60
+addopts = "-p infra.ci.pytest_timeout_guard --session-timeout=600 -n auto -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not torch' --import-mode=importlib"
+pythonpath = ["src", "tests", "../.."]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
     "ignore:Read the `app_url` setting from the appropriate Settings object\\.:DeprecationWarning:wandb.analytics.sentry",
@@ -233,6 +238,12 @@ filterwarnings = [
 markers = [
     "tpu: include in TPU CI; also run on CPU when supported",
     "multidevice: exercise multi-device code in TPU CI and CPU CI",
+    "integration: tests that require cluster infrastructure",
+    "data_integration: tests that require external data fixtures",
+    "cluster: tests that submit a real job to a standing cluster",
+    "requires_cluster: tests that start or connect to a cluster",
+    "docker: tests that require a Docker daemon",
+    "manual: tests that are run by hand on demand",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]

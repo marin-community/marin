@@ -71,7 +71,9 @@ def test_log_scaling_context_parallel_logits_match_unsharded_sequence():
     # The per-row scale reads global key positions. A scale built from each shard's local positions
     # would leave CP4's later shards below the floor and diverge from CP1.
     with use_test_devices(4) as devices:
-        config = _tiny_config(max_seq_len=16, capacity_factor=8.0, log_scaling_n_floor=4)
+        config = _tiny_config(
+            max_seq_len=16, capacity_factor=8.0, log_scaling_n_floor=4, log_scaling_alpha=0.1, log_scaling_power=1.0
+        )
         tokens = np.random.default_rng(0).integers(0, config.vocab_size, size=(4, 16), dtype=np.int32)
         # One row is unpacked, and the rest carry a document boundary or padding off a shard boundary.
         segment_ids = np.zeros((4, 16), dtype=np.int32)
@@ -87,7 +89,11 @@ def test_log_scaling_context_parallel_logits_match_unsharded_sequence():
 
         cp4 = logits(config, context=4, expert=1)
         cp1 = logits(config, context=1, expert=4)
-        off = logits(dataclasses.replace(config, log_scaling_n_floor=None), context=4, expert=1)
+        off = logits(
+            dataclasses.replace(config, log_scaling_n_floor=None, log_scaling_alpha=None, log_scaling_power=None),
+            context=4,
+            expert=1,
+        )
 
     np.testing.assert_allclose(cp4, cp1, rtol=1e-5, atol=1e-5)
     assert np.max(np.abs(cp4 - off)) > 1e-3
