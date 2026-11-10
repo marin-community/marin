@@ -49,8 +49,9 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     named_datasets = experiment.get_named_eval_datasets()
 
     assert primary_dataset is not None
-    assert [row[3] for row in primary_dataset] == ["primary"]
-    assert [row[3] for row in named_datasets["named_final"]] == ["named"]
+    assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["primary"]
+    named_dataset = named_datasets["named_final"]
+    assert [row["input"].spec.task.id for row in named_dataset.collate_fn(list(named_dataset))] == ["named"]
 
 
 @pytest.mark.parametrize("per_token", [False, True])

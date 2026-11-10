@@ -445,7 +445,9 @@ def test_generation_rejects_allocation_and_entrypoint_conflicts(failure):
         if failure == "extra-node":
             dataclasses.replace(topology, num_nodes=topology.num_nodes + 1)
         elif failure == "node-width":
-            dataclasses.replace(topology, role_plan=dataclasses.replace(plan, policy_num_gpus_per_node=2))
+            dataclasses.replace(
+                topology, role_plan=dataclasses.replace(plan, policy_num_gpus_per_node=2, num_inference_engines=2)
+            )
         else:
             dataclasses.replace(spec, topology=topology, config_yaml="entrypoint: generate\n" + spec.config_yaml)
 
@@ -669,7 +671,9 @@ def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pyte
 @pytest.mark.timeout(120)
 def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch):
     step = skyrl_step(_spec(), _execution(), export_hf=True)
-    config = step.build_config(StepContext.for_run(str(tmp_path), str(tmp_path), deps=step.deps))
+    config = step.build_config(
+        StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
     launch = yaml.safe_load(config.launch_config_yaml)
     launch["artifacts"] = {
         key: str(tmp_path / value)
