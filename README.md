@@ -11,7 +11,7 @@ This repository contains the code for **[MARINER](https://arxiv.org/abs/XXXX.XXX
 
 On three 39-bucket swarms, MARINER predicts mixture performance more accurately than Olmix's log-linear regression and RegMix's boosted trees. Its proposed mixtures measure within 0.005 BPB of its predictions and outperform those of more flexible baselines, without the hand-tuned epoch caps or KL penalties commonly used to regularize mixtures. At $10^{21}$ FLOPs with epochs preserved, we estimate from fitted scaling curves that MARINER's mixtures require 69–83% less final-training compute than proportional mixing to reach the same loss, and 26–38% less than Olmix (the paper's Figure 9). They also raise mean downstream accuracy at that scale from proportional mixing's 30.1% to 36.4% (Table 2).
 
-The runs and fits behind the paper are in the [mariner-data](https://huggingface.co/datasets/marin-community/mariner-data) dataset.
+The runs and fits behind the paper are in the [mariner-data](https://huggingface.co/datasets/marin-community/mariner-data) dataset. The final checkpoints of the three swarms' runs are in the model repositories [mariner-swarm-qwen3-360m-1p6b](https://huggingface.co/Calvin-Xu/mariner-swarm-qwen3-360m-1p6b), [mariner-swarm-llama-160m-1p2b](https://huggingface.co/Calvin-Xu/mariner-swarm-llama-160m-1p2b), and [mariner-swarm-llama-200m-6b](https://huggingface.co/Calvin-Xu/mariner-swarm-llama-200m-6b), one folder per run, named by the run's `run_label` in the dataset.
 
 For more details, see our paper: [*MARINER: Measuring and Modeling Repetition Harm for Multi-Epoch Data Mixing*](https://arxiv.org/abs/XXXX.XXXXX)
 
