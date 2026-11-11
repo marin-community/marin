@@ -34,6 +34,15 @@ SETUP_ROOT = "/setup_files"
 ENVIRONMENT_PREFIX = "environment/"
 REBUILT = "rebuilt_pending_oracle_and_admission"
 
+NORMALIZED_CPUS = 2
+NORMALIZED_MEMORY_MB = 4096
+NORMALIZED_STORAGE_MB = 10240
+"""One machine shape for the rebuilt cohort.
+
+Snapshot identity includes the resource shape, so leaving each task's declared
+shape in place multiplies the cohort's snapshots by every distinct size. Tasks
+that need more than this shape are deferred rather than silently shrunk."""
+
 # Fixed base set: one image per runtime family in the V1 FROM census. Digests
 # are resolved and recorded at packaging time; the rebuild stages references
 # and refuses unmapped families.
@@ -345,8 +354,26 @@ def rebuild_task(task_binary: bytes) -> RebuiltTask:
     )
 
 
+def _size_mb(value: object) -> int | None:
+    """Parse a task.toml size such as 4096 or "8G" into MiB."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().upper()
+    if text.endswith("G"):
+        return int(float(text[:-1]) * 1024)
+    if text.endswith("M"):
+        return int(float(text[:-1]))
+    return int(float(text))
+
+
 def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> bytes:
-    """Rewrite task.toml onto the fixed base with a setup-at-start hook."""
+    """Rewrite task.toml onto the fixed base with a setup-at-start hook.
+
+    The machine shape is normalized so the cohort's snapshots collapse to one
+    per base image; a task that declares more than the normalized shape defers.
+    """
     if original is None:
         raise DeferredRebuild("missing_task_toml")
     config = tomllib.loads(original.decode(errors="replace"))
@@ -355,11 +382,22 @@ def _rewrite_task_toml(original: bytes | None, base_ref: str, workdir: str) -> b
         raise DeferredRebuild("missing_environment_section")
     if "setup" in environment:
         raise DeferredRebuild("existing_setup_hook")
+    if environment.get("gpus") or environment.get("tpu"):
+        raise DeferredRebuild("requires_accelerator_machine")
+    if (environment.get("cpus") or 0) > NORMALIZED_CPUS:
+        raise DeferredRebuild("requires_larger_machine_shape")
+    if (_size_mb(environment.get("memory")) or 0) > NORMALIZED_MEMORY_MB:
+        raise DeferredRebuild("requires_larger_machine_shape")
+    if (_size_mb(environment.get("storage")) or 0) > NORMALIZED_STORAGE_MB:
+        raise DeferredRebuild("requires_larger_machine_shape")
     document = tomlkit.parse(original.decode(errors="replace"))
     table = document["environment"]
     assert isinstance(table, Table)
     table["docker_image"] = base_ref
     table["workdir"] = workdir
+    table["cpus"] = NORMALIZED_CPUS
+    table["memory"] = f"{NORMALIZED_MEMORY_MB // 1024}G"
+    table["storage"] = f"{NORMALIZED_STORAGE_MB // 1024}G"
     table["setup"] = {"command": f"sh {SETUP_ROOT}/{SETUP_SCRIPT}"}
     return tomlkit.dumps(document).encode()
 

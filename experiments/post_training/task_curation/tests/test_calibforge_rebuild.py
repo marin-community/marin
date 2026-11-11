@@ -6,6 +6,7 @@
 import gzip
 import io
 import tarfile
+import tomllib
 
 import pytest
 
@@ -150,3 +151,32 @@ def test_the_ten_from_census_maps_onto_nine_bases():
     ]
     refs = {FIXED_BASES[from_ref.split("@")[0]] for from_ref in census}
     assert len(refs) == 9  # python:3.11-slim folds into python:3.11-slim-bookworm
+
+
+def test_the_machine_shape_is_normalized_so_snapshots_collapse():
+    rebuilt = rebuild_task(
+        native_task(
+            "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/ /app/files/\n",
+            {"files/input.csv": b"a\n1\n"},
+        )
+    )
+    config = tomllib.loads(unpack(rebuilt.task_binary)["task.toml"].decode())
+    environment = config["environment"]
+    assert environment["cpus"] == 2
+    assert environment["memory"] == "4G"
+    assert environment["storage"] == "10G"
+
+
+def test_a_task_declaring_more_than_the_normalized_shape_defers():
+    members = {
+        "environment/Dockerfile": b"FROM ubuntu:24.04\nWORKDIR /app\n",
+        "task.toml": b'[task]\nid = "fixture"\n\n[environment]\nworkdir = "/app"\nmemory = "8G"\n',
+    }
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    with pytest.raises(DeferredRebuild, match="larger_machine_shape"):
+        rebuild_task(gzip.compress(buffer.getvalue(), mtime=0))
