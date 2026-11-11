@@ -12,7 +12,12 @@ shared environments:
    the workspace must appear in the rebuilt task's setup payload with identical
    bytes and mode. This catches a rebuild that drops, rewrites or re-modes
    fixture data.
-2. **Verifier liveness** (sandbox). The task's own verifier must execute and
+2. **Setup execution** (local Docker). Run the rebuilt setup script in the task's
+   own base image and compare the files it writes against the same expectation
+   set. Preservation proves the bytes travel; this proves the script lands them.
+   Package installation is stubbed because the rebuilt setup no longer installs
+   task dependencies, and the base image owns provisioning.
+3. **Verifier liveness** (sandbox). The task's own verifier must execute and
    return a well-formed negative verdict on the untouched workspace. A crash, a
    timeout or unparsable output is an infrastructure error, not a pass.
 
@@ -40,8 +45,13 @@ import hashlib
 import io
 import json
 import re
+import shlex
+import subprocess
 import tarfile
+import tempfile
+import tomllib
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +91,22 @@ class PreservationResult:
 
 
 @dataclass(frozen=True)
+class SetupExecution:
+    """One rebuilt setup script executed in its base image."""
+
+    task_id: str
+    outcome: str
+    written: int = 0
+    missing: tuple[str, ...] = ()
+    extra: tuple[str, ...] = ()
+    detail: str = ""
+
+    @property
+    def passed(self) -> bool:
+        return self.outcome == "executed" and not self.missing
+
+
+@dataclass(frozen=True)
 class VerifierResult:
     """One verifier execution against the untouched workspace."""
 
@@ -99,6 +125,7 @@ class QualificationReport:
     """Per-task checks plus the pass rates admission reads."""
 
     preservation: list[PreservationResult] = field(default_factory=list)
+    execution: list[SetupExecution] = field(default_factory=list)
     verifier: list[VerifierResult] = field(default_factory=list)
     bases: dict[str, str] = field(default_factory=dict)
 
@@ -110,6 +137,10 @@ class QualificationReport:
     @property
     def preservation_rate(self) -> float | None:
         return self._rate(self.preservation)
+
+    @property
+    def execution_rate(self) -> float | None:
+        return self._rate(self.execution)
 
     @property
     def verifier_rate(self) -> float | None:
@@ -125,16 +156,18 @@ class QualificationReport:
         }
 
     def verdict(self, *, minimum_rate: float = 1.0) -> str:
-        """``verifier_executed`` only when both checks ran and every sample passed."""
-        if self.preservation_rate is None or self.verifier_rate is None:
+        """``verifier_executed`` only when every check ran and every sample passed."""
+        rates = [self.preservation_rate, self.execution_rate, self.verifier_rate]
+        if any(rate is None for rate in rates):
             return "skipped"
-        if self.preservation_rate < minimum_rate or self.verifier_rate < minimum_rate:
+        if any(rate < minimum_rate for rate in rates):
             return "skipped"
         return "verifier_executed"
 
     def to_dict(self) -> dict:
         return {
             "preservation_rate": self.preservation_rate,
+            "execution_rate": self.execution_rate,
             "verifier_rate": self.verifier_rate,
             "by_base": self.by_base(),
             "verdict": self.verdict(),
@@ -147,6 +180,18 @@ class QualificationReport:
                     "remoded": list(result.remoded),
                 }
                 for result in self.preservation
+            ],
+            "execution": [
+                {
+                    "task_id": result.task_id,
+                    "outcome": result.outcome,
+                    "written": result.written,
+                    "missing": list(result.missing),
+                    "extra": list(result.extra),
+                    "passed": result.passed,
+                    "detail": result.detail,
+                }
+                for result in self.execution
             ],
             "verifier": [
                 {
@@ -178,6 +223,18 @@ def copied_paths(dockerfile: str) -> list[str]:
                 continue
             paths.append(source.rstrip("/"))
     return paths
+
+
+def copied_destinations(dockerfile: str, workdir: str) -> tuple[str, ...]:
+    """Absolute destinations the native recipe writes, resolved against its workdir."""
+    roots: list[str] = []
+    for match in COPY_SOURCE.finditer(dockerfile):
+        destination = match.group("sources").split()[-1]
+        if "$" in destination or "*" in destination or "?" in destination:
+            continue
+        absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
+        roots.append(absolute.rstrip("/") or "/")
+    return tuple(dict.fromkeys(roots))
 
 
 def preservation_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
@@ -234,6 +291,107 @@ def check_preservation(task_id: str, native_payload: bytes, rebuilt_payload: byt
     )
 
 
+DOCKER_SETUP_TIMEOUT = 300
+"""Seconds one rebuilt setup script may run in its base image."""
+
+APT_SHIM = """#!/bin/sh
+# The rebuilt setup no longer installs task dependencies; the base image owns
+# provisioning. This keeps the script's apt steps from reaching the network.
+exit 0
+"""
+
+
+def _docker(*arguments: str, **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(["docker", *arguments], capture_output=True, text=True, **kwargs)
+
+
+def _manifest(stdout: str) -> list[tuple[str, int, str]]:
+    r"""Parse ``mode path`` and ``sha256  .\/path`` lines from one container run."""
+    entries: dict[str, int] = {}
+    digests: dict[str, str] = {}
+    for line in stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        first, second = parts
+        if re.fullmatch(r"[0-7]{3,4}", first):
+            entries[second.strip()] = int(first, 8)
+        elif re.fullmatch(r"[0-9a-f]{64}", first):
+            digests[second.strip().lstrip("./")] = first
+    manifest = []
+    for path, digest in digests.items():
+        mode = entries.get("./" + path) or entries.get(path)
+        if mode is not None:
+            manifest.append((digest, mode, path))
+    return manifest
+
+
+def execute_setup_in_docker(
+    task_id: str,
+    native_payload: bytes,
+    rebuilt_payload: bytes,
+    *,
+    image: str,
+    workdir: str,
+    setup_script: str,
+    destinations: tuple[str, ...] = (),
+    stub_apt: bool = False,
+    dns: tuple[str, ...] = (),
+    timeout: int = DOCKER_SETUP_TIMEOUT,
+) -> SetupExecution:
+    """Run one rebuilt setup script in its base image and compare the written files."""
+    expected = Counter((item.sha256, item.mode) for item in preservation_expectations(native_payload))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        with _read_tar(rebuilt_payload) as archive:
+            archive.extractall(root, filter="data")
+        setup = root / SETUP_ROOT.lstrip("/")
+        script = setup / setup_script
+        if not script.exists():
+            return SetupExecution(task_id=task_id, outcome="missing_setup_script")
+        shim = root / "shim"
+        shim.mkdir()
+        for tool in ("apt-get", "apt"):
+            (shim / tool).write_text(APT_SHIM)
+            (shim / tool).chmod(0o755)
+        scan = " ".join(
+            f"$( [ -e {shlex.quote(item)} ] && printf '%s ' {shlex.quote(item)} )" for item in (workdir, *destinations)
+        )
+        command = (
+            ("PATH=/shim:$PATH; " if stub_apt else "")
+            + f"sh {SETUP_ROOT}/{setup_script} && "
+            + f"for root in {scan}; do (cd \"$root\" && find . -type f -printf '%m %p\\n'"
+            + " && find . -type f -exec sha256sum {} +); done"
+        )
+        resolvers = tuple(part for server in dns for part in ("--dns", server))
+        created = _docker("create", *resolvers, image, "sh", "-c", command)
+        if created.returncode:
+            return SetupExecution(task_id=task_id, outcome="docker_error", detail=created.stderr[-500:])
+        container = created.stdout.strip()
+        try:
+            copied = _docker("cp", str(setup), f"{container}:{SETUP_ROOT}")
+            if copied.returncode:
+                return SetupExecution(task_id=task_id, outcome="docker_error", detail=copied.stderr[-500:])
+            _docker("cp", str(shim), f"{container}:/shim")
+            started = _docker("start", "-a", container, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return SetupExecution(task_id=task_id, outcome="timeout", detail=f"{timeout}s")
+        finally:
+            _docker("rm", "-f", container)
+    if started.returncode:
+        return SetupExecution(task_id=task_id, outcome="script_error", detail=started.stderr[-500:])
+    observed = Counter((digest, mode) for digest, mode, _path in _manifest(started.stdout))
+    missing = expected - observed
+    extra = observed - expected
+    return SetupExecution(
+        task_id=task_id,
+        outcome="executed",
+        written=sum(observed.values()),
+        missing=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted(missing.elements())),
+        extra=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted(extra.elements())),
+    )
+
+
 def classify_verifier_run(*, exit_code: int | None, timed_out: bool, stdout: str) -> str:
     """Classify one verifier execution against an untouched workspace.
 
@@ -266,6 +424,9 @@ def summarize(report: QualificationReport, *, minimum_rate: float = 1.0) -> dict
         "preservation_rate": report.preservation_rate,
         "verifier_rate": report.verifier_rate,
         "minimum_rate": minimum_rate,
+        "executed": len(report.execution),
+        "execution_rate": report.execution_rate,
+        "setup_failures": dict(Counter(result.outcome for result in report.execution if not result.passed)),
         "verifier_failures": dict(Counter(result.outcome for result in report.verifier if not result.passed)),
         "by_base": report.by_base(),
         "oracle_validation": report.verdict(minimum_rate=minimum_rate),
@@ -280,12 +441,76 @@ def _native_tasks(path: Path):
             yield task_id, bytes(blob.as_py() if hasattr(blob, "as_py") else blob)
 
 
+def _rebuilt_metadata(rebuilt_payload: bytes) -> tuple[str, str, str]:
+    """The image, workdir and setup script a rebuilt task declares."""
+    with _read_tar(rebuilt_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == "task.toml"), None)
+        if member is None:
+            raise ValueError("rebuilt task has no task.toml")
+        document = tomllib.loads(archive.extractfile(member).read().decode(errors="replace"))
+    environment = document.get("environment") or {}
+    setup = environment.get("setup") or {}
+    command = str(setup.get("command") or "")
+    script = command.split()[-1].rsplit("/", 1)[-1]
+    workdir = environment.get("workdir") or "/app"
+    return environment["docker_image"], workdir, script
+
+
+def _native_destinations(native_payload: bytes, workdir: str) -> tuple[str, ...]:
+    """Absolute destinations the native recipe writes, resolved against its own workdir."""
+    with _read_tar(native_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == "environment/Dockerfile"), None)
+        if member is None:
+            return (workdir,)
+        dockerfile = archive.extractfile(member).read().decode(errors="replace")
+    native_workdir = "/app"
+    match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
+    if match:
+        native_workdir = match.group(1)
+    return copied_destinations(dockerfile, native_workdir)
+
+
+def _execute_setups(
+    native: dict[str, bytes],
+    rebuilt: dict[str, bytes],
+    workers: int,
+    *,
+    stub_apt: bool = False,
+    dns: tuple[str, ...] = (),
+) -> list[SetupExecution]:
+    def run(task_id: str) -> SetupExecution:
+        try:
+            image, workdir, script = _rebuilt_metadata(rebuilt[task_id])
+        except (KeyError, ValueError) as error:
+            return SetupExecution(task_id=task_id, outcome="invalid_task", detail=str(error))
+        return execute_setup_in_docker(
+            task_id,
+            native[task_id],
+            rebuilt[task_id],
+            image=image,
+            workdir=workdir,
+            setup_script=script,
+            destinations=_native_destinations(native[task_id], workdir),
+            stub_apt=stub_apt,
+            dns=dns,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(run, sorted(native)))
+
+
 def main() -> None:
     """Run the offline preservation phase and write the qualification report."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", type=Path, required=True, help="native cohort parquet (path, task_binary)")
     parser.add_argument("--rebuild-out", type=Path, required=True, help="rebuild output directory")
     parser.add_argument("--output", type=Path, required=True, help="qualification report JSON")
+    parser.add_argument("--docker", action="store_true", help="also execute every rebuilt setup script in Docker")
+    parser.add_argument("--stub-apt", action="store_true", help="skip package installation in the setup script")
+    parser.add_argument("--workers", type=int, default=4, help="concurrent setup executions")
+    parser.add_argument("--docker-dns", action="append", default=[], help="resolver for container DNS")
+    parser.add_argument("--retry-failed", type=Path, help="re-run the tasks a previous report failed")
+    parser.add_argument("--task", action="append", default=[], help="limit to these task ids")
     parser.add_argument("--sandbox", action="store_true", help="also run verifier liveness (needs Daytona)")
     parser.add_argument("--sample-per-base", type=int, default=20, help="verifier samples per base reference")
     args = parser.parse_args()
@@ -301,10 +526,23 @@ def main() -> None:
             rebuilt[task_id] = bytes(blob.as_py() if hasattr(blob, "as_py") else blob)
 
     report = QualificationReport(bases=bases)
-    for task_id, native_payload in _native_tasks(args.cohort):
-        if task_id not in rebuilt:
-            continue
+    wanted = set(args.task)
+    if args.retry_failed is not None:
+        previous = json.loads(args.retry_failed.read_text())
+        wanted |= {row["task_id"] for row in previous["execution"] if not row["passed"]}
+        wanted |= {row["task_id"] for row in previous["preservation"] if not row["passed"]}
+    native = {
+        task_id: payload
+        for task_id, payload in _native_tasks(args.cohort)
+        if task_id in rebuilt and (not wanted or task_id in wanted)
+    }
+    for task_id, native_payload in native.items():
         report.preservation.append(check_preservation(task_id, native_payload, rebuilt[task_id]))
+
+    if args.docker:
+        report.execution = _execute_setups(
+            native, rebuilt, args.workers, stub_apt=args.stub_apt, dns=tuple(args.docker_dns)
+        )
 
     if args.sandbox:
         raise SystemExit(

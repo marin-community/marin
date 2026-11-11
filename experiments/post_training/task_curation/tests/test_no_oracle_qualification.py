@@ -12,9 +12,11 @@ import pytest
 from experiments.post_training.task_curation.no_oracle_qualification import (
     PreservationResult,
     QualificationReport,
+    SetupExecution,
     VerifierResult,
     check_preservation,
     classify_verifier_run,
+    copied_destinations,
     copied_paths,
     summarize,
 )
@@ -84,17 +86,38 @@ def test_verifier_classification_separates_a_real_run_from_infrastructure():
     assert classify_verifier_run(exit_code=0, timed_out=False, stdout="Traceback (most recent call last)") == "malformed"
 
 
-def test_verdict_needs_both_phases_and_every_sample():
+def test_verdict_needs_every_phase_and_every_sample():
     preservation = [PreservationResult("a", expected=())]
+    execution = [SetupExecution("a", "executed", written=1)]
     only_offline = QualificationReport(preservation=preservation)
-    assert only_offline.verdict() == "skipped"  # no verifier run yet
+    assert only_offline.verdict() == "skipped"  # no setup execution or verifier run yet
 
-    clean = QualificationReport(preservation=preservation, verifier=[VerifierResult("a", "negative_verdict", 0)])
+    no_execution = QualificationReport(preservation=preservation, verifier=[VerifierResult("a", "negative_verdict", 0)])
+    assert no_execution.verdict() == "skipped"  # preservation and verifier alone are not enough
+
+    clean = QualificationReport(
+        preservation=preservation, execution=execution, verifier=[VerifierResult("a", "negative_verdict", 0)]
+    )
     assert clean.verdict() == "verifier_executed"
 
-    failed = QualificationReport(preservation=preservation, verifier=[VerifierResult("a", "malformed", 0)])
+    failed = QualificationReport(
+        preservation=preservation, execution=execution, verifier=[VerifierResult("a", "malformed", 0)]
+    )
     assert failed.verdict() == "skipped"
 
     summary = summarize(clean)
     assert summary["oracle_validation"] == "verifier_executed"
-    assert summary["preservation_rate"] == 1.0 and summary["verifier_rate"] == 1.0
+    assert summary["preservation_rate"] == 1.0 and summary["execution_rate"] == 1.0
+
+
+def test_copied_destinations_resolve_against_the_native_workdir():
+    """Files copied outside the workdir are scanned, not silently skipped."""
+    recipe = "FROM ubuntu:24.04\nWORKDIR /app\nCOPY files/data /data\nCOPY files/local relative\n"
+    assert copied_destinations(recipe, "/app") == ("/data", "/app/relative")
+
+
+def test_setup_execution_requires_every_expected_file():
+    """An executed script that misses a copied file is not a pass."""
+    assert SetupExecution("task", "executed", written=2).passed
+    assert not SetupExecution("task", "executed", written=1, missing=("abc:0644",)).passed
+    assert not SetupExecution("task", "script_error", detail="pip3: not found").passed
