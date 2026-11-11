@@ -715,7 +715,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
             "aaii_category": part.aaii_category,
             "agentic": "agentic" in task.tags,
             "grader_kind": _grader_kind(task),
-            "part": part.source_id,
+            "part": part.source_id.lower().replace(":", "-"),
             "source": task.source.model_dump_json(),
             "license": part.license,
             "difficulty": 1 - rates[task.id].mean_score if rates else None,

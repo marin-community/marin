@@ -678,12 +678,12 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
             "aaii_category": "agents" if agent else questions.aaii_category,
             "agentic": agent,
             "grader_kind": "in_process" if agent else "package",
-            "part": "NeMo:predicted-action" if agent else "Evalchemy:questions",
+            "part": "nemo-predicted-action" if agent else "evalchemy-questions",
             "source": (agents[task.id] if agent else originals[task.id]).source.model_dump_json(),
             "license": "fixture-agents" if agent else "fixture-general",
             "difficulty": None,
         }
-    assert Counter(row["part"] for row in annotations) == {"Evalchemy:questions": 5, "NeMo:predicted-action": 3}
+    assert Counter(row["part"] for row in annotations) == {"evalchemy-questions": 5, "nemo-predicted-action": 3}
     families = {row["task_id"]: row["family"] for row in annotations}
     assert Counter(families[task.id] for task in fast) == {questions.family: 3, "agents": 1}
     counts = json.loads((provisional / "summary.json").read_text())["source_counts"]
