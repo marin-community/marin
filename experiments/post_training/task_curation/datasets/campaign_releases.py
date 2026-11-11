@@ -95,12 +95,12 @@ def sources() -> list[RlDataSource]:
                 notes=(
                     "324 environment-admitted CalibForge tasks split 259 train / 65 validation. "
                     "Deprecated pending the snapshot-safe CalibForge rebuild: the campaign's "
-                    "admission-time records report the cohort needing 23 image/resource snapshot "
-                    "variants (19 on the training split), over the ten-snapshot budget — not "
-                    "snapshot-safe, even though the public lowered payloads pin only two verifier "
-                    "identities; the discrepancy is tracked with the rebuild. Admission checks "
-                    "cover fixture equivalence and setup and verifier execution; oracle solution "
-                    "execution was waived."
+                    "provisioning records (snapshot-capacity-check) report the cohort needing 23 "
+                    "image/resource snapshot variants (19 on the retained training slice), over "
+                    "the ten-snapshot budget. The public lowered payloads pin only two verifier "
+                    "contexts and carry no per-task resource shapes, so the variants are invisible "
+                    "there; admission checks cover fixture equivalence and setup and verifier "
+                    "execution, and oracle solution execution was waived."
                 ),
                 dataset=shared_v2,
                 independent_qc=IndependentQC(
@@ -126,7 +126,9 @@ def sources() -> list[RlDataSource]:
                     "8,045 quality-admitted SWE-Smith tasks. The release keeps only tasks that passed "
                     "the Daytona oracle and a Good quality verdict; quality review is not a "
                     "model-solving accuracy claim, and campaign-specific train and validation splits "
-                    "remain in the private archive."
+                    "remain in the private archive. Tasks share five build contexts (two FROM bases, "
+                    "floating python:3.10/3.11-bookworm tags), so a run provisions five snapshots; "
+                    "the campaign's capacity check budgets all five."
                 ),
                 dataset=swesmith,
                 independent_qc=IndependentQC(
@@ -136,7 +138,7 @@ def sources() -> list[RlDataSource]:
                     admitted=8045,
                     evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
+                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
