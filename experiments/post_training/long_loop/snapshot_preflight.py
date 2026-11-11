@@ -33,6 +33,8 @@ def qualify(*, output: str, inputs: dict) -> None:
         source.write_text(json.dumps(inputs))
         receipt = root / "receipt.json"
         command = skyrl_cpu_command(
+            "--group",
+            "harbor-test",
             "python",
             "-m",
             "experiments.post_training.long_loop.snapshot_probe_worker",
