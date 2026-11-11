@@ -22,20 +22,22 @@ from experiments.post_training.long_loop.rl_dataset_admission import file_digest
 
 AGENT_USER = "longloop-agent"
 AGENT_HOME = f"/home/{AGENT_USER}"
-VIRTUAL_ENV = f"{AGENT_HOME}/venv"
 SOURCE = "long-loop-smartie-swesmith"
-AGENT_PATH = (
-    f"{VIRTUAL_ENV}/bin:{AGENT_HOME}/.local/bin:/opt/long-loop-node:"
-    "/opt/long-loop-pi/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-)
 NONROOT_LAYER = f"""
 # Agent commands use Harbor's agent.user; provider administration remains root.
 RUN useradd --create-home --user-group --uid 10001 --shell /bin/bash {AGENT_USER} \\
-    && python3 -m venv --system-site-packages {VIRTUAL_ENV} \\
     && mkdir -p /testbed /logs/agent /output \\
     && chown -R {AGENT_USER}:{AGENT_USER} /testbed /logs/agent /output {AGENT_HOME} \\
     && chmod 0755 /testbed \\
-    && chown root:root / && chmod 0755 /
+    && chown root:root / && chmod 0755 / \\
+    && TASK_PURELIB="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \\
+    && TASK_PLATLIB="$(python3 -c 'import sysconfig; print(sysconfig.get_path("platlib"))')" \\
+    && TASK_SCRIPTS="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" \\
+    && chgrp -R {AGENT_USER} "$TASK_PURELIB" "$TASK_PLATLIB" \\
+    && chmod -R g+rwX "$TASK_PURELIB" "$TASK_PLATLIB" \\
+    && chgrp {AGENT_USER} "$TASK_SCRIPTS" && chmod g+w,+t "$TASK_SCRIPTS" \\
+    && ln -s /opt/long-loop-node/node "$TASK_SCRIPTS/node" \\
+    && ln -s /opt/long-loop-pi/node_modules/.bin/pi "$TASK_SCRIPTS/pi"
 """
 
 
@@ -48,7 +50,7 @@ def pi_nonroot_task(task: TaskSpec) -> TaskSpec:
     config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
     agent = config.setdefault("agent", {})
     agent["user"] = AGENT_USER
-    agent.setdefault("env", {}).update(HOME=AGENT_HOME, VIRTUAL_ENV=VIRTUAL_ENV, PATH=AGENT_PATH)
+    agent.setdefault("env", {})["HOME"] = AGENT_HOME
     dockerfile = resource_bytes(files["environment/Dockerfile"]).decode() + NONROOT_LAYER
     replacements = {"task.toml": tomli_w.dumps(config).encode(), "environment/Dockerfile": dockerfile.encode()}
     resources = tuple(r for r in prepared.resources.verifier if r.path not in replacements) + tuple(
@@ -128,10 +130,12 @@ def main() -> None:
         raise ValueError("Only SWE validation rows may change")
     receipt = {
         **manifest,
-        "execution_overlay_version": "pi-agent-scoped-env-v2",
+        "execution_overlay_version": "pi-task-python-shared-v3",
         "upstream_manifest_sha256": file_digest(args.input / "manifest.json"),
         "marin_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        "policy": "Pi 0.87.0, UID10001; agent-only HOME/virtualenv/PATH; original verifier environment and user",
+        "policy": (
+            "Pi 0.87.0, UID10001; original task Python shared for installations; original verifier environment/user"
+        ),
         "files": files,
     }
     (args.output / "manifest.json").write_text(json.dumps(receipt, indent=2) + "\n")

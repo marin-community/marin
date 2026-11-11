@@ -154,11 +154,21 @@ The next RL harness is Pi0.87.0, matching Micro210's installed-agent runtime.
 Prepare its SWE packages with `python -m experiments.post_training.long_loop.pi_rl_data`
 using an input directory, its expected manifest SHA and a fresh output directory.
 The transformation reuses the frozen Pi layer, selects the non-root
-`longloop-agent` account and provides a writable virtualenv. `/testbed` stays
+`longloop-agent` account and keeps task commands on the task's original Python.
+Its package directories permit group installs; its scripts directory uses the
+sticky bit so new console entrypoints can be installed without deleting existing
+root-owned control executables. Pi's Node packages remain isolated under `/opt`.
+Agent-only HOME selects Pi's writable configuration; PATH and VIRTUAL_ENV retain
+the task's values, as do the verifier's interpreter and environment. `/testbed` stays
 editable; its parent is root-owned. Task identity, instructions, private tests,
 source revisions and row order are preserved and bound by per-row hashes.
 Only SWE rows receive this overlay. Bind the derived manifest in the next run
 spec; the running `.10.10` and the Micro210 task permissions remain unchanged.
+
+The v2 private agent virtualenv isolated installed task dependencies from the
+verifier. The v3 overlay removes that interpreter split. Its CPU container guard
+invokes Pi's actual bash tool to install an offline wheel, then imports the module
+and runs its console entrypoint through the unchanged root verifier.
 
 
 New submissions default to three-day task/coordinator deadlines, from
