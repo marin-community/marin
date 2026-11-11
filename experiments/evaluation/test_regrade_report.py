@@ -238,3 +238,12 @@ def test_the_report_pairs_the_source_attempt_that_the_provenance_names(tmp_path,
 
     assert [(summary.attempts, summary.reused, summary.paired) for summary in summaries] == [(6, 6, 5)]
 
+
+def test_the_report_refuses_a_run_with_two_corpora_of_one_benchmark(tmp_path, source_run):
+    corrected, again = publish(tmp_path, "corrected", ignore_case=True), publish(tmp_path, "again", ignore_case=True)
+    output = str(tmp_path / "regraded")
+    config = task_driver.stored_config(source_run)
+    task_driver.execute_with_retries((corrected, again), output, config, None, None, None, responses_from=source_run)
+
+    with pytest.raises(ValueError, match="holds more than one colors corpus"):
+        regrade_report.compare(source_run, output)

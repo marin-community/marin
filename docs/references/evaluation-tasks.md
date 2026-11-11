@@ -273,7 +273,8 @@ many rewards rose or fell. `--changes` writes each reused attempt whose outcome,
 reward, or extracted answer changed, with both grades, as JSON lines. Attempts
 that needed a new model response are not compared. The grade before is that of
 the source attempt whose evidence blob the provenance names, so a source run
-resumed after the regrade still pairs.
+resumed after the regrade still pairs. A run with two corpora of one benchmark
+is refused.
 
 ## Summary semantics
 
