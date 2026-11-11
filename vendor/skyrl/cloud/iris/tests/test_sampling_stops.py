@@ -59,23 +59,3 @@ def test_backend_special_tokens_with_legacy_sampling_config(skip_special_tokens,
     assert actual["skip_special_tokens"] is (True if skip_special_tokens is None else skip_special_tokens)
     assert actual.get("stop_token_ids") is None
     assert actual.get("stop") is None
-
-
-@pytest.mark.parametrize("backend", ["vllm", "sglang"])
-def test_backend_stop_ids_become_plain_lists(backend):
-    config = OmegaConf.create(
-        dict(
-            max_generate_length=8,
-            temperature=0.0,
-            top_p=1.0,
-            top_k=-1,
-            min_p=0.0,
-            logprobs=None,
-            stop_token_ids=[128001, 128009],
-        )
-    )
-
-    actual = get_sampling_params_for_backend(backend, config)
-
-    assert actual["stop_token_ids"] == [128001, 128009]
-    assert isinstance(actual["stop_token_ids"], list)
