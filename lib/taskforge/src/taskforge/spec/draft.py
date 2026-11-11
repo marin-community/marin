@@ -10,8 +10,8 @@ a spec that survives a JSON round trip.
 
 A ``TaskSpec`` holds the semantic task only. How it runs (machine backend,
 limits, user, deadlines, harness) is the ``TaskRolloutSpec`` RolloutEngine executes, and
-``lower`` alone builds one, choosing each machine's backend for the host. A
-lowered spec is therefore bound to the host whose factories it names, and its
+``lower`` alone builds one, choosing each machine's backend from the factories it is
+given. A lowered spec is therefore bound to the host whose factories it names, and its
 task may name the software differently from the ``TaskSpec``: on a host with
 the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``. A package
 machine always lowers onto the local backend, so on a host without one ``check``
@@ -25,7 +25,7 @@ Only ``lower`` builds a ``TaskRolloutSpec``, so moving it is a single-site chang
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Protocol, runtime_checkable
@@ -65,7 +65,7 @@ from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
 from verifyit.spec import Spec, mode_of
 
-from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
+from taskforge.sandbox.factories import container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.verdict import VERDICT_REWARD
 
@@ -120,7 +120,7 @@ class MachineLimits:
 
 @dataclass(frozen=True)
 class MachineSettings:
-    """A ``MachineRuntimeSpec`` without its backend; ``lower`` picks the backend for this host."""
+    """A ``MachineRuntimeSpec`` without its backend; ``lower`` picks the backend from its factories."""
 
     network: NetworkPolicy
     limits: MachineLimits
@@ -471,13 +471,12 @@ def assemble(
 def lower(
     task: TaskSpec,
     *,
-    host: MachineHost,
     task_machine: MachineSettings | None,
     verifier_machine: MachineSettings | None,
     limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
 ) -> TaskRolloutSpec:
-    """The ``TaskRolloutSpec`` that runs ``task`` on ``host``'s ``factories`` under ``TOOL_HARNESS``.
+    """The ``TaskRolloutSpec`` that runs ``task`` on ``factories`` under ``TOOL_HARNESS``.
 
     Every Taskforge ``TaskRolloutSpec`` is built here. Each machine runs the requirements
     ``host_requirements`` gives for ``factories``, the same rule for the task machine and the verifier
@@ -488,8 +487,9 @@ def lower(
     validation trial replaces it (``stage50_validate.trials.EngineSettings.apply``).
 
     Raises:
-        ValueError: A machine is given where the task has none or missing where it has one, or
-            RolloutEngine rejects the lowered spec (``check``).
+        ValueError: A machine is given where the task has none or missing where it has one, an image
+            machine has not exactly one container backend among ``factories`` (``container_backend``),
+            or RolloutEngine rejects the lowered spec (``check``).
         NotImplementedError: RolloutEngine cannot run the lowered spec.
     """
     if (task_machine is None) != (SHELL_CAPABILITY not in task.environment_requirements.capabilities):
@@ -502,10 +502,12 @@ def lower(
         task=task,
         harness=TOOL_HARNESS,
         task_machine=(
-            None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
+            None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, factories)
         ),
         verifier_machine=(
-            None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading, host)
+            None
+            if verifier_machine is None or grading is None
+            else machine_runtime(verifier_machine, grading, factories)
         ),
         limits=limits,
     )
@@ -514,14 +516,14 @@ def lower(
 
 
 def machine_runtime(
-    settings: MachineSettings, requirements: EnvironmentRequirements, host: MachineHost
+    settings: MachineSettings, requirements: EnvironmentRequirements, factories: Mapping[str, MachineFactory]
 ) -> MachineRuntimeSpec:
-    """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
+    """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``factories``.
 
     Pass requirements already resolved for the available factories with ``host_requirements``.
     """
     return MachineRuntimeSpec(
-        backend=machine_backend(requirements, host).value,
+        backend=machine_backend(requirements, factories).value,
         network=settings.network,
         cpus=settings.limits.cpus,
         memory_mb=settings.limits.memory_mb,
@@ -533,11 +535,11 @@ def machine_runtime(
     )
 
 
-def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) -> Backend:
-    """The host's container backend for an image, the local backend for Linux processes without one
-    (a packages lock or a package spec), else ShellSim."""
+def machine_backend(requirements: EnvironmentRequirements, backends: Iterable[str]) -> Backend:
+    """The selected container backend for an image (``container_backend``), the local backend for Linux
+    processes without one (a packages lock or a package spec), else ShellSim."""
     if requirements.docker_image is not None:
-        return container_backend(host)
+        return container_backend(backends)
     if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
         return Backend.LOCAL
     return Backend.SHELLSIM

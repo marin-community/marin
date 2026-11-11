@@ -2,9 +2,17 @@
 
 This directory contains every version-controlled input for the campaign: model configs, Evalchemy
 configs, Harbor configs, the co-hosted judge config, model-specific Harbor policy values, validation,
-and launch commands. The launcher records the vendored Evalchemy runtime's source hash
-and Harbor's upstream revision and runtime descriptor. It checks the independent Harbor
-lockfile before submission.
+and launch commands. The launcher records the Marin revision and vendored Evalchemy
+runtime's source hash. It checks the independent Harbor lockfile before submission.
+
+Launch policy evaluations from the Marin revisions pinned in the
+[eval policy](https://github.com/marin-community/marin/issues/10197#codebase-pins), not from `main`.
+This directory on `main` can differ from the pinned configs; for example, its SWE-bench budget is
+32,768 tokens, while the policy runs SWE-bench at 131,072. Launches with `--policy-finalization-config` must
+write remote records directly under `gs://marin-eval-metadata/evals` or
+`s3://marin-us-east-02a/marin/evals`, the roots EvalDash catalogs, and may resume only a
+`<root>/<run_id>/results` directory there. EvalDash finds only `<root>/<run_id>/record.json`, so
+nested result files such as replay outputs under `evals/ablations/` are not EvalDash runs.
 
 The launcher leaves `EvalRunRecord.version` unset. Its checked-in inputs, config digests, and durable
 records support reproduction and review; they do not attest that a run conforms to an accepted eval
@@ -19,7 +27,7 @@ completion, the adapter counts the prompt, including tools and the generation pr
 the serving model's `/tokenize` endpoint. It caps the reply to the remaining context and the
 model's output limit. When no reply fits, the harness exits through its normal limit handling
 so Harbor can verify the existing patch. It does not truncate or summarize the conversation.
-The model limits and Harbor runtime pin are recorded in the launch snapshot;
+The model limits and dataset pins are recorded in the launch snapshot;
 results from the previous adapter have a different policy digest and cannot be resumed under
 this configuration.
 

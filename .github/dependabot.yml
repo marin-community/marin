@@ -53,6 +53,16 @@ updates:
         patterns:
           - "*"
 
+  # Tau3 embeds pinned npm packages in an evaluation sandbox. Accept their risk
+  # and suppress update PRs here; security alerts are dismissed separately.
+  - package-ecosystem: "npm"
+    directory: "/experiments/evaluation/images/tau3"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
+
   - package-ecosystem: "cargo"
     directories:
       - "/lib/dupekit/rust"

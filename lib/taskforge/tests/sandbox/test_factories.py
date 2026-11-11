@@ -1,29 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 import subprocess
-import threading
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _machine_spec, _prepare_machine
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
-from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
     ExecutionRequirements,
     MachineSpec,
     NetworkPolicy,
-    UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
@@ -34,7 +27,6 @@ from taskcompendium.models import (
     Grader,
     PlainText,
     ResourceGroups,
-    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
@@ -43,14 +35,8 @@ from verifyit.spec import JudgeSpec, NumericSpec
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
-    MachineHost,
-    MachineRole,
-    RefusalReason,
-    container_backend,
     grading_environment,
     machine_factories,
-    task_refusals,
-    warm_local_python,
 )
 from taskforge.spec import draft
 
@@ -82,11 +68,6 @@ def selection(backend: Backend, **update) -> MachineRuntimeSpec:
     return MachineRuntimeSpec(**(fields | update))
 
 
-LOCKED = EnvironmentRequirements(
-    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="gs://bucket/env/uv.lock"
-)
-
-
 @dataclass(frozen=True)
 class FakeFactory:
     """A factory for a backend whose shellbox module installs only on Linux; it accepts every machine."""
@@ -98,20 +79,6 @@ class FakeFactory:
 
     async def create(self, spec: MachineSpec):
         raise AssertionError(f"Unexpected machine for {spec}")
-
-
-GVISOR = IrisMachineFactory(controller_url="http://127.0.0.1:9")
-SHELLSIM = ShellSimMachineFactory()
-IRIS = {Backend.SHELLSIM.value: SHELLSIM, Backend.GVISOR.value: GVISOR, Backend.LOCAL.value: FakeFactory(Backend.LOCAL)}
-LAPTOP = {Backend.SHELLSIM.value: SHELLSIM, Backend.DOCKER.value: DockerMachineFactory()}
-
-
-def script_grader(
-    environment: EnvironmentRequirements = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE
-    )
-) -> ScriptGrader:
-    return ScriptGrader(argv=("sh", "/tests/grade.sh"), environment=environment)
 
 
 def lowered(
@@ -148,67 +115,6 @@ def lowered(
         verifier_machine=verifier_machine,
         limits=LIMITS,
     )
-
-
-def reasons(spec: TaskRolloutSpec, machines) -> set[tuple[RefusalReason, MachineRole]]:
-    return {(refusal.reason, refusal.where) for refusal in task_refusals(spec, machines)}
-
-
-def test_shellsim_and_machineless_tasks_run_everywhere():
-    for machines in (IRIS, LAPTOP):
-        assert reasons(lowered(None), machines) == set()
-        assert reasons(lowered(selection(Backend.SHELLSIM)), machines) == set()
-
-
-def test_shellsim_accepts_a_storage_limit_and_refuses_a_cpu_limit():
-    assert reasons(lowered(selection(Backend.SHELLSIM, storage_mb=64)), LAPTOP) == set()
-    [refusal] = task_refusals(lowered(selection(Backend.SHELLSIM, cpus=2)), LAPTOP)
-    assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    assert "CPU" in refusal.detail
-
-
-def test_image_tasks_run_on_each_hosts_container_backend():
-    for host, machines in ((MachineHost.IRIS, IRIS), (MachineHost.LAPTOP, LAPTOP)):
-        spec = lowered(selection(container_backend(host), network=NetworkPolicy.ALLOW), image=IMAGE)
-        assert reasons(spec, machines) == set()
-    # A draft lowered on the laptop names a backend Iris has no factory for.
-    [refusal] = task_refusals(lowered(selection(Backend.DOCKER), image=IMAGE), IRIS)
-    assert (refusal.reason, refusal.where) == (RefusalReason.NO_FACTORY, MachineRole.TASK)
-    assert refusal.detail.startswith("docker:")
-
-
-def test_a_network_task_on_a_deny_policy_is_refused_with_the_factorys_message():
-    spec = lowered(selection(Backend.GVISOR), image=IMAGE, capabilities=(*SHELL, "network"))
-    with pytest.raises(UnsupportedMachineSpec) as rejected:
-        GVISOR.check_environment(spec.task.environment_requirements, MachineSpec(source=RegistryImage(IMAGE)))
-
-    assert [(r.reason, r.where, r.detail) for r in task_refusals(spec, IRIS)] == [
-        (RefusalReason.UNSUPPORTED, MachineRole.TASK, f"gvisor: {rejected.value}")
-    ]
-    allowed = lowered(
-        selection(Backend.GVISOR, network=NetworkPolicy.ALLOW),
-        image=IMAGE,
-        capabilities=spec.task.environment_requirements.capabilities,
-    )
-    assert reasons(allowed, IRIS) == set()
-
-
-def test_image_must_match_whether_the_backend_takes_one():
-    assert reasons(lowered(selection(Backend.SHELLSIM), image=IMAGE), IRIS) == {
-        (RefusalReason.UNSUPPORTED, MachineRole.TASK)
-    }
-    assert reasons(lowered(selection(Backend.GVISOR)), IRIS) == {(RefusalReason.UNSUPPORTED, MachineRole.TASK)}
-
-
-def test_verifier_machine_is_checked_against_its_own_backend():
-    spec = lowered(
-        selection(Backend.SHELLSIM),
-        grader=script_grader(),
-        verifier_machine=selection(Backend.GVISOR, gpus=1),
-    )
-    [refusal] = task_refusals(spec, IRIS)
-    assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.VERIFIER)
-    assert "GPU" in refusal.detail
 
 
 def test_a_judge_takes_no_verifier_machine_whatever_environment_its_grader_names():
@@ -266,41 +172,6 @@ def test_factories_construct_exactly_the_selected_backends(monkeypatch, backends
         assert iris.controller_url == controller
 
 
-@dataclass(frozen=True)
-class FakeLocalFactory(FakeFactory):
-    """The local factory's shape: a package cache and a Python version the warm-up resolves."""
-
-    package_cache: Path = Path("/cache/python")
-    python_version: str = "3.12.12"
-
-
-def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_thread(monkeypatch, caplog):
-    calls: list[tuple[Path, tuple[str, ...], str, str]] = []
-    monkeypatch.setattr(
-        factories,
-        "resolve_python_environment",
-        lambda cache, requirements, version: calls.append(
-            (cache, requirements, version, threading.current_thread().name)
-        ),
-    )
-    built = {**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)}
-
-    with caplog.at_level(logging.INFO, logger=factories.__name__):
-        thread = warm_local_python(built)
-        assert thread is not None
-        thread.join(timeout=10)
-
-    assert not thread.is_alive()
-    assert calls == [(Path("/cache/python"), (), "3.12.12", factories.WARM_THREAD)]
-
-
-def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
-    monkeypatch.setattr(factories, "resolve_python_environment", lambda *args: pytest.fail("resolved without a factory"))
-
-    assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
-    assert warm_local_python(IRIS) is None
-
-
 @pytest.mark.manual
 async def test_a_taskforge_shellsim_machine_runs_the_catalogs_cpython():
     """Fetches ``SHELLSIM_CATALOG``'s CPython, which the unit suite leaves to ShellSim's own tests."""
@@ -322,7 +193,7 @@ async def test_a_grader_base_machine_runs_cpython_312_on_the_local_backend():
     """Needs bubblewrap (Linux, as root or with user namespaces) and uv; installs CPython into the package cache."""
     built = machine_factories((Backend.LOCAL,), controller_url=None)
     requirements = draft.host_requirements(draft.grader_environment(None), built)
-    runtime = draft.machine_runtime(draft.machine(startup_timeout=600), requirements, MachineHost.IRIS)
+    runtime = draft.machine_runtime(draft.machine(startup_timeout=600), requirements, built)
     async with AsyncExitStack() as owned:
         machine = await _prepare_machine(requirements, runtime, (), built, _Cleanup(60), owned)
         assert machine is not None

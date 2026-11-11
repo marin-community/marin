@@ -11,9 +11,8 @@
 //! - [`ConcurrencyInterceptor`] — two `tokio::sync::Semaphore`s (FetchLogs and
 //!   Query) keyed by the dispatched method name; acquires a permit BEFORE
 //!   `next.run` and holds it across the handler (bounding the parquet working
-//!   set). Re-checks the deadline AFTER acquiring (the post-acquire shed): if
-//!   the client deadline has elapsed while queued, short-circuit with
-//!   `deadline_exceeded` rather than run a doomed handler. The caps are
+//!   set). One deadline bounds admission and the whole handler; expiry drops
+//!   queued requests and running reads with `deadline_exceeded`. The caps are
 //!   `{FetchLogs: 4}` and `{Query: 2}`, both living in one interceptor keyed by
 //!   method. Registered AFTER SlowRpc.
 //!
@@ -31,6 +30,8 @@ use std::time::Instant;
 use connectrpc::interceptor::{UnaryRequest, UnaryResponse};
 use connectrpc::{async_trait, ConnectError, Interceptor, Next, RequestContext};
 use tokio::sync::Semaphore;
+
+use crate::query::{query_timeout, run_within_query_timeout};
 
 /// Default per-method slow-RPC threshold.
 /// Picked well above the durable-write floor (one bg flush cycle) so a normal
@@ -115,8 +116,7 @@ impl Interceptor for SlowRpcInterceptor {
     }
 }
 
-/// Caps the number of in-flight `FetchLogs` / `Query` RPCs (other methods pass
-/// through untouched), with a post-acquire deadline shed.
+/// Bound read concurrency and the entire read RPC, including admission wait.
 pub struct ConcurrencyInterceptor {
     fetch: Arc<Semaphore>,
     query: Arc<Semaphore>,
@@ -150,16 +150,14 @@ fn deadline_expired(ctx: &RequestContext) -> bool {
 }
 
 fn deadline_error(method: &str) -> ConnectError {
-    ConnectError::deadline_exceeded(format!(
-        "RPC {method}: deadline exceeded before handler ran"
-    ))
+    ConnectError::deadline_exceeded(format!("RPC {method}: deadline exceeded"))
 }
 
 #[async_trait]
 impl Interceptor for ConcurrencyInterceptor {
     async fn intercept_unary(
         &self,
-        req: UnaryRequest,
+        mut req: UnaryRequest,
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
         let method = method_name(&req.ctx).unwrap_or("");
@@ -171,19 +169,26 @@ impl Interceptor for ConcurrencyInterceptor {
         if deadline_expired(&req.ctx) {
             return Err(deadline_error(method));
         }
-        // Acquire BEFORE the handler and hold the permit across it. The
-        // semaphore is never closed (the namespace owns it for the process
-        // lifetime), so `acquire` only errors on close — treat that as internal.
-        let _permit = sem
-            .acquire()
-            .await
-            .map_err(|_| ConnectError::internal("concurrency semaphore closed"))?;
-        // Post-acquire shed: under overload a caller can sit behind in-flight
-        // RPCs long enough that the client gave up. Don't run a doomed handler.
-        if deadline_expired(&req.ctx) {
-            return Err(deadline_error(method));
+        let timeout = query_timeout(req.ctx.time_remaining(), None);
+        if let Some(timeout) = timeout {
+            req.ctx = req.ctx.with_deadline(Some(Instant::now() + timeout));
         }
-        next.run(req).await
+        // Admission, snapshot construction, visibility waits, execution, and
+        // encoding all spend the same request budget. Dropping the handler also
+        // releases its permits and cancels its optional cache downloads.
+        run_within_query_timeout(
+            timeout,
+            async {
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .map_err(|_| ConnectError::internal("concurrency semaphore closed"))?;
+                next.run(req).await
+            },
+            |_| deadline_error(method),
+            |error| error,
+        )
+        .await
     }
 }
 
@@ -218,6 +223,52 @@ mod tests {
 
     fn ok_response() -> UnaryResponse {
         UnaryResponse::from_encoded(EncodedResponse::new(Bytes::new()), CodecFormat::Proto)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_read_expires_without_entering_the_handler() {
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(0, 0))];
+        let result = run_chain(
+            &chain,
+            request(
+                "/finelog.stats.StatsService/Query",
+                Some(Instant::now() + Duration::from_millis(25)),
+            ),
+            |_| async {
+                panic!("expired queued query reached the handler");
+            },
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().code,
+            connectrpc::ErrorCode::DeadlineExceeded
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_deadline_cancels_handler_and_releases_admission() {
+        let chain: Vec<Arc<dyn Interceptor>> = vec![Arc::new(ConcurrencyInterceptor::new(1, 1))];
+        for procedure in [
+            "/finelog.stats.StatsService/Query",
+            "/finelog.logging.LogService/FetchLogs",
+        ] {
+            let held = Semaphore::new(1);
+            let result = run_chain(&chain, request(procedure, None), |_| async {
+                let _active = held.acquire().await.unwrap();
+                std::future::pending::<Result<UnaryResponse, ConnectError>>().await
+            })
+            .await;
+            assert_eq!(
+                result.unwrap_err().code,
+                connectrpc::ErrorCode::DeadlineExceeded
+            );
+            assert_eq!(held.available_permits(), 1);
+            run_chain(&chain, request(procedure, None), |_| async {
+                Ok(ok_response())
+            })
+            .await
+            .unwrap();
+        }
     }
 
     /// A tracing layer that counts events at WARN level.

@@ -21,8 +21,15 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
-from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_measurements import (
+    MetricRow,
+    declared_metric_gap,
+    declared_metric_rows,
+    measurement_from_record,
+    measurements_from_records,
+    undeclared_metric_rows,
+)
+from marin.evaluation.eval_policy import POLICIES, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -45,6 +52,7 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
+from marin.evaluation.metric_selection import PUBLICATION_METRIC_POLICY
 from marin.evaluation.records import EvalRunRecord, RunStatus
 from marin.execution.step_status import STATUS_SUCCESS
 
@@ -174,13 +182,34 @@ def run_metadata(records: list[EvalRunRecord]) -> dict[str, dict[str, str]]:
     return {record.run_id: {facet: _attribute(record, path) for facet, path in RUN_FACETS.items()} for record in records}
 
 
-def _panel_records(records: list[EvalRunRecord], cohort_version: str | None = None) -> list[EvalRunRecord]:
+ALL_COHORTS = "all"
+"""Cohort selection for the newest admissible result per benchmark across every cohort."""
+
+UNVERSIONED_COHORT = "unversioned"
+"""Cohort selection for records launched without a version label (``version: null``)."""
+
+
+def cohort_selection(cohort: str) -> tuple[CohortMode, str | None]:
+    """Return the cohort mode and version a ``cohort`` query value names."""
+    if cohort == ALL_COHORTS:
+        return CohortMode.LATEST_VALID, None
+    if cohort == UNVERSIONED_COHORT:
+        return CohortMode.SINGLE_COHORT, None
+    return CohortMode.SINGLE_COHORT, cohort
+
+
+def in_cohort(record: EvalRunRecord, request: SelectionRequest | None) -> bool:
+    """Whether ``record`` belongs to the request's cohort; no request or all cohorts admits every record."""
+    return request is None or request.cohort is CohortMode.LATEST_VALID or record.version == request.cohort_version
+
+
+def _panel_records(records: list[EvalRunRecord], request: SelectionRequest | None = None) -> list[EvalRunRecord]:
     """Return policy-compliant, non-smoke records for the selected cohort."""
     return [
         record
         for record in records
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
-        if cohort_version is None or record.version == cohort_version
+        if in_cohort(record, request)
         if not record_policy_violations(record)
     ]
 
@@ -198,7 +227,7 @@ def _policy_rejections(
         }
         for record in records
         if not record.evaluation.name.endswith(SMOKE_SUFFIX)
-        if request.cohort_version is None or record.version == request.cohort_version
+        if in_cohort(record, request)
         if request.panel is None or record.evaluation.name in request.panel
         if models is None or record.model.name in models
         if matches_filters(record.model.name, metadata[record.run_id], request)
@@ -239,12 +268,18 @@ def cell_payload(measurement: Measurement) -> dict:
     interval = measurement_interval(measurement)
     coverage = measurement.coverage
     return {
+        "metric_policy": PUBLICATION_METRIC_POLICY,
         "value": measurement.value,
         "low": interval.low,
         "high": interval.high,
         "interval_kind": interval.kind.value,
         "metric": measurement.metric,
         "metric_kind": measurement.kind.value,
+        "repeat_aggregation": (
+            measurement.repeat_aggregation.model_dump(mode="json")
+            if measurement.repeat_aggregation is not None
+            else None
+        ),
         "declared": measurement.declared,
         "n_scored": coverage.n_scored,
         "n_benchmark": coverage.n_benchmark,
@@ -327,7 +362,7 @@ def build_panel(
     variants and controls coverage, completeness, and aggregation. ``benchmarks`` and ``cells`` retain
     every admitted variant under its exact eval name.
     """
-    eligible = _panel_records(records, request.cohort_version)
+    eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
     measurements = dashboard_measurements(eligible)
     protocols = declared_protocols(measurements)
@@ -416,7 +451,7 @@ def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, mo
     ``require_complete``: a model missing one of them is not scored rather than scored on a smaller
     panel that would not be the same quantity.
     """
-    eligible = _panel_records(records, request.cohort_version)
+    eligible = _panel_records(records, request)
     metadata = run_metadata(eligible)
     measurements = dashboard_measurements(eligible)
     selection = select(
@@ -482,14 +517,18 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     return {
         "models": all_models,
         "run_facets": run_facets,
-        "default_cohort": SEPTEMBER_24_VERSION,
+        "metric_policy": PUBLICATION_METRIC_POLICY,
+        "default_cohort": ALL_COHORTS,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
         "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({display_status(r) for r in records}),
-        "versions": sorted(set(POLICIES) | {r.version for r in records if r.version}),
+        "versions": (
+            sorted(set(POLICIES) | {r.version for r in records if r.version})
+            + ([UNVERSIONED_COHORT] if any(r.version is None for r in records) else [])
+        ),
         "facets": facets,
         "archived_models": sorted(archived_models),
     }
@@ -503,6 +542,16 @@ def record_headline(record: EvalRunRecord, protocol: MetricProtocol | None = Non
     if measurement is None or (protocol is not None and not matches_protocol(measurement, protocol)):
         return None
     return cell_payload(measurement)
+
+
+def run_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """The run page's top metric rows: declared protocol metrics first, then undeclared raw rows.
+
+    A declared benchmark metric keeps its protocol name and the value the statistics engine would
+    select; tasks without a declaration keep their raw rows, so a record that mixes both still shows
+    every task. When nothing is declared, the whole raw map is returned.
+    """
+    return [*declared_metric_rows(record), *undeclared_metric_rows(record)]
 
 
 def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
@@ -578,10 +627,10 @@ def _model_runs(records: list[EvalRunRecord], protocols: Mapping[str, MetricProt
 def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
     """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
 
-    ``current_version`` is the version of the model's most recent non-smoke run -- the cohort the view
-    opens on -- and ``cohorts`` lists one entry per distinct version, both excluding ``-smoke`` suites
-    as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
-    and ``runs`` spans every run for the model (smoke included), newest first.
+    ``current_version`` is the version of the model's most recent non-smoke run, and ``cohorts``
+    lists one entry per distinct version, both excluding ``-smoke`` suites as the headline panel
+    does. ``history`` is the per-eval score-over-time across every scored run, and ``runs`` spans
+    every run for the model (smoke included), newest first.
     """
     protocols = declared_protocols(dashboard_measurements(_panel_records(records)))
     model_records = [record for record in records if record.model.name == model]
@@ -604,7 +653,7 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
 def panel_request(
     *,
     benchmarks: tuple[str, ...] | None = None,
-    cohort_version: str | None = None,
+    cohort: str = ALL_COHORTS,
     completeness: Completeness = Completeness.ANY,
     min_coverage: float = DEFAULT_MIN_COVERAGE,
     min_benchmark_coverage: float = DEFAULT_MIN_COVERAGE,
@@ -617,12 +666,14 @@ def panel_request(
     ``include_flagged`` readmits results the engine flags as suspect, which are excluded by default
     so one cannot stand as a model's newest result. They are always reported as the reason for the
     empty cell, so this widens what is shown rather than revealing something that was hidden.
+    ``cohort`` is a version label, ``"unversioned"`` for records without one, or ``"all"``.
     """
+    cohort_mode, cohort_version = cohort_selection(cohort)
     return SelectionRequest(
         min_coverage=min_coverage,
         min_benchmark_coverage=min_benchmark_coverage,
         exclude_flags=frozenset() if include_flagged else DEFAULT_EXCLUDE_FLAGS,
-        cohort=CohortMode.SINGLE_COHORT if cohort_version else CohortMode.LATEST_VALID,
+        cohort=cohort_mode,
         cohort_version=cohort_version,
         panel=benchmarks,
         completeness=completeness,

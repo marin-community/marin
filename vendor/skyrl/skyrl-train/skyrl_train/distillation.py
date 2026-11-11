@@ -9,6 +9,7 @@ from typing import ClassVar, Optional, Self
 import torch
 
 from marinskyrl.distillation import TeacherEvidenceKind
+from skyrl_train import stable_softmax
 
 INVALID_TOPK_INDEX = -1
 RETAINED_MASS_ATOL = 1e-6
@@ -638,6 +639,29 @@ def validate_distillation_attachment(
             raise ValueError(f"prepared distillation {label} does not match teacher evidence")
 
 
+def compact_student_topk_logprobs(
+    logits: torch.Tensor, topk_indices: torch.Tensor, attention_mask: torch.Tensor
+) -> torch.Tensor:
+    """Score padded response IDs against logits with masked sequence positions removed."""
+    response_length = topk_indices.shape[1]
+    response_mask = attention_mask[:, -response_length:].bool()
+    prediction_positions = attention_mask.long().cumsum(-1)[:, -response_length - 1 : -1] - 1
+    rows = []
+    for row in range(logits.shape[0]):
+        response_positions = response_mask[row].nonzero(as_tuple=False).flatten()
+        compact_positions = prediction_positions[row, response_positions]
+        if torch.any(compact_positions < 0):
+            raise ValueError("Selected response tokens require a preceding prompt token")
+        scores = student_topk_logprobs(
+            logits[row, compact_positions].unsqueeze(0),
+            topk_indices[row, response_positions].unsqueeze(0),
+        ).squeeze(0)
+        # Restore only K scores per token, never a padded vocabulary-sized tensor.
+        padded = logits.new_full(topk_indices.shape[1:], torch.nan, dtype=torch.float32)
+        rows.append(padded.index_copy(0, response_positions, scores))
+    return torch.stack(rows)
+
+
 def student_topk_logprobs(logits: torch.Tensor, topk_indices: torch.Tensor) -> torch.Tensor:
     """Return selected student logprobs, with NaN wherever the token ID is the invalid sentinel."""
     if logits.ndim != 3 or topk_indices.ndim != 3 or logits.shape[:2] != topk_indices.shape[:2]:
@@ -652,7 +676,10 @@ def student_topk_logprobs(logits: torch.Tensor, topk_indices: torch.Tensor) -> t
     if torch.any(topk_indices[valid_indices] >= logits.shape[-1]):
         raise ValueError(f"selected top-K indices must be smaller than student vocabulary size {logits.shape[-1]}")
     safe_indices = topk_indices.masked_fill(~valid_indices, 0).long()
-    float_logits = logits.float()
-    selected = torch.gather(float_logits, dim=-1, index=safe_indices)
-    normalized = selected - torch.logsumexp(float_logits, dim=-1, keepdim=True)
+    maximum, argmax = logits.max(dim=-1, keepdim=True)
+    top_logprob = stable_softmax.token_logprobs(
+        logits, argmax.squeeze(-1), 0, logits.shape[-1], None, chunk_size=1
+    ).unsqueeze(-1)
+    selected = logits.gather(-1, safe_indices).float() - maximum.float() + top_logprob
+    normalized = torch.where(safe_indices == argmax, top_logprob, selected)
     return normalized.masked_fill(~valid_indices, torch.nan)

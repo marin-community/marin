@@ -3,6 +3,27 @@
 Add an entry to `nodes` in [graph-data.json](graph-data.json); the tree, timeline
 and Read all views derive from it. Copy a nearby node and preserve its fields.
 
+## Propose a graph change
+
+`graph-data.json` on Marin's `main` branch is the source of truth. Every model
+addition or lineage change goes through a reviewed Marin PR, including outside
+contributions submitted from a fork or opened on the contributor's behalf.
+Submit source changes in the PR; do not pass graph files or ZIPs to a publisher
+for a separate edit to the live tree.
+
+The tree is curated. Explain why the checkpoint matters to the model family and
+link the experiment or model author's assessment. Include releases, distinct
+training or merge stages, and negative results that explain a lineage decision;
+individual trial checkpoints can remain aliases in `retained`. Automated discovery
+may propose a PR, but must preserve review of model selection and parent evidence.
+It must not add every discovered post-train directly to the live graph.
+
+Each graph PR must identify its model IDs, parent evidence, uncertain or inferred
+links, validation results, and whether it changes the public tree. A merge updates
+the source; once activated, the nightly publisher releases changed main source
+at 04:17 UTC.
+The maintenance guide covers manual dispatch, release records and legacy bootstrap.
+
 ## Record the model and its parent
 
 - Give `id` a unique, stable value; public model nodes normally use the full
@@ -63,8 +84,7 @@ ancestry and parent's Direct children list, then reveal it in its family timelin
 and open the evidence links. Ctrl-C stops Marina and its disposable Postgres;
 verify both stop. Each build recreates `dist/`; commit source files only.
 
-Open a focused Marin PR with the model IDs, parent evidence and validation results.
+Open a focused Marin PR with the information listed above.
 For public updates, follow the existing UUID and current-version procedure in the
 [maintenance guide](../../../../docs/references/snowball-family-tree.md#maintain-the-app)
-and the `marina-app` skill. Updating the source in a PR does not automatically
-publish a new public revision.
+and the `marina-app` skill. Opening a PR does not publish a public revision.

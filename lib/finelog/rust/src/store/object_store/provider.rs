@@ -156,6 +156,34 @@ impl Provider {
         }))
     }
 
+    pub(super) async fn read_range(
+        &self,
+        path: OsPath,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError> {
+        match self.backend.get_range(&path, range).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(StatsError::Internal(format!(
+                "read object range {path}: {error}"
+            ))),
+        }
+    }
+
+    pub(super) async fn read_ranges(
+        &self,
+        path: OsPath,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        match self.backend.get_ranges(&path, ranges).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(StatsError::Internal(format!(
+                "read object ranges {path}: {error}"
+            ))),
+        }
+    }
+
     /// Swap the pointer at `path` from `expected` to `bytes`.
     ///
     /// `local_path` is the filesystem path backing `path` when the provider is a

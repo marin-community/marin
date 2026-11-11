@@ -206,6 +206,8 @@ def reconstruct_launch_job_request(
     if job.timeout_ms is not None and job.timeout_ms > 0:
         req.timeout.milliseconds = job.timeout_ms
 
+    req.termination_grace.milliseconds = job.termination_grace_ms
+
     return req
 
 

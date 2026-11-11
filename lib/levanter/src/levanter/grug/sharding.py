@@ -114,7 +114,7 @@ def _reshard_for_shard_map(
     return x
 
 
-_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "context", "expert", "model")
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "context", "model")
 
 
 def compact_grug_mesh_shape(
@@ -126,7 +126,7 @@ def compact_grug_mesh_shape(
     model_axis_size: int,
     context_axis_size: int = 1,
 ) -> tuple[int, ...]:
-    """Return the ``(replica_dcn, data, context, expert, model)`` sizes `compact_grug_mesh` would build.
+    """Return the ``(replica_dcn, data, expert, context, model)`` sizes `compact_grug_mesh` would build.
 
     Takes the device counts as arguments, so launchers can check a layout before the devices exist.
     """
@@ -144,16 +144,16 @@ def compact_grug_mesh_shape(
         raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
 
     global_device_count = process_count * local_device_count
-    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size * context_axis_size
+    fixed_axes = replica_axis_size * expert_axis_size * context_axis_size * model_axis_size
     if global_device_count % fixed_axes != 0:
         raise ValueError(
             f"global_device_count ({global_device_count}) must be divisible by "
-            f"replica_axis_size ({replica_axis_size}) * context_axis_size ({context_axis_size}) * "
-            f"expert_axis_size ({expert_axis_size}) * model_axis_size ({model_axis_size})"
+            f"replica_axis_size ({replica_axis_size}) * expert_axis_size ({expert_axis_size}) * "
+            f"context_axis_size ({context_axis_size}) * model_axis_size ({model_axis_size})"
         )
 
     data_axis_size = global_device_count // fixed_axes
-    return (replica_axis_size, data_axis_size, context_axis_size, expert_axis_size, model_axis_size)
+    return (replica_axis_size, data_axis_size, expert_axis_size, context_axis_size, model_axis_size)
 
 
 def compact_grug_mesh(
@@ -165,10 +165,10 @@ def compact_grug_mesh(
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The mesh is always ``(replica_dcn, data, context, expert, model)``; length-1
+    The mesh is always ``(replica_dcn, data, expert, context, model)``; length-1
     axes are kept so downstream PartitionSpecs can name any axis unconditionally.
     ``data`` absorbs whatever the other axes leave free, so a 32-process job with
-    4 local devices can build an effective ``(4, 2, 1, 16, 1)`` Grug mesh.
+    4 local devices can build an effective ``(4, 2, 16, 1, 1)`` Grug mesh.
 
     Sequence placement on ``context`` is the responsibility of the model.
     """

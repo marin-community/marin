@@ -18,6 +18,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS
+from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
     HarborErrorTaxonomy,
@@ -172,13 +174,13 @@ class HarborResumeIdentity(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     dataset: str
     policy_digest: str
-    runtime: str
     task_limit: int | None
     model: ModelConfigRef
     judge: ModelConfigRef | None
+    evaluator_identity: str
 
 
 def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity) -> None:
@@ -189,7 +191,7 @@ def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity)
     existing = HarborResumeIdentity.model_validate_json(path.read_text())
     if existing != identity:
         raise ValueError(
-            f"Harbor results root {output_dir!r} has different dataset, model, policy, runtime, task limit, or judge"
+            f"Harbor results root {output_dir!r} has different dataset, model, policy, task limit, judge, or evaluator"
         )
 
 
@@ -481,10 +483,10 @@ class HarborExecutor:
         return HarborResumeIdentity(
             dataset=self.config.record_dataset,
             policy_digest=self.config.digest,
-            runtime=harbor_runtime_descriptor(),
             task_limit=self.task_limit,
             model=self.model_config,
             judge=self.judge_config,
+            evaluator_identity=harbor_runtime_descriptor(),
         )
 
     def _run(
@@ -496,14 +498,12 @@ class HarborExecutor:
         verifier_env: Mapping[str, str],
         judge_model: RunningModel | None,
     ) -> HarborRunResult:
-        _bind_harbor_results_root(output_dir, self.resume_identity)
+        resume_identity = self.resume_identity
+        _bind_harbor_results_root(output_dir, resume_identity)
         dataset = self.config.record_dataset
-        identity: tuple[object, ...] = (self.config.digest, model.endpoint.model, self.task_limit)
-        if judge_model is not None:
-            identity += ("hosted-judge", judge_model.endpoint.model)
         job_name = _job_name(
             dataset,
-            identity,
+            (json.dumps(resume_identity.model_dump(mode="json"), sort_keys=True),),
         )
         dataset_path = local_harbor_dataset_path(self.config)
         overlay = HarborRuntimeOverlay(
@@ -513,6 +513,7 @@ class HarborExecutor:
             endpoint_url=model.endpoint.base_url,
             served_model=model.endpoint.model,
             model_identity=self.model_config.location,
+            judge_model_identity=self.judge_config.location if self.judge_config is not None else None,
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
             verifier_env=verifier_env,
@@ -551,6 +552,8 @@ class HarborExecutor:
     ) -> EvaluationOutcome:
         """Run Harbor with candidate inference and an optional hosted judge."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
+        driver_env.update({key: env_vars[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in env_vars})
+        driver_env[CANDIDATE_API_KEY_ENV] = session.model.endpoint.api_key or "EMPTY"
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token

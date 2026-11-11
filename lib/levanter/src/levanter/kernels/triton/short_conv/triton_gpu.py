@@ -17,6 +17,9 @@ backward reads ``x`` and ``dy`` and writes ``dx`` and one fp32 ``dw`` partial pe
 loads ``rows_per_step`` rows of every input before it stores any, so those loads are in flight
 together.
 
+When weights are frozen, a separate activation-only backward reads ``dy`` and
+writes ``dx`` without reading the primal ``x`` or allocating ``dw`` partials.
+
 The backward runs close to the instruction-issue limit, so a step whose rows, halo included, all lie
 in one document skips the segment masks: every mask is true there, so the result is the same, and
 the step issues about 40% fewer instructions. ``dw`` accumulates with explicit fused multiply-adds.
@@ -406,9 +409,68 @@ if triton is not None and tl is not None:
         for lag in tl.static_range(_WIDTH):
             tl.store(partial + lag * channels + cols, dw[lag])
 
+    @triton.jit
+    def _short_conv_dx_kernel(
+        seg_ptr,
+        dy_ptr,
+        w_ptr,
+        dx_ptr,
+        seq_len: tl.constexpr,
+        channels: tl.constexpr,
+        chunk: tl.constexpr,
+        block_c: tl.constexpr,
+        rows_per_step: tl.constexpr,
+        exact: tl.constexpr,
+        packed: tl.constexpr,
+    ):
+        dtype = dx_ptr.dtype.element_ty
+        cols = tl.program_id(0) * block_c + tl.arange(0, block_c)
+        start = tl.program_id(1) * chunk
+        batch = tl.program_id(2).to(tl.int64)
+        dy_base = dy_ptr + batch * seq_len * channels
+        dx_base = dx_ptr + batch * seq_len * channels
+        seg_base = seg_ptr + batch * seq_len
+        weights = (
+            tl.load(w_ptr + cols),
+            tl.load(w_ptr + channels + cols),
+            tl.load(w_ptr + 2 * channels + cols),
+            tl.load(w_ptr + 3 * channels + cols),
+        )
+        ahead = (
+            _row(dy_base, start, seq_len, channels, cols),
+            _row(dy_base, start + 1, seq_len, channels, cols),
+            _row(dy_base, start + 2, seq_len, channels, cols),
+        )
+        ahead_segs = (
+            _seg(seg_base, start, seq_len),
+            _seg(seg_base, start + 1, seq_len),
+            _seg(seg_base, start + 2, seq_len),
+        )
+        for offset in range(0, chunk, rows_per_step):
+            r = start + offset
+            dys = ahead
+            segs = ahead_segs
+            for j in tl.static_range(rows_per_step):
+                dys = dys + (_row(dy_base, r + _HALO + j, seq_len, channels, cols),)
+                segs = segs + (_seg(seg_base, r + _HALO + j, seq_len),)
+            # _dx_row shares the joint backward's segment layout, whose first
+            # three entries serve only dW. It reads indices >= _HALO for dX.
+            dx_segs = (segs[0], segs[0], segs[0]) + segs
+            if _one_segment(segs, rows_per_step + _HALO):
+                for j in tl.static_range(rows_per_step):
+                    dx = _dx_row(dys, dx_segs, j, weights, False, exact, packed)
+                    tl.store(dx_base + (r + j).to(tl.int64) * channels + cols, dx.to(dtype))
+            else:
+                for j in tl.static_range(rows_per_step):
+                    dx = _dx_row(dys, dx_segs, j, weights, True, exact, packed)
+                    tl.store(dx_base + (r + j).to(tl.int64) * channels + cols, dx.to(dtype))
+            ahead = (dys[rows_per_step], dys[rows_per_step + 1], dys[rows_per_step + 2])
+            ahead_segs = (segs[rows_per_step], segs[rows_per_step + 1], segs[rows_per_step + 2])
+
 else:
     _short_conv_fwd_kernel = None
     _short_conv_bwd_kernel = None
+    _short_conv_dx_kernel = None
 
 
 def _launch_kwargs(x: jax.Array, tiles: TritonShortConvTiles, exact: bool) -> dict:
@@ -455,6 +517,24 @@ def short_conv_triton_fwd_local(
     )
 
 
+def short_conv_triton_dx_local(
+    weight: Float[Array, "W C"],
+    segment_ids: Int[Array, "B S"],
+    dy: Float[Array, "B S C"],
+    *,
+    exact_reference_rounding: bool,
+) -> Float[Array, "B S C"]:
+    """Shard-local activation VJP, without primal activations or a dW output."""
+    return jt.triton_call(
+        segment_ids.astype(jnp.int32),
+        dy,
+        weight,
+        kernel=_short_conv_dx_kernel,
+        out_shape=jax.ShapeDtypeStruct(dy.shape, dy.dtype),
+        **_launch_kwargs(dy, BACKWARD_TILES, exact_reference_rounding),
+    )
+
+
 def short_conv_triton_bwd_local(
     weight: Float[Array, "W C"],
     x: Float[Array, "B S C"],
@@ -487,6 +567,7 @@ __all__ = [
     "SEQUENCE_MULTIPLE",
     "TritonShortConvTiles",
     "short_conv_triton_bwd_local",
+    "short_conv_triton_dx_local",
     "short_conv_triton_fwd_local",
     "triton_short_conv_available",
     "triton_short_conv_shapes_supported",

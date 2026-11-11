@@ -135,14 +135,10 @@ class Task:
         return f"{container}:{port}"
 
     async def wait_ready(self) -> None:
-        """Wait for each declared probe, reclaiming the whole group on failure."""
-        try:
-            for container in self.spec.containers:
-                if container.readiness is not None:
-                    await wait_service_ready(self.containers[container.name], container.readiness)
-        except BaseException:
-            await asyncio.shield(self.close())
-            raise
+        """Wait for declared probes; the owner closes helpers and task on failure."""
+        for container in self.spec.containers:
+            if container.readiness is not None:
+                await wait_service_ready(self.containers[container.name], container.readiness)
 
     async def close(self) -> None:
         if self._closing is None:

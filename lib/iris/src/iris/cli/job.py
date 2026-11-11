@@ -582,6 +582,7 @@ def run_iris_job(
     replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
+    termination_grace: int | None = None,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
     sync_packages: list[str] | None = None,
@@ -714,6 +715,7 @@ def run_iris_job(
         replicas=replicas,
         max_retries=max_retries,
         timeout=timeout,
+        termination_grace=termination_grace,
         wait=wait,
         extras=extras,
         setup_scripts=setup_scripts,
@@ -745,6 +747,7 @@ def _submit_and_wait_job(
     max_retries: int,
     timeout: int,
     wait: bool,
+    termination_grace: int | None = None,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
     sync_packages: list[str] | None = None,
@@ -797,6 +800,7 @@ def _submit_and_wait_job(
         max_retries_failure=max_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
+        termination_grace=Duration.from_seconds(termination_grace) if termination_grace is not None else None,
         user=user,
         priority_band=priority_band,
         container_profile=container_profile,
@@ -942,6 +946,12 @@ Examples:
 )
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
+@click.option(
+    "--termination-grace",
+    type=int,
+    default=None,
+    help="Graceful SIGTERM shutdown budget in seconds (1-110; default: controller setting).",
+)
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option(
@@ -1090,6 +1100,7 @@ def run(
     replicas: int | None,
     max_retries: int,
     timeout: int,
+    termination_grace: int | None,
     region: tuple[str, ...],
     zone: str | None,
     target_cluster: str | None,
@@ -1158,6 +1169,7 @@ def run(
             replicas=replicas,
             max_retries=max_retries,
             timeout=timeout,
+            termination_grace=termination_grace,
             extras=list(extra),
             setup_scripts=[] if no_sync else None,
             sync_packages=list(sync_package),

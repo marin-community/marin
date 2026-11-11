@@ -27,11 +27,13 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     CreateSnapshotParams,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
     Image,
     Resources,
 )
+from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
@@ -90,25 +92,39 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
+async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
+    """Retry transient snapshot metadata reads within the caller's startup deadline."""
+    backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
+    attempts = 0
+    while True:
+        try:
+            return await client.snapshot.get(name)
+        except DaytonaError as error:
+            attempts += 1
+            if error.status_code not in (502, 503, 504) or attempts == 3:
+                raise
+            await sleep(backoff.next_interval())
+
+
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
     """Build or await a snapshot identified by its source and resource requirements."""
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
-        snapshot = await client.snapshot.get(name)
+        snapshot = await _snapshot_metadata(client, name)
     except DaytonaNotFoundError:
         image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
         try:
             snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client or event loop.
-            snapshot = await client.snapshot.get(name)
+            snapshot = await _snapshot_metadata(client, name)
     backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
         await asyncio.sleep(backoff.next_interval())
-        snapshot = await client.snapshot.get(name)
+        snapshot = await _snapshot_metadata(client, name)
     return name
 
 
@@ -267,6 +283,36 @@ class DaytonaMachine:
         finally:
             await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"))
 
+    async def _stop_command(self, pidfile: str, completed_path: str) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            stopped = await self.sandbox.process.exec(
+                _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path)))
+            )
+            if stopped.exit_code:
+                raise RuntimeError(stopped.result)
+
+    async def _remove_command_files(self, prefix: str) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
+            if removed.exit_code:
+                raise RuntimeError("Cannot remove Daytona command files")
+
+    async def _cleanup_cancelled_command(
+        self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
+    ) -> None:
+        try:
+            if started:
+                await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
+                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+            else:
+                await finish_owned(own_cleanup(self.close()))
+        except BaseException as cleanup_error:
+            cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
+            try:
+                await finish_owned(own_cleanup(self.close()))
+            except BaseException as close_error:
+                cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
@@ -342,31 +388,26 @@ class DaytonaMachine:
             if not started:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             try:
-                async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                    stopped = await self.sandbox.process.exec(
-                        _control_command(
-                            shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))
-                        )
-                    )
-                    if stopped.exit_code:
-                        raise RuntimeError(stopped.result)
+                await self._stop_command(pidfile, completed_path)
+            except asyncio.CancelledError as cancellation:
+                primary_error = cancellation
+                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+                raise
             except Exception as error:
                 await self.close()
                 raise RuntimeError("Cannot stop the Daytona command process group") from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError:
-            await self.close()
+        except asyncio.CancelledError as cancellation:
+            primary_error = cancellation
+            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
             raise
         except BaseException as error:
             primary_error = error
             raise
         finally:
-            if not self._closed:
+            if not self._closed and not isinstance(primary_error, asyncio.CancelledError):
                 try:
-                    async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                        removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
-                        if removed.exit_code:
-                            raise RuntimeError("Cannot remove Daytona command files")
+                    await self._remove_command_files(prefix)
                 except asyncio.CancelledError:
                     await self.close()
                     raise

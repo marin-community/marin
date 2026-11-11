@@ -231,7 +231,7 @@ fn build_projection_files(
     projections
 }
 
-fn projection_covers(
+pub(crate) fn projection_covers(
     reference: &ProjectionReference,
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
@@ -278,26 +278,7 @@ fn build_access_plans(
         let Some(index) = indices.exact(&segment, SectionKind::ExactPostings) else {
             continue;
         };
-        let mut selected: Option<Vec<RowRun>> = None;
-        for (column_name, values) in constraints {
-            let Some(column) = index.columns.get(column_name) else {
-                continue;
-            };
-            if !values.iter().all(|value| column.rows.contains_key(value)) {
-                continue;
-            }
-            let union = coalesce_runs(
-                values
-                    .iter()
-                    .flat_map(|value| column.rows[value].iter().copied())
-                    .collect(),
-            );
-            selected = Some(match selected {
-                None => union,
-                Some(current) => intersect_runs(&current, &union),
-            });
-        }
-        let Some(selected) = selected else {
+        let Some(selected) = selected_runs(&index, constraints) else {
             continue;
         };
         let segment_selected_rows = selected.iter().map(|run| run.len).sum::<u64>();
@@ -331,7 +312,33 @@ fn build_access_plans(
     plans
 }
 
-fn exact_postings_may_cover(
+pub(crate) fn selected_runs(
+    index: &crate::indices::exact::ExactSection,
+    constraints: &HashMap<String, Vec<String>>,
+) -> Option<Vec<RowRun>> {
+    let mut selected: Option<Vec<RowRun>> = None;
+    for (column_name, values) in constraints {
+        let Some(column) = index.columns.get(column_name) else {
+            continue;
+        };
+        if !values.iter().all(|value| column.rows.contains_key(value)) {
+            continue;
+        }
+        let union = coalesce_runs(
+            values
+                .iter()
+                .flat_map(|value| column.rows[value].iter().copied())
+                .collect(),
+        );
+        selected = Some(match selected {
+            None => union,
+            Some(current) => intersect_runs(&current, &union),
+        });
+    }
+    selected
+}
+
+pub(crate) fn exact_postings_may_cover(
     header: &crate::indices::format::BundleHeader,
     constraints: &HashMap<String, Vec<String>>,
 ) -> bool {
@@ -359,7 +366,7 @@ fn exact_postings_may_cover(
     })
 }
 
-fn postings_are_selective(selected_rows: u64, total_rows: u64) -> bool {
+pub(crate) fn postings_are_selective(selected_rows: u64, total_rows: u64) -> bool {
     total_rows > 0
         && selected_rows.saturating_mul(MAX_POSTINGS_SELECTED_DENOMINATOR)
             <= total_rows.saturating_mul(MAX_POSTINGS_SELECTED_NUMERATOR)
@@ -388,7 +395,7 @@ fn intersect_runs(left: &[RowRun], right: &[RowRun]) -> Vec<RowRun> {
     out
 }
 
-fn runs_access_plan(runs: &[RowRun], row_group_rows: &[usize]) -> ParquetAccessPlan {
+pub(crate) fn runs_access_plan(runs: &[RowRun], row_group_rows: &[usize]) -> ParquetAccessPlan {
     let mut plan = ParquetAccessPlan::new_all(row_group_rows.len());
     let mut group_start = 0_u64;
     let mut run_index = 0;
@@ -425,7 +432,7 @@ fn runs_access_plan(runs: &[RowRun], row_group_rows: &[usize]) -> ParquetAccessP
     plan
 }
 
-fn intersect_access_plans(
+pub(crate) fn intersect_access_plans(
     existing: &ParquetAccessPlan,
     additional: &ParquetAccessPlan,
 ) -> Option<ParquetAccessPlan> {

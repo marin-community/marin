@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult, JobStats
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, ExceptionInfo, TrialResult
 from harbor.models.verifier.result import VerifierResult
 from harbor.tasks.client import TaskClient
@@ -29,7 +29,7 @@ async def test_worker_runs_outside_checkout_with_launcher_package_shadowed(tmp_p
     monkeypatch.chdir(tmp_path)
     async with asyncio.timeout(60), HarborTrialClient(environment) as client:
         with pytest.raises(RuntimeError, match="explicit tasks"):
-            await client.run({"job": {"tasks": []}, "reward_key": "reward"}, 0)
+            await client.run({"job": {"agents": [{}], "tasks": []}, "reward_key": "reward"}, 0)
 
 
 @pytest.mark.asyncio
@@ -76,6 +76,7 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
         check=True,
     )
     config = JobConfig(
+        agents=[AgentConfig()],
         tasks=[
             TaskConfig(
                 path=f"task-{index}",
@@ -113,6 +114,7 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
 async def test_worker_preserves_task_download_stderr(tmp_path):
     cohort = {
         "job": {
+            "agents": [{}],
             "tasks": [
                 {
                     "path": "task",
@@ -145,7 +147,7 @@ def test_validation_scores_preserve_infrastructure_missingness(agent_error, unsc
             trial_uri=f"/tmp/trial-{index}",
             task_id=task.get_task_id(),
             task_checksum="checksum",
-            config=TrialConfig(task=task),
+            config=TrialConfig(task=task, agent=AgentConfig()),
             agent_info=AgentInfo(name="terminus-2", version="test"),
             verifier_result=VerifierResult(rewards={"reward": score}),
         )
@@ -166,7 +168,7 @@ def test_validation_scores_preserve_infrastructure_missingness(agent_error, unsc
     result = JobResult(
         id=uuid4(), started_at=datetime.now(timezone.utc), n_total_trials=4, stats=JobStats(), trial_results=trials
     )
-    config = JobConfig(tasks=tasks)
+    config = JobConfig(agents=[AgentConfig()], tasks=tasks)
     metrics = validation_metrics(result, config, "reward")
     assert metrics == {
         "num_attempted": 4.0,
@@ -188,14 +190,14 @@ def test_validation_scores_preserve_infrastructure_missingness(agent_error, unsc
 async def test_control_socket_multiplexes_errors_without_parsing_harbor_stdout():
     async with HarborTrialClient(os.environ.copy()) as client:
         results = await asyncio.gather(
-            client.run({"job": {"tasks": []}, "reward_key": "reward"}, 0),
-            client.run({"job": {"tasks": []}, "reward_key": "reward"}, 1),
+            client.run({"job": {"agents": [{}], "tasks": []}, "reward_key": "reward"}, 0),
+            client.run({"job": {"agents": [{}], "tasks": []}, "reward_key": "reward"}, 1),
             return_exceptions=True,
         )
         client.process.terminate()
         await client.process.wait()
         async with asyncio.timeout(5):
             with pytest.raises(RuntimeError):
-                await client.run({"job": {"tasks": []}, "reward_key": "reward"}, 2)
+                await client.run({"job": {"agents": [{}], "tasks": []}, "reward_key": "reward"}, 2)
     assert len(results) == 2
     assert all(isinstance(result, RuntimeError) and "explicit tasks" in str(result) for result in results)

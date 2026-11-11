@@ -11,11 +11,11 @@ laptop's ``gcloud`` and hands it to the builder in process; the builder's module
 describes the build and push jobs and where the credential travels.
 """
 
-import argparse
-import asyncio
 import json
 import logging
 from pathlib import Path
+
+import click
 
 from taskforge.sandbox.image_builder import (
     TARGET_CLUSTER,
@@ -26,19 +26,23 @@ from taskforge.sandbox.image_builder import (
 from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--context", type=Path, required=True, help="build context directory with a Dockerfile")
-    parser.add_argument("--repository", required=True, help="repository under the registry, e.g. capability-infra/x")
-    parser.add_argument("--cluster", default="marin")
-    parser.add_argument("--target-cluster", default=TARGET_CLUSTER)
-    args = parser.parse_args()
+@click.command(help=__doc__.split("\n\n")[0])
+@click.option(
+    "--context",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="build context directory with a Dockerfile",
+)
+@click.option("--repository", required=True, help="repository under the registry, e.g. capability-infra/x")
+@click.option("--cluster", default="marin", show_default=True)
+@click.option("--target-cluster", default=TARGET_CLUSTER, show_default=True)
+def main(context: Path, repository: str, cluster: str, target_cluster: str) -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)  # blob redirects carry presigned object-store URLs
-    build = docker_build_from_directory(args.context, BUILD_LIMITS)
+    build = docker_build_from_directory(context, BUILD_LIMITS)
     credential = RegistryCredential.from_json(registry_credential_json())
-    builder = IrisImageBuilder(cluster=args.cluster, target_cluster=args.target_cluster, credential=credential)
-    published = asyncio.run(builder.publish_with_timings(build, args.repository))
+    builder = IrisImageBuilder(cluster=cluster, target_cluster=target_cluster, credential=credential)
+    published = builder.publish_with_timings(build, repository)
     print(
         json.dumps(
             {

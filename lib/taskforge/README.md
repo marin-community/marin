@@ -132,12 +132,13 @@ spec, so a move of either is a single-site change.
   that has neither.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or
   `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
-- `spec.draft.lower(task, *, host, task_machine, verifier_machine, limits, factories)` runs
+- `spec.draft.lower(task, *, task_machine, verifier_machine, limits, factories)` runs
   each machine on `host_requirements` for `factories`: with the local backend, the grader base image
   runs there. A package machine always lowers onto the local backend, so on a host without one
   `lower` refuses it: `RolloutEngine.check` finds no factory for it. It
-  picks the host's container backend for an image, the local backend for Linux processes without
-  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
+  picks the one container backend (`GVISOR` or `DOCKER`) among `factories` for an image, the local
+  backend for Linux processes without one, and ShellSim otherwise, so a lowered spec is bound to its
+  host's factories. A grader with an environment,
   other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
   from `rollout_limits(...)`, which sets no token budget. The spec names the harness `TOOL_HARNESS`,
   and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).
@@ -152,9 +153,8 @@ spec, so a move of either is a single-site change.
   and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
   answer parser. `validate_controls(task, controls)` checks a set against its task.
 - `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
-  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. Before a trial
-  starts, `task_refusals(spec, factories)` asks each factory to check its machine requirements.
-  `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
+  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. `spec.draft.lower`
+  checks a spec's machines against them through `RolloutEngine.check` before any machine starts.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
@@ -168,7 +168,7 @@ process are preferred whenever a task fits one.
 
 Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
 `Backend` values the run uses. A requested backend that cannot start on the host raises during
-factory construction; the selection never silently shrinks. Supply a controller URL exactly when
+factory construction; the selection never silently shrinks. Supply a controller URL when
 selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
 
 Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and

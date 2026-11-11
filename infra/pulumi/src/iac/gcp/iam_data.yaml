@@ -102,6 +102,8 @@ principals:
   human-083: CiQAKk3j6SX9u75usByZQNHcd7nR3vkO13UjVQzqTohBxMnr0scSOwCdtF6ic3+ZFam+8gZChvLRFffhKylT69cpaS+pn9s9eq1qZGXJ9qr1EPH+Ziuk05HmDNztoE3ti/IK
   human-084: CiQAKk3j6Xrq0G/br1n7sCIvxzhuLHznteABVTO6Ba+eB+jGAt4SOgCdtF6injMsVuc9KR7FFzsJEXdgenpBDm0O31y6Kv/xpSSwmfHI8QxXDk1ybKLfTHDkUlheQD1Mrfw=
   human-085: CiQAKk3j6WnrTfIdJ+loS/2XSTZ1KVXAqzZvH7VU/GzZo//Df40SPQCdtF6imiI9+gdIG0pHz3gj//cyBLqaqRqQKu4ZdV6Z9UDuQmdfs1FgoOaW/RJ/l6XdGQnn2tZRmfc/oQM=
+  human-086: CiQAKk3j6TkS9Kg+HpW94wyxOol/M2lrg+wS0KRRPeA/SjnBH2ASRgCdtF6iHtVcYb9YeS0Y925rDEikAP94HWOWtav7Yk+3O9RGlrwW5e1whZhJk8OVZNHnGOzDgJYgabUEqocg/ZVAlGR+ZZo=
+  human-087: CiQAKk3j6fDJkVG4K0pRJqsxl4rkHJRQ+6wUH/yrmJQKL2ogpgISRgCdtF6imSu5bC2e+w7RJZErdbR+RAAbEqTV99jp1e4jYdfGaeLel7KBk15MUsispp2+K53WXXmj8cmEcZ4vOw2+fAQH65M=
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -968,6 +970,8 @@ project_grants:
   - principal: human-083
   - principal: human-084
   - principal: human-085
+  - principal: human-086
+  - principal: human-087
 - role: projects/hai-gcp-models/roles/ray1
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
@@ -1107,6 +1111,7 @@ project_grants:
   - principal: human-006
   - principal: human-026
   - principal: human-078
+  - principal: human-082
 - role: roles/compute.networkViewer
   members:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
@@ -1119,6 +1124,7 @@ project_grants:
   - principal: human-064
   - principal: human-012
   - principal: human-006
+  - principal: human-082
 - role: roles/compute.osLogin
   members:
   - serviceAccount:claude-tunix-agent@hai-gcp-models.iam.gserviceaccount.com
@@ -1186,6 +1192,7 @@ project_grants:
   - principal: human-012
   - principal: human-006
   - principal: human-055
+  - principal: human-082
 - role: roles/eventarc.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-eventarc.iam.gserviceaccount.com
@@ -1237,6 +1244,7 @@ project_grants:
   members:
   - principal: human-032
   - principal: human-064
+  - principal: human-082
 - role: roles/logging.admin
   members:
   - serviceAccount:github-actions-logging@hai-gcp-models.iam.gserviceaccount.com

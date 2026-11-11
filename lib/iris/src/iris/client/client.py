@@ -929,6 +929,7 @@ class IrisClient:
         max_retries_preemption: int = 1000,
         max_task_failures: int = 0,
         timeout: Duration | None = None,
+        termination_grace: Duration | None = None,
         user: str | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
@@ -959,6 +960,7 @@ class IrisClient:
                 it fails (default: 0 = fail on the first failure). Counts across retries,
                 so set this to allow a job to ride out a few inconsistent failures.
             timeout: Per-task timeout (None = no timeout)
+            termination_grace: Time for graceful SIGTERM shutdown (None uses the controller default)
             user: Optional explicit user override for top-level jobs
             task_image: Optional override for the task container image. When None,
                 the worker uses its cluster-configured default_task_image. Used for
@@ -1096,6 +1098,7 @@ class IrisClient:
                 max_retries_preemption=max_retries_preemption,
                 max_task_failures=max_task_failures,
                 timeout=timeout,
+                termination_grace=termination_grace,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,

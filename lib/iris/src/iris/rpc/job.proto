@@ -741,6 +741,8 @@ message RunTaskRequest {
   string bundle_id = 5;
   ResourceSpecProto resources = 6;
   iris.time.Duration timeout = 7;
+  // Controller-resolved SIGTERM-to-SIGKILL budget, excluding runtime teardown.
+  iris.time.Duration termination_grace = 19;
   repeated string ports = 8;
   int32 attempt_id = 9;
   repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata

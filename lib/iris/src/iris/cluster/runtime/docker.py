@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
@@ -58,6 +58,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import resolve_container_profile
 
@@ -743,6 +744,8 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
         if config.attempt_uid:
             cmd.extend(["--label", f"iris.attempt_uid={config.attempt_uid}"])
+        if config.termination_grace is not None:
+            cmd.extend(["--label", f"iris.termination_grace_ms={config.termination_grace.to_ms()}"])
         if config.worker_id:
             cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
         # Phase label: used during adoption to distinguish adoptable run
@@ -1093,6 +1096,7 @@ class DockerRuntime:
 
             task_id = labels.get("iris.task_id", "")
             attempt_id_str = labels.get("iris.attempt_id")
+            termination_grace_ms = labels.get("iris.termination_grace_ms")
             if not task_id or attempt_id_str is None:
                 # Missing required labels — cannot adopt
                 continue
@@ -1117,6 +1121,11 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
+                    termination_grace=(
+                        Duration.from_ms(int(termination_grace_ms))
+                        if termination_grace_ms is not None
+                        else DEFAULT_TERMINATION_GRACE
+                    ),
                     ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )
