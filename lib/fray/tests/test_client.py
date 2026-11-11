@@ -9,7 +9,14 @@ import time
 import pytest
 from fray.client import JobAlreadyExists, JobFailed, wait_all
 from fray.local_backend import LocalClient
-from fray.types import Entrypoint, JobRequest, JobStatus
+from fray.types import Entrypoint, GpuConfig, JobRequest, JobStatus
+
+
+@pytest.mark.parametrize("dtype, per_gpu_flops", [("bf16", 2.5e15), ("fp32", 80e12)])
+def test_gb200_config_reports_per_gpu_and_total_flops(dtype, per_gpu_flops):
+    device = GpuConfig(variant="GB200", count=4)
+    assert device.device_flops(dtype) == per_gpu_flops
+    assert device.total_flops(dtype) == 4 * per_gpu_flops
 
 
 @pytest.fixture

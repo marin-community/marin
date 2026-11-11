@@ -18,8 +18,12 @@ from harbor.host_capabilities import DaytonaConnection, HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from marinskyrl.harbor_environments import (
+    HarborTaskBinding,
+    apply_task_binding,
+)
 from marinskyrl.resource_locator import join_resource_path
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
@@ -57,6 +61,7 @@ class InstalledAgentSettings(BaseModel):
     cleanup_timeout: float
     service_startup_timeout: float
     service_shutdown_timeout: float
+    task_bindings: dict[str, HarborTaskBinding] = Field(default_factory=dict)
     trial_reward_key: str = "reward"
 
     @model_validator(mode="before")
@@ -204,7 +209,11 @@ class InstalledAgentRuntime:
         try:
             task_dir = evidence / "task"
             restore_harbor_trial_task(lowered.task, task_dir)
+            binding = self.settings.task_bindings.get(lowered.task.id)
+            config = apply_task_binding(config, binding)
             environment = config.environment
+            if binding is not None:
+                environment = environment.model_copy(update=binding.environment_resources.model_dump(exclude_none=True))
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
             async with self._served_agent(

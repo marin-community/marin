@@ -37,6 +37,7 @@ class Mode(StrEnum):
     NUMERIC = "numeric"
     EXACT = "exact"
     STRUCTURE_CLOSURE = "structure_closure"
+    REASONING_MARKUP = "reasoning_markup"
     JSON_SCHEMA = "json-schema"
     XML_ELEMENTS = "xml-elements"
     CSV_COLUMNS = "csv-columns"
@@ -101,6 +102,14 @@ class FunctionCall:
 @dataclass(frozen=True)
 class UnsolvableSpec:
     """A private task label requiring a validated terminal ejection for credit."""
+
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
+class ReasoningMarkupSpec:
+    """Grade decoded reply markers, assuming the prompt opened no span. Length stops excuse open spans."""
 
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
@@ -367,6 +376,7 @@ Spec = (
     | NumericSpec
     | ExactSpec
     | StructureClosureSpec
+    | ReasoningMarkupSpec
     | JsonSchemaSpec
     | XmlElementsSpec
     | CsvColumnsSpec
@@ -424,6 +434,11 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
         StructureClosureSpec,
         "grade_structure_closure",
         CandidateEntrypoints("validate_structure_closure", "grade_structure_closure_candidate"),
+    ),
+    Mode.REASONING_MARKUP: ModeDescriptor(
+        ReasoningMarkupSpec,
+        "grade_reasoning_markup",
+        CandidateEntrypoints("validate_reasoning_markup", "grade_reasoning_markup_candidate"),
     ),
     Mode.JSON_SCHEMA: ModeDescriptor(
         JsonSchemaSpec,

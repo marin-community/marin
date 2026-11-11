@@ -757,7 +757,16 @@ class CloudK8sService:
                                 stdout=stdout,
                                 stderr="\n".join(part for part in (stderr, timeout_error) if part),
                             )
-                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                        try:
+                            returncode = resp.returncode
+                        except ValueError as exc:
+                            # kubernetes-client parses a failed exec's error-channel cause as an integer exit code.
+                            return ExecResult(
+                                returncode=1,
+                                stdout=stdout,
+                                stderr="\n".join(part for part in (stderr, str(exc)) if part),
+                            )
+                        return ExecResult(returncode=returncode, stdout=stdout, stderr=stderr)
                     finally:
                         resp.close()
             except (ApiException, TransportError) as e:
