@@ -389,7 +389,7 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     """Submit one export job, verify synchronous output, and persist request state."""
     export_path = policy_export_path(spec.request.export_path, spec.request.step)
-    if _has_completed_hf_model_export(export_path):
+    if spec.request.hf_hub_repo_id is None and _has_completed_hf_model_export(export_path):
         _write_hf_export_request(spec.request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
         print(f"[export-hf] reused verified global_step_{spec.request.step} export")
         return

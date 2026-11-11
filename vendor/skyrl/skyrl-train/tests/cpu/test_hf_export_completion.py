@@ -11,6 +11,8 @@ from skyrl_train.hf_model_io import has_completed_hf_model_export, verify_comple
 def test_completed_export_can_be_reused_and_partial_export_cannot(tmp_path):
     (tmp_path / "config.json").write_text("{}")
     (tmp_path / "tokenizer.json").write_text("{}")
+    (tmp_path / "chat_templates").mkdir()
+    (tmp_path / "chat_templates" / "tool.jinja").write_text("{{ messages }}")
     save_file({"weight": np.arange(4, dtype=np.float32)}, tmp_path / "model-00001-of-00001.safetensors")
     write_local_model_manifest(tmp_path)
 
@@ -32,6 +34,7 @@ def test_completed_export_rejects_index_header_disagreement(tmp_path):
 
     with pytest.raises(ValueError, match="does not match its shards"):
         verify_completed_hf_model_export(str(tmp_path))
+    assert not has_completed_hf_model_export(str(tmp_path))
 
 
 def test_completed_export_rejects_shard_size_change(tmp_path):
@@ -45,3 +48,4 @@ def test_completed_export_rejects_shard_size_change(tmp_path):
 
     with pytest.raises(RuntimeError, match="shard size differs from manifest"):
         verify_completed_hf_model_export(str(tmp_path))
+    assert not has_completed_hf_model_export(str(tmp_path))

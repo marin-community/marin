@@ -12,6 +12,7 @@ class _Request:
     export_path: str = "/tmp/export"
     step: int = 10
     status: HFExportStatus = HFExportStatus.PENDING
+    hf_hub_repo_id: str | None = None
 
     def with_status(self, status: HFExportStatus, **_updates) -> "_Request":
         return replace(self, status=status)
@@ -40,3 +41,17 @@ def test_conversion_without_a_completed_export_returns_request_to_pending(monkey
         export_hf_checkpoint.submit_requested_export(SimpleNamespace(request=_Request(), timeout=60), ["convert"])
 
     assert [request.status for request in written] == [HFExportStatus.IN_PROGRESS, HFExportStatus.PENDING]
+
+
+def test_hub_request_runs_publication_even_when_local_export_is_complete(monkeypatch):
+    written = []
+    conversions = []
+    monkeypatch.setattr(export_hf_checkpoint, "_has_completed_hf_model_export", lambda _path: True)
+    monkeypatch.setattr(export_hf_checkpoint, "_write_hf_export_request", written.append)
+    monkeypatch.setattr(export_hf_checkpoint, "_run_export", lambda *_args: conversions.append(True))
+
+    request = _Request(hf_hub_repo_id="org/model")
+    export_hf_checkpoint.submit_requested_export(SimpleNamespace(request=request, timeout=60), ["convert"])
+
+    assert conversions == [True]
+    assert [entry.status for entry in written] == [HFExportStatus.IN_PROGRESS, HFExportStatus.COMPLETE]

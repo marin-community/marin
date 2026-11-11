@@ -82,8 +82,9 @@ def verify_completed_hf_model_export(export_path: str) -> None:
         index_bytes = source.read()
     weight_map = json.loads(index_bytes)["weight_map"]
     manifest_files = {entry.path: entry.size for entry in manifest.files}
-    export_files = {Path(path).name for path in io.list_dir(export_path)}
-    if missing := set(manifest_files) - export_files:
+    if missing := {
+        path for path in manifest_files if not io.exists(join_resource_path(export_path, path))
+    }:
         raise RuntimeError(f"HF export is missing manifest files at {export_path}: {sorted(missing)[:5]}")
     shards = set(weight_map.values())
     if not shards.issubset(manifest_files):
@@ -108,7 +109,11 @@ def has_completed_hf_model_export(export_path: str) -> bool:
         return False
     if not io.exists(join_resource_path(export_path, HF_WEIGHT_INDEX_FILENAME)):
         return False
-    verify_completed_hf_model_export(export_path)
+    try:
+        verify_completed_hf_model_export(export_path)
+    except (RuntimeError, ValueError) as error:
+        logger.warning(f"HF export at {export_path} is not reusable: {error}")
+        return False
     return True
 
 
