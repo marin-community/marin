@@ -9,7 +9,9 @@ one immutable Hugging Face revision. None has a conversion recipe: campaign
 admission, split assignment and qualification evidence already live in the
 release itself, so re-converting them here would invent a second provenance.
 
-Container-backed cohorts additionally carry host-local Docker image locators.
+The rebuilt CalibForge cohort is the exception: it is a converted dataset published
+from this repository, so it is imported through ``prebuilt.import_prebuilt`` and is
+runnable. The rest carry host-local Docker image locators.
 Their screened public releases record instruction text and identity but no image
 bytes or verifier material, so no machine can execute these tasks from the public
 release alone. Treat every entry as a data pointer, not a runnable pipeline.
@@ -23,6 +25,7 @@ from finestore.rl.curation import (
     Verdict,
 )
 
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
 TASK_TROVE_PUBLIC = "open-athena/task-trove"
@@ -95,6 +98,14 @@ def sources() -> list[RlDataSource]:
             )
         ),
         RlDataSource(
+            pipeline=import_prebuilt,
+            config=PrebuiltCohort(
+                name="calibforge-v1-rebuilt",
+                version="1",
+                repo="open-athena/calibforge-v1-rebuilt-taskcompendium-20261111",
+                revision="8f00c12884d6a68107b245e7c98711b6bd64f4af",
+                expected_rows=1357,
+            ),
             info=SourceInfo(
                 id="Campaign Release:smartie-calibforge-rebuilt-v1",
                 title="Snowball Smartie CalibForge V1 rebuilt cohort (TaskCompendium)",
@@ -137,7 +148,7 @@ def sources() -> list[RlDataSource]:
                     "https://huggingface.co/datasets/open-athena/calibforge-v1-rebuilt-taskcompendium-20261111"
                     "/tree/8f00c12884d6a68107b245e7c98711b6bd64f4af",
                 ),
-            )
+            ),
         ),
         RlDataSource(
             info=SourceInfo(
