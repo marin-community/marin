@@ -133,13 +133,6 @@ def _result(
     )
 
 
-def _receipt(config: DictConfig, result: LaunchResult) -> dict[str, Any]:
-    return {
-        "config": OmegaConf.to_container(config, resolve=True),
-        "result": result.model_dump(mode="json"),
-    }
-
-
 def _record_failure(
     config: DictConfig,
     outcome: LaunchOutcome,
@@ -150,10 +143,10 @@ def _record_failure(
     return result
 
 
-def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> None:
+def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchReceipt:
     export_root = str(config.artifacts.export_root)
     record = read_attempt(export_root, str(config.run.attempt_id))
-    receipt = LaunchReceipt.model_validate(_receipt(config, result))
+    receipt = LaunchReceipt(config=OmegaConf.to_container(config, resolve=True), result=result)
     if record is None:
         record = AttemptRecord(run_id=str(config.run.id), attempt_id=str(config.run.attempt_id), launch=receipt)
     else:
@@ -162,6 +155,7 @@ def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> None:
         tables = register_run_tables(store)
         write_attempt(tables.attempts, record)
         store.flush()
+    return receipt
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
@@ -221,9 +215,8 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
-    payload = _receipt(config, result)
-    _write_attempt_receipt(config, result)
-    write_json(terminal_receipt_uri, payload)
+    receipt = _write_attempt_receipt(config, result)
+    write_json(terminal_receipt_uri, receipt.model_dump(mode="json"))
     return result
 
 

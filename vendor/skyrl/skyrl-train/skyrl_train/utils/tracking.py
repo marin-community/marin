@@ -19,6 +19,7 @@ import dataclasses
 import json
 from enum import Enum
 from functools import partial
+from pathlib import Path
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
@@ -300,6 +301,8 @@ class _RecordsAdapter:
             raise RuntimeError("Start the records execution before logging metrics")
         rows = []
         for name, value in data.items():
+            if name == "metric_attempt_ids":
+                raise ValueError("metric_attempt_ids is reserved for metric provenance")
             if name in ("step", "attempt_id"):
                 expected = step if name == "step" else self.attempt_id
                 if value != expected:

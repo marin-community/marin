@@ -12,13 +12,25 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO
 
 import pytest
 import yaml
-from finestore.rl.run_records import attempt_tracking, read_attempt, read_attempt_metrics
+from finestore.rl.run_records import (
+    AttemptRecord,
+    LaunchState,
+    attempt_tracking,
+    read_attempt,
+    read_attempt_metrics,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+)
+from finestore.store import DataStore
+from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -701,6 +713,8 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["records", "wandb"])
     launch_path = tmp_path / "launch.yaml"
     launch_path.write_text(yaml.safe_dump(launch))
+    (tmp_path / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
+    assert read_skyrl_metrics(str(tmp_path)) == {}
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "IRIS_TASK_ID"):
         environment.pop(key, None)
@@ -709,6 +723,7 @@ import json
 import sys
 from pathlib import Path
 from omegaconf import OmegaConf, open_dict
+from unittest.mock import patch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch import LaunchOutcome, execute_launch
 from cloud.iris.launch_config import load_launch_config
@@ -717,7 +732,7 @@ from marinskyrl.checkpoint_paths import policy_export_path
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from skyrl_train.hf_export_schema import HFExportRequest
 from skyrl_train.utils.tracking import Tracking
-from finestore.rl.run_records import CheckpointReference
+from finestore.rl.run_records import CheckpointReference, read_attempt
 
 path = Path(sys.argv[1])
 root = path.parent
@@ -762,6 +777,10 @@ else:
 with Tracking("tests-project", "history", "records", history_config("rewind", root / "exports")) as rewind:
     rewind.start(resumed_step=1, checkpoint=parent.model_copy(update={"step": 1}))
     rewind.log({"loss": 2.5}, step=2)
+with Tracking("tests-project", "history", "records", history_config("rewind-middle", root / "exports")) as rewind:
+    rewind.start(resumed_step=2,
+        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=2))
+    rewind.log({"loss": 9.3}, step=3)
 with Tracking("tests-project", "history", "records", history_config("stage", root / "exports")) as stage:
     stage.start(resumed_step=0,
         checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
@@ -790,10 +809,15 @@ class LocalBackend:
             with open_dict(config.skyrl):
                 config.skyrl.runtime = {"run_id": config.run.id, "attempt_id": config.run.attempt_id,
                     "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
-            _start_attempt_record(config)
+            with patch("cloud.iris.skyrl_entrypoint.version", return_value="fixture-vllm"):
+                _start_attempt_record(config)
+            startup = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
+            assert startup is not None and startup.vllm_version == "fixture-vllm"
+            (root / "startup-observation.json").write_text(startup.model_dump_json())
             with Tracking("tests-project", "record-boundary", "records", config.skyrl) as tracker:
                 tracker.start(resumed_step=5,
                     checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
+                tracker.log({"startup/resume": 0.05}, step=5)
                 tracker.log({"loss": 0.25}, step=6)
                 tracker.log({"entropy": 0.75}, step=6)
             checkpoints = Path(config.artifacts.checkpoint_root)
@@ -860,12 +884,24 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     metrics = read_skyrl_metrics(str(tmp_path))
     assert list(metrics) == list(range(7))
     assert [row["loss"] for row in metrics.values()] == [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.25]
-    assert metrics[6] == {"step": 6, "attempt_id": config.attempt_id, "loss": 0.25, "entropy": 0.75}
+    assert metrics[6] == {
+        "step": 6,
+        "attempt_id": config.attempt_id,
+        "loss": 0.25,
+        "entropy": 0.75,
+        "metric_attempt_ids": {"loss": config.attempt_id, "entropy": config.attempt_id},
+    }
+    assert metrics[5]["attempt_id"] == config.attempt_id
+    assert metrics[5]["metric_attempt_ids"] == {"loss": "middle", "startup/resume": config.attempt_id}
     assert receipt.parent is not None and receipt.parent.attempt_id == "middle"
     assert receipt.metrics_started_at is not None and receipt.started_at is not None
+    startup = AttemptRecord.model_validate_json((tmp_path / "startup-observation.json").read_text())
+    assert receipt.started_at == startup.started_at and receipt.vllm_version == startup.vllm_version == "fixture-vllm"
     export_root = str(tmp_path / "exports")
     rewind = read_attempt_metrics(export_root, "rewind")
     assert list(rewind) == [0, 1, 2] and rewind[2]["loss"] == 2.5
+    middle_rewind = read_attempt_metrics(export_root, "rewind-middle")
+    assert list(middle_rewind) == [0, 1, 2, 3] and middle_rewind[3]["loss"] == 9.3
     stage = read_attempt_metrics(export_root, "stage")
     assert list(stage) == [0, 1] and [row["loss"] for row in stage.values()] == [9, 8]
     assert read_attempt(export_root, "stage").parent.step == 5
@@ -873,6 +909,37 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
     assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
+    pending = receipt.model_copy(
+        update={
+            "launch": receipt.native.model_copy(
+                update={"result": receipt.native.result.model_copy(update={"state": LaunchState.SUBMITTED})}
+            )
+        }
+    )
+    with DataStore.open(run_records_root(export_root)) as store:
+        write_attempt(register_run_tables(store).attempts, pending)
+        store.flush()
+
+    @contextmanager
+    def controller(**_kwargs):
+        yield SimpleNamespace(url="http://controller.test", credentials=None)
+
+    @contextmanager
+    def rpc(*_args):
+        job = job_pb2.JobStatus(
+            job_id=f"/tests/{receipt.native.config['iris']['job_name']}", state=job_pb2.JOB_STATE_FAILED
+        )
+        yield SimpleNamespace(list_jobs=lambda _query: controller_pb2.Controller.ListJobsResponse(jobs=[job]))
+
+    with monkeypatch.context() as network:
+        network.setattr("marin.rl.skyrl.connect_controller", controller)
+        network.setattr("marin.rl.skyrl.rpc_client", rpc)
+        refreshed = read_skyrl_launch_receipt(str(tmp_path))
+    assert refreshed is not None and refreshed.native.result.state == "failed"
+    assert refreshed.started_at == startup.started_at and refreshed.vllm_version == "fixture-vllm"
+    with DataStore.open(run_records_root(export_root)) as store:
+        write_attempt(register_run_tables(store).attempts, receipt)
+        store.flush()
     (tmp_path / "resolved-launch.yaml").write_text(
         yaml.safe_dump({"config": attempts["earlier-failed-attempt"].native.config})
     )
@@ -1136,3 +1203,9 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
         policy_identity.tokenizer_uri,
         policy_identity.tokenizer_revision,
     )
+    assert evaluated.identity == evaluation_identity.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
+    assert evaluation_identity.location == f"tests/finished@2026.10.26:{source.fingerprint()}/policy"
+    other = ArtifactStep.adopt("tests/other-policy", "v2", str(root), kind=SkyRLRun)
+    other_model = resolve_skyrl_model(StepContext.for_fingerprint({}, (other,)), other, evaluation)
+    assert other_model.identity == f"tests/other-policy@v2:{other.fingerprint()}"
+    assert other_model.location == f"tests/other-policy@v2:{other.fingerprint()}/policy"

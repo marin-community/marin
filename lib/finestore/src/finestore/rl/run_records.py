@@ -188,6 +188,8 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
             views[export_root] = ReadView(run_records_root(export_root))
         record = _attempt(views[export_root], attempt_id)
         if record is None:
+            if not history:
+                return ()
             raise FileNotFoundError(f"Checkpoint ancestry has no attempt {attempt_id} at {export_root}")
         history.append(AttemptHistory(export_root, record, through_step))
         if record.resumed_step is None or record.resumed_step == 0:
@@ -205,7 +207,11 @@ def attempt_lineage(export_root: str, attempt_id: str) -> tuple[AttemptHistory, 
 
 
 def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[str, Any]]:
-    """Read one attempt's metrics with checkpoint ancestors capped at resume bounds."""
+    """Join bounded history by step, retaining each metric's source attempt.
+
+    The step's attempt_id names its latest contributor; metric_attempt_ids
+    identifies the writer of each numeric value in a joined step.
+    """
     views: dict[str, ReadView] = {}
     history = _lineage(export_root, attempt_id, views)
     metrics: dict[int, dict[str, Any]] = {}
@@ -216,7 +222,9 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
             step = row["step"]
             if entry.through_step is not None and step > entry.through_step:
                 continue
-            values = metrics.setdefault(step, {"step": step, "attempt_id": entry.record.attempt_id})
+            values = metrics.setdefault(step, {"step": step, "metric_attempt_ids": {}})
+            values["attempt_id"] = entry.record.attempt_id
+            values["metric_attempt_ids"][row["name"]] = entry.record.attempt_id
             values[row["name"]] = row["value"]
     return dict(sorted(metrics.items()))
 
