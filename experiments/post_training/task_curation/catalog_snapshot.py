@@ -28,6 +28,7 @@ from finestore.rl.curation import (
     ControlCounts,
     ControlSummary,
     CurationCatalog,
+    CurationMode,
     CurationSummary,
     CurrentCatalog,
     JudgmentStatus,
@@ -58,7 +59,7 @@ def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
         )
     return CurationSummary(
         status=manifest["status"],
-        mode=manifest["mode"],
+        mode=CurationMode(manifest["mode"]),
         **{
             key: manifest.get(key)
             for key in (
