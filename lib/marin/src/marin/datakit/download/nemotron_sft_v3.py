@@ -34,6 +34,25 @@ MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
 _RESTORED_CHAT_PARTITION = "chat"
+_OPENCODE_FAMILY = "opencode_v1"
+_OPENCODE_PARTITIONS = (
+    "bash_only_tool_skills",
+    "bash_only_tool",
+    "general",
+    "question_tool",
+    "agent_skills",
+    "agent_skills_question_tool",
+)
+# Conversion fixes made after TRANSFORM_VERSION are versioned per partition, so every other partition keeps its cache.
+_PARTITION_TRANSFORM_VERSIONS = MappingProxyType(
+    {
+        **{(_OPENCODE_FAMILY, partition): "2026.11.11.unquoted-prompt" for partition in _OPENCODE_PARTITIONS},
+        ("agentic_v1", "tool_calling"): "2026.11.11.no-empty-system",
+        ("finance_v1", "train"): "2026.11.11.no-empty-system",
+        ("instruction_following_chat_v2", "reasoning_off"): "2026.11.11.no-empty-system",
+        ("instruction_following_chat_v2", "reasoning_on"): "2026.11.11.no-empty-system",
+    }
+)
 _SWE_V2_FAMILY = "swe_v2"
 _SWE_V2_AGENTLESS_PARTITION = "agentless"
 # The source response uses separate reasoning_content, so this wire-format request conflicts with Marin's template.
@@ -75,20 +94,10 @@ NEMOTRON_SFT_V3_REPOSITORIES: Mapping[str, tuple[str, str, Mapping[str, str]]] =
                     "tool_calling": "data/tool_calling.jsonl",
                 },
             ),
-            "opencode_v1": (
+            _OPENCODE_FAMILY: (
                 "nvidia/Nemotron-SFT-OpenCode-v1",
                 "556d5237acff203f3e1a0be49428634c3606cda2",
-                {
-                    split: f"{split}/data.jsonl"
-                    for split in (
-                        "bash_only_tool_skills",
-                        "bash_only_tool",
-                        "general",
-                        "question_tool",
-                        "agent_skills",
-                        "agent_skills_question_tool",
-                    )
-                },
+                {partition: f"{partition}/data.jsonl" for partition in _OPENCODE_PARTITIONS},
             ),
             _SWE_V2_FAMILY: (
                 "nvidia/Nemotron-SFT-SWE-v2",
@@ -263,6 +272,18 @@ def _parse_messages(value: object) -> list[dict]:
     return messages
 
 
+def _opencode_prompt(content: str, question: str) -> str:
+    """Return an OpenCode user prompt without the literal quotes that its generator added.
+
+    A top-level prompt is `"` + the row's question with `"` escaped + its `<note>` blocks + `"`.
+    Sub-agent prompts have no wrapper and differ from the question, so they are returned unchanged.
+    """
+    quoted_question = '"' + question.replace('"', '\\"')
+    if len(content) > len(quoted_question) and content.startswith(quoted_question) and content.endswith('"'):
+        return question + content[len(quoted_question) : -1]
+    return content
+
+
 def _tool_definitions(value: object) -> list[dict]:
     if value is None:
         return []
@@ -318,6 +339,28 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         if not messages:
             counters.pipeline.update_counter(f"{counter}/empty_messages_filtered", 1)
             return []
+        metadata = row.get("metadata")
+        source_train_turns = metadata.get("train_turns") if isinstance(metadata, Mapping) else None
+        if source_train_turns is not None and (
+            not isinstance(source_train_turns, list)
+            or len(source_train_turns) != len(messages)
+            or any(not isinstance(value, bool) for value in source_train_turns)
+        ):
+            raise ValueError("Source train_turns must contain one boolean per source message")
+        # The source writes a missing system prompt as an empty first message, which would render as an empty turn.
+        if messages[0].get("role") == "system" and messages[0].get("content") == "":
+            messages = messages[1:]
+            if source_train_turns is not None:
+                source_train_turns = source_train_turns[1:]
+            counters.pipeline.update_counter(f"{counter}/empty_system_message_removed", 1)
+        if family == _OPENCODE_FAMILY:
+            question = _restore_backslash_b(row.get("question"))
+            for message in messages:
+                content = message.get("content")
+                if message.get("role") == "user" and isinstance(content, str) and isinstance(question, str):
+                    message["content"] = _opencode_prompt(content, question)
+                    if message["content"] != content:
+                        counters.pipeline.update_counter(f"{counter}/prompt_quotes_removed", 1)
         if family == _SWE_V2_FAMILY and partition_name == _SWE_V2_AGENTLESS_PARTITION:
             for message in messages:
                 content = message.get("content")
@@ -352,14 +395,6 @@ def row_to_chat_doc(row: dict, *, family: str, partition_name: str) -> list[dict
         normalized_messages = [Message.from_dict(message) for message in document["messages"]]
         validate_chat_messages(normalized_messages)
         validate_tool_definitions(kwargs.get("tools", []), normalized_messages)
-        metadata = row.get("metadata")
-        source_train_turns = metadata.get("train_turns") if isinstance(metadata, Mapping) else None
-        if source_train_turns is not None and (
-            not isinstance(source_train_turns, list)
-            or len(source_train_turns) != len(messages)
-            or any(not isinstance(value, bool) for value in source_train_turns)
-        ):
-            raise ValueError("Source train_turns must contain one boolean per source message")
         document["source_train_turns"] = source_train_turns
     except (UnicodeError, ValueError) as error:
         counters.pipeline.update_counter(f"{counter}/quarantined/{type(error).__name__}", 1)
@@ -428,7 +463,11 @@ def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str
         fn=lambda output_path: _transform_chat(
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
-        hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
+        hash_attrs={
+            "family": family,
+            "partition": partition_name,
+            "version": _PARTITION_TRANSFORM_VERSIONS.get((family, partition_name), TRANSFORM_VERSION),
+        },
     )
 
 
