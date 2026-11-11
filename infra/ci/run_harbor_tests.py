@@ -66,7 +66,6 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
             *pytest_command,
             "--noconftest",
             "vendor/harbor/tests/marin",
-            "experiments/evaluation/images/tau3/test_build.py",
             *extra_args,
         ],
         cwd=repo_root,

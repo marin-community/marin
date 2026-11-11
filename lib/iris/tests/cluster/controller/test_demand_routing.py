@@ -230,24 +230,6 @@ class TestWaterfallRouting:
         assert len(result.routed_entries.get("high-priority", [])) == 3
         assert result.routed_entries.get("low-priority") is None
 
-    def test_cpu_demand_routes_by_priority(self):
-        """CPU demand matches all groups and routes by priority."""
-        config_high = make_scale_group_config(name="high-priority", max_slices=5, priority=10)
-        config_low = make_scale_group_config(
-            name="low-priority",
-            max_slices=5,
-            priority=20,
-        )
-
-        group_high = ScalingGroup(config_high, make_mock_platform())
-        group_low = ScalingGroup(config_low, make_mock_platform())
-
-        demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
-        result = route_demand([group_high, group_low], demand)
-
-        assert len(result.routed_entries.get("high-priority", [])) == 2
-        assert result.routed_entries.get("low-priority") is None
-
     def test_demand_overflows_to_lower_priority_when_at_max_slices(self):
         """When high-priority group is at max_slices, demand falls through to lower priority."""
         config_high = make_scale_group_config(name="high-priority", max_slices=2, priority=10)

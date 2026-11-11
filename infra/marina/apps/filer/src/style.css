@@ -106,6 +106,7 @@ a {
   display: flex;
   gap: 10px;
   align-items: center;
+  font-size: 12px;
 }
 .sidebar button:hover {
   background: #e9edf4;
@@ -120,7 +121,7 @@ a {
   font-size: 11px;
 }
 .section-label {
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 1.4px;
   font-weight: 650;
   color: #8490a1;
@@ -146,12 +147,24 @@ a {
   color: #8295b2;
 }
 .sidebar .recent {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #778393;
+}
+.sidebar .favorite-link {
+  color: #3d5c83;
+}
+.favorite-link span {
+  color: #b78533;
+}
+.sidebar-hint {
+  margin: 0 10px;
+  color: #8894a5;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .sidebar-foot {
   margin-top: auto;
@@ -185,8 +198,17 @@ main {
   padding: 0 32px;
   background: #fff;
 }
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.topbar-actions button {
+  padding: 4px 9px;
+  color: #60738f;
+}
 .eyebrow {
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 1.35px;
   font-weight: 650;
   color: #8490a1;
@@ -227,7 +249,7 @@ main {
   padding: 9px 12px;
   background: transparent;
   font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 .address-bar button,
 .primary {
@@ -238,6 +260,19 @@ main {
 .address-bar button span {
   opacity: 0.6;
   margin-left: 16px;
+}
+.copy-notice {
+  margin: 8px 32px 0;
+  color: #3b735b;
+  font-size: 11px;
+}
+.favorite-error {
+  margin: 8px 32px 0;
+  color: #9b4545;
+  font-size: 11px;
+}
+.mobile-favorites {
+  display: none;
 }
 .breadcrumbs {
   margin: 17px 32px 0;
@@ -269,7 +304,7 @@ main {
   margin-bottom: 24px;
 }
 .page-heading h1 {
-  font-size: 24px;
+  font-size: 26px;
   letter-spacing: -0.7px;
   font-weight: 600;
   margin: 8px 0 9px;
@@ -278,7 +313,7 @@ main {
 .page-heading p {
   margin: 0;
   color: #8792a2;
-  font-size: 11px;
+  font-size: 12px;
 }
 .page-heading p span {
   margin: 0 7px;
@@ -289,7 +324,7 @@ main {
   flex-shrink: 0;
 }
 .heading-actions button {
-  font-size: 10px;
+  font-size: 11px;
   color: #6b7b92;
 }
 .welcome {
@@ -367,7 +402,7 @@ main {
   border-radius: 0;
   padding: 15px 2px 12px;
   color: #8793a4;
-  font-size: 11px;
+  font-size: 12px;
   border-bottom: 2px solid transparent;
 }
 .tabs .selected {
@@ -385,9 +420,25 @@ main {
 .toolbar input {
   border: 1px solid #e3e7ee;
   border-radius: 5px;
-  font-size: 10px;
+  font-size: 11px;
   padding: 6px 9px;
   min-width: 180px;
+}
+.view-switch {
+  display: flex;
+  gap: 3px;
+  border: 1px solid #e3e7ee;
+  border-radius: 6px;
+  padding: 2px;
+}
+.view-switch button {
+  border: 0;
+  padding: 4px 8px;
+  font-size: 10px;
+}
+.view-switch button.selected {
+  color: #315b96;
+  background: #e9f0fa;
 }
 .table-tools {
   display: flex;
@@ -409,12 +460,12 @@ table {
   border-collapse: separate;
   border-spacing: 0;
   text-align: left;
-  font-size: 11px;
+  font-size: 12px;
 }
 th {
   font-weight: 500;
   color: #8390a3;
-  font-size: 10px;
+  font-size: 11px;
   background: #f7f9fc;
   position: sticky;
   top: 0;
@@ -444,6 +495,10 @@ tbody tr:hover {
 .data-table tbody tr {
   cursor: pointer;
 }
+.files tbody tr.chosen,
+.file-card.chosen {
+  background: #edf3fc;
+}
 .file-link {
   padding: 0;
   border: 0;
@@ -451,8 +506,134 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 11px;
+  font-size: 12px;
   text-align: left;
+}
+.file-thumbnail {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #edf1f6;
+}
+.row-actions {
+  white-space: nowrap;
+  color: #8a96a7;
+}
+.row-actions button {
+  border: 0;
+  background: transparent;
+  padding: 3px 7px;
+  color: #56749b;
+}
+.file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #e0e5ed;
+  border-top: 0;
+  background: #fff;
+}
+.file-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px;
+  text-align: left;
+  border-color: #e7ebf1;
+}
+.card-preview {
+  display: grid;
+  place-items: center;
+  height: 110px;
+  background: #f4f6fa;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.card-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.card-preview .folder-icon,
+.card-preview .file-icon {
+  font-size: 38px;
+}
+.card-name {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.card-meta {
+  color: #8a96a7;
+  font-size: 10px;
+}
+.listing-area {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+}
+.listing-main {
+  flex: 1;
+  min-width: 0;
+}
+.file-preview {
+  flex: 0 0 42%;
+  min-width: 330px;
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #dce4ef;
+  background: white;
+}
+.file-preview-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid #e7ecf3;
+}
+.file-preview-header > div {
+  min-width: 0;
+}
+.file-preview-header h2 {
+  font-size: 15px;
+  font-weight: 550;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+.file-preview-header button {
+  align-self: flex-start;
+  border: 0;
+  font-size: 22px;
+  padding: 0 4px;
+}
+.file-preview-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e7ecf3;
+}
+.file-preview-actions button {
+  font-size: 10px;
+  padding: 6px 8px;
+}
+.file-preview-message {
+  margin: 0;
+  padding: 16px;
+  font-size: 11px;
+}
+.file-preview .source-view {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  border: 0;
+  padding: 16px;
 }
 .folder-icon {
   color: #668bb5;
@@ -474,7 +655,7 @@ tbody tr:hover {
   gap: 12px;
   align-items: center;
   color: #8d99a9;
-  font-size: 10px;
+  font-size: 11px;
   padding: 15px 0;
 }
 .listing-footer button,
@@ -624,6 +805,26 @@ tbody tr:hover {
 .pagination {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.row-jump {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-right: 8px;
+}
+.row-jump input {
+  width: 70px;
+  padding: 6px;
+  border: 1px solid #dce1e8;
+  border-radius: 6px;
+}
+.statistic {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pagination select {
   border: 1px solid #dce1e8;
@@ -692,6 +893,19 @@ tbody tr:hover {
   max-width: 100%;
   max-height: 60vh;
 }
+.image-view img.expanded {
+  max-width: none;
+  max-height: none;
+}
+.image-view {
+  overflow: auto;
+}
+.image-tools {
+  position: sticky;
+  left: 0;
+  margin-bottom: 12px;
+  text-align: right;
+}
 .loading .table-wrap {
   opacity: 0.6;
 }
@@ -731,6 +945,14 @@ tbody tr:hover {
   .data-area.inspecting {
     flex-direction: column;
   }
+  .listing-area.with-preview {
+    flex-direction: column;
+  }
+  .file-preview {
+    width: 100%;
+    min-width: 0;
+    max-height: 50vh;
+  }
   .inspector {
     width: 100%;
     margin: 14px 0 0;
@@ -751,11 +973,30 @@ tbody tr:hover {
   .breadcrumbs {
     margin: 12px 15px 0;
   }
+  .copy-notice {
+    margin-left: 15px;
+  }
+  .favorite-error {
+    margin-left: 15px;
+  }
+  .mobile-favorites {
+    display: block;
+    margin: 10px 15px 0;
+    font-size: 12px;
+    color: #60738f;
+  }
+  .mobile-favorites button {
+    display: block;
+    width: 100%;
+    margin-top: 5px;
+    text-align: left;
+  }
   .content {
     padding: 22px 15px;
   }
   .page-heading {
     align-items: flex-start;
+    flex-wrap: wrap;
   }
   .page-heading h1 {
     font-size: 20px;
@@ -772,6 +1013,9 @@ tbody tr:hover {
   }
   .toolbar input {
     width: 170px;
+  }
+  .file-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   }
   .table-tools {
     flex-wrap: wrap;
