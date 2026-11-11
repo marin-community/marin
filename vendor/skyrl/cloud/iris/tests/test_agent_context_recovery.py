@@ -1,18 +1,25 @@
 """Context rejection must reach the installed agent without disabling its endpoint."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.models import ContextWindowExceeded, ModelTurn, Prompt, Transition
+from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.agent_backend import TRIAL_HEADER, AgentInferenceBackend
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
-from skyrl_train.rollouts.task_worker import _model_turn
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _model_turn
 from skyrl_train.trajectory_runners.model_clients import GenerationBudgetExceededError
-from skyrl_train.trajectory_runners.types import TokenProvenance
-from tests.cpu.task_specs import lowered_task, text_task
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import NoGrader
+from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 
 class Decoder:
@@ -118,3 +125,87 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
     assert result.rollout.stop_reason == "length"
     assert len(result.rollout.conversations[0].steps) == 1
     assert result.rollout.conversations[0].response_token_ids == (3,)
+
+
+@pytest.mark.asyncio
+async def test_original_harbor_trial_keeps_sampled_tokens_and_grade_after_context_rejection():
+    """A reduced output budget starts a new prompt; rejecting it must retain the prior turn."""
+
+    class Tokenizer:
+        eos_token_id = 99
+
+        def decode(self, token_ids, **kwargs):
+            return "Working"
+
+    class Client:
+        calls = 0
+
+        async def generate(self, _request):
+            self.calls += 1
+            if self.calls == 2:
+                raise GenerationBudgetExceededError([1, 2, 3, 4])
+            return {
+                "token_provenance": TokenProvenance.ENGINE,
+                "assistant_messages": [{"role": "assistant", "content": "Working"}],
+                "prompt_ids": [[1, 2]],
+                "response_ids": [[3]],
+                "response_logprobs": [[-0.1]],
+                "stop_reasons": ["stop"],
+            }
+
+    async def trial(complete):
+        await complete(Prompt(({"role": "user", "content": "Start"},), {"max_tokens": 8}))
+        try:
+            await complete(Prompt(({"role": "user", "content": "Longer history"},), {"max_tokens": 1}))
+        except ContextWindowExceeded:
+            pass
+        return SimpleNamespace(
+            trial_uri="fixture/trial", exception_info=None, verifier_result=SimpleNamespace(rewards={"reward": 0.75})
+        )
+
+    class InstalledAgents:
+        def original_harness(self, *args):
+            return HarborTrialHarness(trial, "reward")
+
+        async def shutdown(self):
+            pass
+
+    config = OmegaConf.create(
+        {
+            "backend": "vllm",
+            "max_input_length": 3,
+            "max_model_len": 128,
+            "apply_overlong_filtering": False,
+            "sampling_params": {
+                "max_generate_length": 8,
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+                "min_p": 0,
+                "logprobs": 0,
+            },
+        }
+    )
+    task = text_task().model_copy(update={"tags": ("harbor",), "grader": NoGrader(reason="Harbor grades the trial")})
+    request = TaskRequestBatch(
+        rows=(task_input(lowered_task(task, "harbor_trial", max_turns=8)),),
+        trajectory_ids=(TrajectoryID("harbor", 0),),
+    )
+    worker = TaskRolloutWorker(
+        config,
+        WholeTaskProjection(config, Tokenizer()),
+        Client(),
+        {},
+        harbor=HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"max_retries": 0}})),
+        installed_agents=InstalledAgents(),
+        shutdown_timeout=5,
+    )
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+    assert result.grade.status == Outcome.GRADED
+    assert result.grade.reward == 0.75
+    assert result.response_token_ids == (3,)
+    assert result.loss_mask == (1,)
+    assert result.logprobs == (-0.1,)

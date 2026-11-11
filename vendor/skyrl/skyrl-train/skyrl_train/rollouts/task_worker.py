@@ -504,7 +504,9 @@ class TaskRolloutWorker:
                         session_id=session_id,
                     )
                 except (GenerationLimitReached, ContextLengthExceededError) as error:
-                    if lowered.harness != SKYRL_AGENT_HARNESS:
+                    # Installed agents still run verification after a rejected prompt.
+                    # Keep its unsent conversation from replacing the last sampled turn.
+                    if lowered.harness not in {SKYRL_AGENT_HARNESS, HARBOR_TRIAL_SESSION}:
                         raise
                     raise ContextWindowExceeded(
                         f"This request exceeds the maximum context length of {max_context_length} tokens. "
