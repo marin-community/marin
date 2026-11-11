@@ -8,7 +8,7 @@ Each tray requests 120 CPUs, 940 GiB RAM and 2 TiB disk (`940GB`/`2TB` in Iris's
 
 The recipe comes from Ben's long-loop recipe at `bf163020a7115d85fd3fcb02099d3abfda3b6cf2`. It preserves RLOO-N and eight responses per prompt group, using two groups per update. Sample packing enables the existing Megatron context-parallel path; training still uses full trajectories. It keeps zero-reward groups for this runtime smoke, so the controlled length probe is not filtered out. The real tasks are two original Harbor CalibForge tasks and two non-agentic arithmetic/sequence tasks from Ben's pinned mixed-task artifact. The second stage replaces one short arithmetic prompt with a clearly marked visible ledger plus the same arithmetic question and verifier. Its rendered prompt has 31,611 valid tokens; it does not use masked padding to reach that length.
 
-`data.py` checks the original Parquet SHA-256 values before selection and emits a manifest of task identities and stage checksums. The tokenizer and chat template are copied without changes from the SFT run's `2026.09.18` tokenizer. The source tokenizer manifest pins their hashes. Generation stops on both token IDs 128001 and 128009.
+`data.py` checks the original Parquet SHA-256 values before selection and emits a manifest of task identities and stage checksums. The tokenizer and chat template are copied without changes from the SFT run's `2026.09.18` tokenizer. The source tokenizer manifest pins their hashes. Generation stops on both token IDs 128001 and 128009. Mini-SWE sends an OpenAI Bash tool definition; automatic tool selection uses the existing Hermes parser, matching the SFT template's `<tool_call>` JSON format.
 
 After the CPU export completes and the original tokenizer files and generation config are present, run `handoff.py` in the vendored SkyRL CPU environment with `--hf-root` set to the private export URI. It validates shard sizes against the completed export receipts and writes SkyRL's immutable portable-model manifest. It preserves the original tokenizer bytes and uses the exporter's shard SHA-256 values. Verify tokenizer and policy metadata staging before allocating GPUs.
 
@@ -16,7 +16,7 @@ Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9268
+  --stage 32k --version 2026.11.11.9269
 ```
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. The recipe explicitly selects Daytona's `us` target, which full Harbor trials require in their host connection. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.

@@ -123,6 +123,8 @@ generator:
   chat_template: null
   engine_init_kwargs:
     moe_backend: triton
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
     model_loader_extra_config:
       distributed: false
       concurrency: 4
