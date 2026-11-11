@@ -52,8 +52,9 @@ import argparse
 import hashlib
 import json
 import logging
+import multiprocessing
 from collections.abc import Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,7 +90,7 @@ READ_CACHE_BYTES = 256_000_000
 READ_BATCH_TOKENS = 64_000_000
 READ_BATCH_DOCS = 2_000
 # Expected output tokens per item, summed over caches. Bounds the file count of the copied caches.
-PART_TOKENS = 2_000_000_000
+PART_TOKENS = 500_000_000
 SELECT_THREADS = 16
 
 
@@ -336,7 +337,10 @@ def _doc_lengths(store: JaggedArrayStore) -> np.ndarray:
 
 
 def _read_docs(store: JaggedArrayStore, indices: np.ndarray, lengths: np.ndarray) -> Iterator[np.ndarray]:
-    """Yield documents in ``indices`` order, batching reads by document count and tokens."""
+    """Yield documents in ``indices`` order, batching reads by document count and tokens.
+
+    ``lengths[i]`` is the length of document ``indices[i]``.
+    """
     start = 0
     while start < len(indices):
         stop = start
@@ -346,7 +350,7 @@ def _read_docs(store: JaggedArrayStore, indices: np.ndarray, lengths: np.ndarray
             and stop - start < READ_BATCH_DOCS
             and (stop == start or batch_tokens < READ_BATCH_TOKENS)
         ):
-            batch_tokens += int(lengths[indices[stop]])
+            batch_tokens += int(lengths[stop])
             stop += 1
         for doc in store.get_batch_sync(indices[start:stop].tolist()):
             yield np.asarray(doc, dtype=np.int32)
@@ -355,16 +359,19 @@ def _read_docs(store: JaggedArrayStore, indices: np.ndarray, lengths: np.ndarray
 
 @dataclass(frozen=True)
 class _ShardSelection:
-    store: JaggedArrayStore
-    # Per cache: source row indices, repeated for multiple copies, and the source document lengths.
+    path: str
+    # Per cache: source row indices, repeated for multiple copies, and their document lengths.
     indices: dict[str, np.ndarray]
-    lengths: np.ndarray
+    lengths: dict[str, np.ndarray]
+
+
+def _open_input_ids(path: str) -> JaggedArrayStore:
+    return JaggedArrayStore.open(prefix_join(path, "input_ids"), mode="r", dtype=np.int32)
 
 
 def _select(the_plan: dict, cell: str, shard: dict) -> _ShardSelection:
     path = shard_path(the_plan["store"], cell, shard["key"])
-    store = JaggedArrayStore.open(prefix_join(path, "input_ids"), mode="r", dtype=np.int32)
-    lengths = _doc_lengths(store)
+    lengths = _doc_lengths(_open_input_ids(path))
     if len(lengths) != shard["rows"]:
         raise ValueError(f"{path}: plan has {shard['rows']} rows, store has {len(lengths)}")
     draws = document_draws(the_plan["seed"], cell, shard["key"], len(lengths))
@@ -372,7 +379,14 @@ def _select(the_plan: dict, cell: str, shard: dict) -> _ShardSelection:
         cache: np.repeat(np.arange(len(lengths)), document_copies(draws, tuple(band)))
         for cache, band in the_plan["cells"][cell]["bands"].items()
     }
-    return _ShardSelection(store, indices, lengths)
+    return _ShardSelection(path, indices, {cache: lengths[rows] for cache, rows in indices.items()})
+
+
+def _selected_docs(selections: Sequence[_ShardSelection], cache: str) -> Iterator[np.ndarray]:
+    """Yield one cache's documents, opening each source shard only while reading it."""
+    for selection in selections:
+        if len(selection.indices[cache]):
+            yield from _read_docs(_open_input_ids(selection.path), selection.indices[cache], selection.lengths[cache])
 
 
 def sample_item(the_plan: dict, index: int, out: str) -> dict:
@@ -383,13 +397,11 @@ def sample_item(the_plan: dict, index: int, out: str) -> dict:
 
     written = {}
     for cache in the_plan["cells"][cell]["bands"]:
-        picked = [(s, s.indices[cache]) for s in selections if len(s.indices[cache])]
-        if not picked:
+        lengths = np.concatenate([s.lengths[cache] for s in selections])
+        if not len(lengths):
             continue
-        docs = (doc for s, indices in picked for doc in _read_docs(s.store, indices, s.lengths))
-        lengths = np.concatenate([s.lengths[indices] for s, indices in picked])
         path = prefix_join(out, f"{cache}/part-{index:06d}")
-        ledger = write_bucket_cache(path, docs, lengths)
+        ledger = write_bucket_cache(path, _selected_docs(selections, cache), lengths)
         written[cache] = {
             "path": path,
             "rows": int(ledger.total_num_rows),
@@ -403,17 +415,34 @@ def _sidecar(out: str, index: int) -> str:
     return prefix_join(out, f"{DONE_DIR}/item-{index:06d}.json")
 
 
+def _sample_and_record(out: str, index: int) -> None:
+    result = sample_item(load_plan(out), index, out)
+    StoragePath(_sidecar(out, index)).write_text(json.dumps(result))
+
+
+def _init_item_process() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # The shared read cache can be sized only before the first store opens.
+    set_jagged_array_read_cache_bytes(READ_CACHE_BYTES)
+
+
 def sample(out: str, num_tasks: int, task_index: int) -> None:
+    """Sample this task's items, each in a fresh process.
+
+    Resident memory grows with the tokens a process reads and writes, about 4 bytes per token on
+    an 8 GB worker, so a long-lived process runs out of memory after a few items.
+    """
     the_plan = load_plan(out)
     indices = range(task_index, len(the_plan["items"]), num_tasks)
     logger.info("sample task %d/%d: %d items", task_index, num_tasks, len(indices))
     for index in indices:
-        sidecar = _sidecar(out, index)
-        if StoragePath(sidecar).exists():
+        if StoragePath(_sidecar(out, index)).exists():
             logger.info("item %d already done", index)
             continue
-        result = sample_item(the_plan, index, out)
-        StoragePath(sidecar).write_text(json.dumps(result))
+        with ProcessPoolExecutor(
+            1, mp_context=multiprocessing.get_context("spawn"), initializer=_init_item_process
+        ) as pool:
+            pool.submit(_sample_and_record, out, index).result()
 
 
 def _load_sidecars(out: str, count: int) -> list[dict]:
@@ -549,8 +578,6 @@ def main() -> None:
             parser.error("--phase plan needs --recipe")
         plan(args.recipe, args.out, args.seed, args.store, _parse_targets(args.target))
     elif args.phase == "sample":
-        # The shared read cache can be sized only before the first store opens.
-        set_jagged_array_read_cache_bytes(READ_CACHE_BYTES)
         sample(args.out, args.num_tasks, args.task_index)
     elif args.phase == "merge":
         merge(args.out)
