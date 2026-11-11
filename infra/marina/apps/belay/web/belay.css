@@ -475,12 +475,14 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 /* Status: idea checklist */
 .ck-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 10px; }
 .ck-bar h2 { margin: 0 auto 0 0; }
-.ck-ctl { font-size: 13px; color: var(--slate); display: inline-flex; gap: 6px; align-items: center; }
-.ck-ctl select, #ck-filter { font: 13px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+#ck-filter { font: 13px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
 #ck-filter { min-width: 240px; }
 .ck-table { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .ck-row { display: grid; grid-template-columns: minmax(180px, 1fr) 112px 84px repeat(4, 100px) 168px 56px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .ck-head { border-top: 0; background: var(--surface-2); font: 600 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--slate); }
+.ck-sort { all: unset; cursor: pointer; white-space: nowrap; border-radius: 4px; }
+.ck-sort:hover, .ck-sort.on { color: var(--ink); }
+.ck-sort:focus-visible { outline: 2px solid var(--rope); outline-offset: 2px; }
 .ck-row a { color: var(--ink); text-decoration: none; }
 .ck-row a:hover { text-decoration: underline; }
 .ck-idea .xid a { color: var(--rope); }
@@ -500,8 +502,8 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 .recipe-cell { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .score { font: 600 13px var(--mono); color: var(--ink); background: var(--surface-2); border-radius: 8px; padding: 2px 8px; cursor: help; }
 @media (max-width: 760px) {
-  .ck-head { display: none; }
   .ck-row { grid-template-columns: 1fr; gap: 4px; padding: 12px; }
+  .ck-head { display: flex; flex-wrap: wrap; gap: 6px 14px; }
   .gcell:hover .gate-tip, .gcell:focus .gate-tip, .gcell:focus-within .gate-tip { display: none; }
   .gcell[aria-expanded='true'] .gate-tip { display: flex; position: static; margin-top: 4px; box-shadow: none; max-width: none; }
   .ck-row > span[data-label]:not(.ck-idea)::before { content: attr(data-label) ": "; color: var(--faint); font-size: 11px; margin-right: 4px; }
