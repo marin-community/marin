@@ -614,10 +614,15 @@ uv run python -m experiments.post_training.task_curation.no_oracle_qualification
     --output /path/to/qc-report.json
 ```
 
-The report's `summary` prints the rates and `oracle_validation`. The sandbox
-phase needs a Daytona credential, creates one sandbox per sampled task, and has
-no cleanup code path in this repository: hand the created snapshot names to an
-operator, as `.agents/ops/daytona.md` describes.
+The report's `summary` prints the rates and `oracle_validation`. Run the sandbox
+phase through Harbor's trial path (`harbor run --config`, see
+[harbor-integration](harbor-integration.md)) over a packaged sample of the
+rebuilt tasks, with the task's own verifier as the final step:
+`no_oracle_qualification.classify_verifier_run` turns each trial's verifier exit
+code and trailing reward into the outcome the report records. The phase needs a
+Daytona credential, creates one sandbox per sampled task, and has no cleanup
+code path in this repository: hand the created snapshot names to an operator, as
+`.agents/ops/daytona.md` describes.
 
 ## Conversion modes
 
