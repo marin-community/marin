@@ -136,7 +136,6 @@ TARGET_MODEL = ArtifactStep.adopt(
 
 def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
     plan = _snowball_draft_sft_plan(preset)
-    recipe = SkyRLRecipe.from_document(yaml.safe_load(plan.config_yaml))
     name = user_owned_name(f"{ARTIFACT_NAME}{preset.artifact_suffix}")
     version = resolve_version(name, None)
     pool = pool_step(POOL_ARTIFACT_NAME, resolve_version(POOL_ARTIFACT_NAME, None))
@@ -144,7 +143,9 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(recipe.to_skyrl(), sort_keys=False),
+            config_yaml=yaml.safe_dump(
+                SkyRLRecipe.from_document(yaml.safe_load(plan.config_yaml)).to_skyrl(), sort_keys=False
+            ),
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
                 tokenizer_uri=TARGET_TOKENIZER,

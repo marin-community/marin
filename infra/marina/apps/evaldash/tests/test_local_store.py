@@ -76,11 +76,13 @@ def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owne
     assert metadata["models"] == fresh["models"]
 
 
-def test_api_defaults_to_the_current_verified_cohort(client):
-    expected = "eval-policy-2026-09-24-verified"
-    assert client.get("/panel").json()["request"]["cohort_version"] == expected
-    assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
-    assert client.get("/panel", params={"cohort": "all"}).json()["request"]["cohort_version"] is None
+def test_a_request_without_a_cohort_reads_the_newest_result_across_cohorts(client):
+    assert client.get("/meta").json()["default_cohort"] == "all"
+    for params in ({}, {"cohort": ""}, {"cohort": "all"}):
+        request = client.get("/panel", params=params).json()["request"]
+        assert (request["cohort"], request["cohort_version"]) == ("latest_valid", None)
+    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b"})
+    assert comparison.status_code == 200
 
 
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
@@ -232,6 +234,11 @@ def test_api_surface_over_fixtures(client):
     assert detail["headline"]["metric"] == "accuracy"
     assert detail["headline"]["value"] == pytest.approx(0.741)
     assert detail["timing"]["started_at"] and detail["timing"]["finished_at"]
+    # The detail endpoint resolves the declared protocol metric for the run page's top table; the
+    # harness's own metric spelling stays on the record for the folded raw table.
+    assert detail["metric_rows"] == [
+        {"task": "mmlu", "metric": "accuracy", "value": pytest.approx(0.741), "declared": True}
+    ]
     # Serving params round-trip through the record and reach the detail response.
     assert detail["serving"]["tensor_parallel_size"] == 8
     assert detail["serving"]["extra"]["temperature"] == "0.0"
@@ -309,12 +316,23 @@ def test_api_compare_applies_the_selection_it_is_given(comparison_client):
     assert comparison["shared"] == ["mmlu"]
 
 
-def test_api_compare_rejects_mixed_cohorts_but_panel_can_browse_them(client):
+def test_api_compare_spans_cohorts_when_all_cohorts_are_selected(client):
     response = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"})
 
-    assert response.status_code == 400
-    panel = client.get("/panel", params={"cohort": "all"}).json()
-    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} >= {"2026.07.20", "2026.07.21"}
+    assert response.status_code == 200
+    comparison = response.json()
+    assert comparison["shared"]
+    versions = {cell["version"] for row in comparison["rows"] for cell in row["cells"].values()}
+    assert versions >= {"2026.07.20", "2026.07.21"}
+
+
+def test_api_selects_unversioned_records_by_name(client):
+    assert "unversioned" in client.get("/meta").json()["versions"]
+
+    panel = client.get("/panel", params={"cohort": "unversioned"}).json()
+
+    assert {row["model"] for row in panel["rows"]} == {"llama3-8b"}
+    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} == {None}
 
 
 def test_api_compare_rejects_a_request_it_cannot_answer(client):

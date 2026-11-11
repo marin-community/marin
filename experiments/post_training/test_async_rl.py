@@ -66,16 +66,20 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
         settings=("trainer.rollout_buffer.max_in_flight=1",),
     )
     seeded = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", seed=23)
-    assert seeded.rl.name != run.rl.name
+    assert seeded.rl.name == f'{run.rl.name}-set-{async_rl.fingerprint_hash("trainer.seed=23")}'
     assert capped.rl.name != run.rl.name
     assert capped.evaluation.name != run.evaluation.name
 
 
 @pytest.mark.parametrize(
     "setting",
-    ("trainer.rollout_buffer.max_staleness_steps=-1", "trainer.rollout_buffer.max_in_flight=0"),
+    (
+        "trainer.rollout_buffer.max_staleness_steps=-1",
+        "trainer.rollout_buffer.max_in_flight=0",
+        'trainer={"resume_mode":"none"}',
+    ),
 )
-def test_invalid_rollout_limits_are_rejected_before_launch(setting):
+def test_invalid_settings_are_rejected_before_launch(setting):
     with pytest.raises(click.BadParameter):
         async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", settings=(setting,))
 

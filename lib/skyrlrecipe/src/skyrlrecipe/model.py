@@ -98,16 +98,16 @@ class _Unset(Enum):
     VALUE = "unset"
 
 
-def unset_field(**kwargs: Any) -> Any:
+def unset_field() -> Any:
     """Keep a following field sparse without resolving its default."""
-    return Field(default=_Unset.VALUE, validate_default=False, exclude_if=lambda value: value is _Unset.VALUE, **kwargs)
+    return Field(default=_Unset.VALUE, validate_default=False, exclude_if=lambda value: value is _Unset.VALUE)
 
 
-def field(default: Any = ..., **kwargs: Any) -> Any:
+def field(default: Any = ...) -> Any:
     """Create a field with a recursively immutable container default."""
     if isinstance(default, Mapping | list):
-        return Field(default=freeze(default), **kwargs)
-    return Field(default=default, **kwargs)
+        return Field(default=freeze(default))
+    return Field(default=default)
 
 
 class Section(BaseModel):

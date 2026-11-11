@@ -150,10 +150,7 @@ def main(
         extra_trainer_modes=extra_trainer_modes,
     )
     spec = iceball_rl_spec(model, data)
-    spec = replace(
-        spec,
-        config_yaml=_with_patch(spec.config_yaml, ICEBALL_PROBE_RECIPE),
-    )
+    spec = replace(spec, config_yaml=_with_patch(spec.config_yaml, ICEBALL_PROBE_RECIPE))
     return probe_step(spec, iceball_rl_execution(), settings)
 
 

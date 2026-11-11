@@ -131,6 +131,28 @@ class _ChatResult:
     reasoning_violation_token: int | None = None
 
 
+# Chat-template turn terminators that can differ from the tokenizer's EOS, e.g. Llama-style templates end
+# turns with `<|eot_id|>` while `eos_token` is `<|end_of_text|>`. Other special tokens, such as a template's
+# `<|tool_call_end|>`, can end a reply cut off at the output budget without ending the turn.
+TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
+
+
+def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
+    """Whether the response ends with the EOS or a chat template's turn terminator."""
+    if not response_ids or finish_reason == "length":
+        return False
+    return response_ids[-1] in _turn_end_tokens(tokenizer)
+
+
+def _turn_end_tokens(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    tokens = {tokenizer.eos_token_id}
+    for marker in TURN_END_MARKERS:
+        token_ids = tokenizer.encode(marker, add_special_tokens=False)
+        if len(token_ids) == 1:
+            tokens.add(token_ids[0])
+    return tokens
+
+
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
     provider_fields = choice.get("provider_specific_fields") or {}
     routes = choice.get("routed_experts", provider_fields.get("routed_experts"))
@@ -235,12 +257,15 @@ def _reasoning_violation(
     An unclosed span is located at the last token. The token is ``None`` when the one-token markers are
     well formed, i.e. the violation is in literal marker text.
     """
-    violation = reasoning_span_violation(decoded, stop_reason)
+    # Training keeps the rule that a leading closing marker ends a span the chat template opened.
+    violation = reasoning_span_violation(decoded, stop_reason, prompt_opens_span=True)
     if violation is None:
         return None, None
     markers = _reasoning_marker_tokens(tokenizer)
     positions = [index for index, token in enumerate(response_ids) if token in markers]
-    error = first_reasoning_violation([markers[response_ids[index]] for index in positions], stop_reason)
+    error = first_reasoning_violation(
+        [markers[response_ids[index]] for index in positions], stop_reason, prompt_opens_span=True
+    )
     if error is None:
         return violation, None
     if error.marker_index is None:
@@ -406,12 +431,11 @@ class DirectModelClient:
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.
             tokenizer = self._client.tokenizer
-            semantic_ids = (
-                response_ids[:-1] if response_ids and response_ids[-1] == tokenizer.eos_token_id else response_ids
-            )
+            stop_reason = choice["finish_reason"]
+            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
             if len(semantic_ids) != len(response_ids):
-                eos_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
-                text = text.removesuffix(eos_text)
+                terminator_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+                text = text.removesuffix(terminator_text)
                 if message.get("content") is not None:
                     message = {**message, "content": text}
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
@@ -430,14 +454,13 @@ class DirectModelClient:
                 selected = [
                     select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
                 ]
-            stop_reason = choice["finish_reason"]
             token_budget = chat_options.get("max_completion_tokens")
             if (
                 stop_reason == "tool_calls"
                 and token_budget is not None
                 and len(response_ids) >= token_budget
                 and choice.get("stop_reason") is None
-                and response_ids[-1] != tokenizer.eos_token_id
+                and len(semantic_ids) == len(response_ids)
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"

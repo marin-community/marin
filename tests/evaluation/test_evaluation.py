@@ -1851,7 +1851,7 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
 
 
 def test_resolve_eval_keys_validates_programmatic_selections() -> None:
-    assert resolve_eval_keys("gsm8k-smoke,aime-smoke") == ("gsm8k-smoke", "aime-smoke")
+    assert resolve_eval_keys("gsm8k-smoke,aime-harbor") == ("gsm8k-smoke", "aime-harbor")
     with pytest.raises(ValueError):
         resolve_eval_keys("gsm8k-smoke,missing")
 
@@ -2737,6 +2737,34 @@ def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
 
     assert result.exit_code == 2
     assert "requires exactly one Harbor evaluation" in result.output
+
+
+def test_policy_launch_rejects_resume_outside_an_evaldash_run(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    finalization = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evals",
+            "tb2",
+            "--policy-finalization-config",
+            str(finalization),
+            "--resume-results-path",
+            "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/results",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "is not a run's results directory that EvalDash catalogs" in result.output
 
 
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):

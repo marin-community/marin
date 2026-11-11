@@ -1,14 +1,14 @@
 from pathlib import Path
 
 import pytest
-
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, TrialResult
 from harbor.trial.attempt import trial_relative_path
 
 
 def _result(tmp_path: Path, *, trial_relpath: str | None) -> TrialResult:
     config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         trial_name="trial-1",
         trials_dir=tmp_path / "original",
@@ -63,6 +63,7 @@ def test_trial_relative_locator_rejects_nonportable_paths(
 @pytest.mark.unit
 def test_trial_relative_path_includes_attempt_scope(tmp_path) -> None:
     config = TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=tmp_path / "task"),
         trial_name="trial-1",
     )

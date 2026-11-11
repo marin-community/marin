@@ -27,11 +27,13 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     CreateSnapshotParams,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
     Image,
     Resources,
 )
+from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
@@ -90,25 +92,39 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
+async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
+    """Retry transient snapshot metadata reads within the caller's startup deadline."""
+    backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
+    attempts = 0
+    while True:
+        try:
+            return await client.snapshot.get(name)
+        except DaytonaError as error:
+            attempts += 1
+            if error.status_code not in (502, 503, 504) or attempts == 3:
+                raise
+            await sleep(backoff.next_interval())
+
+
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
     """Build or await a snapshot identified by its source and resource requirements."""
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
-        snapshot = await client.snapshot.get(name)
+        snapshot = await _snapshot_metadata(client, name)
     except DaytonaNotFoundError:
         image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
         try:
             snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client or event loop.
-            snapshot = await client.snapshot.get(name)
+            snapshot = await _snapshot_metadata(client, name)
     backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
         await asyncio.sleep(backoff.next_interval())
-        snapshot = await client.snapshot.get(name)
+        snapshot = await _snapshot_metadata(client, name)
     return name
 
 

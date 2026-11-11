@@ -382,6 +382,14 @@ def _copy_tokenizer_metadata(source: Path, destination: Path) -> None:
         shutil.copy2(metadata_file, destination / metadata_file.name)
 
 
+def _validate_policy_tokenizer(path: Path, source: str) -> None:
+    # Keep Transformers optional for dependency-light launcher imports.
+    from transformers import AutoTokenizer
+
+    _require_tokenizer_metadata(path, source)
+    AutoTokenizer.from_pretrained(str(path), local_files_only=True, trust_remote_code=True)
+
+
 def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenizer | None:
     """Stage the requested tokenizer independently from the policy weights."""
     tokenizer_path = args.policy_tokenizer
@@ -394,7 +402,7 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
     if is_cloud_uri(tokenizer_path):
         manifest = load_model_manifest(tokenizer_path)
         stage_model_metadata(tokenizer_path, manifest, local_path)
-        _require_tokenizer_metadata(target, tokenizer_path)
+        _validate_policy_tokenizer(target, tokenizer_path)
         (target / MODEL_MANIFEST_FILENAME).unlink(missing_ok=True)
     else:
         with atomic_directory_update(target, staging_prefix=f".{target.name}.tokenizer-") as staging:
@@ -409,9 +417,9 @@ def prepare_policy_tokenizer(args: argparse.Namespace) -> PreparedPolicyTokenize
                     destination=staging,
                     allow_patterns=TOKENIZER_METADATA_PATTERNS + TOKENIZER_CLASS_RESOLUTION_FILES,
                 )
-                _require_tokenizer_metadata(staging, tokenizer_path)
             else:
                 raise ValueError(f"Unsupported policy tokenizer source: {tokenizer_path!r}")
+            _validate_policy_tokenizer(staging, tokenizer_path)
 
     return PreparedPolicyTokenizer(local_path)
 

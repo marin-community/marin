@@ -1,24 +1,23 @@
 import copy
 from collections.abc import Iterator, Mapping
-from typing import Any
 from dataclasses import fields, replace
 from types import SimpleNamespace
-from typing import get_args
+from typing import Any, get_args
 
 from omegaconf import OmegaConf
+from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
+from skyrl_train.config.ftpo import FTPOConfig
+from skyrl_train.config.objective_spec import CorrectionAction, SequenceAggregate
+from skyrlrecipe.declared import Callback, SequenceRule, Teacher, TokenRule
+from skyrlrecipe.documents import MISSING, get_path, set_path
+from skyrlrecipe.ownership import LAUNCH_PATHS
 
 from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
 from cloud.iris.rl_data import resolve_rl_train_data_with_sources
-from skyrlrecipe.declared import Callback, SequenceRule, Teacher, TokenRule
-from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
 from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
-from skyrlrecipe.documents import MISSING, get_path, set_path
-from skyrlrecipe.ownership import LAUNCH_PATHS
 from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
-from skyrl_train.config.ftpo import FTPOConfig
-from skyrl_train.config.objective_spec import CorrectionAction, SequenceAggregate
 
 GPU_PATHS = frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"})
 
