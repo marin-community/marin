@@ -61,61 +61,100 @@ class Terminal:
     """Run identity and evidence blob of the stored model response this attempt reused, if any."""
 
 
-def terminal_attempts(root: str, benchmarks: Collection[str] | None = None) -> tuple[str, dict[AttemptKey, Terminal]]:
-    """A result root's run identity, and the grade of each benchmark, source row and trial's latest finished attempt."""
+def finished_attempts(
+    root: str, benchmarks: Collection[str] | None = None
+) -> tuple[ReadView, str, list[tuple[AttemptKey, Attempt]]]:
+    """A result root's reader, its run identity, and its finished attempts with their benchmark, source row and trial.
+    """
     reader = ReadView(root)
     saved = reader.read_blob(RUN_OBJECT)
     if saved is None:
         raise ValueError(f"No evaluation run is stored in {root}")
     run = json.loads(saved)
-    names = {entry["dataset"]: entry["protocol"]["benchmark"] for entry in run["datasets"]}
-    latest: dict[AttemptKey, Attempt] = {}
+    names: dict[str, str] = {}
+    for entry in run["datasets"]:
+        benchmark = entry["protocol"]["benchmark"]
+        if benchmarks is not None and benchmark not in benchmarks:
+            continue
+        names[entry["dataset"]] = benchmark
+    finished = []
     for row in reader.iter_rows(ATTEMPTS_TABLE):
         attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
-        key = (names[attempt.dataset], attempt.source_row, attempt.trial)
-        if (
-            attempt.phase is AttemptPhase.FINISHED
-            and (benchmarks is None or key[0] in benchmarks)
-            and (key not in latest or attempt.retry > latest[key].retry)
-        ):
-            latest[key] = attempt
-    blobs = {key: attempt.result_blob for key, attempt in sorted(latest.items()) if attempt.result_blob}
-    keys = list(blobs)
-    terminal = {}
-    for start in range(0, len(keys), BLOB_BATCH):
-        batch = keys[start : start + BLOB_BATCH]
-        evidence = reader.read_blobs([blobs[key] for key in batch])
-        for key in batch:
-            raw = json.loads(evidence[blobs[key]])
-            outcome = latest[key].outcome
+        if attempt.phase is AttemptPhase.FINISHED and attempt.dataset in names and attempt.result_blob:
+            finished.append(((names[attempt.dataset], attempt.source_row, attempt.trial), attempt))
+    return reader, run_identity(run), finished
+
+
+def grades(reader: ReadView, attempts: dict[str, tuple[AttemptKey, Attempt]]) -> dict[str, tuple[AttemptKey, Terminal]]:
+    """The grade and provenance of each attempt, by evidence blob."""
+    blobs = sorted(attempts)
+    graded = {}
+    for start in range(0, len(blobs), BLOB_BATCH):
+        batch = blobs[start : start + BLOB_BATCH]
+        evidence = reader.read_blobs(batch)
+        for blob in batch:
+            key, attempt = attempts[blob]
+            raw = json.loads(evidence[blob])
+            outcome = attempt.outcome
             assert outcome is not None
             grade = raw.get("grade") or {}
             extracted = (grade.get("detail") or {}).get("extracted")
             reused = raw.get(REUSED_FROM_RUN)
-            terminal[key] = Terminal(
-                result_blob=blobs[key],
-                grade=Grade(
-                    outcome=outcome,
-                    score=grade.get("reward") if outcome in SCORED_OUTCOMES else None,
-                    extracted=extracted if extracted is None or isinstance(extracted, str) else json.dumps(extracted),
+            graded[blob] = (
+                key,
+                Terminal(
+                    result_blob=blob,
+                    grade=Grade(
+                        outcome=outcome,
+                        score=grade.get("reward") if outcome in SCORED_OUTCOMES else None,
+                        extracted=(
+                            extracted if extracted is None or isinstance(extracted, str) else json.dumps(extracted)
+                        ),
+                    ),
+                    reused_from=(reused["run"], reused["result_blob"]) if reused else None,
                 ),
-                reused_from=(reused["run"], reused["result_blob"]) if reused else None,
             )
-    return run_identity(run), terminal
+    return graded
+
+
+def terminal_attempts(root: str, benchmarks: Collection[str] | None = None) -> tuple[str, dict[AttemptKey, Terminal]]:
+    """A result root's run identity, and the grade of each benchmark, source row and trial's latest finished attempt."""
+    reader, run, finished = finished_attempts(root, benchmarks)
+    latest: dict[AttemptKey, Attempt] = {}
+    for key, attempt in finished:
+        if key not in latest or attempt.retry > latest[key].retry:
+            latest[key] = attempt
+    graded = grades(reader, {attempt.result_blob: (key, attempt) for key, attempt in latest.items()})
+    return run, dict(sorted(graded.values()))
 
 
 def compare(source: str, regrade: str) -> tuple[list[Summary], list[Change]]:
-    """Pair each attempt of ``regrade`` that reused a model response of ``source`` with that source attempt."""
+    """Pair each attempt of ``regrade`` that reused a model response of ``source`` with the source attempt it names.
+
+    The pairing follows the evidence blob in the attempt's provenance, so a source run resumed after the regrade
+    still pairs with the attempt whose response was reused.
+    """
     _, after = terminal_attempts(regrade)
-    source_run, before = terminal_attempts(source, {key[0] for key in after})
+    reader, source_run, finished = finished_attempts(source, {key[0] for key in after})
+    by_blob = {attempt.result_blob: (key, attempt) for key, attempt in finished}
+    named = {
+        terminal.reused_from[1]: by_blob[terminal.reused_from[1]]
+        for terminal in after.values()
+        if terminal.reused_from is not None
+        and terminal.reused_from[0] == source_run
+        and terminal.reused_from[1] in by_blob
+    }
+    before = grades(reader, named)
     summaries, changes = [], []
     for benchmark in sorted({key[0] for key in after}):
         keys = [key for key in sorted(after) if key[0] == benchmark]
-        reused = [
-            (key, before[key].grade, after[key].grade)
-            for key in keys
-            if key in before and after[key].reused_from == (source_run, before[key].result_blob)
-        ]
+        reused = []
+        for key in keys:
+            provenance = after[key].reused_from
+            if provenance is not None and provenance[0] == source_run and provenance[1] in before:
+                source_key, source_terminal = before[provenance[1]]
+                if source_key == key:
+                    reused.append((key, source_terminal.grade, after[key].grade))
         changes += [Change(*key, before=old, after=new) for key, old, new in reused if old != new]
         scores = [(old.score, new.score) for _, old, new in reused if old.score is not None and new.score is not None]
         summaries.append(
