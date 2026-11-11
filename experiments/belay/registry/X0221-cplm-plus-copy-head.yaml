@@ -116,7 +116,8 @@ trials:
   batch: X0221
   date: '2026-11-11'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0221
-  wandb: []
+  wandb:
+  - belay-X0221d1280-seed0
   settings:
     cplm_plus: 'true'
   commit: 172f9e44d2
