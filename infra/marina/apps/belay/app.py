@@ -971,16 +971,16 @@ def _requeue(conn: Connection, session_id: str) -> None:
         _enqueue(conn, EventKind(event["kind"]), event["ref"], f"{event['summary']} (retry)", payload)
 
 
-def reap_sessions(conn: Connection) -> list[str]:
-    """Mark every running session lost and offer its events again; returns their ids. Only the watch pass calls this,
-    as it starts: Loom runs one watch pass at a time and each session is a watch pass, so a session still running then
-    ended without reporting."""
+def _lose_sessions(conn: Connection, summary: str, started_before: datetime.datetime | None = None) -> list[str]:
+    """Mark running sessions (started before ``started_before``, if given) lost with ``summary``, and offer their
+    events again; returns their ids."""
     lost = (
         conn.execute(
             text(
-                "UPDATE sessions SET state = 'lost', ended_at = now(), "
-                "summary = 'Its watch pass ended without a report.' WHERE state = 'running' RETURNING id"
-            )
+                "UPDATE sessions SET state = 'lost', ended_at = now(), summary = :summary WHERE state = 'running' "
+                "AND (CAST(:cutoff AS TIMESTAMPTZ) IS NULL OR started_at < :cutoff) RETURNING id"
+            ),
+            {"summary": summary, "cutoff": started_before},
         )
         .scalars()
         .all()
@@ -990,16 +990,15 @@ def reap_sessions(conn: Connection) -> list[str]:
     return list(lost)
 
 
+def reap_sessions(conn: Connection) -> list[str]:
+    """Mark every running session lost and offer its events again; returns their ids. Only the watch pass calls this,
+    as it starts: Loom runs one watch pass at a time and each session is a watch pass, so a session still running then
+    ended without reporting."""
+    return _lose_sessions(conn, "Its watch pass ended without a report.")
+
+
 def _expire_sessions(conn: Connection) -> None:
-    lost = conn.execute(
-        text(
-            "UPDATE sessions SET state = 'lost', ended_at = now(), summary = 'No report within the session timeout.' "
-            "WHERE state = 'running' AND started_at < :cutoff RETURNING id"
-        ),
-        {"cutoff": _now() - SESSION_TIMEOUT},
-    ).scalars()
-    for session_id in list(lost):
-        _requeue(conn, session_id)
+    _lose_sessions(conn, "No report within the session timeout.", _now() - SESSION_TIMEOUT)
 
 
 def _training(live: list[dict]) -> str:
