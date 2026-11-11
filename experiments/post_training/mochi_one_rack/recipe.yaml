@@ -36,7 +36,7 @@ trainer:
   max_ckpts_to_keep: 2
   seed: 20261020
   logger: wandb
-  project_name: mochi-one-rack-smoke
+  project_name: mochi-muonh-smoke
   tracker_commit_each_step: true
   training_metrics: true
   rollout_spans: true
@@ -57,13 +57,22 @@ trainer:
     use_entropy_loss: false
   policy:
     optimizer_config:
-      optimizer: AdamW
-      lr: 1.0e-06
+      optimizer: MuonH
+      lr: 1.0e-05
       weight_decay: 0.0
-      max_grad_norm: 0.5
+      max_grad_norm: 0.0
       adam_betas:
       - 0.9
-      - 0.999
+      - 0.95
+      optimizer_kwargs:
+        adam_lr: 2.307692307692308e-06
+        momentum: 0.95
+        nesterov: true
+        backend_steps: 5
+        epsilon: 1.0e-08
+        muon_epsilon: 1.0e-08
+        offload_momentum: true
+        expert_normalization: all_experts
       scheduler: constant_with_warmup
       num_warmup_steps: 0
     megatron_config:
@@ -73,9 +82,7 @@ trainer:
       expert_model_parallel_size: 4
       expert_tensor_parallel_size: 1
       optimizer_config_kwargs:
-        optimizer_cpu_offload: true
-        optimizer_offload_fraction: 0.5
-        overlap_cpu_optimizer_d2h_h2d: false
+        use_distributed_optimizer: false
       optimizer_checkpoint_sharding_type: dp_reshardable
   ref:
     megatron_config:

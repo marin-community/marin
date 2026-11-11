@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Five Mochi updates at 4K, then restore the optimizer and run five at 32K."""
+"""Restart Hero MuonH at 4K before running five near-limit 32K updates."""
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -50,12 +50,13 @@ ROLE_PLAN = SkyRLRolePlan(
 
 @dataclass(frozen=True)
 class MochiSmoke:
+    initial_four_k: ArtifactStep[SkyRLRun]
     four_k: ArtifactStep[SkyRLRun]
     thirty_two_k: ArtifactStep[SkyRLRun]
 
 
 def build_smoke(
-    version: str, *, four_k_version: str | None = None, save_continuation_checkpoint: bool = True
+    version: str, *, initial_four_k_version: str | None = None, four_k_version: str | None = None
 ) -> MochiSmoke:
     trial_root = StoragePath(TRIAL_ROOT)
     hf_root = str(trial_root / "hf-sft")
@@ -95,23 +96,24 @@ def build_smoke(
             "max_turns": 4,
         }
         recipe["trainer"]["max_steps"] = max_steps
-        if stage == "32k":
+        recipe["trainer"]["ckpt_interval"] = max_steps
+        for callback in recipe["trainer"]["callbacks"]:
+            if callback["type"] == "checkpoint":
+                callback["save_steps"] = max_steps
+        if stage != "4k-initial":
             recipe["trainer"].update(resume_mode="from_path", restore_dataloader_state=False)
-            if not save_continuation_checkpoint:
-                recipe["trainer"]["ckpt_interval"] = -1
-                for callback in recipe["trainer"]["callbacks"]:
-                    if callback["type"] == "checkpoint":
-                        callback.update(save_steps=-1, save_on_train_end=False)
+        if stage == "32k":
             recipe["environment"]["task_sessions"]["task_spec"]["session"]["model_turn_timeout"] = 600
+        data_stage = "32k" if stage == "32k" else "4k"
         data = ArtifactStep.adopt(
-            f"users/romain/documents/mochi-one-rack/{stage}",
+            f"users/romain/documents/mochi-one-rack/{data_stage}",
             DATA_VERSION,
-            source=str(trial_root / "data" / DATA_VERSION / stage),
+            source=str(trial_root / "data" / DATA_VERSION / data_stage),
             kind=Artifact,
         )
         step = skyrl_step(
             SkyRLSpec(
-                name=user_owned_name(f"checkpoints/mochi-one-rack/{stage}"),
+                name=user_owned_name(f"checkpoints/mochi-muonh/{stage}"),
                 version=stage_version,
                 config_yaml=yaml.safe_dump(recipe, sort_keys=False),
                 model=model,
@@ -142,40 +144,46 @@ def build_smoke(
 
         return replace(step, build_config=bind_traces)
 
-    four_k = training_step("4k", 4096, 5, four_k_version or version)
-    thirty_two_k = training_step("32k", 32768, 10, version)
-    build_resume = thirty_two_k.build_config
+    def continuation(
+        previous: ArtifactStep[SkyRLRun], previous_step: int, stage: str, cap: int, max_steps: int, stage_version: str
+    ) -> ArtifactStep[SkyRLRun]:
+        step = training_step(stage, cap, max_steps, stage_version)
+        build_config = step.build_config
 
-    def resume_config(ctx: StepContext) -> SkyRLRunConfig:
-        config = build_resume(ctx)
-        checkpoint_root = (
-            f"<resume-checkpoints:{artifact_identity(four_k)}>"
-            if ctx.is_fingerprint
-            else ctx.resolved(four_k).checkpoint_root
-        )
-        launch = yaml.safe_load(config.launch_config_yaml)
-        launch["skyrl"]["trainer"]["resume_path"] = str(StoragePath(checkpoint_root) / "global_step_5")
-        return replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
+        def resume_config(ctx: StepContext) -> SkyRLRunConfig:
+            config = build_config(ctx)
+            checkpoint_root = (
+                f"<resume-checkpoints:{artifact_identity(previous)}>"
+                if ctx.is_fingerprint
+                else ctx.resolved(previous).checkpoint_root
+            )
+            launch = yaml.safe_load(config.launch_config_yaml)
+            launch["skyrl"]["trainer"]["resume_path"] = str(
+                StoragePath(checkpoint_root) / f"global_step_{previous_step}"
+            )
+            return replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
 
-    thirty_two_k = replace(thirty_two_k, build_config=resume_config, deps=(*thirty_two_k.deps, four_k))
-    return MochiSmoke(four_k, thirty_two_k)
+        return replace(step, build_config=resume_config, deps=(*step.deps, previous))
+
+    initial_four_k = training_step("4k-initial", 4096, 4, initial_four_k_version or four_k_version or version)
+    four_k = continuation(initial_four_k, 4, "4k", 4096, 5, four_k_version or version)
+    thirty_two_k = continuation(four_k, 5, "32k", 32768, 10, version)
+    return MochiSmoke(initial_four_k, four_k, thirty_two_k)
 
 
 @click.command(help=__doc__)
-@click.option("--stage", type=click.Choice(("4k", "32k")), default="32k")
+@click.option("--stage", type=click.Choice(("4k-initial", "4k", "32k")), default="32k")
+@click.option("--initial-four-k-version", default=None, help="Reuse a completed fresh-MuonH checkpoint-4 artifact.")
 @click.option("--four-k-version", default=None, help="Reuse a completed 4K artifact when retrying the continuation.")
-@click.option(
-    "--save-continuation-checkpoint/--skip-continuation-checkpoint",
-    default=True,
-    help="Keep the loaded 4K checkpoint and omit the final 32K save when time is bounded.",
-)
 @rl_build_options
-def main(stage: str, four_k_version: str | None, save_continuation_checkpoint: bool) -> ArtifactStep:
+def main(stage: str, initial_four_k_version: str | None, four_k_version: str | None) -> ArtifactStep:
     run = build_smoke(
         resolve_version("mochi-one-rack", None),
+        initial_four_k_version=initial_four_k_version,
         four_k_version=four_k_version,
-        save_continuation_checkpoint=save_continuation_checkpoint,
     )
+    if stage == "4k-initial":
+        return run.initial_four_k
     return run.four_k if stage == "4k" else run.thirty_two_k
 
 

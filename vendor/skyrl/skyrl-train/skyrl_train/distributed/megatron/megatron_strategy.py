@@ -101,6 +101,12 @@ def _saved_optimizer_sharding_type(common_state: dict) -> str:
 _MUONH_CHECKPOINT_RECIPE = "MuonH"
 
 
+def _muonh_checkpoint_recipe(optimizer_config) -> str:
+    if optimizer_config.get("optimizer_kwargs", {}).get("expert_normalization", "per_expert") == "all_experts":
+        return f"{_MUONH_CHECKPOINT_RECIPE}:hero_ep_all_experts"
+    return _MUONH_CHECKPOINT_RECIPE
+
+
 def _muonh_fp32_substates(optimizer_state: dict) -> list[dict]:
     return (
         [optimizer_state]
@@ -356,7 +362,7 @@ class MegatronStrategy(DistributedStrategy):
             )
             if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
-                sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
+                sharded_state_dict["optimizer_recipe"] = _muonh_checkpoint_recipe(self.optimizer_config)
                 sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
         if scheduler:
             sharded_state_dict["lr_scheduler"] = scheduler.state_dict()
@@ -444,7 +450,7 @@ class MegatronStrategy(DistributedStrategy):
         with remote_checkpoint_metadata(ckpt_dir) as read_dir:
             if optimizer and load_training_state:
                 common_state = dist_checkpointing.load_common_state_dict(read_dir)
-                if muonh and common_state.get("optimizer_recipe") != _MUONH_CHECKPOINT_RECIPE:
+                if muonh and common_state.get("optimizer_recipe") != _muonh_checkpoint_recipe(self.optimizer_config):
                     raise ValueError("Checkpoint does not contain Grug MuonH optimizer state")
                 if muonh and "optimizer_recipe_step" not in common_state:
                     raise ValueError("Checkpoint does not contain Grug AdamH step state")
