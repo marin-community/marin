@@ -438,6 +438,42 @@ def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_pat
         verified_copy_prefix(str(source), str(destination), workers=1)
 
 
+def test_verified_copy_ignores_null_s3_version_id(tmp_path, monkeypatch):
+    # On a bucket with versioning suspended, HeadObject reports VersionId "null"
+    # while ListObjectsV2 entries carry no version ID at all.
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    etag = '"366f00cbbba4448aa3ec79702df5711a"'
+
+    class VersioningSuspendedSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def find(self, path, *, detail):
+            found = source_filesystem.find(path, detail=detail)
+            return {name: {**info, "ETag": etag} for name, info in found.items()}
+
+        def info(self, path):
+            return {**source_filesystem.info(path), "ETag": etag, "VersionId": "null"}
+
+    def versioning_suspended_route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(source):
+            return VersioningSuspendedSource(), source_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", versioning_suspended_route)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"weights"
+
+
 def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp_path, monkeypatch):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
