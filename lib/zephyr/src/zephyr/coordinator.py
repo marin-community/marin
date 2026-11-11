@@ -909,10 +909,9 @@ class ZephyrCoordinator:
         """True when no further task can be dispatched to this worker. Lock held.
 
         Every active execution must have loaded its last task-producing stage
-        and drained its queue, and this worker must hold nothing in flight that
-        could fail and be requeued onto it. A peer's requeued shard is picked up
-        by a restarted worker, and ``_check_worker_group`` is the failsafe
-        against the pool dying out entirely.
+        and drained its queue. Keep one idle worker while shards are in flight:
+        a replacement attempt can poll before the old attempt's heartbeat
+        expires and would otherwise exit before its shard is requeued.
         """
         active = [r for r in self._executions.values() if not r.done]
         if not active:
@@ -924,7 +923,17 @@ class ZephyrCoordinator:
             return False
         if not all(r.is_last_stage and not r.task_queue for r in active):
             return False
-        return not any(e.worker_id == worker_id for r in active for e in r.in_flight.values())
+        in_flight_workers = {e.worker_id for r in active for e in r.in_flight.values()}
+        if worker_id in in_flight_workers:
+            return False
+        if any(r.completed_shards < r.total_shards for r in active):
+            idle_workers = sum(
+                state is WorkerState.ACTIVE and worker not in in_flight_workers
+                for worker, state in self._worker_states.items()
+            )
+            if idle_workers <= 1:
+                return False
+        return True
 
     def _assert_in_flight_consistent(self, run: _PipelineExecution, worker_id: str, shard_idx: int) -> None:
         """Assert in_flight[shard_idx], if present, is owned by the reporting worker.

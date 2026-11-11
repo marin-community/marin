@@ -177,3 +177,25 @@ uv run --project vendor/skyrl --frozen --extra cpu --no-group dev python vendor/
 
 Types and open mappings that YAML cannot express belong in `vendor/skyrl/scripts/recipe_schema_sidecar.py`.
 A renamed or retired author key needs a migration message in `skyrlrecipe.ownership.REMOVED`.
+
+## Reference-likelihood diagnostics
+
+Add `type: reference_likelihood` to `trainer.callbacks`, with `reference_paths`
+(a list of Parquet paths), `output_path`, and optional `batch_size` (default 8).
+It runs inside the existing evaluation session, after rollout weights have been
+synchronized. Keep an evaluation callback to schedule those sessions.
+
+Each Parquet row needs a unique `id`, `validation_domain`, `reference_token_ids`
+(the complete prompt and answer), and `reference_start` (the first answer token).
+Render the native chat template, including thinking-mode delimiters, before
+creating these rows. A nonempty prompt is required to score the first answer token.
+The tokenizer must match the serving model. The scorer requests prompt logprobs
+and one disposable output token; it does not grade that generated token.
+
+Metrics distinguish equal-example NLL from token-weighted NLL. Per-step JSONL
+records contain the full token IDs, answer start, and chosen answer-token logprobs.
+Use them to locate distribution changes. Lower NLL does not establish factual
+correctness, better generated answers, or preserved behavior. The callback does
+not select checkpoints, enforce preservation gates, or stop training.
+Missing or misaligned scores fail that step's scoring: the trainer logs a
+warning, omits the step's reference metrics and JSONL, and continues training.
