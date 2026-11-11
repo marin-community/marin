@@ -167,6 +167,7 @@ data:
   kind: parquet
   shuffle: false
 extra_env:
+  DAYTONA_TARGET: us
   OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
   NCCL_NET: Socket

@@ -16,10 +16,10 @@ Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9267
+  --stage 32k --version 2026.11.11.9268
 ```
 
-Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.
+Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. The recipe explicitly selects Daytona's `us` target, which full Harbor trials require in their host connection. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.
 
 The wheel in `config/external/vllm/mochi-gb200.toml` is experimental. `runtime.vllm_backend()` selects it through Marin's ordinary CUDA serving launcher without changing the promoted `gpu.toml`. The vendored SkyRL lock selects the same vLLM bytes. Its Python implementation is the merged schema-3 source `3004cd8f163299116b96d1b324cfff418c387388`; its SM100 native payloads are byte-identical to release `5fa2e9bad66dcc2b9836e657323214aefc179a7f`. The matching Torch 2.14.1/cu132 FlashAttention package retains FA2 kernels and excludes an incompatible optional FA4 namespace. Artifact manifests are attached to the task-scoped prerelease.
 
