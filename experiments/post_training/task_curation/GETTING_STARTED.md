@@ -96,7 +96,7 @@ Declaring, converting or assessing a source does **not** approve it for training
    ```
 
 5. **Examine the QUICK result.** Open `manifest.json` for your source. Make sure that `input_rows` is equal to `converted_rows` plus the sum of `rejections`. Make sure that you expect each rejection reason.
-6. **Run SAMPLE with review.** Set `GLM_BULK_TOKEN` first (refer to Before you start). This example uses a panel of 5 rows for a fast test. The default panel has 100 rows.
+6. **Run SAMPLE with review.** Set `GLM_BULK_TOKEN` first (refer to Before you start). This example uses a panel of 5 rows for a fast test. The default panel has 100 rows. If the source has no oracle solutions, follow [Sources without oracle solutions](../../../docs/references/task-curation.md#sources-without-oracle-solutions).
 
    ```bash
    uv run --with-editable './lib/taskcompendium[pipeline]' python \
