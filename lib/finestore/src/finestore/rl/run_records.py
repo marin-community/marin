@@ -209,6 +209,11 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
         export_root, attempt_id = record.parent.export_root, record.parent.attempt_id
 
 
+def attempt_lineage(export_root: str, attempt_id: str) -> tuple[AttemptHistory, ...]:
+    """Read bounded checkpoint receipts for native history and timing consumers."""
+    return _lineage(export_root, attempt_id, {})
+
+
 def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[str, Any]]:
     """Join bounded history by step, retaining each metric's source attempt.
 

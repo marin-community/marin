@@ -359,3 +359,4 @@ terminal result, startup information and checkpoint ancestry have separate field
 `read_attempt_metrics` joins only that attempt and its known bounded ancestors;
 joined steps expose `metric_attempt_ids` for per-metric attribution. A step reset
 starts a fresh metric history while retaining its checkpoint provenance.
+`attempt_lineage` exposes those bounded attempt receipts to history and timing readers.
