@@ -410,7 +410,9 @@ def _manifest(stdout: str) -> list[tuple[str, int, str]]:
             continue
         first, second = parts
         path = _normalized_path(second.strip())
-        if re.fullmatch(r"[0-7]{3,4}", first):
+        # stat prints a mode without leading zeros ("0" for a file a task
+        # deliberately made unreadable), so accept one to four octal digits.
+        if re.fullmatch(r"[0-7]{1,4}", first):
             entries[path] = int(first, 8)
         elif re.fullmatch(r"[0-9a-f]{64}", first):
             digests[path] = first

@@ -171,3 +171,12 @@ def test_a_faithful_mode_change_is_reported_not_failed():
     written, missing, extra, changed = _compare_workspace(expectations, f"755 ./run.sh\n{'b' * 64}  ./run.sh\n")
     assert (written, missing, extra) == (1, (), ())
     assert changed and changed[0].startswith("bbbbbbbbbbbb:")
+
+
+def test_a_mode_zero_file_still_counts_as_present():
+    """stat prints "0" for a task's deliberately unreadable file; content still matches."""
+    expectations = (FileExpectation(path="environment/files/admin.conf", sha256="c" * 64, mode=0o000),)
+    written, missing, _extra, _changed = _compare_workspace(
+        expectations, f"0 /etc/nginx/sites-enabled/admin.conf\n{'c' * 64}  /etc/nginx/sites-enabled/admin.conf\n"
+    )
+    assert written == 1 and missing == ()
