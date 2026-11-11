@@ -55,13 +55,14 @@ config:
       use_kl_loss: false
       use_kl_in_reward: false
       kl_estimator_type: k3_unbiased_gradient
-      off_policy_correction: none
+      off_policy_correction: tis
       eps_clip_low: 0.2
       eps_clip_high: 0.2
       group_advantage_min_size: 2
       advantage_batch_normalize: false
       rloo_n_filter_zero_reward_groups: true
       use_entropy_loss: false
+      tis_splice: true
     policy:
       optimizer_config:
         optimizer: AdamW
@@ -79,6 +80,9 @@ config:
         context_parallel_size: 4
         expert_model_parallel_size: 8
         expert_tensor_parallel_size: 1
+        moe_router_replay: true
+        transformer_config_kwargs:
+          moe_router_fusion: false
     ref:
       megatron_config:
         tensor_model_parallel_size: 1
@@ -171,6 +175,7 @@ config:
       hf_overrides:
         max_position_embeddings: 262144
         max_seq_len: 262144
+      enable_return_routed_experts: true
     sampling_params:
       temperature: 1.0
       top_p: 1.0

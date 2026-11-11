@@ -133,3 +133,10 @@ accounting, not GPU learning or live grading.
 
 The real RL job creates its own sandboxes. No separate sandbox or serving probe
 is allocated before it.
+
+
+The next-run recipe enables truncated importance sampling with the `tis` preset
+(token ratio cap2.0), policy Router Replay and serving-side expert-ID capture.
+The exact-token-ID path remains required for both raw completions and installed
+agent chat. Learner router fusion is disabled so replay hooks remain active.
+These settings do not alter the already submitted `.10.10` run.
