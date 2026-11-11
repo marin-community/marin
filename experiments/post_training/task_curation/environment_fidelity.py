@@ -16,6 +16,7 @@ enforce that, and neither is a judgement call:
 The rule applies to agentic tasks: a conversation-only task needs no machine.
 """
 
+import base64
 import re
 from collections.abc import Iterable, Mapping
 
@@ -25,10 +26,18 @@ ENVIRONMENT_DOCKERFILE = "environment/Dockerfile"
 SETUP_PREFIX = "setup_files/"
 
 
-def dockerfile_of(files: Mapping[str, bytes]) -> str | None:
-    """The archive's environment Dockerfile, when it defines one."""
+def dockerfile_of(files: Mapping[str, bytes | str]) -> str | None:
+    """The archive's environment Dockerfile, when it defines one.
+
+    ``unpack_task_binary`` exposes archived files as base64 text, so both forms are
+    accepted; anything that is not text is rejected rather than guessed at.
+    """
     blob = files.get(ENVIRONMENT_DOCKERFILE)
-    return None if blob is None else blob.decode(errors="replace")
+    if blob is None:
+        return None
+    if isinstance(blob, str):
+        blob = base64.b64decode(blob, validate=True)
+    return blob.decode(errors="replace")
 
 
 def provably_no_op_against(dockerfile: str, files: Iterable[str], *, agent_image: str) -> tuple[bool, str]:
@@ -53,7 +62,7 @@ def provably_no_op_against(dockerfile: str, files: Iterable[str], *, agent_image
     return True, "no changes relative to the agent image"
 
 
-def environment_unused(spec: Mapping, archive_files: Mapping[str, bytes]) -> str | None:
+def environment_unused(spec: Mapping, archive_files: Mapping[str, bytes | str]) -> str | None:
     """Why a converted task ignores its archive's environment, if it does.
 
     ``spec`` is a TaskCompendium task dict. A task whose archive defines

@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     unpack_task_binary,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.source_defects import SOURCE_DEFECTS
+from experiments.post_training.task_curation.environment_fidelity import environment_unused
 from experiments.post_training.task_curation.pipeline import HfSource
 
 TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
@@ -42,6 +43,14 @@ class TaskTroveConverter:
         if isinstance(converted, ImportRejection):
             return converted
         task = converted.task if isinstance(converted, NormalizedTask) else converted
+        # The archive's environment is part of the task. A conversion that declares an
+        # image while the archive defines environment/Dockerfile has replaced it, so the
+        # row is rejected until it is reconverted faithfully.
+        reused = environment_unused(task.model_dump(mode="json"), row.data["files"])
+        if reused is not None:
+            return ImportRejection(
+                kind=ImportFailureKind.CONVERTER_ERROR, reason="environment_substituted", detail=reused
+            )
         existing = {resource.path for resource in (*task.resources.all, *task.resources.oracle)}
         # Oracle controls may upload these files through runtimes without timestamp support.
         oracle = task.resources.oracle + tuple(
