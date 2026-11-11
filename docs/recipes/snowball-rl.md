@@ -7,7 +7,8 @@
    at an immutable version with the required evaluation exclusions.
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
-4. Read the [verdict](#compare-with-controls) for a gated run.
+4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
+   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
 
 ## Run a preset
 
