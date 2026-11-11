@@ -49,15 +49,16 @@ def test_dependency_installs_move_into_the_setup_script():
         "RUN apt-get update && apt-get install -y jq\n"
     )
     rebuilt = rebuild_task(native_task(dockerfile, {"files/input.csv": b"a\n1\n"}))
-    assert rebuilt.base_ref == "ubuntu:24.04"
+    assert rebuilt.base_ref.startswith("ubuntu:24.04@sha256:")
     script = unpack(rebuilt.task_binary)["setup_files/calibforge-initialize.sh"].decode()
     assert "DEBIAN_FRONTEND=noninteractive" in script
     assert "apt-get" in script and "jq" in script
     assert "tar -xzf /setup_files/calibforge-fixtures.tar.gz" in script
     output = unpack(rebuilt.task_binary)
-    assert output["environment/Dockerfile"] == b"FROM ubuntu:24.04\nWORKDIR /app\n"
+    assert output["environment/Dockerfile"].startswith(b"FROM ubuntu:24.04@sha256:")
+    assert output["environment/Dockerfile"].endswith(b"\nWORKDIR /app\n")
     toml = output["task.toml"].decode()
-    assert 'docker_image = "ubuntu:24.04"' in toml
+    assert 'docker_image = "ubuntu:24.04@sha256:' in toml
     assert "setup" in toml
 
 
@@ -147,10 +148,13 @@ def test_the_ten_from_census_maps_onto_nine_bases():
         "python:3.10-slim-bookworm",
         "debian:12-slim",
         "debian:13.0-slim",
-        "aweaiteam/calibforge:fasttext-base-v1",
     ]
     refs = {FIXED_BASES[from_ref.split("@")[0]] for from_ref in census}
-    assert len(refs) == 9  # python:3.11-slim folds into python:3.11-slim-bookworm
+    assert len(refs) == 8  # python:3.11-slim folds into python:3.11-slim-bookworm
+    assert all("@sha256:" in ref for ref in refs)
+    # The excluded fasttext base is unmapped, so such a task defers instead of
+    # emitting an unpinned image the lowered spec would reject.
+    assert "aweaiteam/calibforge:fasttext-base-v1" not in FIXED_BASES
 
 
 def test_the_machine_shape_is_normalized_so_snapshots_collapse():

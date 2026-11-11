@@ -47,16 +47,30 @@ that need more than this shape are deferred rather than silently shrunk."""
 # are resolved and recorded at packaging time; the rebuild stages references
 # and refuses unmapped families.
 FIXED_BASES = {
-    "ubuntu:24.04": "ubuntu:24.04",
-    "aweaiteam/calibforge:tb2-verifier-base-v1": "aweaiteam/calibforge:tb2-verifier-base-v1",
-    "aweaiteam/calibforge:fasttext-base-v1": "aweaiteam/calibforge:fasttext-base-v1",
-    "python:3.13-slim-bookworm": "python:3.13-slim-bookworm",
-    "python:3.12-slim-bookworm": "python:3.12-slim-bookworm",
-    "python:3.11-slim": "python:3.11-slim-bookworm",
-    "python:3.11-slim-bookworm": "python:3.11-slim-bookworm",
-    "python:3.10-slim-bookworm": "python:3.10-slim-bookworm",
-    "debian:12-slim": "debian:12-slim",
-    "debian:13.0-slim": "debian:13.0-slim",
+    # Every base is digest-pinned: a lowered task spec rejects a floating tag, and a
+    # digest change is a deliberate edit here rather than a silent rebuild.
+    "ubuntu:24.04": "ubuntu:24.04@sha256:78d4744ead1f5b19b04d0df558ab182a5300903900755e515b2ca4d10eb2044d",
+    "aweaiteam/calibforge:tb2-verifier-base-v1": (
+        "aweaiteam/calibforge:tb2-verifier-base-v1@sha256:"
+        "0f61b2776c40231d5d868278ed6042295ddbc9d24b036cd72f0b88ebe9bd621a"
+    ),
+    "python:3.13-slim-bookworm": (
+        "python:3.13-slim-bookworm@sha256:f3dac913ab53b78c64f26d5518fcd7043d5a1a46522d6a493b598c3ed12f62a6"
+    ),
+    "python:3.12-slim-bookworm": (
+        "python:3.12-slim-bookworm@sha256:0f086103b026048cc50cb5da25ec435c023c5241a83fc44daea593377abc61c4"
+    ),
+    "python:3.11-slim": (
+        "python:3.11-slim-bookworm@sha256:e8c69d86735f6df3efa06b324694fe51f0422785f83a3bd463052636c2421944"
+    ),
+    "python:3.11-slim-bookworm": (
+        "python:3.11-slim-bookworm@sha256:e8c69d86735f6df3efa06b324694fe51f0422785f83a3bd463052636c2421944"
+    ),
+    "python:3.10-slim-bookworm": (
+        "python:3.10-slim-bookworm@sha256:db6ee5170ebce0f4d165af242e8e77addc08bd9ffc37e8b1815752cf027aa4f8"
+    ),
+    "debian:12-slim": "debian:12-slim@sha256:c67e92c8099ba22853ab4cfda7cfb494d253d6012ca82dee98ba8976772af018",
+    "debian:13.0-slim": "debian:13.0-slim@sha256:f2306da7a8fb6440535937baed0ce0018736742d6dc5beec9d6a31355b259726",
 }
 
 _META_COMMANDS = {"from", "cmd", "entrypoint", "label", "expose", "stopsignal", "healthcheck", "shell"}
@@ -179,7 +193,8 @@ def compile_recipe(
         raise DeferredRebuild("requires_unmapped_base:" + original_from)
     # A digest-pinned original keeps its digest on the normalized reference; floating
     # tags stay references until packaging resolves their digests.
-    base_ref = f"{FIXED_BASES[base_key]}@{original_digest}" if original_digest else FIXED_BASES[base_key]
+    # The mapped base already carries a digest; a digest-pinned original keeps its own.
+    base_ref = f"{base_key}@{original_digest}" if original_digest else FIXED_BASES[base_key]
     workdir = "/"
     commands = [
         "#!/bin/sh",
@@ -451,7 +466,7 @@ def main() -> None:
         # rebuild itself stays free of the Harbor measurement environment.
         "snapshot_identity_count": None,
         "base_refs": sorted(set(base_refs)),
-        "digest_pinned": False,
+        "digest_pinned": True,
         "admission": "not_run",
         # The cohort ships no oracle solutions, so execution is uncertified until
         # no_oracle_qualification runs; that report supplies the real value.
