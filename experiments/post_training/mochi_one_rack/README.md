@@ -8,11 +8,13 @@ The recipe comes from Ben's long-loop recipe at `bf163020a7115d85fd3fcb02099d3ab
 
 `data.py` checks the original Parquet SHA-256 values before selection and emits a manifest of task identities and stage checksums. The tokenizer and chat template are copied without changes from the SFT run's `2026.09.18` tokenizer. The source tokenizer manifest pins their hashes. Generation stops on both token IDs 128001 and 128009.
 
+After the CPU export completes and the original tokenizer files and generation config are present, run `handoff.py` in the vendored SkyRL CPU environment with `--hf-root` set to the private export URI. It validates shard sizes against the completed export receipts and writes SkyRL's immutable portable-model manifest. It preserves the original tokenizer bytes and uses the exporter's shard SHA-256 values. Verify tokenizer and policy metadata staging before allocating GPUs.
+
 Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9262
+  --stage 32k --version 2026.11.11.9263
 ```
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.

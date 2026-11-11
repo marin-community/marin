@@ -30,7 +30,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
 TRIAL_ROOT = "s3://marin-us-east-08a/tmp/ttl=7d/romain/mochi-rl-smoke/2026.11.11.01a1c926.a1"
-INPUT_VERSION = "2026.11.11.9261"
+INPUT_VERSION = "2026.11.11.9263"
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=12,
