@@ -15,7 +15,7 @@ bytes or verifier material, so no machine can execute these tasks from the publi
 release alone. Treat every entry as a data pointer, not a runnable pipeline.
 """
 
-from finestore.rl.curation import DaytonaSafety, IndependentQC, OracleValidation, Verdict
+from finestore.rl.curation import IndependentQC, OracleValidation, Verdict
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -85,7 +85,6 @@ def sources() -> list[RlDataSource]:
                     admitted=2205,
                     evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
                 oracle_validation=OracleValidation.SKIPPED,
             )
         ),
@@ -121,7 +120,6 @@ def sources() -> list[RlDataSource]:
                     admitted=324,
                     evidence_url=_pinned_blob(shared_v2, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -150,7 +148,6 @@ def sources() -> list[RlDataSource]:
                     admitted=8045,
                     evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             )
         ),
         RlDataSource(
@@ -178,7 +175,6 @@ def sources() -> list[RlDataSource]:
                     reviewed=1699,
                     evidence_url=_pinned_blob(staged_v1, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
         RlDataSource(
@@ -208,7 +204,6 @@ def sources() -> list[RlDataSource]:
                     reviewed=778,
                     evidence_url=_pinned_blob(staged_v2, "manifest.json"),
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
             )
         ),
     ]

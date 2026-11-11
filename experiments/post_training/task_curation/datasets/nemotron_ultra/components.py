@@ -24,7 +24,6 @@ from functools import lru_cache, partial
 from typing import Any
 
 import pyarrow as pa
-from finestore.rl.curation import DaytonaSafety
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.nemotron_ultra import PLACEHOLDER_FIELD, blend_component
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
@@ -525,7 +524,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="agentic-safety",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2000,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "safety_en": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/safety_en",
@@ -545,7 +543,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=1884,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         f"{NEXT_ACTION_COMPONENT}/{SweSplit.SWE_REBENCH}": SourceInfo(
             id=(
@@ -557,7 +554,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5307,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
@@ -566,7 +562,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=860,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
@@ -575,7 +570,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=3903,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "ultra_sft_step3200_abstention": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_abstention",
@@ -624,7 +618,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="math-proof",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=902,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_cot",
@@ -641,7 +634,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="math-answer",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5917,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k",
@@ -674,7 +666,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="chemistry",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=1403,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_reasoning_gym": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym",
@@ -715,7 +706,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2666,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
@@ -748,7 +738,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=246,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
             id=(
@@ -759,7 +748,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=932,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
     },
     "rlvr1": {
@@ -818,7 +806,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="math-proof",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=902,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot",
@@ -835,7 +822,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="math-answer",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5917,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k",
@@ -900,7 +886,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2838,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             id=("MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
@@ -909,7 +894,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=11060,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
@@ -918,7 +902,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=20035,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
@@ -927,7 +910,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=4011,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
     },
     "rlvr2": {
@@ -986,7 +968,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="math-proof",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=902,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_math_cot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot",
@@ -1003,7 +984,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="math-answer",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=5917,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_multichallenge_len40k": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k",
@@ -1068,7 +1048,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2838,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
             id=("MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
@@ -1077,7 +1056,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="swe-repo",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=11060,
-            daytona_safety=DaytonaSafety.UNSAFE,
         ),
         "ultra_sft_step3200_tau_pivot": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
@@ -1086,7 +1064,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=20035,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_toolcall_schema": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
@@ -1095,7 +1072,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="tool-use",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=2666,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_ds2_freeform": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform",
@@ -1120,7 +1096,6 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             family="chemistry",
             tags=("agentic", "multi-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=1403,
-            daytona_safety=DaytonaSafety.SAFE,
         ),
         "ultra_sft_step3200_structured_outputs_v3": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3",

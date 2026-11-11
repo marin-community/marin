@@ -11,7 +11,6 @@ multiple-choice source grades the option letter in process.
 
 import re
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -245,7 +244,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
                     "in the new grader."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
         (
@@ -262,7 +260,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
                     "data field at conversion."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
     )
@@ -296,7 +293,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
                     "and subsample hard: 617k rows is a third of the corpus."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",

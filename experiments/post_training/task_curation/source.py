@@ -8,11 +8,11 @@ from typing import Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
-    DaytonaSafety,
     IndependentQC,
     OracleValidation,
     PipelineReference,
     SourceDeclaration,
+    daytona_verdict,
 )
 from marin.execution.lazy import ArtifactStep
 
@@ -80,20 +80,21 @@ class SourceInfo:
     notes: str = ""
     dataset: SourceReference | None = None
     independent_qc: IndependentQC | None = None
-    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
-    """Whether running the source fits the Daytona-safe snapshot budget.
-
-    Each unique agent or grader image a run provisions is one Daytona snapshot. Sources
-    without the ``agentic`` tag never provision sandboxes and are safe regardless of this
-    value; assess an agentic source's unique snapshot count against
-    ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` before declaring it safe or unsafe.
-    """
-
     daytona_snapshot_count: int | None = None
-    """Measured distinct snapshot identities over the pinned task payloads."""
+    """Distinct environments the source's own task specs require, as measured.
+
+    Each unique agent or grader image a run provisions is one Daytona snapshot.
+    ``None`` means the count was never taken; it is never inferred from a declaration.
+    """
 
     daytona_count_basis: str | None = None
     """Identity rule and payload source behind ``daytona_snapshot_count``."""
+
+    daytona_execution_failures: int | None = None
+    """Tasks the Daytona backend refuses on their declared execution requirements."""
+
+    daytona_run_evidence: str | None = None
+    """A campaign run that executed this source on the Daytona RL org, when one exists."""
 
     oracle_validation: OracleValidation | None = None
     """How execution was qualified when the source ships no oracle solutions.
@@ -149,10 +150,11 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 files=list(self.files),
             )
         tags = info.tags
-        measured = info.daytona_snapshot_count is not None and info.daytona_count_basis is not None
-        safety = info.daytona_safety
-        if not measured and safety is not DaytonaSafety.UNASSESSED:
-            safety = DaytonaSafety.UNASSESSED
+        safety = daytona_verdict(
+            snapshot_count=info.daytona_snapshot_count,
+            execution_failures=info.daytona_execution_failures,
+            agentic="agentic" in tags,
+        )
         return SourceDeclaration(
             id=info.id,
             name=self.name,
@@ -190,7 +192,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,
-            daytona_safety=DaytonaSafety.SAFE if "agentic" not in tags else safety,
+            daytona_safety=safety,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
             oracle_validation=info.oracle_validation,

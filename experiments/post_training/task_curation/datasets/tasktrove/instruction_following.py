@@ -11,7 +11,6 @@ vacuous or contradictory schemas and conflicting public language requirements.
 import json
 import re
 
-from finestore.rl.curation import DaytonaSafety
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported
@@ -227,7 +226,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
                     "(vacuous pass) at conversion."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-ifeval",
@@ -248,7 +246,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
-                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured",

@@ -18,14 +18,27 @@ def test_non_agentic_sources_are_daytona_safe_without_an_authored_value():
     assert source.declaration.daytona_safety is DaytonaSafety.SAFE
 
 
-def test_an_agentic_verdict_requires_a_measured_count_to_survive_the_projection():
+def test_an_agentic_verdict_comes_from_the_measured_count():
+    """The verdict is derived from the count, so no field on the source can set it."""
     agent = SourceInfo(id="trove:agent", title="Agent", origin="fixture", tags=("agentic",))
-    inferred = RlDataSource(info=replace(agent, daytona_safety=DaytonaSafety.UNSAFE))
-    assert inferred.declaration.daytona_safety is DaytonaSafety.UNASSESSED
-    measured = RlDataSource(info=replace(agent, daytona_safety=DaytonaSafety.UNSAFE, **MEASURED))
-    assert measured.declaration.daytona_safety is DaytonaSafety.UNSAFE
-    assert measured.declaration.daytona_snapshot_count == 5
-    assert measured.declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
+    inferred = RlDataSource(info=replace(agent, **MEASURED))
+    assert inferred.declaration.daytona_safety is DaytonaSafety.SAFE
+    assert inferred.declaration.daytona_snapshot_count == 5
+    assert inferred.declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
+
+    over = RlDataSource(info=replace(agent, **{**MEASURED, "daytona_snapshot_count": DAYTONA_SAFE_SNAPSHOT_LIMIT + 1}))
+    assert over.declaration.daytona_safety is DaytonaSafety.UNSAFE
+
+    refused = RlDataSource(info=replace(agent, **MEASURED, daytona_execution_failures=1))
+    assert refused.declaration.daytona_safety is DaytonaSafety.UNSAFE
+
+
+def test_an_unmeasured_agentic_source_is_unassessed_whatever_it_declares():
+    agent = SourceInfo(id="trove:agent", title="Agent", origin="fixture", tags=("agentic",))
+    assert RlDataSource(info=agent).declaration.daytona_safety is DaytonaSafety.UNASSESSED
+    assert (
+        RlDataSource(info=replace(agent, daytona_count_basis="x")).declaration.daytona_safety is DaytonaSafety.UNASSESSED
+    )
 
 
 def test_deprecated_tag_marks_the_status_over_available():
