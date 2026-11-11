@@ -70,7 +70,7 @@ def _connection(arguments: argparse.Namespace) -> DaytonaConnection:
     return DaytonaConnection(api_key=api_key, api_url=arguments.api_url, target=arguments.target)
 
 
-def _row(name: str, state: str, cpus: Any, memory: Any, disk: Any) -> tuple[str, ...]:
+def _row(name: str, state: str, cpus: int | None, memory: int | None, disk: int | None) -> tuple[str, ...]:
     return (
         name,
         state,

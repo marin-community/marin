@@ -1094,7 +1094,7 @@ def test_task_environment_builds_the_machine_spec_and_snapshot_request(tmp_path)
     assert spec.network is NetworkPolicy.DENY
     assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (2, 2049, 1025)
     assert request.source == spec.source
-    assert request.name == snapshot_name(request.source, request.resources)
+    assert request.name == "shellbox-63d11f0b74739ee18b90a963a6db6e078db4e468"
     assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (2, 3, 2)
 
 

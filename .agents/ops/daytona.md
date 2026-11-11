@@ -75,8 +75,9 @@ Snapshots are identified by Shellbox, not by individual launchers. One snapshot
 covers one image source (a registry image, or a Docker build context with its
 Dockerfile contents) and one CPU, memory, disk and GPU request. Memory and disk
 round up to whole GiB. The name is `shellbox-` plus the first 40 hex characters
-of `sha256(image_source_key(source) + json(resources))`, so a changed image,
-context or resource request selects a different snapshot. Harbor passes its task
+of `sha256(image_source_key(source) + json(resources))`, so a changed image
+reference, build context or resource request selects a different snapshot. A
+moved registry tag keeps its snapshot name. Harbor passes its task
 image and resource values to Shellbox and does not name, round or build
 snapshots itself.
 

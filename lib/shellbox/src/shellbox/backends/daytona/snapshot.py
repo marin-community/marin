@@ -101,7 +101,11 @@ def snapshot_resources(*, cpus: int | None, memory_mb: int | None, storage_mb: i
 
 
 def snapshot_name(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """Name the snapshot by the exact image content and provider resources."""
+    """Name the snapshot by its source identity and provider resources.
+
+    A registry image is identified by reference, so a moved tag keeps its name.
+    A Docker build context is identified by its current contents.
+    """
     identity = f"{image_source_key(source)}\0" f"{json.dumps(asdict(resources), sort_keys=True)}"
     return f"{SNAPSHOT_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
 
