@@ -49,6 +49,22 @@ def test_gsm8k_flexible_grader_preserves_complete_final_box(response, reference,
     assert verdict.detail["metrics"]["exact_match,flexible-extract"] == expected
 
 
+def test_gsm8k_flexible_grader_scores_leading_question_restatement():
+    response = (
+        "\nQuestion: Janet has 16 eggs and uses 7.\n"
+        "16 - 7 = 9; 9 * 2 = 18.\nThe answer is 18.\n"
+        "Question: unrelated question with 8088 rows"
+    )
+    verdict = score(
+        "harness_generation",
+        {"profile": "gsm8k", "references": (("18",),), "question": "Janet has 16 eggs and uses 7."},
+        response,
+    )
+
+    assert verdict.detail["extracted"]["flexible-extract"] == "18"
+    assert verdict.detail["metrics"]["exact_match,flexible-extract"] == 1.0
+
+
 @pytest.mark.parametrize("threaded", [False, True])
 def test_minerva_symbolic_timeout_is_a_nonmatch(threaded):
     if threaded:

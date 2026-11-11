@@ -2,7 +2,7 @@
 
 import re
 
-from eval.generation_stops import GSM8K_STOP_SEQUENCES, truncate_at_stop
+from eval.generation_stops import END_OF_TURN_SEQUENCES, truncate_at_stop
 from eval.graders.answer_extraction import extract_final_boxed_answer
 from eval.graders.minerva_math import is_equiv, normalize_final_answer
 
@@ -29,7 +29,8 @@ _FALLBACK = "[invalid]"
 
 def extract_gsm8k_flexible_answer(response: str) -> str:
     """Prefer final-answer syntax before falling back to the last number."""
-    response = truncate_at_stop(response, GSM8K_STOP_SEQUENCES)
+    # A leading Question: can restate the prompt; a later line starts a new turn.
+    response = truncate_at_stop(response.lstrip(), END_OF_TURN_SEQUENCES)
     boxed = extract_final_boxed_answer(response)
     if boxed:
         return boxed.strip()
