@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProofNet-Verified and NuminaMath-LEAN fixture rows, and the frozen contracts converted from them."""
+"""Fixture rows of the Lean sources (ProofNet-Verified, NuminaMath-LEAN, miniF2F, PutnamBench) and their contracts."""
 
 import gzip
 import json
@@ -13,14 +13,18 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.lean import numina, proofs
+from experiments.post_training.task_curation.datasets.lean import evals, numina, proofs
 
-PROOFNET = proofs.sources()[0].config
+PROOFNET = proofs.sources()[0].config.recipe
 NUMINA = numina.sources()[0].config
+MINIF2F_EVAL, PUTNAMBENCH_EVAL = (source.config for source in evals.sources())
+MINIF2F, PUTNAMBENCH = MINIF2F_EVAL.recipe, PUTNAMBENCH_EVAL.recipe
 NUMINA_FIXTURE = Path(__file__).parent / "fixtures/lean/numina_rows.json"
 """Rows copied from the pinned NuminaMath-LEAN payload whose human proofs check with the grader's toolchain."""
 PROOFS_FIXTURE = Path(__file__).parent / "fixtures/lean/proofnet_proofs.json"
 """Rows copied from the pinned ProofNet-Verified payload, each with a proof checked by the grader's toolchain."""
+EVAL_FIXTURE = Path(__file__).parent / "fixtures/lean/eval_rows.json"
+"""miniF2F and PutnamBench rows as their readers produce them from the pinned files, by benchmark."""
 
 
 def proofnet_row(**fields: Any) -> dict[str, Any]:
@@ -89,3 +93,11 @@ def prime_inputs(
         (directory / name / f"{name}.json.gz").write_bytes(gzip.compress(json.dumps(sorted(uuids)).encode()))
         staged[name] = StoragePath(str(directory / name))
     return staged
+
+
+EVAL_ROWS = json.loads(EVAL_FIXTURE.read_text())
+
+
+def eval_row(benchmark: str, name: str) -> dict[str, Any]:
+    """The fixture row of ``name`` in ``benchmark`` (``minif2f`` or ``putnam``)."""
+    return next(row for row in EVAL_ROWS[benchmark] if row["name"] == name)

@@ -3,16 +3,20 @@
 
 """Lean proof sources freeze each statement into the contract the kernel-replay grader checks."""
 
+import io
 import json
 import os
+import tarfile
 import time
 
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
 
-from experiments.post_training.task_curation.datasets.lean.check_statements import failed_unexpectedly
+from experiments.post_training.task_curation.datasets.lean.check_statements import audit_failures, failed_unexpectedly
 from experiments.post_training.task_curation.datasets.lean.eval_overlap import statement_key
+from experiments.post_training.task_curation.datasets.lean.evals import minif2f_rows, putnam_contract, putnam_rows
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
     GraderFailure,
@@ -30,11 +34,16 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     human_proof,
     is_human_proof_row,
 )
+from experiments.post_training.task_curation.datasets.lean.proofs import proofnet_contract
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
+    MINIF2F,
+    MINIF2F_EVAL,
     NUMINA,
     PROOFNET,
+    PUTNAMBENCH,
     contract,
+    eval_row,
     numina_row,
     prime_inputs,
     proofnet_row,
@@ -143,10 +152,14 @@ def test_a_reply_restates_the_target_only_with_a_declaration_outside_comments_an
     assert declares_target(block, "t") is restated
 
 
-def test_a_repeated_exercise_is_left_out():
-    result = convert_row(PROOFNET, proofnet_row(index=351))
+@pytest.mark.parametrize(("index", "reason"), [(35, "no_sorry_proof"), (351, "repeated_exercise")])
+def test_the_proofnet_eval_leaves_out_the_row_that_ships_its_proof_and_the_repeated_exercise(index, reason):
+    assert PROOFNET.source.select is not None
+    assert not PROOFNET.source.select(proofnet_row(index=index), None)
+    statement = "theorem Artin_exercise_2_2_9 : True :=\n  trivial" if index == 35 else proofnet_row()["formal_stmt"]
+    result = proofnet_contract(proofnet_row(index=index, formal_stmt=statement))
     assert isinstance(result, ImportRejection)
-    assert result.reason == "repeated_exercise"
+    assert result.reason == reason
 
 
 PROOF_BYTES, REPLY_BYTES = 1 << 16, 1 << 20
@@ -376,6 +389,137 @@ def test_a_numina_row_without_a_usable_statement_or_proof_is_rejected(fields, re
     assert result.reason == reason
 
 
+def test_a_minif2f_theorem_imports_mathlib_in_place_of_the_benchmarks_own_imports():
+    task = converted_task(MINIF2F, eval_row("minif2f", "mathd_algebra_478"))
+    frozen = contract(task)
+    assert frozen["prefix"] == "import Mathlib\n\nopen scoped Nat\nopen scoped Real"
+    assert frozen["target"] == "mathd_algebra_478"
+    prompt = task.context.events[0]
+    assert isinstance(prompt, TextMessage)
+    assert "The volume of a cone" in prompt.content
+    assert {"eval", "benchmark:miniF2F"} <= set(task.tags)
+
+
+def test_a_minif2f_theorem_without_a_docstring_shows_only_its_lean_statement():
+    task = converted_task(MINIF2F, eval_row("minif2f", "numbertheory_4x3m7y3neq2003"))
+    prompt = task.context.events[0]
+    assert isinstance(prompt, TextMessage)
+    instructions, code = prompt.content.split("```lean4\n", 1)
+    assert instructions.strip().count("\n") == 0
+    assert f"{contract(task)['statement']} by\n  sorry" in code
+
+
+@pytest.mark.parametrize(
+    ("name", "statement"),
+    [
+        ("mathd_numbertheory_66", "theorem mathd_numbertheory_66 : 194 % 11 = 7 :="),
+        ("mathd_algebra_302", "theorem mathd_algebra_302 : (Complex.I / 2) ^ 2 = -(1 / 4) :="),
+    ],
+)
+def test_a_minif2f_theorem_that_ships_its_proof_is_frozen_without_it(name, statement):
+    task = converted_task(MINIF2F, eval_row("minif2f", name))
+    assert contract(task)["statement"] == statement
+    prompt = task.context.events[0]
+    assert isinstance(prompt, TextMessage)
+    assert "rfl" not in prompt.content and "div_pow" not in prompt.content
+
+
+def test_a_minif2f_theorem_whose_shipped_proof_changed_is_a_source_defect():
+    row = eval_row("minif2f", "mathd_numbertheory_66")
+    result = convert_row(MINIF2F, {**row, "formal_statement": row["formal_statement"].replace("rfl", "by decide")})
+    assert isinstance(result, ImportRejection)
+    assert result.reason == "unexpected_proof"
+
+
+def test_test_lean_is_read_as_one_row_per_theorem_with_its_docstring_and_the_files_header(tmp_path):
+    header = "import MiniF2F.ProblemImports\n\nopen scoped Real"
+    path = tmp_path / "Test.lean"
+    path.write_text(
+        f"{header}\n\n/-- One and one. -/\ntheorem a : 1 + 1 = 2 := by\n  sorry\n\ntheorem b : 2 = 2 := by\n  sorry\n"
+        "\n/-- Three. -/\n\n--/\ntheorem c : 3 = 3 := by\n  sorry\n"
+    )
+    assert list(minif2f_rows(StoragePath(str(path)))) == [
+        {
+            "name": "a",
+            "informal": "One and one.",
+            "header": header,
+            "formal_statement": "theorem a : 1 + 1 = 2 := by\n  sorry",
+        },
+        {"name": "b", "informal": "", "header": header, "formal_statement": "theorem b : 2 = 2 := by\n  sorry"},
+        {"name": "c", "informal": "Three.", "header": header, "formal_statement": "theorem c : 3 = 3 := by\n  sorry"},
+    ]
+
+
+def test_a_putnam_problem_freezes_the_theorem_named_after_its_file_below_its_helpers():
+    task = converted_task(PUTNAMBENCH, eval_row("putnam", "putnam_1997_b5"))
+    frozen = contract(task)
+    assert frozen["target"] == "putnam_1997_b5"
+    assert frozen["prefix"].startswith("import Mathlib")
+    assert "def tetration" in frozen["prefix"]
+    assert frozen["statement"].startswith("theorem putnam_1997_b5")
+    prompt = task.context.events[0]
+    assert isinstance(prompt, TextMessage)
+    assert "Prove that for $n" in prompt.content
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"), [("putnam_1962_a5", "answer_problem"), ("putnam_1966_a4", "does_not_compile")]
+)
+def test_a_putnam_problem_that_asks_for_an_answer_or_does_not_compile_is_left_out(name, reason):
+    row = eval_row("putnam", name)
+    assert PUTNAMBENCH.source.select is not None
+    assert not PUTNAMBENCH.source.select(row, None)
+    result, _ = putnam_contract(row)
+    assert isinstance(result, ImportRejection)
+    assert result.reason == reason
+
+
+def putnam_archive(path, members):
+    top = "PutnamBench-" + "0" * 40
+    with tarfile.open(path, "w:gz") as tar:
+        for name, data in members:
+            member = tarfile.TarInfo(f"{top}/{name}")
+            member.size = len(data.encode())
+            tar.addfile(member, io.BytesIO(data.encode()))
+    return StoragePath(str(path))
+
+
+def test_the_putnam_archive_yields_its_lean_problem_files_in_name_order(tmp_path):
+    first, second = (eval_row("putnam", name)["text"] for name in ("putnam_1962_a1", "putnam_1962_a5"))
+    archive = putnam_archive(
+        tmp_path / "PutnamBench.tar.gz",
+        [
+            ("lean4/src/putnam_1962_a5.lean", second),
+            ("coq/src/putnam_1962_a1.v", "Theorem putnam_1962_a1."),
+            ("lean4/lakefile.lean", "import Lake"),
+            ("lean4/src/putnam_1962_a1.lean", first),
+        ],
+    )
+    assert list(putnam_rows(archive)) == [
+        {"name": "putnam_1962_a1", "text": first},
+        {"name": "putnam_1962_a5", "text": second},
+    ]
+
+
+def test_a_putnam_archive_that_holds_a_problem_twice_is_an_error(tmp_path):
+    text = eval_row("putnam", "putnam_1962_a1")["text"]
+    archive = putnam_archive(
+        tmp_path / "PutnamBench.tar.gz",
+        [("lean4/src/putnam_1962_a1.lean", text), ("lean4/src/putnam_1962_a1.lean", text.replace("5", "6"))],
+    )
+    with pytest.raises(ValueError, match="twice"):
+        list(putnam_rows(archive))
+
+
+def test_the_statement_check_fails_on_a_repeated_row_or_an_eval_population_it_does_not_match():
+    population = MINIF2F_EVAL.protocol.expected_population
+    complete = [{"row": f"t{index}", "status": "validates"} for index in range(population)]
+    assert audit_failures("minif2f", complete) == 0
+    assert audit_failures("minif2f", complete[1:]) == 1
+    assert audit_failures("minif2f", [*complete[2:], complete[0], complete[0]]) == 1
+    assert audit_failures("numina", complete[:3]) == 0
+
+
 @pytest.mark.parametrize(
     ("source", "result", "unexpected"),
     [
@@ -385,8 +529,21 @@ def test_a_numina_row_without_a_usable_statement_or_proof_is_rejected(fields, re
         ("numina", {"row": "0:uuid", "status": "fails"}, True),
         ("numina", {"row": "0:uuid", "status": "timeout"}, True),
         ("proofnet", {"row": 1, "status": "validates"}, False),
+        ("minif2f", {"row": "a", "status": "rejected", "reason": "unexpected_proof"}, True),
+        ("putnam", {"row": "a", "status": "rejected", "reason": "answer_problem"}, False),
+        ("putnam", {"row": "a", "status": "rejected", "reason": "ambiguous_target"}, True),
     ],
-    ids=["expected_rejection", "other_rejection", "numina_rejection", "fails", "timeout", "validates"],
+    ids=[
+        "expected_rejection",
+        "other_rejection",
+        "numina_rejection",
+        "fails",
+        "timeout",
+        "validates",
+        "minif2f_rejection",
+        "putnam_answer_problem",
+        "putnam_other_rejection",
+    ],
 )
 def test_the_statement_check_fails_on_a_reference_that_does_not_validate(source, result, unexpected):
     assert failed_unexpectedly(source, result) is unexpected

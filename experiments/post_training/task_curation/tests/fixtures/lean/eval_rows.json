@@ -1,0 +1,46 @@
+{
+  "minif2f": [
+    {
+      "name": "mathd_algebra_478",
+      "informal": "The volume of a cone is given by the formula $V = \\frac{1}{3}Bh$, where $B$ is the area of the base and $h$ is the height. The area of the base of a cone is 30 square units, and its height is 6.5 units. What is the number of cubic units in its volume?",
+      "header": "/-\nCopyright (c) 2021 OpenAI. All rights reserved.\nReleased under Apache 2.0 license as described in the file LICENSE.\nAuthors: Kunhao Zheng, Kudzo Ahegbebu, Stanislas Polu, David Renshaw, OpenAI GPT-f\n-/\nimport MiniF2F.ProblemImports\n\nopen scoped Nat\nopen scoped Real",
+      "formal_statement": "theorem mathd_algebra_478 (b h v : ℝ) (h₀ : 0 < b ∧ 0 < h ∧ 0 < v) (h₁ : v = 1 / 3 * (b * h))\n    (h₂ : b = 30) (h₃ : h = 13 / 2) : v = 65 := by\n  sorry"
+    },
+    {
+      "name": "numbertheory_4x3m7y3neq2003",
+      "informal": "",
+      "header": "/-\nCopyright (c) 2021 OpenAI. All rights reserved.\nReleased under Apache 2.0 license as described in the file LICENSE.\nAuthors: Kunhao Zheng, Kudzo Ahegbebu, Stanislas Polu, David Renshaw, OpenAI GPT-f\n-/\nimport MiniF2F.ProblemImports\n\nopen scoped Nat\nopen scoped Real",
+      "formal_statement": "theorem numbertheory_4x3m7y3neq2003 (x y : ℤ) : 4 * x ^ 3 - 7 * y ^ 3 ≠ 2003 := by\n  sorry"
+    },
+    {
+      "name": "mathd_numbertheory_66",
+      "informal": "Determine the remainder of 194 (mod 11).",
+      "header": "/-\nCopyright (c) 2021 OpenAI. All rights reserved.\nReleased under Apache 2.0 license as described in the file LICENSE.\nAuthors: Kunhao Zheng, Kudzo Ahegbebu, Stanislas Polu, David Renshaw, OpenAI GPT-f\n-/\nimport MiniF2F.ProblemImports\n\nopen scoped Nat\nopen scoped Real",
+      "formal_statement": "theorem mathd_numbertheory_66 : 194 % 11 = 7 :=\n  rfl"
+    },
+    {
+      "name": "mathd_algebra_302",
+      "informal": "Evaluate $\\left(\\frac{i}{2}\\right)^2$.",
+      "header": "/-\nCopyright (c) 2021 OpenAI. All rights reserved.\nReleased under Apache 2.0 license as described in the file LICENSE.\nAuthors: Kunhao Zheng, Kudzo Ahegbebu, Stanislas Polu, David Renshaw, OpenAI GPT-f\n-/\nimport MiniF2F.ProblemImports\n\nopen scoped Nat\nopen scoped Real",
+      "formal_statement": "theorem mathd_algebra_302 : (Complex.I / 2) ^ 2 = -(1 / 4) := by\n  norm_num [div_pow]"
+    }
+  ],
+  "putnam": [
+    {
+      "name": "putnam_1962_a1",
+      "text": "import Mathlib\n\nopen MeasureTheory\n\n/--\nGiven five points in a plane, no three of which lie on a straight line, show that some four of these points form the vertices of a convex quadrilateral.\n-/\ntheorem putnam_1962_a1\n(S : Set (ℝ × ℝ))\n(hS : S.ncard = 5)\n(hnoncol : ∀ s ⊆ S, s.ncard = 3 → ¬Collinear ℝ s)\n: ∃ T ⊆ S, T.ncard = 4 ∧ ¬∃ t ∈ T, t ∈ convexHull ℝ (T \\ {t}) :=\nsorry\n"
+    },
+    {
+      "name": "putnam_1962_a5",
+      "text": "import Mathlib\n\nabbrev putnam_1962_a5_solution : ℕ → ℕ := sorry\n-- fun n : ℕ => n * (n + 1) * 2^(n - 2)\n/--\nEvaluate in closed form \\[ \\sum_{k=1}^n {n \\choose k} k^2. \\]\n-/\ntheorem putnam_1962_a5\n: ∀ n ≥ 2, putnam_1962_a5_solution n = ∑ k ∈ Finset.Icc 1 n, Nat.choose n k * k^2 :=\nsorry\n"
+    },
+    {
+      "name": "putnam_1966_a4",
+      "text": "import Mathlib\n\nopen Topology Filter\n\n/--\nProve that the $n$th item in the ascending list of non-perfect-square positive integers equals $n + \\{\\sqrt{n}\\}$, where $\\{m\\}$ denotes the closest integer to $m$.\n-/\ntheorem putnam_1966_a4\n(a : ℕ → ℤ)\n(ha1 : a 1 = 2)\n(hai : ∀ n ≥ 1, a (n + 1) = (if ∃ m : ℤ, m^2 = a n + 1 = True then a n + 2 else a n + 1))\n: ∀ n ≥ 1, a n = n + round (Real.sqrt n) :=\nsorry\n"
+    },
+    {
+      "name": "putnam_1997_b5",
+      "text": "import Mathlib\n\ndef tetration : ℕ → ℕ → ℕ\n  | _, 0 => 1\n  | b, (m + 1) => b^(tetration b m)\n/--\nProve that for $n\\geq 2$, \\[\\overbrace{2^{2^{\\cdots^{2}}}}^{\\mbox{$n$ terms}} \\equiv \\overbrace{2^{2^{\\cdots^{2}}}}^{\\mbox{$n-1$ terms}} \\quad \\pmod{n}.\\]\n-/\ntheorem putnam_1997_b5\n(n : ℕ)\n(hn : n ≥ 2)\n: tetration 2 n ≡ tetration 2 (n-1) [MOD n] :=\nsorry\n"
+    }
+  ]
+}

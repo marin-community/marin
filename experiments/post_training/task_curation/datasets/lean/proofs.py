@@ -19,18 +19,22 @@ and Mathlib v4.34.0. At the pinned revision every contract validates with the gr
 (``check_statements.py``) except two rows the converter leaves out: row 35 ships its proof in place of
 ``sorry``, and row 351 states Rudin's exercise 4.8a again, as row 168 does. ProofNet-Verified's
 proofs are not public, so its tasks carry only the negative control, a ``sorry`` proof that passes
-through every grader step and must score zero. It is evaluation data.
+through every grader step and must score zero. It is evaluation data, published like the other Lean evals
+(``evals.py``) through ``lean_eval``: one greedy attempt per statement, scored by the fraction proved.
 """
 
 import re
 from collections.abc import Mapping
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.script_grader import grade_script, script_package
 from taskcompendium.convert.tasks import conversation_task
+from taskcompendium.evaluation.corpus import chat_item
+from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, OperationKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
@@ -45,7 +49,8 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
     without_comments,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
+from experiments.post_training.task_curation.evaluation import EvalDataset, curate
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).resolve().parent
@@ -97,8 +102,12 @@ your reply is graded. The statement and the declarations above it must stay unch
 but not `sorry`, `native_decide` or new axioms."""
 
 PROOFNET_VERIFIED_REVISION = "08d4c516eb92d2c1442612a1e5afd5d25d86f4e4"
+PROOFNET_FILE = "proofnet-verified.jsonl"
 REPEATED_EXERCISES = {351: 168}
 """ProofNet-Verified rows that state an exercise an earlier row states, mapped to that row."""
+PROOFNET_LEFT_OUT = frozenset({35, *REPEATED_EXERCISES})
+"""ProofNet-Verified rows the eval does not select: row 35 ships its proof, and the repeated exercises."""
+EVAL_PROTOCOL_VERSION = "2026.11.11"
 
 
 def statement_contract(prefix: str, formal_statement: str, target: str) -> Contract | ImportRejection:
@@ -124,9 +133,15 @@ def statement_contract(prefix: str, formal_statement: str, target: str) -> Contr
 
 
 def proof_task(
-    row: RawRow, context: ConversionContext, contract: Contract, informal: str, evidence: dict[str, Any]
+    row: RawRow,
+    context: ConversionContext,
+    contract: Contract,
+    informal: str,
+    evidence: dict[str, Any],
+    tags: tuple[str, ...] = (),
 ) -> TaskSpec:
-    """A conversation task asking for a proof of ``contract``, graded by ``lean_grade.py``."""
+    """A conversation task asking for a proof of ``contract``, graded by ``lean_grade.py``, with ``tags`` after
+    the Lean tags."""
     prompt = INSTRUCTIONS.format(
         version=LEAN_VERSION, informal=informal.strip(), prefix=contract.prefix, statement=contract.statement
     )
@@ -138,7 +153,7 @@ def proof_task(
         answer_path=DEFAULT_OUTPUT,
     )
     task = conversation_task(row, events=(TextMessage(role="user", content=prompt),), package=package, evidence=evidence)
-    return task.model_copy(update={"tags": ("lean", "proof", "kernel-replay", f"lean-v{LEAN_VERSION}")})
+    return task.model_copy(update={"tags": ("lean", "proof", "kernel-replay", f"lean-v{LEAN_VERSION}", *tags)})
 
 
 def proofnet_contract(data: Mapping[str, Any]) -> Contract | ImportRejection:
@@ -163,7 +178,11 @@ def convert_proofnet_verified(row: RawRow, context: ConversionContext) -> TaskSp
     if isinstance(contract, ImportRejection):
         return contract
     evidence = {key: row.data[key] for key in ("index", "name", "textbook", "informal_proof") if key in row.data}
-    return proof_task(row, context, contract, informal, evidence)
+    return proof_task(row, context, contract, informal, evidence, ("eval", "benchmark:ProofNet-Verified"))
+
+
+def is_proofnet_eval_row(data: Mapping[str, Any], _context: ConversionContext | None) -> bool:
+    return data.get("index") not in PROOFNET_LEFT_OUT
 
 
 def sorry_proof(task: TaskSpec) -> Reply:
@@ -174,32 +193,59 @@ def sorry_proof(task: TaskSpec) -> Reply:
 LEAN_PROOF_CONTROLS = Controls(negative=sorry_proof, memory_mb=LEAN_GRADER_MEMORY_MB)
 
 
-def sources() -> list[RlDataSource[CurationRecipe]]:
+def lean_eval(info: SourceInfo, recipe: CurationRecipe, benchmark: str) -> RlDataSource[EvalDataset]:
+    """``recipe`` published as an eval of ``info.count`` statements: one greedy attempt at each, with thinking
+    on, scored by the fraction ``lean_grade.py`` accepts. An infrastructure error is not a score of zero; the
+    attempt has to run again."""
+    protocol = EvaluationProtocol(
+        benchmark=benchmark,
+        version=EVAL_PROTOCOL_VERSION,
+        operation=OperationKind.CHAT_GENERATION,
+        sampling=Sampling(
+            temperature=0,
+            top_p=None,
+            top_k=None,
+            max_tokens=None,
+            stop=(),
+            chat_template_kwargs={"enable_thinking": True},
+        ),
+        trials=TrialPolicy(count=1, seed=None),
+        metrics=(Metrics.ACCURACY,),
+        primary_metric="accuracy",
+        summary=SummaryKind.MEAN,
+        expected_population=info.count,
+    )
+    item_builder = partial(chat_item, response_selection="final_or_complete_reasoning")
+    return RlDataSource(info=info, config=EvalDataset(recipe, protocol, item_builder), pipeline=curate)
+
+
+def sources() -> list[RlDataSource[EvalDataset]]:
     return [
-        RlDataSource(
-            pipeline=process_rows,
-            info=SourceInfo(
+        lean_eval(
+            SourceInfo(
                 id="Hugging Face:marcusm117/ProofNet-Verified",
                 title="marcusm117/ProofNet-Verified",
                 origin="Hugging Face",
                 family="math-proof",
-                tags=("lean", "theorem-proving", "single-turn", "benchmark", "license:apache-2.0"),
-                count=367,
+                tags=("eval", "lean", "theorem-proving", "single-turn", "benchmark", "license:apache-2.0"),
+                count=365,
                 notes="Audited ProofNet statements for Lean and Mathlib v4.34; proofs are not public.",
             ),
-            config=CurationRecipe(
+            CurationRecipe(
                 name="lean-proofnet-verified",
                 source=HfSource(
                     "marcusm117/ProofNet-Verified",
                     PROOFNET_VERIFIED_REVISION,
-                    ("proofnet-verified.jsonl",),
+                    (PROOFNET_FILE,),
                     SourceFormat.JSONL,
+                    select=is_proofnet_eval_row,
                 ),
                 convert=convert_proofnet_verified,
-                version="1",
+                version=EVAL_PROTOCOL_VERSION,
                 intended_use=IntendedUse.EVAL,
                 controls=LEAN_PROOF_CONTROLS,
                 grader=LEAN_KERNEL_GRADER_PACKAGES,
             ),
+            "ProofNet-Verified",
         )
     ]

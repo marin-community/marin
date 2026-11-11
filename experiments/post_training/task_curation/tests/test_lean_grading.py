@@ -15,14 +15,18 @@ from taskcompendium.pipeline.controls import run_controls
 from taskcompendium.pipeline.models import CheckStatus, Reply
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.datasets.lean.evals import SHIPPED_PROOFS
 from experiments.post_training.task_curation.datasets.lean.numina import NUMINA_CONTROLS
 from experiments.post_training.task_curation.datasets.lean.proofs import LEAN_GRADER_MEMORY_MB, LEAN_PROOF_CONTROLS
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
+    MINIF2F,
     NUMINA,
     NUMINA_ROWS,
     PROOFNET,
+    PUTNAMBENCH,
     REAL_PROOFS,
+    eval_row,
     prime_inputs,
     proofnet_row,
 )
@@ -132,6 +136,21 @@ def test_a_contract_that_does_not_validate_is_a_grader_failure_not_a_score(contr
 
 def test_the_negative_control_scores_zero_after_every_step(lean_kernel_machines):
     report = run_controls(task(ADD_ZERO), controls=LEAN_PROOF_CONTROLS, machines=lean_kernel_machines)
+    statuses = {check.check: check.status for check in report.checks}
+    assert statuses == {"negative": CheckStatus.PASS}, report
+
+
+@pytest.mark.parametrize("name", sorted(SHIPPED_PROOFS))
+def test_the_proof_a_minif2f_theorem_shipped_with_scores_one_on_its_frozen_statement(name, lean_kernel_machines):
+    task = converted_task(MINIF2F, eval_row("minif2f", name))
+    proof = SHIPPED_PROOFS[name].removeprefix(":=").strip()
+    result = grade(task, reply(proof), lean_kernel_machines, LEAN_GRADER_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+
+
+def test_a_putnam_task_with_helper_definitions_passes_its_negative_control(lean_kernel_machines):
+    task = converted_task(PUTNAMBENCH, eval_row("putnam", "putnam_1997_b5"))
+    report = run_controls(task, controls=LEAN_PROOF_CONTROLS, machines=lean_kernel_machines)
     statuses = {check.check: check.status for check in report.checks}
     assert statuses == {"negative": CheckStatus.PASS}, report
 

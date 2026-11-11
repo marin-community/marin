@@ -27,7 +27,13 @@ from collections import defaultdict
 from pathlib import Path
 
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.datasets.lean.evals import (
+    MINIF2F_FILES_URL,
+    PUTNAMBENCH_REVISION,
+    minif2f_rows,
+)
 from experiments.post_training.task_curation.datasets.lean.lean_grade import TARGET_NAME, without_comments
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP_FILE,
@@ -35,19 +41,16 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     NUMINA_REVISION,
     is_human_proof_row,
 )
-from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION
+from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_FILE, PROOFNET_VERIFIED_REVISION
 
-MINIF2F_REVISION = "f0a20e14c1eeccd859d51bb4c2b3ee487889c303"
-PUTNAMBENCH_REVISION = "f423c173cef31a61fc3e69cbe606c8bc31fcb229"
 PINNED_INPUTS = {
     "train-00000-of-00001.parquet": (
         f"https://huggingface.co/datasets/project-numina/NuminaMath-LEAN/resolve/{NUMINA_REVISION}/{NUMINA_FILE}"
     ),
-    "Test.lean": f"https://raw.githubusercontent.com/google-deepmind/miniF2F/{MINIF2F_REVISION}/MiniF2F/Test.lean",
-    "Valid.lean": f"https://raw.githubusercontent.com/google-deepmind/miniF2F/{MINIF2F_REVISION}/MiniF2F/Valid.lean",
-    "proofnet-verified.jsonl": (
-        "https://huggingface.co/datasets/marcusm117/ProofNet-Verified/resolve/"
-        f"{PROOFNET_VERIFIED_REVISION}/proofnet-verified.jsonl"
+    "Test.lean": f"{MINIF2F_FILES_URL}/Test.lean",
+    "Valid.lean": f"{MINIF2F_FILES_URL}/Valid.lean",
+    PROOFNET_FILE: (
+        f"https://huggingface.co/datasets/marcusm117/ProofNet-Verified/resolve/{PROOFNET_VERIFIED_REVISION}/{PROOFNET_FILE}"
     ),
     "putnam.json": (
         f"https://raw.githubusercontent.com/trishullab/PutnamBench/{PUTNAMBENCH_REVISION}/informal/putnam.json"
@@ -90,16 +93,11 @@ def shingles(text: str) -> frozenset[tuple[str, ...]]:
 
 
 def lean_problems(path: Path) -> list[dict]:
-    """Each theorem of a miniF2F file with its docstring, the informal problem."""
-    text = path.read_text()
-    starts = list(DECLARATION.finditer(text))
-    problems = []
-    for index, start in enumerate(starts):
-        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
-        before = text[: start.start()].rstrip()
-        informal = before[before.rfind("/--") + 3 : -2] if before.endswith("-/") else ""
-        problems.append({"eval": f"miniF2F:{start['name']}", "formal": text[start.start() : end], "informal": informal})
-    return problems
+    """Each theorem of a miniF2F file with its docstring, the informal problem, as the miniF2F eval reads them."""
+    return [
+        {"eval": f"miniF2F:{row['name']}", "formal": row["formal_statement"], "informal": row["informal"]}
+        for row in minif2f_rows(StoragePath(str(path)))
+    ]
 
 
 def eval_problems(minif2f: list[Path], proofnet: Path, putnam: Path) -> list[dict]:
