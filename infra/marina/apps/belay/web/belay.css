@@ -316,6 +316,9 @@ button.line:hover { background: var(--surface-2); }
 .line .nm small { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .line .d { font-size: 13px; text-align: right; }
 .line .eta { font-size: 12px; color: var(--slate); min-width: 70px; text-align: right; }
+.runs-k { margin-top: 8px; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
+.earlier-runs { margin-top: 8px; }
+.earlier-runs summary { cursor: pointer; font-size: 12px; color: var(--slate); }
 .line.pending { grid-template-columns: minmax(0, 1fr) auto auto auto; cursor: default; }
 .line.session { grid-template-columns: 80px 104px minmax(0, 1fr) auto auto; font-size: 13px; }
 .line.session .st { justify-self: start; }

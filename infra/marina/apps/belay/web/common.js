@@ -271,9 +271,14 @@ function wandbUrl(run) {
 }
 
 
-function eta(run) {
+function secondsLeft(run) {
   if (!run.steps_per_sec || !run.total_steps || run.step === null) return null
-  const seconds = (run.total_steps - run.step) / run.steps_per_sec
+  return (run.total_steps - run.step) / run.steps_per_sec
+}
+
+function eta(run) {
+  const seconds = secondsLeft(run)
+  if (seconds === null) return null
   if (seconds < 60) return '<1 min'
   return seconds < 3600 ? `${Math.round(seconds / 60)} min` : `${(seconds / 3600).toFixed(1)} h`
 }

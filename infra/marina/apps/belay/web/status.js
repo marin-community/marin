@@ -135,9 +135,36 @@ function ideaRuns(idea) {
   return state.runs.filter((r) => idea.registry_id && r.registry_id === idea.registry_id)
 }
 
+// Runs submitted within this long of the one before belong to the same launch (a ladder's rungs go out together).
+const LAUNCH_GAP_MS = 60 * 60 * 1000
+
+// An idea's runs, newest first, split into its newest launch and everything earlier.
+function launches(runs) {
+  const sorted = [...runs].sort((a, b) => (b.submitted_at ?? '').localeCompare(a.submitted_at ?? ''))
+  const cut = sorted.findIndex(
+    (r, i) => i > 0 && (!r.submitted_at || Date.parse(sorted[i - 1].submitted_at) - Date.parse(r.submitted_at) > LAUNCH_GAP_MS),
+  )
+  return cut === -1 ? { latest: sorted, earlier: [] } : { latest: sorted.slice(0, cut), earlier: sorted.slice(cut) }
+}
+
+function miniRuns(runs) {
+  return el(
+    'div',
+    { class: 'mini-runs' },
+    runs.map((r) =>
+      el('div', { class: 'mini-run' }, el('code', {}, r.name), runPill(r), progress(r), el('span', { class: 'mono' }, loss(r.loss)), link(wandbUrl(r), 'W&B ↗')),
+    ),
+  )
+}
+
+// The registry's short name for an idea (its entry's name), else the idea's title.
+function shortName(registryId, fallback) {
+  return registry?.ideas.find((x) => x.xid === registryId)?.name ?? fallback
+}
+
 function detail(idea, cfg) {
   const plan = idea.plan
-  const runs = ideaRuns(idea)
+  const { latest, earlier } = launches(ideaRuns(idea))
   const facts = [
     idea.url ? ['Source', link(idea.url, idea.author ? `#9514 · ${idea.author}` : 'GitHub')] : ['Source', link(`https://github.com/${cfg.default_author}`, `proposal by @${cfg.default_author}`)],
     plan?.cost ? ['Cost', plan.cost] : null,
@@ -149,23 +176,8 @@ function detail(idea, cfg) {
     'div',
     { class: 'detail-c' },
     el('div', { class: 'kv' }, facts.map(([k, v]) => el('span', { class: 'kvp' }, el('span', { class: 'k' }, k), v))),
-    runs.length
-      ? el(
-          'div',
-          { class: 'mini-runs' },
-          runs.map((r) =>
-            el(
-              'div',
-              { class: 'mini-run' },
-              el('code', {}, r.name),
-              runPill(r),
-              progress(r),
-              el('span', { class: 'mono' }, loss(r.loss)),
-              link(wandbUrl(r), 'W&B ↗'),
-            ),
-          ),
-        )
-      : null,
+    latest.length ? [el('div', { class: 'runs-k' }, 'Latest launch'), miniRuns(latest)] : null,
+    earlier.length ? el('details', { class: 'earlier-runs' }, el('summary', {}, `Earlier runs (${earlier.length})`), miniRuns(earlier)) : null,
     idea.result ? el('p', { class: 'verdict-line' }, verdictChip(idea.result), ' ', idea.result.verdict) : null,
     idea.note ? el('p', { class: 'muted small' }, idea.note) : null,
     !idea.result && !idea.note ? el('p', { class: 'muted small clamp' }, plan?.summary ?? idea.body) : null,
@@ -195,22 +207,44 @@ function idCell(idea) {
   return el('span', { class: 'xid mono' }, idea.registry_id ?? `#${idea.id}`)
 }
 
+// One run's place in its idea's launch: its rung (d768) on a ladder, else its run name (seed0).
+function runLabel(r) {
+  const rung = r.registry_id && r.experiment ? r.experiment.slice(r.registry_id.length) : ''
+  return rung || r.name.replace(/^belay-[^-]+-/, '')
+}
+
+function runShort(r) {
+  if (r.state === 'pending') return `${runLabel(r)} queued`
+  if (r.total_steps) return `${runLabel(r)} ${Math.floor((100 * Math.min(r.step ?? 0, r.total_steps)) / r.total_steps)}%`
+  return `${runLabel(r)} ${r.step ? `step ${r.step.toLocaleString()}` : 'starting'}`
+}
+
+// Now running: one line per idea with runs in flight, each run as a short progress note; the line opens the idea.
 function renderRunning() {
   const live = state.runs.filter((r) => !TERMINAL.has(r.state))
   if (!live.length) {
     setChildren('running', el('div', { class: 'none' }, 'Nothing running'))
     return
   }
+  const groups = new Map()
+  for (const r of live) {
+    const key = r.registry_id ?? r.name
+    groups.set(key, [...(groups.get(key) ?? []), r])
+  }
   setChildren(
     'running',
-    live.map((r) => {
-      const idea = state.ideas.find((i) => i.registry_id && i.registry_id === r.registry_id)
-      const time = eta(r)
+    [...groups].map(([key, runs]) => {
+      runs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      const idea = state.ideas.find((i) => i.registry_id && i.registry_id === key)
+      const queued = runs.every((r) => r.state === 'pending')
+      // The launch's time left is its slowest run's, shown only once every started run has an estimate.
+      const started = runs.filter((r) => r.state !== 'pending')
+      const last = started.every((r) => secondsLeft(r) !== null) ? started.sort((a, b) => secondsLeft(b) - secondsLeft(a))[0] : null
       const cells = [
-        el('span', { class: 'xid mono' }, r.experiment ?? ''),
-        el('span', { class: 'nm' }, el('b', {}, idea?.title ?? r.name), el('small', {}, r.name)),
-        progress(r),
-        el('span', { class: 'eta mono' }, r.state === 'pending' ? 'queued' : time ? `${time} left` : '—'),
+        el('span', { class: 'xid mono' }, runs[0].registry_id ?? ''),
+        el('span', { class: 'nm' }, el('b', {}, shortName(key, idea?.title ?? runs[0].name)), el('small', {}, runs.map(runShort).join(' · '))),
+        el('span', { class: 'pill' }, `${runs.length} ${queued ? 'queued' : 'running'}`),
+        el('span', { class: 'eta mono', title: last ? `until ${last.name} finishes` : '' }, queued ? 'queued' : last ? `${eta(last)} left` : '—'),
       ]
       return idea ? ideaLine(idea, cells) : el('div', { class: 'line static' }, ...cells)
     }),
