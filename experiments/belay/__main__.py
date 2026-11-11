@@ -89,11 +89,9 @@ from experiments.belay.config import (
     Track,
 )
 from experiments.belay.page import (
-    SESSION_ENV,
     SESSION_FILE,
     TERMINAL_RUN_STATES,
     Idea,
-    PageRequestError,
     PageRun,
     PageState,
     Post,
@@ -227,19 +225,8 @@ class EventKind(StrEnum):
     NOTE = "note"
 
 
-# Events about runs already in flight: a draining session past its budget still takes these, but no new ideas.
-RESULT_KINDS = (EventKind.RUN_FINISHED, EventKind.RUN_OVERDUE)
-# A draining session takes new ideas for this long or this many ideas, then only finishes what is in flight, and
-# exits by the hard stop, under Loom's 4-hour session limit.
-DRAIN_BUDGET = datetime.timedelta(hours=3)
-DRAIN_MAX_IDEAS = 10
-DRAIN_HARD_STOP = datetime.timedelta(hours=3, minutes=45)
-WAIT_POLL_SECONDS = 60
-# A Loom watch pass does not start while a session runs, so the session's own wait keeps the page synced (run states,
-# which turn finished and failed runs into events) this often.
-WAIT_SYNC_INTERVAL = datetime.timedelta(minutes=5)
-# One `wait` call returns within this, so it fits in one shell command; the session then runs it again.
-WAIT_CALL_SECONDS = 9 * 60
+# How often wait_for_job polls Iris.
+JOB_POLL_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -306,8 +293,8 @@ def claim() -> None:
     path.write_text(json.dumps(claimed["events"], indent=2))
     print(f"session {session_id} claimed {len(claimed['events'])} event(s) into {path}")
     say_next(
-        f"{BELAY} start --events {path}; the drain loop's wait is {BELAY} wait --session {session_id} --events <file>; "
-        f"at the end, {BELAY} finish --session {session_id} --summary ..."
+        f"{BELAY} start --events {path}; when every event is worked through, {BELAY} finish --session {session_id} "
+        "--summary ..."
     )
 
 
@@ -326,92 +313,6 @@ def finish(session_id: str, summary: str) -> None:
     SESSION_FILE.unlink(missing_ok=True)
     print(f"session {session_id} finished")
     say_next("stop")
-
-
-class WaitOutcome(StrEnum):
-    WORK = "work"
-    WAIT = "wait"
-    DRAINED = "drained"
-    OUT_OF_TIME = "out_of_time"
-
-
-def wait_outcome(
-    now: datetime.datetime,
-    started: datetime.datetime,
-    ideas_taken: int,
-    queued: list[EventKind],
-    live_due: list[datetime.datetime | None],
-) -> WaitOutcome:
-    """What a draining session does next: take queued work (only run results once past its budget), keep waiting on
-    runs due before its hard stop (``None``: due unknown, so wait), or exit. Runs due later are left to a later
-    session."""
-    if now - started >= DRAIN_HARD_STOP:
-        return WaitOutcome.OUT_OF_TIME
-    taking_ideas = now - started < DRAIN_BUDGET and ideas_taken < DRAIN_MAX_IDEAS
-    if any(taking_ideas or kind in RESULT_KINDS for kind in queued):
-        return WaitOutcome.WORK
-    end = started + DRAIN_HARD_STOP
-    if any(due is None or due <= end for due in live_due):
-        return WaitOutcome.WAIT
-    return WaitOutcome.DRAINED
-
-
-def _instant(iso: str) -> datetime.datetime:
-    return datetime.datetime.fromisoformat(iso)
-
-
-def wait(session_id: str, events_file: Path) -> None:
-    """The drain loop's wait (RUNBOOK section 0b), a plain poll with no model turns: return when queued work (a
-    finished run, or a newly approved idea while within the budget) is claimed into a new events file, or when
-    nothing short is left to wait for."""
-    seen_file = events_file.parent / f"belay-{session_id}.seen.json"
-    seen = set(json.loads(seen_file.read_text())) if seen_file.exists() else set()
-    seen |= {e["id"] for e in json.loads(events_file.read_text()) if "id" in e}
-    seen_file.write_text(json.dumps(sorted(seen)))
-    own_session(session_id)
-    deadline = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=WAIT_CALL_SECONDS)
-    synced_at = None
-    while True:
-        if synced_at is None or datetime.datetime.now(datetime.UTC) - synced_at >= WAIT_SYNC_INTERVAL:
-            try:
-                sync()
-            except (subprocess.CalledProcessError, PageRequestError) as failure:  # keep waiting on the last sync
-                print(f"sync failed, still waiting: {failure}")
-            synced_at = datetime.datetime.now(datetime.UTC)
-        state = call("agent/state")
-        session = next((s for s in state["sessions"] if s["id"] == session_id), None)
-        if session is None or session["state"] != "running":
-            raise SystemExit(f"refusing: session {session_id} is not running on the Belay page")
-        now = datetime.datetime.now(datetime.UTC)
-        started = _instant(session["started_at"])
-        taken = sum(1 for e in session["events"] if e["kind"] in (EventKind.APPROVED, EventKind.WORK_PENDING))
-        queued = [EventKind(e["kind"]) for e in state["queued"] if e["kind"] in set(EventKind)]
-        expected = {e["name"]: e for e in state["expectations"]}
-        live_due = [_instant(e["expected_at"]) for e in expected.values() if e["state"] not in TERMINAL_RUN_STATES]
-        live_due += [None for r in state["runs"] if r["state"] not in TERMINAL_RUN_STATES and r["name"] not in expected]
-        outcome = wait_outcome(now, started, taken, queued, live_due)
-        if outcome is WaitOutcome.WORK:
-            within = now - started < DRAIN_BUDGET and taken < DRAIN_MAX_IDEAS
-            kinds = None if within else [k.value for k in RESULT_KINDS]
-            claimed = call("agent/dispatch/claim", {"session_id": session_id, "kinds": kinds})
-            new = [e for e in claimed["events"] if e["id"] not in seen]
-            path = events_file.parent / f"belay-{session_id}-{now:%H%M%S}.events.json"
-            path.write_text(json.dumps(new, indent=2))
-            print(f"claimed {len(new)} event(s) into {path}")
-            say_next(f"{BELAY} start --events {path}; then {BELAY} wait --session {session_id} --events {path}")
-            return
-        if outcome is WaitOutcome.WAIT and now < deadline:
-            time.sleep(WAIT_POLL_SECONDS)
-            continue
-        if outcome is WaitOutcome.WAIT:
-            print(f"still waiting on {len(live_due)} run(s) due before this session's hard stop")
-            say_next(f"{BELAY} wait --session {session_id} --events {events_file}")
-            return
-        later = len([d for d in live_due if d is not None])
-        why = "the session's time is up" if outcome is WaitOutcome.OUT_OF_TIME else "nothing is queued"
-        print(f"drained: {why}; {later} run(s) still going are left to a later session")
-        say_next("the final message (section 7)")
-        return
 
 
 def start(events_file: Path, today: datetime.date) -> None:
@@ -1612,7 +1513,7 @@ def wait_for_job(job: str) -> str:
         row = next((line.split() for line in listing.splitlines() if line.startswith(job + " ")), None)
         if row is not None and row[1] in TERMINAL_RUN_STATES:
             return row[1]
-        time.sleep(WAIT_POLL_SECONDS // 4)
+        time.sleep(JOB_POLL_SECONDS)
 
 
 def job_output(job: str) -> list[str]:
@@ -2056,9 +1957,6 @@ def main(argv: list[str]) -> None:
 
     sub.add_parser("sync", help="report runs, registry results and storage to the page (the watch runs it every pass)")
     command("claim")
-    p = command("wait")
-    p.add_argument("--session", default=os.environ.get(SESSION_ENV), help="this session's id (default: its env)")
-    p.add_argument("--events", type=Path, required=True, help="the events file this session last worked through")
     p = command("finish")
     p.add_argument("--session", required=True, help="the session id claim printed")
     p.add_argument("--summary", required=True, help="the final message (RUNBOOK section 7)")
@@ -2143,10 +2041,6 @@ def main(argv: list[str]) -> None:
         sync()
     elif args.command == "claim":
         claim()
-    elif args.command == "wait":
-        if not args.session:
-            raise SystemExit(f"refusing: give --session (or set {SESSION_ENV})")
-        wait(args.session, args.events)
     elif args.command == "finish":
         finish(args.session, args.summary)
     elif args.command == "start" and args.check_only:

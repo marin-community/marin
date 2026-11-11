@@ -23,7 +23,7 @@ import wandb
 
 from experiments.belay.branch import git
 from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
-from experiments.belay.page import call, mark_reviewed, page_state
+from experiments.belay.page import call, mark_reviewed, page_state, session_credentials
 from experiments.belay.registry_entry import require_registry_checkout
 from experiments.belay.submit import iris_jobs
 
@@ -184,12 +184,24 @@ class Watcher:
 
 
 def sync() -> None:
-    """One pass against the configured page, measuring storage only when the page's last measurement is an hour old."""
+    """One watch pass against the configured page: reap sessions earlier passes left running, then report runs,
+    results and storage (measured only when the page's last measurement is an hour old)."""
+    reap_sessions()
     require_registry_checkout()
     measured = call("agent/state")["watcher"]["storage_at"]
     storage_at = None if measured is None else datetime.datetime.fromisoformat(measured)
     Watcher(CONFIG.registry_checkout, token=None, storage_at=storage_at).tick()
     react_to_reviewed()
+
+
+def reap_sessions() -> None:
+    """Mark every session the page still shows running as lost and queue its events again. Loom runs one watch pass
+    at a time and each Belay session is a watch pass, so when a pass starts any running session has ended without
+    reporting (its agent stopped, or Loom ended it). Only the watch pass runs sync, never a session."""
+    if session_credentials() is not None:
+        raise SystemExit("refusing: sync belongs to the watch pass; inside a session it would reap that session")
+    for session_id in call("agent/sessions/reap", {})["lost"]:
+        print(f"session {session_id} ended without reporting; its events are queued again")
 
 
 def react_to_reviewed() -> None:
