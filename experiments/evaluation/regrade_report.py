@@ -66,6 +66,8 @@ def finished_attempts(
     root: str, benchmarks: Collection[str] | None = None
 ) -> tuple[ReadView, str, list[tuple[AttemptKey, Attempt]]]:
     """A result root's reader, its run identity, and its finished attempts with their benchmark, source row and trial.
+
+    A run that holds two corpora of one benchmark is refused, because its attempts would share keys.
     """
     reader = ReadView(root)
     saved = reader.read_blob(RUN_OBJECT)
@@ -77,6 +79,8 @@ def finished_attempts(
         benchmark = entry["protocol"]["benchmark"]
         if benchmarks is not None and benchmark not in benchmarks:
             continue
+        if benchmark in names.values():
+            raise ValueError(f"{root} holds more than one {benchmark} corpus")
         names[entry["dataset"]] = benchmark
     finished = []
     for row in reader.iter_rows(ATTEMPTS_TABLE):
