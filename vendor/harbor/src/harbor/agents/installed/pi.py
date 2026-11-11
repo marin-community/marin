@@ -65,7 +65,7 @@ class Pi(BaseInstalledAgent):
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
     _API_BASE_ENV = "HARBOR_PI_API_BASE"
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
-    _ENDPOINT_ENV_PATH = "/tmp/harbor-pi-endpoint.env"
+    _ENDPOINT_ENV_PATH = "/logs/agent/harbor-pi-endpoint.env"
     _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _MCP_CONFIGURE_PATH = "/installed-agent/pi_configure_mcp.cjs"

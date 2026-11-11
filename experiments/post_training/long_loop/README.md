@@ -140,3 +140,14 @@ The next-run recipe enables truncated importance sampling with the `tis` preset
 The exact-token-ID path remains required for both raw completions and installed
 agent chat. Learner router fusion is disabled so replay hooks remain active.
 These settings do not alter the already submitted `.10.10` run.
+
+
+The next RL harness is Pi0.87.0, matching Micro210's installed-agent runtime.
+Prepare its SWE packages with `python -m experiments.post_training.long_loop.pi_rl_data`
+using an input directory, its expected manifest SHA and a fresh output directory.
+The transformation reuses the frozen Pi layer, selects the non-root
+`longloop-agent` account and provides a writable virtualenv. `/testbed` stays
+editable; its parent is root-owned. Task identity, instructions, private tests,
+source revisions and row order are preserved and bound by per-row hashes.
+Only SWE rows receive this overlay. Bind the derived manifest in the next run
+spec; the running `.10.10` and the Micro210 task permissions remain unchanged.

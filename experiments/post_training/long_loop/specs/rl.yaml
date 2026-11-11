@@ -244,13 +244,18 @@ config:
       enable_reward_shaping: false
     installed_agent:
       agent:
-        name: mini-swe-agent
-        override_setup_timeout_sec: 300
+        name: pi
+        override_setup_timeout_sec: 360
         kwargs:
-          version: 2.1.0
-          max_turns: 32
-          temperature: 1.0
-      setup_timeout: 300
+          version: 0.87.0
+          mcp_adapter_version: 7.0.0
+          thinking: high
+          thinking_format: chat-template
+          model_info:
+            max_input_tokens: 102400
+            max_output_tokens: 8192
+          compaction_reserve_tokens: 8192
+      setup_timeout: 360
       run_timeout: 1800
       cleanup_timeout: 120
       service_startup_timeout: 60
