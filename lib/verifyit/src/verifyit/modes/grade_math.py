@@ -253,12 +253,7 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
 
 
 def _candidate_parse(parse: Callable[[], list]) -> list:
-    """A candidate's parse, empty when SymPy cannot even build its literal.
-
-    A candidate such as a 70,000-digit integer makes ``sympify`` raise (Python's
-    integer string limit) instead of returning an expression; that candidate is
-    unparsable, which grades zero, not a grader failure.
-    """
+    """A candidate's parse, empty when SymPy cannot build its literal."""
     from sympy import SympifyError  # noqa: PLC0415
 
     try:
@@ -407,7 +402,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
 
 def math_answer(spec: MathSpec, text: str) -> str:
-    """The math content of an answer: all of it for the raw profile, else its last box or last line."""
+    """Keep raw responses whole; extract the last box or line for other profiles."""
     if spec.profile is MathProfile.RAW:
         return text
     if BOXED in text:

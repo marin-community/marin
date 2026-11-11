@@ -370,7 +370,6 @@ def test_interval_comparison_keeps_a_relation_chain_whole():
 
 @pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
 def test_a_candidate_sympy_cannot_build_scores_zero(profile):
-    # A sampled 70,000-digit integer exceeds Python's integer string limit inside sympify.
     huge = "8" * 70_000
     result = grade_math.grade_math_text_candidate(MathSpec("12", profile=profile), rf"\boxed{{{huge}}}")
     assert result.reward == 0
