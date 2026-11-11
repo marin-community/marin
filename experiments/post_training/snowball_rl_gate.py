@@ -52,6 +52,7 @@ from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.provenance import Provenance
 from scipy.stats import t
 from tabulate import tabulate
 from taskcompendium.grading_result import Outcome
@@ -1126,7 +1127,9 @@ def _gate_artifact(
 ) -> ArtifactStep[GateReport]:
     pins = control_pins(preset)
     defaults = recipe.run_step(preset, recipe.run_spec(preset, name="current-defaults"))
-    name += "-defaults-" + fingerprint_hash(canonical_json((defaults.fingerprint(), defaults.runtime_args)))
+    name += "-defaults-" + fingerprint_hash(
+        canonical_json((defaults.fingerprint(), defaults.runtime_args, Provenance.capture(presets.REPO_ROOT).tree_hash))
+    )
     controls = tuple(
         tuple(
             (

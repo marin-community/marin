@@ -27,6 +27,7 @@ from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_typ
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics
+from rigging.provenance import Provenance
 from scipy.stats import t
 
 from experiments.post_training import snowball_rl as snowball
@@ -571,6 +572,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         "authored-run-name",
         "cached-default",
         "cached-execution",
+        "cached-source",
     ],
 )
 def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, tmp_path, monkeypatch, case):
@@ -593,7 +595,7 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
                 "trainer.micro_train_batch_size_per_gpu=2",
             ),
         )
-    if case in ("cached-default", "cached-execution"):
+    if case in ("cached-default", "cached-execution", "cached-source"):
         inputs = gate.GateInputs(preset_name=preset.name)
     if case in ("initializer", "unbound-model"):
         name, version = "tests/custom-init", "2026.11.07"
@@ -688,17 +690,28 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
             fault_key = "skyrl.trainer.run_name"
         write_receipt(candidate, document)
     report = rescore(preset.name, "--candidate", name)
-    if case in ("cached-default", "cached-execution"):
+    if case in ("cached-default", "cached-execution", "cached-source"):
         assert report["verdict"] == "pass", report
         if case == "cached-default":
             promoted = replace(preset, settings=(*preset.settings, "trainer.policy.optimizer_config.weight_decay=0.1"))
             changed_key = "skyrl.trainer.policy.optimizer_config.weight_decay"
-        else:
+        elif case == "cached-execution":
             promoted = replace(
                 preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_memory="123GB"))
             )
             changed_key = "iris.allocation.memory"
-        monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
+        else:
+            document = json.loads((candidate / "terminal.json").read_text())
+            document["config"]["skyrl"]["generator"]["eval_sampling_params"]["top_k"] = 1
+            write_receipt(candidate, document)
+            monkeypatch.setattr(
+                Provenance,
+                "capture",
+                lambda *args, **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test"),
+            )
+            changed_key = "evaluation protocol"
+        if case != "cached-source":
+            monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
         updated = rescore(preset.name, "--candidate", name)
         assert updated["verdict"] == "invalid", updated
         assert changed_key in updated["reason"]
