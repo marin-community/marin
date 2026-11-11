@@ -168,7 +168,9 @@ class SkyRLLaunchConfig:
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
-    return OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
+    composed = OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
+    OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
+    return composed
 
 
 def _is_source_recipe(skyrl: DictConfig) -> bool:
@@ -218,9 +220,7 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     resolved.runtime.training_type = None if training_type is None else training_type.value
     resolved.skyrl = compiled.config
     data_kind = parsed.recipe.data.kind
-    if OmegaConf.is_missing(resolved.inputs, "data_kind"):
-        resolved.inputs.data_kind = data_kind
-    elif resolved.inputs.data_kind != data_kind:
+    if resolved.inputs.data_kind != data_kind:
         raise ValueError(
             f"inputs.data_kind={resolved.inputs.data_kind!r} does not match the composed SkyRL value {data_kind!r}"
         )
