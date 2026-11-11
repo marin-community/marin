@@ -22,9 +22,6 @@ from typing import Literal, cast
 import fsspec
 import yaml
 from finestore.rl.run_records import (
-    EXPORTS_SUBDIRECTORY,
-    RESOLVED_LAUNCH_FILENAME,
-    TERMINAL_RECEIPT_FILENAME,
     AttemptRecord,
     LaunchReceipt,
     LaunchResult,
@@ -42,7 +39,13 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.skyrl_records import read_skyrl_launch_config, read_stored_skyrl_receipt
+from marin.rl.skyrl_records import (
+    EXPORTS_SUBDIRECTORY,
+    RESOLVED_LAUNCH_FILENAME,
+    TERMINAL_RECEIPT_FILENAME,
+    read_skyrl_launch_config,
+    read_stored_skyrl_receipt,
+)
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
@@ -1095,5 +1098,7 @@ def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
         }
     )
     if record is not None:
-        return record.model_copy(update={"launch": receipt})
-    return AttemptRecord(run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], launch=receipt)
+        return record.model_copy(update={"config": config, "result": receipt.result})
+    return AttemptRecord(
+        run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], config=config, result=receipt.result
+    )

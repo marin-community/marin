@@ -13,13 +13,9 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from iris.cluster.client.job_info import get_job_info
 from finestore.rl.run_records import (
     AttemptRecord,
-    LaunchReceipt,
-    LaunchResult,
-    LaunchState,
     read_attempt,
-    register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
 
@@ -36,21 +32,18 @@ def _start_attempt_record(config: DictConfig) -> None:
         vllm_version = version("vllm")
     except PackageNotFoundError:
         vllm_version = None
-    if record is None:
-        record = AttemptRecord(
-            run_id=str(config.run.id),
-            attempt_id=attempt_id,
-            started_at=datetime.now(timezone.utc).isoformat(),
-            vllm_version=vllm_version,
-            launch=LaunchReceipt(
+    first_start = record is None or record.started_at is None
+    facts = {"started_at": datetime.now(timezone.utc).isoformat(), "vllm_version": vllm_version} if first_start else {}
+    with DataStore.open(run_records_root(export_root)) as store:
+        update_attempt(
+            store,
+            AttemptRecord(
+                run_id=str(config.run.id),
+                attempt_id=attempt_id,
                 config=OmegaConf.to_container(config, resolve=True),
-                result=LaunchResult(state=LaunchState.SUBMITTED, iris_job_id=config.skyrl.runtime.iris_job_id),
+                **facts,
             ),
         )
-    with DataStore.open(run_records_root(export_root)) as store:
-        tables = register_run_tables(store)
-        write_attempt(tables.attempts, record)
-        store.flush()
 
 
 def run_config(config_path: Path) -> None:

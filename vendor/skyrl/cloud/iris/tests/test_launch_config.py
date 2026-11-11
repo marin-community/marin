@@ -18,7 +18,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from finestore.rl.run_records import attempt_tracking, read_attempt, read_attempt_metrics
+from finestore.rl.run_records import read_attempt, read_attempt_metrics
 from cloud.iris.tests.launch_test_support import raw_config
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
@@ -321,15 +321,15 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
         skyrl_entrypoint.run_config(destination)
     attempt = read_attempt(export_root, "attempt-1")
     assert attempt is not None
-    record = attempt_tracking(attempt)
-    assert {key: record[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
+    runtime = attempt.native.config["skyrl"]["runtime"]
+    assert {key: runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
         "run_id": "smoke",
         "attempt_id": "attempt-1",
         "iris_job_id": "/tests/bootstrap-trainer",
         "coordinator_iris_job_id": "/tests/coordinator",
     }
-    assert first_start <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
-    assert record["engine"]["vllm_version"] == ("fixture-vllm" if entrypoint == "generate" else None)
+    assert first_start <= datetime.fromisoformat(attempt.started_at) <= datetime.now(timezone.utc)
+    assert attempt.vllm_version == ("fixture-vllm" if entrypoint == "generate" else None)
     fail = False
     skyrl_entrypoint.run_config(destination)
     final = read_attempt(export_root, "attempt-1")

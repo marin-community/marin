@@ -32,13 +32,14 @@ import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from finestore.rl.run_records import (
+    METRIC_METADATA_KEYS,
     AttemptRecord,
     CheckpointReference,
     MetricRow,
     read_attempt,
     register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
 
@@ -275,25 +276,16 @@ class _RecordsAdapter:
         record = read_attempt(self.export_root, self.attempt_id)
         if record is not None and record.metrics_started_at is not None:
             raise ValueError(f"Records execution requires a fresh attempt_id: {self.attempt_id}")
-        if (
-            checkpoint is not None
-            and checkpoint.attempt_id == self.attempt_id
-            and checkpoint.export_root.rstrip("/") == self.export_root.rstrip("/")
-        ):
-            raise ValueError(f"Records execution cannot resume its own attempt_id: {self.attempt_id}")
-        if record is None:
-            record = AttemptRecord(
-                run_id=self.run_id, attempt_id=self.attempt_id, started_at=datetime.now(timezone.utc).isoformat()
-            )
-        record = record.model_copy(
-            update={
-                "metrics_started_at": datetime.now(timezone.utc).isoformat(),
-                "resumed_step": resumed_step,
-                "parent": checkpoint,
-            }
+        update_attempt(
+            self.store,
+            AttemptRecord(
+                run_id=self.run_id,
+                attempt_id=self.attempt_id,
+                metrics_started_at=datetime.now(timezone.utc).isoformat(),
+                resumed_step=resumed_step,
+                parent=checkpoint,
+            ),
         )
-        write_attempt(self.tables.attempts, record)
-        self.store.flush()
         self.started = True
 
     def log(self, data: dict[str, Any], step: int) -> None:
@@ -301,9 +293,9 @@ class _RecordsAdapter:
             raise RuntimeError("Start the records execution before logging metrics")
         rows = []
         for name, value in data.items():
-            if name == "metric_attempt_ids":
-                raise ValueError("metric_attempt_ids is reserved for metric provenance")
-            if name in ("step", "attempt_id"):
+            if name in METRIC_METADATA_KEYS:
+                if name == "metric_attempt_ids":
+                    raise ValueError("metric_attempt_ids is reserved for metric provenance")
                 expected = step if name == "step" else self.attempt_id
                 if value != expected:
                     raise ValueError(f"Metric metadata {name} differs from the active execution")
