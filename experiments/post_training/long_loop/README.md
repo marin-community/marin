@@ -78,20 +78,16 @@ runtime configuration validator before allocation.
 ```bash
 uv run python -m experiments.post_training.long_loop \
   --spec /absolute/path/to/continuation-spec/round1.yaml \
-  --smoke --through rl --version 2026.11.10.1 \
+  --through archive --version 2026.11.10.10 \
   --validation-output /absolute/path/to/continuation-validation
 ```
 
-This constructs the same pinned RL recipe with scale-only overrides and stops after
-RL. It excludes eval/archive allocations, but retains data admission, CP4, context,
-GS8, exact 32/32 consumed-group quotas and native first-update qualification gates.
-`--run` submits only after preflight passes. GPU execution must fit the aggregate
-256-H100 cap; a running 256-H100 SFT leaves no room for a simultaneous smoke.
-
-The CPU tests cover actual quota-buffer behavior, 102,400-token collation, and
-checkpoint-adoption failures. They do not certify natural-long GPU forward,
-backward, optimizer, or save/restore behavior. Full downstream runs still require
-the recorded runtime qualifications and the eval/archive preparation checks.
+This constructs the full planned RL, evaluation and archive graph. Add `--run` only
+when replacing the previous allocation has been reconciled. It retains context,
+GS8 and exact 32/32 consumed-group quotas without a stochastic-length qualification
+or an extra GPU probe. The aggregate allocation remains at most 256 H100.
+CPU tests cover quota-buffer behavior, 102,400-token collation and checkpoint
+adoption. Actual learner execution provides the GPU behavior evidence.
 
 ## Evaluation and archive evidence
 
@@ -113,10 +109,10 @@ verification produces an explicitly partial archive and prevents checkpoint
 cleanup. Model exports go to public Hugging Face repositories; native optimizer
 payloads remain location/TTL references.
 
-### CPU runtime qualification before RL allocation
+### CPU data and configuration validation
 
 Strict composition checks literal source-route keys survive translation. Before
-submitting an RL admission run, also run the actual CPU dataset and rollout-context
+submitting the real RL run, also run the actual CPU dataset and rollout-context
 setup on its generated `compiled.yaml`:
 
 ```bash
@@ -132,10 +128,8 @@ token-length filter, constructs `TrainingContext`, collates every source type,
 and exercises the real quota planner with scripted GS8 rewards. Its receipt
 binds compiled config and local data hashes. Check those data hashes against the
 run's pinned manifests before submission. This proves CPU setup and quota
-accounting, not GPU learning, live grading, or natural-long CP qualification.
+accounting, not GPU learning or live grading.
 
-The graph also runs a one-GPU Linux sandbox preflight before the RL gang. It uses
-SkyRL's identical immutable task image and container profile, beneath the same
-privileged coordinator. It constructs `LocalMachineFactory`, creates the persistent
-namespace keeper, executes a shell command and closes the sandbox. Failed startup
-blocks RL. CPU dataset validation does not substitute for this host capability check.
+
+The real RL job creates its own sandboxes. No separate sandbox or serving probe
+is allocated before it.

@@ -188,7 +188,7 @@ FULL_PLAN = SkyRLRolePlan(
 
 
 def full_recipe(*, initial_model: str, validation_tasks: int, source_routes: dict[str, str]) -> dict:
-    """Construct the target geometry; live qualification remains mandatory."""
+    """Construct the explicit target training geometry."""
     config = yaml.safe_load(Path(__file__).with_name("rl-smoke.yaml").read_text())
     _materialize_role_plan_config(config, FULL_PLAN)
     config["context_budget"] = {
