@@ -3,9 +3,8 @@
 
 """Operate Daytona snapshots without ad-hoc scripts.
 
-``shellbox-daytona-snapshots`` reads the same snapshot identity that Harbor
-launches use, so an inventory can be compared with the required set and stale
-storage can be reclaimed before submitting a campaign.
+``shellbox-daytona-snapshots`` compares an account inventory with supplied
+snapshot specs and reclaims stale storage before submitting a campaign.
 """
 
 import argparse

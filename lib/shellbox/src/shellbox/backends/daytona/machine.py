@@ -498,8 +498,8 @@ class DaytonaMachineFactory:
         )
 
     async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
-        source = self._check_spec(spec)
-        return await ensure_snapshot(client, snapshot_request_for_spec(spec, source))
+        self._check_spec(spec)
+        return await ensure_snapshot(client, snapshot_request_for_spec(spec))
 
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.

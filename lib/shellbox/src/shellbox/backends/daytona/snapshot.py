@@ -110,8 +110,11 @@ def snapshot_name(source: RegistryImage | DockerfileSource, resources: Resources
     return f"{SNAPSHOT_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
 
 
-def snapshot_request_for_spec(spec: MachineSpec, source: RegistryImage | DockerfileSource) -> SnapshotRequest:
+def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
     """Derive the snapshot a machine spec would create."""
+    source = spec.source
+    if not isinstance(source, (RegistryImage, DockerfileSource)):
+        raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
     return SnapshotRequest(
         source=validate_source(source),
         resources=snapshot_resources(

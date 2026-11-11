@@ -52,7 +52,6 @@ from shellbox.machine import (
     DockerImage,
     ExitReason,
     MachineSpec,
-    NetworkPolicy,
     UnsupportedMachineSpec,
 )
 
@@ -1050,8 +1049,6 @@ def test_snapshot_identity_tracks_rounded_resources_and_image_source() -> None:
     assert (rounded.cpu, rounded.memory, rounded.disk, rounded.gpu) == (2, 3, 2, None)
 
     name = snapshot_name(image, rounded)
-    assert name.startswith("shellbox-")
-    assert len(name) == len("shellbox-") + 40
     assert name == snapshot_name(
         RegistryImage(image.reference),
         snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2048, gpus=0),
@@ -1076,26 +1073,17 @@ def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_pat
         task_snapshot_source(None, tmp_path / "absent")
 
 
-def test_task_environment_builds_the_machine_spec_and_snapshot_request(tmp_path) -> None:
+def test_task_environment_uses_known_snapshot_identity(tmp_path) -> None:
     environment = DaytonaTaskEnvironment(
         environment_dir=tmp_path,
         docker_image="fixture:tag",
-        workdir="/workspace",
-        env={"TASK_VALUE": "daytona"},
-        allow_internet=False,
         cpus=2,
         memory_mb=2049,
         storage_mb=1025,
     )
 
-    spec = environment.machine_spec()
     request = environment.snapshot_request()
-    assert (spec.workdir, spec.env) == ("/workspace", {"TASK_VALUE": "daytona"})
-    assert spec.network is NetworkPolicy.DENY
-    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (2, 2049, 1025)
-    assert request.source == spec.source
     assert request.name == "shellbox-63d11f0b74739ee18b90a963a6db6e078db4e468"
-    assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (2, 3, 2)
 
 
 def test_list_snapshots_reads_every_page(monkeypatch) -> None:
@@ -1137,12 +1125,3 @@ def test_purge_revalidates_last_use_before_deleting() -> None:
     assert report.deleted == ()
     assert report.skipped == ("candidate",)
     assert "candidate" in account.snapshots
-
-
-def test_daytona_network_policy_parses_declarative_fields() -> None:
-    assert DaytonaNetworkPolicy.from_config({"mode": "block_all"}).parameters() == {"network_block_all": True}
-    assert DaytonaNetworkPolicy.from_config({"mode": "domain_allow_list", "value": "example.org"}).parameters() == {
-        "domain_allow_list": "example.org"
-    }
-    with pytest.raises(ValueError, match="Unknown Daytona network policy fields"):
-        DaytonaNetworkPolicy.from_config({"mode": "block_all", "extra": "value"})

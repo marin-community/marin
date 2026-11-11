@@ -71,7 +71,7 @@ requirement. See the source Jupiter runbook below for that workflow.
 
 ## Snapshot preflight and reclamation
 
-Snapshots are identified by Shellbox, not by individual launchers. One snapshot
+Shellbox identifies snapshots for all launchers. One snapshot
 covers one image source (a registry image, or a Docker build context with its
 Dockerfile contents) and one CPU, memory, disk and GPU request. Memory and disk
 round up to whole GiB. The name is `shellbox-` plus the first 40 hex characters
@@ -196,7 +196,6 @@ with an installed SDK until the selected launcher implements the current rule.
 Use the pinned provider SDK through these Shellbox entrypoints for remote
 snapshot operations. Harbor's `cache clean` command cleans local Docker images
 and the local Harbor cache; it is not a Daytona snapshot-quota remedy.
-
 
 Quota exhaustion can fail every trial before scoring. Inspect an actual trial
 exception and preserve it separately from model errors. After any backend or
