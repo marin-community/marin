@@ -505,6 +505,7 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 .gate-chip.lost { background: var(--worse-soft); color: var(--worse); }
 .gate-chip.run { background: transparent; color: var(--amber); border: 1px solid var(--amber); }
 .gate-chip.tested { background: transparent; color: var(--faint); }
+.gate-chip.partial { background: transparent; color: var(--slate); border: 1px dashed var(--line); }
 .gate-chip.study { margin-left: 6px; background: var(--surface-2); color: var(--rope); font-family: var(--mono); font-size: 11px; }
 .gcell { position: relative; display: inline-block; cursor: help; border-radius: 8px; }
 .gcell:focus-visible { outline: 2px solid var(--rope); outline-offset: 1px; }
