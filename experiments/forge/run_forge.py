@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--driver-range", type=lambda value: tuple(map(int, value.split(":"))))
     parser.add_argument("--memory", default="8GB")
     parser.add_argument("--disk", default="50GB")
+    parser.add_argument("--local-sandbox", action="store_true", help="THROWAWAY: bwrap sandboxes in a privileged driver")
     parser.add_argument("--target-cluster", default="cw-rno2a")
     parser.add_argument("--ranks")
     parser.add_argument("--resume-held", action="store_true", help="Resume published held workpieces")
@@ -45,6 +46,8 @@ def main() -> None:
         "max-retries": "3",
         "sync-package": "marin-forge",
     }
+    if args.local_sandbox:
+        options["container-profile"] = "container_profile_privileged"
     driver = {name: str(getattr(args, name)) for name in ("proposals", "output", "policy", "arm", "concurrency")}
     driver["buckets"] = "4096"
     if args.ranks:
@@ -54,6 +57,12 @@ def main() -> None:
         for key in ("OMP_NUM_THREADS", "RAYON_NUM_THREADS", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL")
         for item in ("-e", key, str(args.cpu))
     ]
+    if os.environ.get("ROUTING_KEY"):  # THROWAWAY: per-session gateway routing key
+        pins += ["-e", "FORGE_ROUTING_KEY", "1"]
+    if args.local_sandbox:
+        pins += ["-e", "FORGE_LOCAL_SANDBOX", "1"]
+        if os.environ.get("BWRAP_RLIMIT_GB"):  # THROWAWAY: per-command RLIMIT_DATA inside bwrap machines
+            pins += ["-e", "FORGE_LOCAL_RLIMIT_DATA_GB", os.environ["BWRAP_RLIMIT_GB"]]
     for index in range(start, end):
         options["job-name"] = f"{args.job_prefix}-{index}"
         driver["bucket-range"] = f"{4096 * index // args.drivers}:{4096 * (index + 1) // args.drivers}"

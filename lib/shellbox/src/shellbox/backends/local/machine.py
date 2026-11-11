@@ -119,6 +119,34 @@ PROBE_TIMEOUT = 30
 NS_GET_USERNS = 0xB701
 
 
+# THROWAWAY (2026-11-09): uv's python-build-standalone CPython lacks os.pidfd_open / signal.pidfd_send_signal
+# (configure-time check against old kernel headers). Fall back to the raw syscalls; numbers are the same on
+# every Linux architecture (asm-generic): pidfd_open=434, pidfd_send_signal=424.
+def _pidfd_open(pid: int, flags: int = 0) -> int:
+    if hasattr(os, "pidfd_open"):
+        return os.pidfd_open(pid, flags)
+    import ctypes  # noqa: PLC0415
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    fd = libc.syscall(434, ctypes.c_int(pid), ctypes.c_uint(flags))
+    if fd < 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+    return fd
+
+
+def _pidfd_send_signal(pidfd: int, sig: int) -> None:
+    if hasattr(signal, "pidfd_send_signal"):
+        signal.pidfd_send_signal(pidfd, sig)
+        return
+    import ctypes  # noqa: PLC0415
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.syscall(424, ctypes.c_int(pidfd), ctypes.c_int(int(sig)), None, ctypes.c_uint(0)) < 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+
+
 class SandboxUnavailable(RuntimeError):
     """No bwrap executable can build a command sandbox on this host."""
 
@@ -326,11 +354,17 @@ def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirecto
 
 def _resource_limits() -> list[tuple[int, int]]:
     host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
-    return [
+    limits = [
         (resource.RLIMIT_NPROC, host_tasks + NPROC_HEADROOM),
         (resource.RLIMIT_FSIZE, FILE_SIZE_LIMIT),
         (resource.RLIMIT_CORE, 0),
     ]
+    # THROWAWAY (2026-11-09): with per-machine cgroups disabled inside the privileged Iris pod, cap each command
+    # process's anonymous memory so one runaway task cannot OOM-kill the whole driver (l-111, 15:58Z).
+    data_gb = os.environ.get("FORGE_LOCAL_RLIMIT_DATA_GB")
+    if data_gb:
+        limits.append((resource.RLIMIT_DATA, int(float(data_gb) * 1024**3)))
+    return limits
 
 
 def _command_account(user: str | None) -> pwd.struct_passwd | None:
@@ -383,7 +417,7 @@ def _pin_init(pid: int, namespace: int) -> int:
     directory = os.open(f"/proc/{pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     descriptor = None
     try:
-        descriptor = os.pidfd_open(pid)
+        descriptor = _pidfd_open(pid)
         process_namespace = os.open("ns/pid", os.O_RDONLY | os.O_CLOEXEC, dir_fd=directory)
         try:
             if os.fstat(process_namespace).st_ino != namespace:
@@ -569,7 +603,7 @@ class LocalMachine:
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,
                 )
-                self._keeper_pidfd = os.pidfd_open(self._keeper.pid)
+                self._keeper_pidfd = _pidfd_open(self._keeper.pid)
             async with asyncio.timeout(PROBE_TIMEOUT):
                 while True:
                     # The inherited file description shares bwrap's write
@@ -962,7 +996,7 @@ class LocalMachine:
             if descriptor is None:
                 continue
             try:
-                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                _pidfd_send_signal(descriptor, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 

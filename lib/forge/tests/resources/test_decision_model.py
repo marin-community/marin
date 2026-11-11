@@ -58,7 +58,8 @@ class FakeClef:
         level = 4 if body["state"]["z_candidate_answer"] == "Twelve" else 2
         probabilities = {str(index): float(index == level) for index in range(len(DECISION_LEVELS))}
         return httpx.Response(
-            200, json={"model": "clef", "answers": {"whole": {"probabilities": probabilities}}, "usage": {"input_tokens": 9}}
+            200,
+            json={"model": "clef", "answers": {"whole": {"probabilities": probabilities}}, "usage": {"input_tokens": 9}},
         )
 
     def client(self, unavailable_wait: float = 900.0) -> ClefDecisionModel:
@@ -130,7 +131,9 @@ def test_verification_requires_its_own_grader_kind() -> None:
     judge = arithmetic_task(grader=verifyit_package(JudgeSpec(references=("12",))).grader)
     exact = arithmetic_task(grader=verifyit_package(ExactSpec(expected=("12",))).grader)
     decision = decision_task()
-    numeric = arithmetic_task(grader=verifyit_package(NumericSpec(expected="12", tolerance_abs=0.0, tolerance_rel=0.0)).grader)
+    numeric = arithmetic_task(
+        grader=verifyit_package(NumericSpec(expected="12", tolerance_abs=0.0, tolerance_rel=0.0)).grader
+    )
     allowed = {
         Verification.DECISION_MODEL: (decision,),
         Verification.ANSWER_IN_BOX: (exact, numeric),

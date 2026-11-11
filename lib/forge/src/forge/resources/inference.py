@@ -3,6 +3,7 @@
 
 """Forge values at the boundary of the existing GLM transport and continuation engine."""
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Protocol, override
@@ -113,6 +114,14 @@ class GlmInference(InferenceClient):
                 {"type": "function", "function": TOOL_SCHEMA.dump_python(tool, mode="json")} for tool in request.tools
             ]
         }
+        # THROWAWAY (2026-11-09): with FORGE_ROUTING_KEY set, pin each session to one gateway worker by key.
+        # The gateway reads ``prompt_cache_key`` from the body and forwards it as ``x-routing-key``; without it,
+        # cache_aware routing sends every new session to the node holding the biggest shared-prefix cache.
+        if os.environ.get("FORGE_ROUTING_KEY"):
+            root = request
+            while root.previous is not None:
+                root = root.previous
+            fields["prompt_cache_key"] = f"forge-{digest((self.provider_digest, root._history, root.sample))[:32]}"
         try:
             result = await self.client.complete(
                 tuple(_message(message) for message in request.conversation), policy, fields

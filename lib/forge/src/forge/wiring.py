@@ -23,6 +23,7 @@ from pydantic import TypeAdapter
 from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
 from rolloutengine.validation import InvalidTaskSpec
 from shellbox.backends.iris.machine import IrisMachineFactory
+from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable, SystemDirectories
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import EnvironmentRequirements, TaskResource
@@ -39,6 +40,7 @@ from forge.harness.loop import AgenticHarness
 from forge.harness.tools import adversary_tools, standard_tools
 from forge.harness.tools.validate import ValidateTool
 from forge.lowering import (
+    LOCAL_SANDBOX,
     LoweringSettings,
     check_verification,
     host_requirements,
@@ -375,6 +377,18 @@ async def runtime(
         container.backend.value: container,
         "shellsim": shellsim_factory(output_budget_mb=policy.setting("sandbox.output_budget_mb", int)),
     }
+    if LOCAL_SANDBOX:  # THROWAWAY: bwrap sandboxes inside the (privileged) driver pod
+        try:
+            local: MachineFactory = LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE)
+        except SandboxUnavailable as error:
+            logging.warning("bwrap copy-on-write unavailable (%s); using read-only system directories", error)
+            local = LocalMachineFactory(system_directories=SystemDirectories.READ_ONLY)
+        # THROWAWAY: inside the privileged Iris pod the keeper's write to its per-machine cgroup.procs fails with
+        # EOPNOTSUPP (canary p-119, 2026-11-09 15:34Z). Run without per-machine cgroups; the driver pod's memory
+        # request is the only enforced bound on sandbox memory.
+        local.cgroup_parent = None  # type: ignore[attr-defined]
+        factories[local.backend.value] = local
+        logging.info("FORGE_LOCAL_SANDBOX=1: grader-base machines run on %s", local.backend.value)
     headers = {"x-api-key": parallel_api_key}
     async with AsyncExitStack() as owned:
         clients: dict[str, CompletionBackend] = {}

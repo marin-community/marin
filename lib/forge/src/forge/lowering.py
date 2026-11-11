@@ -5,6 +5,7 @@
 
 """Bind authored tasks to Forge's machine factories and RolloutEngine limits."""
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
@@ -88,6 +89,10 @@ def requirements(
     )
 
 
+LOCAL_SANDBOX = os.environ.get("FORGE_LOCAL_SANDBOX") == "1"
+"""THROWAWAY (2026-11-09): run grader-base Linux machines under the driver's own bwrap instead of Iris pods."""
+LOCAL_CPYTHON = PackageSpec(pypi_packages=())
+
 IN_PROCESS_GRADER_TIMEOUT = 300.0
 """Deadline for graders without a declared command timeout; script graders own their timeout."""
 MACHINE_PREPARATION_TIMEOUT = 300.0
@@ -163,8 +168,9 @@ def machine_runtime(settings: MachineSettings, requirements: EnvironmentRequirem
     return MachineRuntimeSpec(
         backend=backend.value,
         network=settings.network,
-        cpus=None if backend is Backend.SHELLSIM else settings.limits.cpus,
-        memory_mb=settings.limits.memory_mb,
+        # THROWAWAY: local (bwrap) machines run without per-machine cgroups in the Iris pod, so no cpu/memory limit.
+        cpus=None if backend in (Backend.SHELLSIM, Backend.LOCAL) else settings.limits.cpus,
+        memory_mb=None if backend is Backend.LOCAL else settings.limits.memory_mb,
         storage_mb=settings.limits.storage_mb,
         gpus=settings.limits.gpus,
         user=settings.user,
@@ -178,12 +184,18 @@ def machine_backend(requirements: EnvironmentRequirements) -> Backend:
     if requirements.docker_image is not None:
         return Backend.GVISOR
     if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
+        if LOCAL_SANDBOX and requirements.package_spec is not None:
+            return Backend.LOCAL
         raise InvalidTaskSpec("Linux process requirements need a container image on Iris")
     return Backend.SHELLSIM
 
 
 def host_requirements(requirements: EnvironmentRequirements) -> EnvironmentRequirements:
     """Normalize the working directory without changing the requested software."""
+    if LOCAL_SANDBOX and requirements.docker_image == GRADER_BASE_IMAGE:
+        requirements = requirements.model_copy(
+            update={"docker_image": None, "package_spec": requirements.package_spec or LOCAL_CPYTHON}
+        )
     if requirements.command_semantics is not None and not requirements.working_directory:
         return requirements.model_copy(update={"working_directory": DEFAULT_WORKDIR})
     return requirements
