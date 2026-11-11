@@ -370,8 +370,26 @@ Requests wait asynchronously for inference, so the proxy's configured outstandin
 does not depend on the web server's thread-pool size.
 
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
-a record for that eval; other steps continue. A server startup failure marks every pending eval as
-an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
+a record for that eval; other steps continue. For a Hugging Face model with caching enabled,
+`remote_inference` checks the completion marker in-process when the coordinator and serving
+workers can be proven to share a cluster and region. A hit skips CPU preparation.
+A named CoreWeave target still submits the CPU job because its local Iris controller reports
+the execution cluster as `local`, which does not prove a match to the target name. A miss, or a different
+serving placement, submits a CPU job with the serving placement constraints before
+reserving GPUs or TPUs. Root GPU submissions without `target_cluster` skip preparation with a warning: the GPU job
+can auto-federate while a CPU prepare job stays local. GPU children inside an Iris job keep
+preparing without a cluster pin because child jobs stay on their parent cluster.
+TPU placement with `ANY_REGION` or several regions also skips preparation with a warning when
+no target cluster is set. An unset TPU region keeps preparing inside a job because children inherit the parent region.
+A root TPU submission without a cluster or region pin skips preparation: there is no parent region to inherit.
+Both paths use the worker's model resolver. The job receives the serving worker's environment,
+including `HF_TOKEN`, and gets one retry for a failure. Preparation
+has one four-hour wait budget; a preparation timeout does not trigger a serving-startup retry.
+With different cache prefixes or a target cluster spanning several regions, preparation can warm
+a cache the serving worker cannot use, and that worker may still download on an accelerator.
+Candidate and hosted-judge preparation are separate: cold judge preparation can hold already
+reserved candidate accelerators. A preparation or
+server startup failure marks every pending eval as an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
 with the same `--run-id`. The launcher derives the same eval identities, skips completed steps,
 and keeps unfinished evals in their existing FineStore archives. Evalchemy restores completed
 requests from those archives even when the inference URL or request concurrency changes.
