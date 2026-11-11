@@ -101,10 +101,17 @@ class SetupExecution:
     written: int = 0
     missing: tuple[str, ...] = ()
     extra: tuple[str, ...] = ()
+    changed: tuple[str, ...] = ()
     detail: str = ""
 
     @property
     def passed(self) -> bool:
+        """Whether every expected file is present as written by the native recipe.
+
+        The comparison is on content. A mode difference is reported in ``changed``
+        because the native recipe's own ``chmod`` steps are replayed verbatim by the
+        rebuild, so a faithful rebuild legitimately differs from the source byte mode.
+        """
         return self.outcome == "executed" and not self.missing
 
 
@@ -264,6 +271,82 @@ def preservation_expectations(native_payload: bytes) -> tuple[FileExpectation, .
     return tuple(expectations)
 
 
+def removed_workspace_paths(dockerfile: str, workdir: str) -> tuple[str, ...]:
+    """Absolute paths the native recipe deletes from the workspace.
+
+    A recipe that generates data with a copied script and then removes the script
+    leaves no such file behind, so a faithful rebuild must not be required to keep it.
+    """
+    removed: list[str] = []
+    for line in dockerfile.splitlines():
+        stripped = line.strip()
+        if not stripped.upper().startswith("RUN "):
+            continue
+        for segment in re.split(r"&&|\|\||;", stripped[4:]):
+            try:
+                tokens = shlex.split(segment, comments=False)
+            except ValueError:
+                continue
+            while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", tokens[0]):
+                tokens = tokens[1:]
+            if not tokens or tokens[0] != "rm":
+                continue
+            for token in tokens[1:]:
+                if token.startswith("-") or any(character in token for character in "$*?"):
+                    continue
+                removed.append(token if token.startswith("/") else f"{workdir.rstrip('/')}/{token}")
+    return tuple(dict.fromkeys(removed))
+
+
+def copy_mappings(dockerfile: str, workdir: str) -> list[tuple[str, str, bool]]:
+    """Each copied source with its absolute destination and whether that is a directory."""
+    mappings: list[tuple[str, str, bool]] = []
+    for match in COPY_SOURCE.finditer(dockerfile):
+        tokens = [token for token in match.group("sources").split() if not token.startswith("--")]
+        if len(tokens) < 2:
+            continue
+        *sources, destination = tokens
+        is_directory = len(sources) > 1 or destination.endswith("/")
+        absolute = destination if destination.startswith("/") else f"{workdir.rstrip('/')}/{destination}"
+        absolute = absolute.rstrip("/") or "/"
+        for source in sources:
+            if any(character in source for character in "$*?"):
+                continue
+            mappings.append((source.rstrip("/"), absolute, is_directory))
+    return mappings
+
+
+def workspace_expectations(native_payload: bytes) -> tuple[FileExpectation, ...]:
+    """The copied files the native recipe leaves in the workspace, read from its own tar."""
+    expectations = preservation_expectations(native_payload)
+    with _read_tar(native_payload) as archive:
+        member = next((item for item in archive.getmembers() if item.name == f"{ENVIRONMENT_PREFIX}Dockerfile"), None)
+        if member is None:
+            return expectations
+        dockerfile = archive.extractfile(member).read().decode(errors="replace")
+    workdir_match = re.search(r"^\s*WORKDIR\s+(\S+)", dockerfile, re.IGNORECASE | re.MULTILINE)
+    workdir = workdir_match.group(1) if workdir_match else "/app"
+    removed = removed_workspace_paths(dockerfile, workdir)
+    if not removed:
+        return expectations
+    mappings = copy_mappings(dockerfile, workdir)
+    kept: list[FileExpectation] = []
+    for item in expectations:
+        relative = item.path[len(ENVIRONMENT_PREFIX) :]
+        destination = relative
+        for source, absolute, is_directory in mappings:
+            if relative == source:
+                destination = f"{absolute}/{relative.rsplit('/', 1)[-1]}" if is_directory else absolute
+                break
+            if relative.startswith(source + "/"):
+                destination = f"{absolute}/{relative[len(source) + 1:]}"
+                break
+        if any(destination == path or destination.startswith(path.rstrip("/") + "/") for path in removed):
+            continue
+        kept.append(item)
+    return tuple(kept)
+
+
 def check_preservation(task_id: str, native_payload: bytes, rebuilt_payload: bytes) -> PreservationResult:
     """Compare the native recipe's copied files with the rebuilt setup payload."""
     expected = preservation_expectations(native_payload)
@@ -307,8 +390,18 @@ def _docker(*arguments: str, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", *arguments], capture_output=True, text=True, **kwargs)
 
 
+def _normalized_path(path: str) -> str:
+    """A reported path with one relative prefix removed; absolute paths keep their root."""
+    return path[2:] if path.startswith("./") else path
+
+
 def _manifest(stdout: str) -> list[tuple[str, int, str]]:
-    r"""Parse ``mode path`` and ``sha256  .\/path`` lines from one container run."""
+    r"""Parse ``mode path`` and ``sha256  path`` lines from one container run.
+
+    ``find`` reports paths relative to the root it walks and ``stat`` reports the
+    absolute path it was given, so both forms appear. Normalizing a single leading
+    ``./`` keeps them consistent without touching a leading ``/``.
+    """
     entries: dict[str, int] = {}
     digests: dict[str, str] = {}
     for line in stdout.splitlines():
@@ -316,16 +409,12 @@ def _manifest(stdout: str) -> list[tuple[str, int, str]]:
         if len(parts) != 2:
             continue
         first, second = parts
+        path = _normalized_path(second.strip())
         if re.fullmatch(r"[0-7]{3,4}", first):
-            entries[second.strip()] = int(first, 8)
+            entries[path] = int(first, 8)
         elif re.fullmatch(r"[0-9a-f]{64}", first):
-            digests[second.strip().lstrip("./")] = first
-    manifest = []
-    for path, digest in digests.items():
-        mode = entries.get("./" + path) or entries.get(path)
-        if mode is not None:
-            manifest.append((digest, mode, path))
-    return manifest
+            digests[path] = first
+    return [(digest, entries[path], path) for path, digest in digests.items() if path in entries]
 
 
 def execute_setup_in_docker(
@@ -342,7 +431,6 @@ def execute_setup_in_docker(
     timeout: int = DOCKER_SETUP_TIMEOUT,
 ) -> SetupExecution:
     """Run one rebuilt setup script in its base image and compare the written files."""
-    expected = Counter((item.sha256, item.mode) for item in preservation_expectations(native_payload))
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         with _read_tar(rebuilt_payload) as archive:
@@ -362,8 +450,9 @@ def execute_setup_in_docker(
         command = (
             ("PATH=/shim:$PATH; " if stub_apt else "")
             + f"sh {SETUP_ROOT}/{setup_script} && "
-            + f"for root in {scan}; do (cd \"$root\" && find . -type f -printf '%m %p\\n'"
-            + " && find . -type f -exec sha256sum {} +); done"
+            + f'for root in {scan}; do if [ -d "$root" ]; then (cd "$root" && find . -type f'
+            + " -printf '%m %p\\n' && find . -type f -exec sha256sum {} +); elif [ -e \"$root\" ]; then"
+            + ' (stat -c \'%a %n\' "$root" && sha256sum "$root"); fi; done'
         )
         resolvers = tuple(part for server in dns for part in ("--dns", server))
         created = _docker("create", *resolvers, image, "sh", "-c", command)
@@ -382,22 +471,41 @@ def execute_setup_in_docker(
             _docker("rm", "-f", container)
     if started.returncode:
         return SetupExecution(task_id=task_id, outcome="script_error", detail=started.stderr[-500:])
-    observed = Counter((digest, mode) for digest, mode, _path in _manifest(started.stdout))
-    missing = expected - observed
-    extra = observed - expected
+    written, missing, extra, changed = _compare_workspace(workspace_expectations(native_payload), started.stdout)
     return SetupExecution(
-        task_id=task_id,
-        outcome="executed",
-        written=sum(observed.values()),
-        missing=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted(missing.elements())),
-        extra=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted(extra.elements())),
+        task_id=task_id, outcome="executed", written=written, missing=missing, extra=extra, changed=changed
     )
+
+
+def _compare_workspace(
+    expectations: tuple[FileExpectation, ...], stdout: str
+) -> tuple[int, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Compare a container's workspace against the expected files.
+
+    Content decides the verdict. Modes are reported separately because the native
+    recipe's own ``chmod`` steps are replayed verbatim by the rebuild, so a faithful
+    rebuild can legitimately end with a different mode than the archived source file.
+    """
+    manifest = _manifest(stdout)
+    observed: dict[str, set[int]] = {}
+    for digest, mode, _path in manifest:
+        observed.setdefault(digest, set()).add(mode)
+    expected = {item.sha256: item for item in expectations}
+    missing = tuple(f"{digest[:12]}:{item.path}" for digest, item in sorted(expected.items()) if digest not in observed)
+    extra = tuple(sorted({f"{digest[:12]}:{path}" for digest, _mode, path in manifest if digest not in expected}))
+    changed = tuple(
+        f"{digest[:12]}:{'/'.join(oct(mode) for mode in sorted(observed[digest]))}->{oct(item.mode)}"
+        for digest, item in sorted(expected.items())
+        if digest in observed and item.mode not in observed[digest]
+    )
+    return len(manifest), missing, extra, changed
 
 
 def execute_lowered_setup(
     spec: Mapping,
     expectations: tuple[FileExpectation, ...],
     *,
+    destinations: tuple[str, ...] = (),
     timeout: int = DOCKER_SETUP_TIMEOUT,
     dns: tuple[str, ...] = (),
 ) -> SetupExecution:
@@ -413,7 +521,6 @@ def execute_lowered_setup(
     if not commands:
         return SetupExecution(task_id=task["id"], outcome="no_setup_commands")
     workdir = requirements.get("working_directory") or "/app"
-    expected = Counter((item.sha256, item.mode) for item in expectations)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for resource in task["resources"].get("all") or ():
@@ -423,11 +530,13 @@ def execute_lowered_setup(
             mode = resource.get("mode")
             if mode is not None:
                 target.chmod(int(mode, 8))
-        scan = " ".join(f"$( [ -e {shlex.quote(item)} ] && printf '%s ' {shlex.quote(item)} )" for item in (workdir,))
+        roots = (workdir, *destinations)
+        scan = " ".join(f"$( [ -e {shlex.quote(item)} ] && printf '%s ' {shlex.quote(item)} )" for item in roots)
         command = (
             " && ".join(commands)
-            + f" && for root in {scan}; do (cd \"$root\" && find . -type f -printf '%m %p\\n'"
-            + " && find . -type f -exec sha256sum {} +); done"
+            + f' && for root in {scan}; do if [ -d "$root" ]; then (cd "$root" && find . -type f'
+            + " -printf '%m %p\\n' && find . -type f -exec sha256sum {} +); elif [ -e \"$root\" ]; then"
+            + ' (stat -c \'%a %n\' "$root" && sha256sum "$root"); fi; done'
         )
         resolvers = tuple(part for server in dns for part in ("--dns", server))
         created = _docker("create", *resolvers, requirements["docker_image"], "sh", "-c", command)
@@ -445,14 +554,14 @@ def execute_lowered_setup(
             _docker("rm", "-f", container)
     if started.returncode:
         return SetupExecution(task_id=task["id"], outcome="script_error", detail=started.stderr[-500:])
-    observed = Counter((digest, mode) for digest, mode, _path in _manifest(started.stdout))
-    missing = expected - observed
+    written, missing, extra, changed = _compare_workspace(expectations, started.stdout)
     return SetupExecution(
         task_id=task["id"],
         outcome="executed",
-        written=sum(observed.values()),
-        missing=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted(missing.elements())),
-        extra=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted((observed - expected).elements())),
+        written=written,
+        missing=missing,
+        extra=extra,
+        changed=changed,
     )
 
 
@@ -567,8 +676,14 @@ def _execute_lowered(
     lowered: dict[str, Mapping], native: dict[str, bytes], workers: int, *, dns: tuple[str, ...] = ()
 ) -> list[SetupExecution]:
     def run(task_id: str) -> SetupExecution:
-        expectations = preservation_expectations(native[task_id])
-        return execute_lowered_setup(lowered[task_id], expectations, dns=dns)
+        expectations = workspace_expectations(native[task_id])
+        workdir = lowered[task_id]["task"]["environment_requirements"].get("working_directory") or "/app"
+        return execute_lowered_setup(
+            lowered[task_id],
+            expectations,
+            destinations=_native_destinations(native[task_id], workdir),
+            dns=dns,
+        )
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(run, sorted(lowered)))

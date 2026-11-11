@@ -10,15 +10,19 @@ import tarfile
 import pytest
 
 from experiments.post_training.task_curation.no_oracle_qualification import (
+    FileExpectation,
     PreservationResult,
     QualificationReport,
     SetupExecution,
     VerifierResult,
+    _compare_workspace,
+    _manifest,
     check_preservation,
     classify_verifier_run,
     copied_destinations,
     copied_paths,
     summarize,
+    workspace_expectations,
 )
 
 
@@ -121,3 +125,49 @@ def test_setup_execution_requires_every_expected_file():
     assert SetupExecution("task", "executed", written=2).passed
     assert not SetupExecution("task", "executed", written=1, missing=("abc:0644",)).passed
     assert not SetupExecution("task", "script_error", detail="pip3: not found").passed
+
+
+def test_a_file_the_native_recipe_deletes_is_not_required_in_the_workspace():
+    """A generator script removed by its own RUN must not be demanded after setup."""
+    recipe = (
+        "FROM python:3.13-slim-bookworm\n"
+        "WORKDIR /app\n"
+        "COPY files/gen.py /app/\n"
+        "RUN python3 /app/gen.py && rm /app/gen.py\n"
+    )
+    native = _tar({"environment/Dockerfile": (recipe.encode(), 0o644), "environment/files/gen.py": (b"print(1)", 0o644)})
+    assert [item.path for item in workspace_expectations(native)] == []
+
+
+def test_a_kept_file_is_still_required_when_another_is_deleted():
+    """Only the removed file is exempt; the recipe's other outputs still count."""
+    recipe = (
+        "FROM ubuntu:24.04\n"
+        "WORKDIR /app\n"
+        "COPY files/run.sh /app/run.sh\n"
+        "COPY files/config.py /app/config.py\n"
+        "RUN rm /app/run.sh\n"
+    )
+    native = _tar(
+        {
+            "environment/Dockerfile": (recipe.encode(), 0o644),
+            "environment/files/run.sh": (b"echo\n", 0o644),
+            "environment/files/config.py": (b"x = 1\n", 0o644),
+        }
+    )
+    assert [item.path for item in workspace_expectations(native)] == ["environment/files/config.py"]
+
+
+def test_an_absolute_destination_keeps_its_mode():
+    """stat reports an absolute path; normalizing must not strip the leading slash."""
+    digest = "a" * 64
+    manifest = _manifest(f"644 /data/products.csv\n{digest}  /data/products.csv\n")
+    assert manifest == [(digest, 0o644, "/data/products.csv")]
+
+
+def test_a_faithful_mode_change_is_reported_not_failed():
+    """The native recipe's own chmod is replayed, so mode alone cannot fail the check."""
+    expectations = (FileExpectation(path="environment/files/run.sh", sha256="b" * 64, mode=0o644),)
+    written, missing, extra, changed = _compare_workspace(expectations, f"755 ./run.sh\n{'b' * 64}  ./run.sh\n")
+    assert (written, missing, extra) == (1, (), ())
+    assert changed and changed[0].startswith("bbbbbbbbbbbb:")
