@@ -19,6 +19,7 @@ import json
 import math
 import tarfile
 import tempfile
+import tomllib
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from daytona import Resources
 from harbor.environments.daytona import machine_spec
+from harbor_config.models.task.config import EnvironmentConfig
 from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
 from shellbox.image import RegistryImage
 
@@ -33,13 +35,12 @@ ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
 
 
-@dataclass(frozen=True)
-class EnvConfig:
-    """The identity-relevant slice of Harbor's task environment config."""
-
-    docker_image: str | None = None
-    workdir: str = "/app"
-    allow_internet: bool = False
+def _task_environment_config(task_toml: bytes | None) -> EnvironmentConfig:
+    """Harbor's own environment config for a task, defaulted when absent."""
+    if task_toml is None:
+        return EnvironmentConfig()
+    document = tomllib.loads(task_toml.decode(errors="replace"))
+    return EnvironmentConfig(**document.get("environment") or {})
 
 
 @dataclass
@@ -69,14 +70,22 @@ def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> 
     target.chmod(mode & 0o7777)
 
 
-def _unpack_environment(payload: bytes) -> Iterator[tuple[str, bytes, int]]:
+def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], bytes | None]:
+    """The extracted ``environment/`` entries and the task's own ``task.toml``."""
+    entries: list[tuple[str, bytes, int]] = []
+    task_toml: bytes | None = None
     with tarfile.open(
         fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
     ) as archive:
         for member in archive.getmembers():
-            if member.isdir() or member.issym() or not member.name.startswith(ENVIRONMENT_PREFIX):
+            if member.isdir() or member.issym():
                 continue
-            yield member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode
+            if member.name in {"task.toml", "./task.toml"}:
+                task_toml = archive.extractfile(member).read()
+                continue
+            if member.name.startswith(ENVIRONMENT_PREFIX):
+                entries.append((member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode))
+    return entries, task_toml
 
 
 def _registry_identity(reference: str) -> str:
@@ -89,13 +98,22 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
     for task_id, payload in tasks:
+        entries, task_toml = _unpack_environment(payload)
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                for name, content, mode in _unpack_environment(payload):
+                for name, content, mode in entries:
                     _write_context(Path(tmp), name, content, mode)
-                if not (Path(tmp) / DOCKERFILE).exists():
+                config = _task_environment_config(task_toml)
+                if not config.docker_image and not (Path(tmp) / DOCKERFILE).exists():
                     raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
-                spec = machine_spec(EnvConfig(), Path(tmp), {}, cpus=None, memory_mb=None, storage_mb=None)
+                spec = machine_spec(
+                    config,
+                    Path(tmp),
+                    {},
+                    cpus=config.cpus,
+                    memory_mb=config.memory_mb,
+                    storage_mb=config.storage_mb,
+                )
                 name = snapshot_identity(
                     spec.source, _machine_resources(spec.cpus, spec.memory_mb, spec.storage_mb, spec.gpus)
                 )
@@ -138,28 +156,43 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     for task_id, spec in tasks:
         task = spec.get("task") or {}
         runtime = spec.get("runtime") or {}
-        docker_image = (task.get("environment_requirements") or {}).get("docker_image")
+        requirements = task.get("environment_requirements") or {}
+        docker_image = requirements.get("docker_image")
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 for name, content, mode in _verifier_files(spec):
                     _write_context(Path(tmp), name, content, mode)
                 if not docker_image and not (Path(tmp) / DOCKERFILE).exists():
                     raise UnsupportedMachineSpec(f"no docker_image and no {ENVIRONMENT_PREFIX}{DOCKERFILE}")
+                verifier_machine = runtime.get("verifier_machine") or {}
+                task_machine_spec = runtime.get("task_machine") or {}
                 verifier = machine_spec(
-                    EnvConfig(docker_image=docker_image),
+                    EnvironmentConfig(
+                        docker_image=docker_image,
+                        workdir=requirements.get("working_directory"),
+                        cpus=verifier_machine.get("cpus"),
+                        memory_mb=verifier_machine.get("memory_mb"),
+                        storage_mb=verifier_machine.get("storage_mb"),
+                    ),
                     Path(tmp),
                     {},
-                    cpus=(runtime.get("verifier_machine") or {}).get("cpus"),
-                    memory_mb=(runtime.get("verifier_machine") or {}).get("memory_mb"),
-                    storage_mb=(runtime.get("verifier_machine") or {}).get("storage_mb"),
+                    cpus=verifier_machine.get("cpus"),
+                    memory_mb=verifier_machine.get("memory_mb"),
+                    storage_mb=verifier_machine.get("storage_mb"),
                 )
                 task_machine = machine_spec(
-                    EnvConfig(docker_image=docker_image),
+                    EnvironmentConfig(
+                        docker_image=docker_image,
+                        workdir=requirements.get("working_directory"),
+                        cpus=task_machine_spec.get("cpus"),
+                        memory_mb=task_machine_spec.get("memory_mb"),
+                        storage_mb=task_machine_spec.get("storage_mb"),
+                    ),
                     Path(tmp),
                     {},
-                    cpus=(runtime.get("task_machine") or {}).get("cpus"),
-                    memory_mb=(runtime.get("task_machine") or {}).get("memory_mb"),
-                    storage_mb=(runtime.get("task_machine") or {}).get("storage_mb"),
+                    cpus=task_machine_spec.get("cpus"),
+                    memory_mb=task_machine_spec.get("memory_mb"),
+                    storage_mb=task_machine_spec.get("storage_mb"),
                 )
                 # Identities are derived while the context exists: the production hash
                 # reads the Dockerfile and every file of the staged tree.
