@@ -120,8 +120,6 @@ auth:
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
     - wg0420@princeton.edu
-    # CI: the Snowball vLLM parity nightly federates its H100 root here from the marin hub.
-    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
 
 kubernetes_provider:
   namespace: iris
