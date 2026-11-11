@@ -247,15 +247,32 @@ def new_spec_text(
 
 
 def iris_jobs() -> list[IrisJob]:
-    """Every Iris job under this user's ``belay-`` prefix."""
-    prefix = f"/{resolve_job_user()}/{RUN_PREFIX}"
-    out = subprocess.run(
-        ["uv", "run", "iris", "--cluster", "marin", "job", "list", "--prefix", prefix, "--limit", "500"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return [IrisJob(m.group(1), m.group(2), m.group(3)) for line in out.splitlines() if (m := _JOB_LINE.match(line))]
+    """Every Iris job under a ``belay-`` prefix of Belay's Iris user, and of this process's user (a maintainer's own
+    runs) when that differs."""
+    jobs = []
+    for user in dict.fromkeys((CONFIG.iris_user, resolve_job_user())):
+        out = subprocess.run(
+            [
+                "uv",
+                "run",
+                "iris",
+                "--cluster",
+                "marin",
+                "job",
+                "list",
+                "--prefix",
+                f"/{user}/{RUN_PREFIX}",
+                "--limit",
+                "500",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        jobs += [
+            IrisJob(m.group(1), m.group(2), m.group(3)) for line in out.splitlines() if (m := _JOB_LINE.match(line))
+        ]
+    return jobs
 
 
 def nodes_in_use(jobs: list[IrisJob], runs_dir: Path = RUNS_DIR) -> int:

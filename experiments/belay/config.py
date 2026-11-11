@@ -40,6 +40,8 @@ class BelayConfig:
     """The page as anyone sees it, for links in public posts."""
     default_author: str
     """GitHub login credited for ideas with no #9514 comment and no recorded proposer (internal proposals)."""
+    iris_user: str
+    """The Iris user Belay's sessions submit runs as (Loom sets ``IRIS_USER`` to it), whoever lists them."""
 
     @property
     def recipe_name(self) -> str:
@@ -68,6 +70,7 @@ PRODUCTION = BelayConfig(
     page_url="https://applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/",
     public_page_url="https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/",
     default_author="ClassicLarry",
+    iris_user="loom",
 )
 
 # The local demo: same rules, but its weekly branches are cut from the demo code branch (which carries the Belay
