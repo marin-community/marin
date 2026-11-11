@@ -166,23 +166,6 @@ def export_sft(
     validate_handoff(output)
 
 
-def full_sft_recipe() -> dict:
-    """Use the pinned 10-05 composition at the target 50B-position geometry."""
-    recipe = yaml.safe_load(SMOKE_CONFIG.read_text())
-    recipe["resources"]["replicas"] = 32
-    recipe["model"]["max_seq_len"] = 262144
-    recipe["stop_after_steps"] = 746
-    recipe["first_checkpoint_restore_step"] = 1
-    recipe["max_task_failures"] = 0
-    wrapper = recipe["trainer"]
-    wrapper["context_axis_size"] = 8
-    wrapper["gradient_accumulation_steps"] = 8
-    trainer = wrapper["trainer"]
-    trainer["tracker"]["tags"] = ["long-loop", "full", "sft"]
-    trainer["checkpointer"]["keep"] = [{"every": 100}]
-    return recipe
-
-
 def sft_steps(
     version: str,
     source_revision: str,

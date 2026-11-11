@@ -170,6 +170,12 @@ verifier. The v3 overlay removes that interpreter split. Its CPU container guard
 invokes Pi's actual bash tool to install an offline wheel, then imports the module
 and runs its console entrypoint through the unchanged root verifier.
 
+Model-owned turn, token and agent-time limits retain the task verifier's actual
+reward and training eligibility. Pi's generic nonzero exit needs the engine's
+matching model-limit stop reason; a network or cleanup error does not qualify.
+Missing or failed verification remains masked. The turn limit stays at128 and
+best-checkpoint selection still requires all120validation tasks to be scored.
+
 
 New submissions default to three-day task/coordinator deadlines, from
 `execution_policy.DEFAULT_TASK_TIMEOUT_SECONDS`. RL has no wall-time callback

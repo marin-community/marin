@@ -220,7 +220,7 @@ def verify_hf_checkpoint(receipt: dict) -> dict:
 
 
 def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
-    """Run beside the data, with concurrent staging and resumable Hub upload workers."""
+    """Publish the selected HF export and return its verified commit/file receipt."""
     if not config.repo_id.startswith("open-athena/") or config.workers < 1:
         raise ValueError("Use an open-athena repository and positive upload worker count")
     card_fs, card_key = filesystem_for(config.model_card)

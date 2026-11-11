@@ -26,6 +26,8 @@ from experiments.post_training.long_loop.preflight import EndpointEvidence, chec
 from experiments.post_training.long_loop.serving import check_context_limit, checked_serving_release
 from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, read_json, validate_handoff
 
+PROBE_MODEL_ALIAS = "long-loop-sft-probe"
+
 
 def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> list[int]:
     """Match the token-ID list returned by the serving tokenize API."""
@@ -58,7 +60,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
     model = load_model_config(root / settings["model_config"])
     model = replace(
         model,
-        name="long-loop-sft-probe",
+        name=PROBE_MODEL_ALIAS,
         location=prefix_join(model_root, "hf"),
         revision=None,
         tokenizer=tokenizer_repo,
@@ -72,7 +74,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
         env_vars={},
         priority=priority_band_value(settings["priority"]),
         capability_origin=origin,
-        api_model="long-loop-sft-probe",
+        api_model=PROBE_MODEL_ALIAS,
     )
     inference = replace(inference, engine=replace(inference.engine, gpu_release=checked_serving_release()))
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, revision=tokenizer_revision)
@@ -85,7 +87,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
             models = client.get(base + "/models")
             models.raise_for_status()
             request = {
-                "model": "long-loop-sft-probe",
+                "model": PROBE_MODEL_ALIAS,
                 "messages": messages,
                 "chat_template_kwargs": {"enable_thinking": True},
                 "add_generation_prompt": True,
@@ -108,7 +110,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
                 response = client.post(
                     base + "/chat/completions",
                     json={
-                        "model": "long-loop-sft-probe",
+                        "model": PROBE_MODEL_ALIAS,
                         "messages": messages,
                         "max_tokens": 4,
                         "temperature": 0,
@@ -125,7 +127,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
             tokenizer_hash = hashlib.sha256(fs.cat_file(path)).hexdigest()
             check_endpoint(
                 EndpointEvidence(
-                    "long-loop-sft-probe",
+                    PROBE_MODEL_ALIAS,
                     models.json()["data"][0]["id"],
                     hashlib.sha256(
                         Path(hf_hub_download(tokenizer_repo, "tokenizer.json", revision=tokenizer_revision)).read_bytes()

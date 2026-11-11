@@ -10,21 +10,49 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.external import AgentCompletion, messages_equal
-from rolloutengine.models import LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import (
+    BUDGET_STOP_REASON,
+    LENGTH_STOP_REASON,
+    MAX_TURNS_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
+    LimitReached,
+    ModelTurn,
+    Prompt,
+    RolloutEnded,
+    RolloutLimits,
+)
 from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import StepReward
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped, AgentInferenceBackend
 from skyrl_train.rollouts.agent_trace import recorded_completion
-from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION
+from skyrl_train.rollouts.harbor_settings import HARBOR_EXCEPTION, HARBOR_MODEL_LIMIT
 
 
 def trial_grade(result: TrialResult, reward_key: str) -> GradeResult:
     """Preserve available scores and original failures for the training error policy."""
     diagnostics = {"harbor_trial_uri": result.trial_uri}
     if result.exception_info is not None:
-        diagnostics[HARBOR_EXCEPTION] = result.exception_info.exception_type
+        exception = result.exception_info
+        diagnostics[HARBOR_EXCEPTION] = exception.exception_type
+        model_limit = {
+            "AgentTimeoutError": TOTAL_TURN_TIMEOUT_STOP_REASON,
+            "ContextLengthExceededError": LENGTH_STOP_REASON,
+            "TurnCapExhaustedError": MAX_TURNS_STOP_REASON,
+            "OutputLengthExceededError": LENGTH_STOP_REASON,
+        }.get(exception.exception_type)
+        if exception.exception_type == "NonZeroAgentExitCodeError":
+            model_limit = next(
+                (
+                    reason
+                    for reason in (MAX_TURNS_STOP_REASON, BUDGET_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON)
+                    if f"Generation stopped: {reason}" in exception.exception_message
+                ),
+                None,
+            )
+        if model_limit is not None:
+            diagnostics[HARBOR_MODEL_LIMIT] = model_limit
     verifier = result.verifier_result
     if verifier is None or verifier.rewards is None or reward_key not in verifier.rewards:
         return GradeResult(
