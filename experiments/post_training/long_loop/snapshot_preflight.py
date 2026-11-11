@@ -5,8 +5,6 @@
 
 import json
 import os
-import subprocess
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,53 +15,32 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.rl.cli import rl_build_options
-from marin.rl.skyrl import skyrl_cpu_command
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
 
+from experiments.post_training.long_loop.qualification import run_qualification
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution
 
 
-def qualify(*, output: str, inputs: dict) -> None:
-    with tempfile.TemporaryDirectory(prefix="long-loop-snapshots-") as temporary:
-        root = Path(temporary)
-        source = root / "inputs.json"
-        source.write_text(json.dumps(inputs))
-        receipt = root / "receipt.json"
-        command = skyrl_cpu_command(
-            "--group",
-            "harbor-test",
-            "python",
-            "-m",
-            "experiments.post_training.long_loop.snapshot_probe_worker",
-            "--inputs",
-            str(source),
-            "--output",
-            str(receipt),
-        )
-        environment = dict(os.environ)
-        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
-            environment.pop(name, None)
-        try:
-            with (root / "probe.log").open("w") as log:
-                result = subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=1800)
-        finally:
-            for path in (source, root / "probe.log", receipt):
-                if path.exists():
-                    fs, key = filesystem_for(prefix_join(output, path.name))
-                    fs.pipe_file(key, path.read_bytes())
-        result.check_returncode()
-        if not json.loads(receipt.read_text())["passed"]:
-            raise ValueError("Snapshot lifecycle qualification failed")
+def qualify(*, output: str, inputs: dict, probe_module: str) -> None:
+    run_qualification(output=output, inputs=inputs, module=probe_module, dependency_group="harbor-test")
 
 
 @click.command(help=__doc__)
 @click.option("--spec", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--inputs", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option(
+    "--probe-module",
+    type=click.Choice(
+        [
+            "experiments.post_training.long_loop.snapshot_probe_worker",
+            "experiments.post_training.long_loop.calibforge_probe_worker",
+        ]
+    ),
+    required=True,
+)
 @rl_build_options
-def main(spec: Path, inputs: Path) -> ArtifactStep:
+def main(spec: Path, inputs: Path, probe_module: str) -> ArtifactStep:
     resolved = resolve_spec(spec, smoke=False)
     os.environ["MARIN_PREFIX"] = resolved["storage"]["output_prefix"]
     os.environ["MARIN_TEMP_PREFIX"] = resolved["storage"]["temporary_prefix"]
@@ -84,6 +61,7 @@ def main(spec: Path, inputs: Path) -> ArtifactStep:
         version=version,
         output=OUT,
         inputs=json.loads(inputs.read_text()),
+        probe_module=probe_module,
     )
     return replace(step, runtime_args={**step.runtime_args, "skyrl_execution": execution})
 

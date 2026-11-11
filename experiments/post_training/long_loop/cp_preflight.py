@@ -5,8 +5,6 @@
 
 import json
 import os
-import subprocess
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,51 +15,22 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.rl.cli import rl_build_options
-from marin.rl.skyrl import skyrl_cpu_command
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
 
+from experiments.post_training.long_loop.qualification import run_qualification
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution
 
 
 def qualify(*, output: str, inputs: dict) -> None:
-    with tempfile.TemporaryDirectory(prefix="long-loop-cp-") as temporary:
-        root = Path(temporary)
-        source = root / "inputs.json"
-        source.write_text(json.dumps(inputs))
-        receipt = root / "receipt.json"
-        command = skyrl_cpu_command(
-            "python",
-            "-m",
-            "torch.distributed.run",
-            "--standalone",
-            "--nproc-per-node=4",
-            "--module",
-            "experiments.post_training.long_loop.cp_numerical_probe",
-            "--inputs",
-            str(source),
-            "--output",
-            str(receipt),
-        )
-        command[command.index("--extra") + 1] = "megatron"
-        environment = dict(os.environ)
-        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
-            environment.pop(name, None)
-        # Match the learner's explicit fused attention backend.
-        environment.update(NVTE_FLASH_ATTN="0", NVTE_FUSED_ATTN="1")
-        try:
-            with (root / "probe.log").open("w") as log:
-                result = subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=1800)
-        finally:
-            for path in (source, root / "probe.log", receipt):
-                if path.exists():
-                    fs, key = filesystem_for(prefix_join(output, path.name))
-                    fs.pipe_file(key, path.read_bytes())
-        result.check_returncode()
-        if not json.loads(receipt.read_text())["passed"]:
-            raise ValueError("CP numerical qualification failed")
+    run_qualification(
+        output=output,
+        inputs=inputs,
+        module="experiments.post_training.long_loop.cp_numerical_probe",
+        prefix_arguments=("-m", "torch.distributed.run", "--standalone", "--nproc-per-node=4"),
+        extra="megatron",
+        environment_overrides={"NVTE_FLASH_ATTN": "0", "NVTE_FUSED_ATTN": "1"},
+    )
 
 
 @click.command(help=__doc__)

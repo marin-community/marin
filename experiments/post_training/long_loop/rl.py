@@ -237,13 +237,3 @@ def full_recipe(*, initial_model: str, validation_tasks: int, source_routes: dic
         "max_seq_len": 262144,
     }
     return config
-
-
-def full_rl_step(
-    *, version: str, model: ArtifactHfModel, selection: ArtifactStep[Artifact], validation_tasks: int
-) -> ArtifactStep[SkyRLRun]:
-    """Refuse full RL admission until target-geometry qualification is implemented."""
-    raise NotImplementedError(
-        "Full RL launch is blocked pending admitted mixed-source dataset provenance and "
-        "local integration review of the first-step CP4 qualification path"
-    )

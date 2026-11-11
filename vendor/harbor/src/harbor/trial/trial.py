@@ -48,6 +48,7 @@ from harbor.skills import ResolvedSkill, resolve_skills
 from harbor.tasks.client import TaskClient
 from harbor.trial.artifact_handler import ArtifactHandler
 from harbor.trial.attempt import trial_paths, trial_relative_path
+from harbor.environments.setup import run_environment_setup
 from harbor.trial.errors import (
     AgentDiskFullError,
     AgentSetupTimeoutError,
@@ -422,6 +423,12 @@ class Trial(ABC):
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
+        if self.task.config.environment.setup is not None:
+            await self._await_phase(
+                run_environment_setup(self.agent_environment, self.task.config.environment.setup),
+                timeout_sec=self.task.config.environment.setup.timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError("Public fixture initialization timed out"),
+            )
         with self.agent_environment.with_default_user(self.task.config.agent.user):
             if self.user_agent is not None:
                 await self._setup_user_agent()
