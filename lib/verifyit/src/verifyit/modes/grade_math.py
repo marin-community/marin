@@ -21,7 +21,7 @@ import math
 import re
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
@@ -110,12 +110,7 @@ def _is_undefined(value: Any) -> bool:
 
 
 def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
-    """Whether any expected parse equals any candidate parse, as math-verify's ``verify``.
-
-    Pairs math-verify raises on get their own comparison here (see
-    ``_verify_pair``); its deadline, a ``BaseException``, still reaches
-    ``grade_math_candidate`` as an infrastructure failure.
-    """
+    """Whether any expected parse equals any candidate parse."""
     return any(
         _verify_pair(gold, target, allow_set_relation_comp)
         for gold in _as_list(expected)
@@ -168,8 +163,16 @@ _CLOCK_SPACING = re.compile(r"\\[!,;:]|\\(?:text|mathrm)\{([^}]*)\}|\s+")
 _CLOCK_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?(am|pm|a\.m\.|p\.m\.)?", re.IGNORECASE)
 
 
-def _clock_time(text: str) -> tuple[int, int, int, str | None] | None:
-    """(hour, minute, second, meridiem) when ``text`` reads as a clock time, else ``None``."""
+@dataclass(frozen=True)
+class _ClockTime:
+    hour: int
+    minute: int
+    second: int
+    meridiem: str | None
+
+
+def _clock_time(text: str) -> _ClockTime | None:
+    """A parsed clock time, or ``None`` when the text is not one."""
     raw = strip_math_delimiters(text.strip())
     compact = re.sub(r"\s+", "", _CLOCK_SPACING.sub(lambda match: match.group(1) or "", raw))
     match = _CLOCK_TIME.fullmatch(compact)
@@ -179,33 +182,35 @@ def _clock_time(text: str) -> tuple[int, int, int, str | None] | None:
     meridiem = match[4].lower().replace(".", "") if match[4] else None
     if hour > 24 or minute > 59 or second > 59 or (meridiem and not 1 <= hour <= 12):
         return None
-    return hour, minute, second, meridiem
+    return _ClockTime(hour, minute, second, meridiem)
 
 
-def _reference_clock_time(text: str) -> tuple[int, int, int, str | None] | None:
+def _reference_clock_time(text: str) -> _ClockTime | None:
     """The reference's clock time when math-verify would misread it, else ``None``.
 
     That is a meridiem, LaTeX colon spacing (``10\\!:\\!00``), or a ``:00`` minute,
     which math-verify parses as division by zero. Any other ``a:b`` stays a ratio.
     """
     time = _clock_time(text)
-    if time is None or time[3] is not None or "\\" in text or time[1] == 0:
+    if time is None or time.meridiem is not None or "\\" in text or time.minute == 0:
         return time
     return None
 
 
-def _clock_times_match(expected: tuple[int, int, int, str | None], candidate: tuple[int, int, int, str | None]) -> bool:
+def _clock_times_match(expected: _ClockTime, candidate: _ClockTime) -> bool:
     """A reference with a meridiem fixes the 24-hour time; one without accepts either reading of its hour."""
 
-    def on_24_hours(time: tuple[int, int, int, str | None]) -> tuple[int, int, int]:
-        hour, minute, second, meridiem = time
-        if meridiem is not None:
-            hour = hour % 12 + (12 if meridiem == "pm" else 0)
-        return hour, minute, second
+    def on_24_hours(time: _ClockTime) -> tuple[int, int, int]:
+        hour = time.hour
+        if time.meridiem is not None:
+            hour = hour % 12 + (12 if time.meridiem == "pm" else 0)
+        return hour, time.minute, time.second
 
-    if expected[3] is not None:
+    if expected.meridiem is not None:
         return on_24_hours(expected) == on_24_hours(candidate)
-    return expected[:3] in (candidate[:3], on_24_hours(candidate))
+    expected_clock = expected.hour, expected.minute, expected.second
+    candidate_clock = candidate.hour, candidate.minute, candidate.second
+    return expected_clock in (candidate_clock, on_24_hours(candidate))
 
 
 def _is_expression(parsed: list) -> bool:
