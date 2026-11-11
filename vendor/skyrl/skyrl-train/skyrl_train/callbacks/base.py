@@ -21,10 +21,15 @@ from loguru import logger
 from .types import CallbackErrorBehavior
 
 
-def checkpoint_save_allowed(state: "TrainerState", save_after_fraction: float) -> bool:
-    """Allow checkpoint writes after the configured fraction of planned updates."""
+def validate_save_after_fraction(save_after_fraction: float) -> None:
+    """Reject a save fraction outside [0, 1]."""
     if not 0.0 <= save_after_fraction <= 1.0:
         raise ValueError("save_after_fraction must be between 0 and 1")
+
+
+def checkpoint_save_allowed(state: "TrainerState", save_after_fraction: float) -> bool:
+    """Allow checkpoint writes after the configured fraction of planned updates."""
+    validate_save_after_fraction(save_after_fraction)
     return state.global_step >= math.ceil(save_after_fraction * state.total_steps)
 
 

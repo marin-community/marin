@@ -48,7 +48,14 @@ from skyrl_train.inference_observability import (
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
 from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
-from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler, checkpoint_save_allowed
+from .base import (
+    CallbackHandler,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    checkpoint_save_allowed,
+    validate_save_after_fraction,
+)
 from .types import (
     CallbackErrorBehavior,
     CHECKPOINT_CALLBACK_TYPE,
@@ -107,6 +114,7 @@ class CheckpointCallback(TrainerCallback):
     """
 
     def __init__(self, save_steps: int = 10, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
         self.save_after_fraction = save_after_fraction
@@ -210,6 +218,7 @@ class BestCheckpointCallback(TrainerCallback):
         minimum_scored_tasks: int,
         save_after_fraction: float = 0.0,
     ):
+        validate_save_after_fraction(save_after_fraction)
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
@@ -448,6 +457,7 @@ class HFModelSaveCallback(TrainerCallback):
     """
 
     def __init__(self, save_steps: int = -1, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
         self.save_after_fraction = save_after_fraction

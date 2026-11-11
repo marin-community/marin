@@ -60,3 +60,14 @@ async def test_best_checkpoint_ignores_improvements_before_save_boundary(tmp_pat
     assert not (tmp_path / "global_step_5").exists()
     assert (tmp_path / "global_step_10").is_dir()
     assert json.loads((tmp_path / "best_checkpoint.json").read_text())["step"] == 10
+
+
+@pytest.mark.parametrize('save_after_fraction', [50, -0.1, float("nan")])
+@pytest.mark.parametrize('callback_type, constructor_kwargs', [
+    (CheckpointCallback, {}),
+    (HFModelSaveCallback, {}),
+    (BestCheckpointCallback, dict(initial_model_uri="initial", expected_tasks=1, minimum_scored_tasks=1)),
+])
+def test_save_after_fraction_rejected_at_construction(callback_type, constructor_kwargs, save_after_fraction):
+    with pytest.raises(ValueError, match="save_after_fraction"):
+        callback_type(save_after_fraction=save_after_fraction, **constructor_kwargs)
