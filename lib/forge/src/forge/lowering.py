@@ -16,12 +16,15 @@ from rolloutengine.validation import InvalidTaskSpec, check_grader
 from shellbox.machine import DEFAULT_WORKDIR, Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.grading import DecisionModelConnection
 from taskcompendium.models import (
+    ActionSubmission,
     CommandSemantics,
     DecisionModelGrader,
     EnvironmentRequirements,
+    FinalAction,
     Grader,
     ScriptGrader,
     TaskSpec,
+    TextSubmission,
     VerifyitGrader,
     judge_spec,
 )
@@ -309,6 +312,16 @@ def check_verification(task: TaskSpec, verification: Verification, settings: Low
             raise InvalidTaskSpec(
                 'Verification is decision_model: the grader must be {"kind": "decision_model", ...} with deliverable, '
                 "rubric, reference and cut; script, VerifyIt and LLM-judge graders are refused"
+            )
+        answer = task.answer_format
+        submissions = set(answer.submission_types)
+        if isinstance(answer, FinalAction) and answer.normal_submission is not None:
+            submissions |= set(answer.normal_submission.submission_types)
+        if not submissions <= {TextSubmission, ActionSubmission}:
+            raise InvalidTaskSpec(
+                f"Verification is decision_model: the decision model reads a prose answer, but answer_format "
+                f"{answer.kind!r} submits structured data; use plain_text (or boxed, answer_call, json_answer, "
+                "final_action) and put any required structure in the rubric"
             )
     elif verification is Verification.ANSWER_IN_BOX:
         if not (

@@ -256,7 +256,9 @@ async def grade_decision_model_answer(
     elif isinstance(submission, ActionSubmission):
         answer = native_action_text(submission.message)
     else:
-        raise TypeError(f"A decision model cannot grade a {type(submission).__name__}")
+        return GradeResult(
+            Outcome.INVALID_TASK, None, f"A decision model reads a text answer, not a {type(submission).__name__}"
+        )
     if not answer.strip():
         return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
     level = await connection.read(grader, answer)

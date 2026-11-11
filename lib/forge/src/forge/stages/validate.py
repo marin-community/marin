@@ -15,7 +15,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from forge.config import ForgeConfig
 from forge.effects.context import Context
 from forge.effects.events import Note, Resolved
-from forge.effects.issues import Hold, OutputBudgetExhausted, describe_exception
+from forge.effects.issues import DecisionModelUnavailable, Hold, OutputBudgetExhausted, describe_exception
 from forge.harness.protocol import Returned, Stopped, StopReason
 from forge.harness.tools.adversary import AdversaryClaim, AdversaryReport, ReportTool
 from forge.lowering import check_verification, host_requirements, lower_with_settings, lowering_settings, requirements
@@ -62,6 +62,8 @@ async def adversary_result(
             result = await run_adversary(ctx, workpiece, config, resources, spec, name)
         except* OutputBudgetExhausted:
             await ctx.emit(Note(f"Adversary {name}: output budget exhausted on attempt {retry + 1} of 2"))
+        except* DecisionModelUnavailable:
+            raise  # holds the whole workpiece so the driver frees the slot and defers decision_model proposals
         except* Hold as error:
             result = AdversaryResult(name, False, (), failure_reasons(error))
         if result is not None:
@@ -70,11 +72,22 @@ async def adversary_result(
 
 
 def failure_reasons(error: BaseException) -> tuple[str, ...]:
-    """Retain leaf diagnostics when observer scopes group infrastructure failures."""
-    if isinstance(error, BaseExceptionGroup):
-        return tuple(reason for child in error.exceptions for reason in failure_reasons(child))
-    reasons = (describe_exception(error),)
-    return reasons + (failure_reasons(error.__cause__) if error.__cause__ is not None else ())
+    """Retain leaf diagnostics when observer scopes group infrastructure failures; each exception once."""
+    reasons: list[str] = []
+    seen: set[int] = set()
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(reversed(current.exceptions))
+            continue
+        reasons.append(describe_exception(current))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+    return tuple(reasons)
 
 
 async def claim_result(ctx: Context, spec: TaskRolloutSpec, claim: AdversaryClaim) -> AdversaryFinding:

@@ -129,6 +129,16 @@ DECISION_MODEL_HELD = 75
 """``one``'s exit status for a workpiece held because the decision model was unavailable (EX_TEMPFAIL)."""
 
 
+def decision_model_held(wp: Workpiece) -> bool:
+    """Whether ``wp`` was held because the decision model stayed unavailable (the coordinator records holds)."""
+    last = wp.decisions[-1] if wp.decisions else None
+    return (
+        wp.terminal is Terminal.HELD
+        and isinstance(last, Incomplete)
+        and any(reason.startswith(f"{DecisionModelUnavailable.__name__}: ") for reason in last.reasons)
+    )
+
+
 async def one(args: argparse.Namespace) -> int:
     configure_coreweave_s3()
     with open_url(args.proposals, "rt") as source:
@@ -145,7 +155,7 @@ async def one(args: argparse.Namespace) -> int:
     sink = JsonlSink(str(workdir / "events.jsonl"))
     wp = Workpiece(proposal.header.id, proposal)
     log: EventLog | None = None
-    skipped = decision_model_held = False
+    skipped = False
     try:
         restored = await recover(workdir, destination)
         if restored is not None and (restored.finished or (restored.terminal is Terminal.HELD and not args.resume_held)):
@@ -170,7 +180,6 @@ async def one(args: argparse.Namespace) -> int:
         if log is not None:
             await log.record(StageCompleted(None, "", "Held", wp.round, Terminal.HELD))
         logging.warning("Forge workpiece %s held: %s", proposal.header.id, reasons(error))
-        decision_model_held = error.subgroup(DecisionModelUnavailable) is not None
     except* Exception as error:
         detail = traceback.format_exc()
         wp = wp.with_(terminal=Terminal.HELD, decisions=(*wp.decisions, Incomplete((f"bug: {detail}",))))
@@ -189,7 +198,7 @@ async def one(args: argparse.Namespace) -> int:
             )
             (workdir / "status.json").write_text(json.dumps(asdict(status)))
             publish(workdir, destination, SNAPSHOT_FILES if log is not None else SNAPSHOT_FILES[1:])
-    return DECISION_MODEL_HELD if decision_model_held else 0
+    return DECISION_MODEL_HELD if decision_model_held(wp) else 0
 
 
 async def run(args: argparse.Namespace) -> None:

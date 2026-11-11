@@ -204,8 +204,11 @@ class DecisionModelEngine:
         spec = spec.model_copy(update={"decision_model": DecisionModelConnection(level)})
         try:
             return await self.engine.run_task(spec, model, run_id=run_id)
-        except RolloutInterrupted as error:
+        except RolloutInterrupted:
             # The engine wraps grading failures; the effect decision (hold, restart) belongs to the decision model.
-            if failure is not None:
-                raise failure from error
-            raise
+            if failure is None:
+                raise
+        # Raised outside the handler: the engine's wrapper already has ``failure`` as its cause, so chaining
+        # ``failure`` to the wrapper would make the cause chain a cycle.
+        assert failure is not None
+        raise failure
