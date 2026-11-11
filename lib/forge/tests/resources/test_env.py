@@ -9,6 +9,7 @@ from typing import override
 
 import pytest
 from rolloutengine.test_support import machine_runtime
+from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.machine import (
     Command,
     ExecSetupFailed,
@@ -294,6 +295,21 @@ async def test_machine_startup_expected_failure_is_transient(
     monkeypatch.setattr(env_module, "prepare_machine", failed_start)
     factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
     with pytest.raises(Transient) as caught:
+        await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
+    assert caught.value.__cause__ is failure
+
+
+async def test_sandbox_startup_failure_restarts_the_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure = SandboxUnavailable("Persistent bubblewrap keeper failed: setting up uid map")
+
+    @asynccontextmanager
+    async def failed_start(*args: object, **kwargs: object) -> AsyncIterator[Machine]:
+        raise failure
+        yield MemoryMachine()
+
+    monkeypatch.setattr(env_module, "prepare_machine", failed_start)
+    factory = ShellboxEnvFactory(shellsim_factory(), machine_runtime(backend="shellsim"), 5, Notes())
+    with pytest.raises(Restart, match="keeper failed") as caught:
         await factory.create(EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR))
     assert caught.value.__cause__ is failure
 

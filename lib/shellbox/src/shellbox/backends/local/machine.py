@@ -19,6 +19,7 @@ import re
 import resource
 import shutil
 import signal
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -67,6 +68,10 @@ NPROC_HEADROOM = 256
 """Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
 FILE_SIZE_LIMIT = 1 << 30
 PROCESS_STOP_TIMEOUT = 1
+SESSION_TERM_GRACE = 1.0
+"""How long a timed-out command's session may handle SIGTERM before SIGKILL."""
+SESSION_KILL_TIMEOUT = 5.0
+"""How long SIGKILLed session members may take to be reaped before the machine is closed instead."""
 # Reserve program directories and private configuration paths from caller-supplied mounts.
 SYSTEM_DIRECTORIES = (
     "/bin",
@@ -145,6 +150,69 @@ def _pidfd_send_signal(pidfd: int, sig: int) -> None:
     if libc.syscall(424, ctypes.c_int(pidfd), ctypes.c_int(int(sig)), None, ctypes.c_uint(0)) < 0:
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno))
+
+
+def _session_members(session: int) -> list[int]:
+    """Live (non-zombie) processes in ``session``, as seen from this PID namespace, guest processes included."""
+    if not os.path.isdir("/proc"):  # macOS: only the platform-independent tests take this path.
+        listing = subprocess.run(["ps", "-A", "-o", "pid=,stat="], capture_output=True, text=True, check=True).stdout
+        rows = [line.split() for line in listing.splitlines()]
+        candidates = [int(pid) for pid, state in rows if not state.startswith("Z")]
+        members = []
+        for pid in candidates:
+            try:
+                if os.getsid(pid) == session:
+                    members.append(pid)
+            except (ProcessLookupError, PermissionError):
+                pass
+        return members
+    members = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            stat = Path(f"/proc/{name}/stat").read_text()
+        except OSError:
+            continue
+        # Fields after the parenthesised command name: state, ppid, pgrp, session.
+        state, _, _, member_session = stat.rpartition(")")[2].split()[:4]
+        if int(member_session) == session and state not in ("Z", "X"):
+            members.append(int(name))
+    return members
+
+
+async def stop_session(process: asyncio.subprocess.Process) -> bool:
+    """Stop every process in a ``start_new_session`` launcher's session, then the launcher; True once all exit.
+
+    Guest processes stay in the launcher's session across the PID namespace boundary, including those that
+    changed process group (``timeout``, job control); only a guest ``setsid`` leaves it. The launcher is
+    signalled last so that it reaps its guest child: an orphan of the launcher would be reparented to this
+    PID namespace's init, which need not reap. The session ID stays allocated while any member lives.
+    """
+    loop = asyncio.get_running_loop()
+    for sig, bound in ((signal.SIGTERM, SESSION_TERM_GRACE), (signal.SIGKILL, SESSION_KILL_TIMEOUT)):
+        for pid in _session_members(process.pid):
+            if pid != process.pid:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+        deadline = loop.time() + bound
+        while _session_members(process.pid) not in ([], [process.pid]) and loop.time() < deadline:
+            await asyncio.sleep(0.02)
+    # The launcher exits by itself once it has reaped its child.
+    for bound in (SESSION_TERM_GRACE, SESSION_KILL_TIMEOUT):
+        try:
+            async with asyncio.timeout(bound):
+                await process.wait()
+            break
+        except TimeoutError:
+            process.kill()
+    survivors = _session_members(process.pid)
+    if process.returncode is not None and not survivors:
+        return True
+    logger.warning("Session %d survived SIGKILL: %s", process.pid, survivors)
+    return False
 
 
 class SandboxUnavailable(RuntimeError):
@@ -892,6 +960,7 @@ class LocalMachine:
                     status_writer.close()
                     await process.wait()
             except BaseException as interruption:
+                timed_out = isinstance(interruption, TimeoutError)
 
                 async def cleanup() -> None:
                     nonlocal process
@@ -904,6 +973,9 @@ class LocalMachine:
                     status_writer.close()
                     if group is not None:
                         await self._stop_command(process, group)
+                    elif timed_out and not self._closed and await stop_session(process):
+                        # Without a cgroup, a timed-out command's session is its containment; the machine stays.
+                        logger.info("Stopped a timed-out command's session; the machine stays open")
                     elif not self._closed:
                         await self.close()
                     await process.wait()
@@ -1109,8 +1181,10 @@ class LocalMachineFactory:
 
     Prepared images use private rootless umoci bundles, without host program mounts. Registry inputs
     must be digest pinned. Only numeric root image users are supported. ``ttl`` bounds the lifetime of
-    a task. With delegated cgroups, command interruption preserves the task;
-    without delegation it closes every container in the task.
+    a task. With delegated cgroups, command interruption preserves the task. Without delegation, a
+    command timeout stops the command's process session (TERM, then KILL) and preserves the task;
+    a guest process that called ``setsid`` survives it. A cancelled command, or a session that cannot be
+    reaped, closes every container in the task.
     """
 
     backend: Backend = Backend.LOCAL

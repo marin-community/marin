@@ -1241,8 +1241,31 @@ socket.create_connection(('127.0.0.1', 8123), timeout=1).close()
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c 'while True: pass'",
+        "sleep 300",
+        "trap '' TERM; for i in $(seq 20); do sh -c 'trap \"\" TERM; while :; do :; done' & done; wait",
+        "timeout 600 sh -c 'trap \"\" TERM; while :; do :; done'",
+    ],
+    ids=["cpu", "sleep", "children", "own-process-group"],
+)
+def test_undelegated_timeout_stops_the_command_session_and_keeps_the_machine(undelegated_factory, command):
+    async def scenario(machine):
+        result = await machine.run(Command(("sh", "-c", command), timeout=1))
+        assert result.reason is ExitReason.TIMED_OUT
+        # The guest PID namespace holds only the keeper and this listing once the session is gone.
+        listing = await machine.run(Command(("sh", "-c", "for p in /proc/[0-9]*; do cat $p/comm; done"), timeout=5))
+        assert listing.exit_code == 0
+        names = listing.stdout.split()
+        assert set(names) <= {b"bwrap", b"sh", b"sleep"} and names.count(b"sh") == names.count(b"sleep") == 1, names
+
+    on_machine(undelegated_factory, SPEC, scenario)
+
+
 @pytest.mark.parametrize("cancel", [False, True], ids=["timeout", "cancel"])
-def test_local_task_command_deadline_closes_every_member(undelegated_factory, cancel):
+def test_local_task_command_deadline_keeps_or_closes_every_member(undelegated_factory, cancel):
     async def scenario():
         group = await undelegated_factory.create_task(private_task_spec())
         roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
@@ -1264,8 +1287,11 @@ def test_local_task_command_deadline_closes_every_member(undelegated_factory, ca
                 result = await pending
                 assert result.reason is ExitReason.TIMED_OUT
             for machine in group.containers.values():
-                with pytest.raises(MachineTerminated):
-                    await machine.run(Command(("true",)))
+                if cancel:
+                    with pytest.raises(MachineTerminated):
+                        await machine.run(Command(("true",)))
+                else:
+                    assert (await machine.run(Command(("true",)))).exit_code == 0
         finally:
             await group.close()
         assert not any(root.exists() for root in roots)

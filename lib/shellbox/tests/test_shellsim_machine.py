@@ -14,13 +14,14 @@ import pytest
 pytest.importorskip("shellsim")
 
 import shellsim
-from shellbox.backends.shellsim.machine import INTERRUPT_GRACE, ShellSimMachineFactory
+from shellbox.backends.shellsim.machine import INTERRUPT_GRACE, STRAY_WORKER_WAIT, ShellSimMachineFactory
 from shellbox.machine import (
     Command,
     ExitReason,
     MachineOutputLimitExceeded,
     MachineResourceExhausted,
     MachineSpec,
+    MachineTerminated,
     PackageSpec,
     Result,
     ShellStatus,
@@ -121,7 +122,7 @@ def test_interrupted_command_waits_for_native_cleanup_and_preserves_machine(monk
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("interruption", ["timeout", "cancel", "interrupt", "close"])
+@pytest.mark.parametrize("interruption", ["interrupt", "close"])
 def test_uncooperative_native_work_closes_the_machine_after_a_bounded_grace(monkeypatch, interruption):
     async def check():
         machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
@@ -129,29 +130,14 @@ def test_uncooperative_native_work_closes_the_machine_after_a_bounded_grace(monk
         loop = asyncio.get_running_loop()
         clock = [loop.time()]
         monkeypatch.setattr(loop, "time", lambda: clock[0])
-        shell_action = interruption in ("interrupt", "close")
         try:
-            with _controlled_action(monkeypatch, shell.shell if shell_action else machine.simulation) as action:
-                running = asyncio.create_task(
-                    shell.execute("fixture") if shell_action else machine.run(Command(("fixture",), timeout=10))
-                )
+            with _controlled_action(monkeypatch, shell.shell) as action:
+                running = asyncio.create_task(shell.execute("fixture"))
                 await action.started.wait()
-                if interruption == "timeout":
-                    clock[0] += 10
-                elif interruption == "cancel":
-                    running.cancel()
-                else:
-                    stopping = asyncio.create_task(shell.interrupt() if interruption == "interrupt" else machine.close())
+                stopping = asyncio.create_task(shell.interrupt() if interruption == "interrupt" else machine.close())
                 await action.requested.wait()
                 clock[0] += INTERRUPT_GRACE
-                if interruption == "cancel":
-                    running.cancel()
-                    with pytest.raises(asyncio.CancelledError):
-                        await running
-                elif interruption == "timeout":
-                    result = await running
-                    assert result.reason is ExitReason.TIMED_OUT
-                elif interruption == "interrupt":
+                if interruption == "interrupt":
                     with pytest.raises(RuntimeError):
                         await stopping
                 else:
@@ -160,9 +146,53 @@ def test_uncooperative_native_work_closes_the_machine_after_a_bounded_grace(monk
                 with pytest.raises(RuntimeError):
                     await machine.run(Command(("true",)))
                 action.release.set()
-                if shell_action:
-                    result = await running
-                    assert result.exit_code == 130
+                result = await running
+                assert result.exit_code == 130
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "cancel"])
+@pytest.mark.parametrize("finishes", [True, False], ids=["late-worker", "stuck-worker"])
+def test_a_command_worker_outliving_its_grace_holds_the_next_action_then_closes_only_if_stuck(
+    monkeypatch, interruption, finishes
+):
+    async def check():
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        monkeypatch.setattr(loop, "time", lambda: clock[0])
+        try:
+            with _controlled_action(monkeypatch, machine.simulation) as action:
+                running = asyncio.create_task(machine.run(Command(("fixture",), timeout=10)))
+                await action.started.wait()
+                if interruption == "timeout":
+                    clock[0] += 10
+                else:
+                    running.cancel()
+                await action.requested.wait()
+                clock[0] += INTERRUPT_GRACE
+                if interruption == "timeout":
+                    assert (await running).reason is ExitReason.TIMED_OUT
+                else:
+                    running.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await running
+                following = asyncio.create_task(machine.run(Command(("printf", "usable"))))
+                await asyncio.sleep(0)
+                assert not following.done()
+                if not finishes:
+                    clock[0] += STRAY_WORKER_WAIT
+                    with pytest.raises(MachineTerminated):
+                        await following
+                    with pytest.raises(MachineTerminated):
+                        await machine.run(Command(("true",)))
+                    return
+                action.release.set()
+            result = await following
+            assert (result.exit_code, result.stdout) == (0, b"usable")
         finally:
             await machine.close()
 

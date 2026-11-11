@@ -49,6 +49,8 @@ DEFAULT_OUTPUT_LIMIT = 128 * 1024 * 1024
 DEFAULT_MEMORY_MB = 2048
 SIMULATOR_PANIC_EXIT_CODE = 1
 INTERRUPT_GRACE = 5.0
+STRAY_WORKER_WAIT = 60.0
+"""How long after its grace a timed-out worker may still finish before the next action closes the machine."""
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,7 @@ class ShellSimShellSession:
             action.cancellation.cancel()
             deadline = asyncio.get_running_loop().time() + INTERRUPT_GRACE
             if not await self.machine._drain_worker(action.worker, deadline):
+                self.machine._closed = True
                 raise MachineTerminated("ShellSim did not stop after interruption; machine is closed")
 
     async def close(self) -> None:
@@ -139,6 +142,8 @@ class ShellSimMachine:
         self._lock = asyncio.Lock()
         self._closed = False
         self._active: _RunningAction | None = None
+        self._stray: asyncio.Task[object] | None = None
+        self._stray_deadline = 0.0
         self._shell = ShellSimShellSession(self)
         self.simulation.mkdir(spec.workdir, parents=True)
         for log_dir in ("/logs/agent", "/logs/verifier", "/logs/artifacts"):
@@ -158,10 +163,27 @@ class ShellSimMachine:
         async with self._lock:
             if self._closed:
                 raise MachineTerminated("Machine is closed")
+            await self._settle_stray()
             yield
 
+    async def _settle_stray(self) -> None:
+        """Wait, up to the stray deadline, for a worker that outlived its grace; close if it is still running."""
+        stray = self._stray
+        if stray is None:
+            return
+        loop = asyncio.get_running_loop()
+        while not stray.done() and (remaining := self._stray_deadline - loop.time()) > 0:
+            await asyncio.wait({stray}, timeout=remaining)
+        if not stray.done():
+            self._closed = True
+            logger.warning("ShellSim worker still running %.0f s after its grace; machine is closed", STRAY_WORKER_WAIT)
+            raise MachineTerminated("ShellSim worker did not stop after interruption; machine is closed")
+        self._stray = None
+
     async def _drain_worker[T](self, worker: asyncio.Task[T], deadline: float) -> bool:
-        """Return True once the worker finishes, or close the machine and return False on expiry.
+        """Return True once the worker finishes, or record it as stray and return False on expiry.
+
+        Admission waits for a stray worker, so the simulation is never shared; see ``_settle_stray``.
 
         Repeated waiter cancellation is deferred through this deadline, then re-raised.
         """
@@ -179,9 +201,9 @@ class ShellSimMachine:
         if completed:
             _log_worker_failure(worker)
         else:
-            self._closed = True
+            self._stray, self._stray_deadline = worker, loop.time() + STRAY_WORKER_WAIT
             worker.add_done_callback(_log_worker_failure)
-            logger.warning("ShellSim interruption grace expired; machine is closed")
+            logger.warning("ShellSim interruption grace expired; the next action waits for the worker")
         if interrupted:
             raise asyncio.CancelledError
         return completed

@@ -17,6 +17,7 @@ from uuid import uuid4
 from rolloutengine.machines import prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.iris.machine import IrisMachine
+from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.machine import (
     DEFAULT_WORKDIR,
     Command,
@@ -293,6 +294,9 @@ class ShellboxEnvFactory(EnvFactory):
             )
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
             raise _machine_issue(error) from error
+        except SandboxUnavailable as error:
+            # A keeper that fails to start is a host condition, not a defect: replay on a fresh machine.
+            raise Restart(f"environment startup failed: {error}") from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
         image = digest((requirements, self.runtime))
