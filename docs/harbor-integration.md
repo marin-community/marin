@@ -97,7 +97,7 @@ Daytona accepts `network_policy` (`mode` and optional `value`), `ttl_minutes` an
 and the task's resource request; snapshot names, automatic snapshots, forced rebuilds
 and policy-level target overrides are not policy settings. Inventory, preflight and
 reclamation use `shellbox-daytona-snapshots`; see the
-[Daytona operations runbook](../.agents/ops/daytona.md#snapshot-preflight-and-reclamation).
+[Daytona operations runbook](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation).
 Set the target before launching:
 
 ```bash
