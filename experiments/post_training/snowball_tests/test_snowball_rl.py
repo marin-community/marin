@@ -342,6 +342,7 @@ print(json.dumps([{
 
 @pytest.mark.timeout(180)
 def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
     bindings = {binding for preset in presets.PRESETS.values() for binding in (preset.tasks, preset.eval_lite)}
     summaries = {
         binding: (Path(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).read_text()
@@ -351,11 +352,11 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     for binding, summary in summaries.items():
         (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
-        "speed-short": {"2026.11.11.1": ("55ebf515", "196dd177")},
-        "data-short": {"2026.11.11.1": ("ec3a962a", "a40e2c35")},
-        "speed-medium": {"2026.11.11.1": ("9afe247a", "ef952dad")},
-        "learning-medium": {"2026.11.11.1": ("ab45bfdf", "59846c81")},
-        "speed-long": {"2026.11.11.1": ("e40c8ba5", "18f50b58")},
+        "speed-short": {"2026.11.11.1": ("55ebf515", "669c1a89")},
+        "data-short": {"2026.11.11.1": ("ec3a962a", "9b29729a")},
+        "speed-medium": {"2026.11.11.1": ("9afe247a", "4fdb1811")},
+        "learning-medium": {"2026.11.11.1": ("ab45bfdf", "a3a3b3c4")},
+        "speed-long": {"2026.11.11.1": ("e40c8ba5", "927520d4")},
     }
     expected = {name: versions.get(presets.PRESETS[name].revision) for name, versions in revisions.items()}
 
