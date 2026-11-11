@@ -31,6 +31,7 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
     "MODAL_API_KEY",
     "TPU_CI",
     "MARIN_PREFIX",
+    "MARIN_TEMP_PREFIX",
     # Evalchemy FinanceBench grades with an external judge endpoint (marin-community/marin#9070).
     "JUDGE_API_KEY",
     "JUDGE_BASE_URL",

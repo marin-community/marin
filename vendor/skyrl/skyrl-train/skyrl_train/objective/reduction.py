@@ -25,6 +25,20 @@ class StepCounts:
     max_seq_len: int
 
 
+def restore_source_token_mean(
+    loss_mask: torch.Tensor, data_source_ids: torch.Tensor, source_id: int
+) -> torch.Tensor:
+    """Restore one source's solo token-mean coefficient in a mixed SFT step."""
+    if loss_mask.ndim != 2 or data_source_ids.shape != loss_mask.shape[:1]:
+        raise ValueError("source restoration requires aligned row tags and two-dimensional loss masks")
+    source_mask = data_source_ids.eq(source_id).unsqueeze(-1)
+    source_tokens = (loss_mask * source_mask).sum()
+    if source_tokens <= 0:
+        raise ValueError("source restoration requires supervised tokens from the selected source")
+    total_tokens = loss_mask.sum()
+    return torch.where(source_mask, total_tokens / source_tokens, 1.0).expand_as(loss_mask)
+
+
 def policy_data_weights(
     loss_mask: torch.Tensor, response_span_tags: torch.Tensor | None, think_token_weight: float
 ) -> torch.Tensor:

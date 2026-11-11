@@ -50,6 +50,7 @@ from marin.evaluation.records import (
     list_records,
 )
 from marin.evaluation.runner import (
+    DEFAULT_ORCHESTRATOR_MEMORY,
     EndpointRoute,
     EvalExecutor,
     Evaluation,
@@ -83,7 +84,6 @@ from experiments.evaluation.policy_finalization import POLICY_JUDGED_BENCHMARKS,
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
 _ORCHESTRATOR_CPU = 4.0
-_ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
 _SERVE_THROUGHPUT_FIELDS = frozenset({"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"})
 _EVALCHEMY_THROUGHPUT_FIELDS = frozenset({"num_concurrent"})
@@ -138,6 +138,7 @@ class LaunchSpec:
     submission_cluster: str
     federated_cluster: str | None
     priority_band: int
+    orchestrator_memory: str = DEFAULT_ORCHESTRATOR_MEMORY
     max_concurrent: int = DEFAULT_EVAL_CONCURRENCY
     instances: int = 1
     judge_model: ModelConfig | None = None
@@ -480,6 +481,7 @@ def build_evaluation_batch(
         model=model,
         accelerator=accelerator,
         priority_band=spec.priority_band,
+        orchestrator_memory=spec.orchestrator_memory,
         capability_origin=_capability_origin(endpoint_cluster),
         api_model=canonical_served_name(model.name),
         evaluations=tuple(evaluations),
@@ -509,6 +511,8 @@ def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> t
 
 def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     """Resolve one launch before an Iris client is opened."""
+    if spec.resume_results_path is not None and spec.resume_results_path.startswith("s3://"):
+        configure_coreweave_s3()
     provenance = LaunchProvenance(
         git_sha=_git_sha(),
         launch_host=socket.gethostname(),
@@ -587,7 +591,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
-        resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
+        resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=batch.orchestrator_memory, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         egress_allow=batch.egress_allow,

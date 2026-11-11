@@ -17,8 +17,8 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.dataset import prompt_token_ids
 from skyrl_train.dataset.fixed_completions import FixedCompletionsDataset
 from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
-from skyrl_train.objective.objective import build_objective_micro_batch, compute_policy_objective
-from skyrl_train.objective.reduction import step_counts
+from skyrl_train.objective.objective import build_objective_micro_batch, compute_policy_objective, megatron_loss_scale
+from skyrl_train.objective.reduction import restore_source_token_mean, step_counts
 from skyrl_train.rollouts.context import RolloutRequestSpec, prompt_order_from_config
 from skyrl_train.rollouts.loader import PromptLoader
 from skyrl_train.trajectory_runners.fixed_completions import FixedCompletionsTrajectoryRunner
@@ -281,6 +281,64 @@ def test_one_sft_step_on_a_fixed_batch_matches_independent_unpadded_nll(tmp_path
         optimizer.step()
     for (name, stepped), expected in zip(model.named_parameters(), reference.parameters()):
         assert torch.allclose(stepped, expected, rtol=1e-5, atol=1e-6), name
+
+
+def test_restored_source_sft_loss_matches_global_reference_across_dp_and_microbatches():
+    # Two DP ranks each accumulate two one-row microbatches. The J rows carry more
+    # supervised tokens, and the last token of one R row is unsupervised.
+    token_nll = torch.tensor(
+        [[0.2, 0.4, 0.0], [0.3, 0.5, 0.7], [0.6, 0.0, 0.0], [0.1, 0.2, 0.4]], requires_grad=True
+    )
+    loss_mask = torch.tensor([[1, 1, 0], [1, 1, 1], [1, 0, 0], [1, 1, 1]], dtype=torch.float32)
+    source_ids = torch.tensor([0, 1, 0, 1])
+    weights = restore_source_token_mean(loss_mask, source_ids, source_id=0)
+    advantages = torch.ones_like(loss_mask)
+    counts = step_counts(
+        [loss_mask[:2], loss_mask[2:]],
+        [loss_mask[:2], loss_mask[2:]],
+        [loss_mask[:2], loss_mask[2:]],
+        [advantages[:2], advantages[2:]],
+        max_seq_len=3,
+        all_reduce_sum=lambda values: values,
+    )
+    config = fixed_completion_test_config().trainer.algorithm
+    micro_losses = []
+    for index in range(4):
+        micro = build_objective_micro_batch(
+            action_log_probs=-token_nll[index : index + 1],
+            old_action_log_probs=-token_nll[index : index + 1].detach(),
+            base_action_log_probs=None,
+            advantages=advantages[index : index + 1],
+            loss_mask=loss_mask[index : index + 1],
+            rollout_logprobs=None,
+            response_span_tags=None,
+            token_entropy=torch.zeros_like(loss_mask[index : index + 1]),
+            think_token_weight=1.0,
+            teacher=None,
+            correction_weights=weights[index : index + 1],
+        )
+        objective = compute_policy_objective(
+            micro,
+            loss=PolicyLossRegistry.get("sft"),
+            counts=counts,
+            config=config,
+            loss_scale=megatron_loss_scale(num_microbatches=2, data_parallel_size=2),
+            report_scale=1.0,
+        )
+        micro_losses.append(objective.optimization_loss)
+    actual = torch.stack(micro_losses).sum() / 4  # Megatron's microbatch and DP averages.
+    r_tokens = (loss_mask * source_ids.eq(0).unsqueeze(-1)).sum()
+    all_tokens = loss_mask.sum()
+    expected_r = (token_nll * loss_mask * source_ids.eq(0).unsqueeze(-1)).sum() / r_tokens
+    expected_j = (token_nll * loss_mask * source_ids.eq(1).unsqueeze(-1)).sum() / all_tokens
+    expected = expected_r + expected_j
+    torch.testing.assert_close(actual, expected)
+    assert torch.stack(micro_losses[1::2]).sum().item() / 4 == pytest.approx(expected_j.item())
+    actual.backward(retain_graph=True)
+    actual_grad = token_nll.grad.clone()
+    token_nll.grad.zero_()
+    expected.backward()
+    torch.testing.assert_close(actual_grad, token_nll.grad)
 
 
 def test_seeded_passes_consume_each_row_once_per_epoch_in_a_reproducible_order(tmp_path, tokenizer):

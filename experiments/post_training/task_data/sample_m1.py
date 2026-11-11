@@ -132,7 +132,7 @@ def main() -> None:
                 prompt_ids[index],
                 request_seed(MASTER_SEED, tasks[index]["task_id"], sample),
                 decode,
-                close,
+                (close,),
             )
             for index, sample in work
         ]

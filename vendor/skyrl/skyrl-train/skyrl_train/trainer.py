@@ -71,6 +71,7 @@ from marinskyrl.distillation import (
 )
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
+from skyrl_train.objective.reduction import restore_source_token_mean
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
@@ -1673,6 +1674,18 @@ class RayPPOTrainer:
             training_input["loss_mask"] = training_input["loss_mask"] * training_input["teacher_valid_mask"]
 
         correction = off_policy_correction(self.cfg.trainer.algorithm)
+        restore_source = self.cfg.trainer.algorithm.sft_restore_source_mean
+        if restore_source is not None:
+            source_names = training_input.metadata["data_source_names"]
+            if restore_source not in source_names:
+                raise ValueError(f"fixed-completion batch has no data source {restore_source!r}")
+            training_input["correction_weights"] = restore_source_token_mean(
+                training_input["loss_mask"], training_input["data_source_ids"], source_names.index(restore_source)
+            )
+            for source_id, source_name in enumerate(source_names):
+                source_mask = training_input["loss_mask"] * training_input["data_source_ids"].eq(source_id).unsqueeze(-1)
+                source_nll = -(training_input["action_log_probs"] * source_mask).sum() / source_mask.sum()
+                self.all_metrics[f"sft/{source_name}_nll"] = source_nll.item()
         if correction.rules:
             rollout_logprobs = training_input.get("rollout_logprobs")
             if rollout_logprobs is None:

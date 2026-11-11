@@ -63,6 +63,7 @@ _ORCHESTRATOR_ROLE = "orchestrator"
 _JUDGE_ROLE = "judge"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
+DEFAULT_ORCHESTRATOR_MEMORY = "16g"
 
 
 # Stop evaluator attempts before their HTTP retries exhaust during a model reload.
@@ -245,6 +246,7 @@ class EvaluationBatch:
     provenance: LaunchProvenance
     submission_cluster: str
     max_concurrent: int
+    orchestrator_memory: str = DEFAULT_ORCHESTRATOR_MEMORY
     instances: int = 1
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)

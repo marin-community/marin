@@ -17,7 +17,7 @@ from iris.client.client import JobFailedError
 from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 
-from cloud.iris.artifacts import terminal_checkpoint_step, write_json
+from cloud.iris.artifacts import read_json, terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from marinskyrl.checkpoint_paths import policy_export_path
 from marinskyrl.hf_model import validate_portable_hf_model_files
@@ -164,8 +164,37 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
     terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
-    if StoragePath(terminal_manifest_uri).exists():
-        raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
+    existing = read_json(terminal_manifest_uri) if StoragePath(terminal_manifest_uri).exists() else None
+    if existing is not None:
+        if existing["result"]["state"] != LaunchState.SUCCEEDED:
+            raise ValueError(f"Existing terminal manifest is not successful: {terminal_manifest_uri}")
+        prior = existing["config"]
+        current = OmegaConf.to_container(config, resolve=True)
+        assert isinstance(prior, dict) and isinstance(current, dict)
+        prior["run"]["attempt_id"] = current["run"]["attempt_id"]
+        prior["iris"]["job_name"] = current["iris"]["job_name"]
+        if prior != current:
+            raise ValueError(f"Existing terminal manifest has a different run identity: {terminal_manifest_uri}")
+        model = None
+        if config.run.export_hf:
+            from skyrl_train.hf_model_io import verify_hf_model_export  # noqa: PLC0415 - export runtime dependency
+
+            for step in config.skyrl.trainer.get("hf_export_steps", []):
+                policy_uri = policy_export_path(str(config.artifacts.export_root), int(step))
+                verify_hf_model_export(policy_uri)
+                root = StoragePath(policy_uri)
+                names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
+                validate_portable_hf_model_files(names, policy_uri)
+            model = _exported_policy(config)
+        prior_result = existing["result"]
+        if not prior_result["iris_job_id"] or prior_result["iris_job_state"] != JobState.SUCCEEDED.value:
+            raise ValueError(f"Existing terminal manifest has no successful Iris job: {terminal_manifest_uri}")
+        outcome = LaunchOutcome(
+            job_id=prior_result["iris_job_id"],
+            job_state=prior_result["iris_job_state"],
+            exit_code=0,
+        )
+        return _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
 
     if backend is None:
         # The concrete Iris backend imports the training/export stack. Keep it

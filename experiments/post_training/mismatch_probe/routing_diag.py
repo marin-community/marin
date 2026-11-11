@@ -64,7 +64,7 @@ def probe_rows(pol, set_name: str, group_index: int, groups, sequences, out: Pat
             np.isfinite(results["router_selected"]).all() and np.isfinite(results["router_margin"]).all()
         )
         row["shape"] = list(results["router_selected"].shape)
-    except BaseException as exc:  # noqa: BLE001 - the report is the point
+    except BaseException as exc:
         row["status"] = "crash"
         row["seconds"] = round(time.monotonic() - started, 1)
         row["error_type"] = type(exc).__name__
@@ -105,9 +105,16 @@ def main() -> None:
                     logger.info("probed group %s/%s/%s", name, group_index, groups[group_index][0])
                     if not alive:
                         return
-    except BaseException as exc:  # noqa: BLE001 - record driver-level failures too
-        _write_report(args.out, {"set": "driver", "status": "crash", "error_type": type(exc).__name__,
-                                 "error_text": ("\n".join(traceback.format_exception(exc)))[-ERROR_BOUND:]})
+    except BaseException as exc:
+        _write_report(
+            args.out,
+            {
+                "set": "driver",
+                "status": "crash",
+                "error_type": type(exc).__name__,
+                "error_text": ("\n".join(traceback.format_exception(exc)))[-ERROR_BOUND:],
+            },
+        )
         raise
     finally:
         ray.shutdown()
