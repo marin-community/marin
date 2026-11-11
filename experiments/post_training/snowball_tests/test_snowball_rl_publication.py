@@ -35,6 +35,7 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
         "legacy-lineage",
         "lineage-missing-window",
         "historical-unknown",
+        "historical-retry",
         "current-lineage-unknown",
         "missing-tracking",
         "train-long",
@@ -51,7 +52,9 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
         tasks=f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}",
         init="weights@pinned",
     )
-    source = recorded_runs(name, "tests/stored-progress", attempt_id="native-attempt", inputs=inputs)
+    source = recorded_runs(
+        name, "tests/stored-progress", attempt_id="native-attempt", inputs=inputs, legacy=case == "historical-retry"
+    )
     receipt = json.loads((source / "terminal.json").read_text())
     if case == "native-composed":
         training = snowball.build_run(
@@ -103,6 +106,27 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         write_json(source / "resolved-launch.yaml", {"config": receipt["config"]})
     else:
         write_receipt(source, receipt)
+    if case == "historical-retry":
+        write_json(source / "exports/attempts/native-attempt/receipt.json", receipt)
+        retry = deepcopy(receipt)
+        retry["config"]["run"]["attempt_id"] = "retry"
+        retry["result"].update(
+            state="failed", started_at="2026-11-06T20:00:00+00:00", finished_at="2026-11-06T20:05:00+00:00"
+        )
+        write_receipt(source, retry)
+        native_json(
+            """
+import sys
+from omegaconf import OmegaConf
+from skyrl_train.utils.tracking import Tracking
+config = OmegaConf.create({"trainer": {"export_path": sys.argv[1]}})
+with Tracking("snowball", "retry", "files", config) as tracker:
+    tracker.start(resumed_step=1)
+    tracker.log({"startup/load_checkpoints": 2.0}, step=1, commit=False)
+print("null")
+""",
+            [str(source / "exports")],
+        )
     if case == "native-composed":
         shutil.rmtree(source / "exports/dumped_evals")
 
@@ -122,21 +146,19 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
     )
     assert row["issue"] is None and row["verdict"] is None and row["gate_result"] is None
     assert row["evaluation"] is None and row["baseline"] is None and row["final"] is None
+    historical = case in {"historical-unknown", "historical-retry"}
     expected_time = (
         None
-        if case in {"lineage-missing-window", "historical-unknown", "current-lineage-unknown"}
+        if historical or case in {"lineage-missing-window", "current-lineage-unknown"}
         else 7200 if case == "legacy-lineage" else 3600
     )
     assert row["elapsed_seconds"] == expected_time and row["timing_scope"] == "checkpoint_lineage_native_jobs"
-    assert row["optimizer_steps"] == (None if case == "historical-unknown" else 0 if case == "native-failed" else 2)
+    assert row["optimizer_steps"] == (None if historical else 0 if case == "native-failed" else 2)
     if case in {"native-failed", "invariant-failed", "historical-unknown"}:
         assert row["status"] == "failed"
         assert ("finite_losses_and_gradients" if case == "invariant-failed" else "native_attempt") in row["failed_facts"]
     else:
         assert row["status"] == "succeeded" and row["failed_facts"] == []
-    if case == "legacy-lineage":
-        historical = publication.build_record(str(source), preset, attempt_id="ancestor")
-        assert historical["optimizer_steps"] == 1 and historical["elapsed_seconds"] == 3600
     if case == "missing-tracking":
         assert row["wandb_url"] is None and row["engine"] is None
     if case == "native-composed":

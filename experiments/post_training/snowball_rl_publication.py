@@ -98,21 +98,15 @@ def build_record(
     provenance = result.provenance or {}
     tracking = skyrl_records.read_skyrl_attempt_tracking(run_output, attempt_id)
     started, finished = result.started_at, result.finished_at
-    metrics = skyrl_records.read_skyrl_metrics(run_output)
-    if attempt_id != current_id:
-        selected_steps = [step for step, row in metrics.items() if row.get("attempt_id") == attempt_id]
-        last_step = max(selected_steps, default=-1)
-        metrics = {step: row for step, row in metrics.items() if step <= last_step}
-    attributable = attempt_id == current_id or bool(metrics)
-    invariants = gate.training_invariants(preset, metrics) if attributable else ()
+    is_current = attempt_id == current_id
+    metrics = skyrl_records.read_skyrl_metrics(run_output) if is_current else {}
+    invariants = gate.training_invariants(preset, metrics) if is_current else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
-    optimizer_steps = (
-        next(int(fact.value) for fact in invariants if fact.name == "planned_updates") if attributable else None
-    )
+    optimizer_steps = next((int(fact.value) for fact in invariants if fact.name == "planned_updates"), None)
     lineage_ids = {attempt_id} | {row["attempt_id"] for row in metrics.values() if row.get("attempt_id")}
-    lineage_known = attributable and (
+    lineage_known = is_current and (
         len(receipts) == 1 or (bool(metrics) and all(row.get("attempt_id") for row in metrics.values()))
     )
     windows = [
@@ -125,10 +119,10 @@ def build_record(
         if any(value < 0 for value in durations):
             raise ValueError("Native completion precedes its recorded start")
         elapsed = sum(durations) / 1000
-    else:
+    elif is_current:
         evidence.append("Checkpoint lineage timing is unknown: attempt attribution or a native time window is missing.")
-    if not attributable:
-        evidence.append("Historical checkpoint updates are unknown without stored per-step attempt attribution.")
+    else:
+        evidence.append("Historical updates and lineage timing are unknown because retries can change shared metrics.")
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
     record = {
