@@ -26,13 +26,13 @@ Run each recipe in its source store's region. Sampling a few percent of document
 
 The commands below are for `harrier`. For `snowball`, use `--recipe snowball` and swap in the placement flag and prefix from the table.
 
-1. Plan. This reads the cell ledgers and writes `plan.json`. The log shows each cache's target, which cells repeat documents, and how many shards and items there are. Harrier has 76,416 shards in 1,255 items; Snowball has 1,032,407 shards in 467 items.
+1. Plan. This reads the cell ledgers and writes `plan.json`. The log shows each cache's target, which cells repeat documents, and how many shards and items there are. Harrier has 76,416 shards in 4,386 items; Snowball has 1,032,407 shards in 1,445 items.
 
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run --enable-extra-resources --target-cluster cw-us-east-08a --cpu 4 --memory 16GB --job-name snowball-data-plan -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.grug.snowball_ladder.sample_mix --phase plan --recipe harrier --out $OUT
 ```
 
-2. Sample, as independent tasks so one failure does not stop the rest. Each item writes about 2B tokens. Finished items are skipped on rerun, so resubmit any task that dies.
+2. Sample, as independent tasks so one failure does not stop the rest. Each item writes about 500M tokens and runs in a fresh process, because resident memory grows with the tokens a process moves; a 2B-token item ran out of memory on an 8 GB task. Finished items are skipped on rerun, so resubmit any task that dies.
 
 ```bash
 for k in $(seq 0 127); do uv run iris --config lib/iris/config/marin.yaml job run --enable-extra-resources --target-cluster cw-us-east-08a --cpu 4 --memory 32GB --disk 16GB --max-retries 2 --no-wait --job-name snowball-data-sample-$k -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.grug.snowball_ladder.sample_mix --phase sample --out $OUT --num-tasks 128 --task-index $k; done
