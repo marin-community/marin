@@ -46,7 +46,9 @@ class PrebuiltCohort:
 
     @property
     def dataset(self) -> SourceReference:
-        return SourceReference(self.repo, self.revision, f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}")
+        return SourceReference(
+            self.repo, self.revision, f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}"
+        )
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -68,7 +70,11 @@ def import_cohort(config: PrebuiltCohort) -> str:
     recorded count, fails here: admitting it would put tasks into training that the
     published cohort never qualified.
     """
-    local = Path(hf_hub_download(repo_id=config.repo, repo_type=config.repo_type, filename=TASKS_FILENAME, revision=config.revision))
+    local = Path(
+        hf_hub_download(
+            repo_id=config.repo, repo_type=config.repo_type, filename=TASKS_FILENAME, revision=config.revision
+        )
+    )
     rows = pq.read_table(local).to_pylist()
     if len(rows) != config.expected_rows:
         raise ValueError(f"{config.repo}@{config.revision} has {len(rows)} rows, expected {config.expected_rows}")

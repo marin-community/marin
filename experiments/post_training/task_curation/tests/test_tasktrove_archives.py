@@ -204,4 +204,4 @@ def test_a_conversion_that_replaces_the_archive_environment_is_rejected():
     rejection = convert_nl2bash_task(row, context)
     assert isinstance(rejection, ImportRejection)
     assert rejection.reason == "environment_substituted"
-    assert "environment/Dockerfile" in rejection.detail
+    assert "does not use the archive's base image" in rejection.detail
