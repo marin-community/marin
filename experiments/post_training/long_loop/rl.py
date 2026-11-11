@@ -203,12 +203,6 @@ def full_recipe(*, initial_model: str, validation_tasks: int, source_routes: dic
         dump_training_order=True,
         ckpt_interval=1,
         max_ckpts_to_keep=-1,
-        long_context_qualification={
-            "enabled": True,
-            "minimum_tokens": 65537,
-            "maximum_tokens": 102400,
-            "maximum_steps": 5,
-        },
     )
     if set(source_routes.values()) != {"agentic", "nonagentic"}:
         raise ValueError("Full RL requires admitted agentic and nonagentic source provenance")

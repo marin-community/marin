@@ -60,6 +60,7 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
     assert [row["stage"].rsplit("/", 1)[-1] for row in rows] == ["base", "inputs", "sft"]
     assert rows[0]["source"] == resolved["initializer"]["uri"]
     assert terminal.runtime_args["skyrl_execution"].priority == "production"
+    resolved["blockers"] = ["Missing admitted agentic manifest"]
     with pytest.raises(ValueError, match="Run is not admitted"):
         build_spec_graph(resolved, "2026.11.09.12", through="archive")
 
@@ -99,14 +100,27 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     # Isolate graph wiring; this does not waive the live artifact-admission checks.
     resolved["blockers"] = []
     resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/committed-sft", "step": 746}
+    handoff_root = tmp_path / "verified-handoff"
+    (handoff_root / "hf").mkdir(parents=True)
+    (handoff_root / "hf/config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "grug_moe",
+                "num_attention_heads": 20,
+                "num_key_value_heads": 5,
+                "num_hidden_layers": 26,
+                "global_every": 4,
+            }
+        )
+    )
     resolved["adopted_handoff"] = {
-        "uri": "s3://test/verified-handoff",
+        "uri": str(handoff_root),
         "source_checkpoint": "s3://test/committed-sft/checkpoints/step-746",
         "files": [],
     }
     resolved["adopted_endpoint"] = {
         "uri": "s3://test/verified-endpoint",
-        "model_uri": "s3://test/verified-handoff/hf",
+        "model_uri": str(handoff_root / "hf"),
         "tokenizer_revision": resolved["tokenizer"]["revision"],
         "settings": resolved["endpoint"],
         "files": [],
@@ -118,7 +132,7 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)
     handoff = next(step for step in graph_handles([terminal]) if step.name.endswith("/sft-handoff"))
-    assert handoff.adopt_source == "s3://test/verified-handoff"
+    assert handoff.adopt_source == str(handoff_root)
     endpoint = next(step for step in graph_handles([terminal]) if step.name.endswith("/endpoint"))
     assert endpoint.adopt_source == "s3://test/verified-endpoint"
     assert any(step.name.endswith("/verify-endpoint") for step in endpoint.deps)
@@ -142,7 +156,7 @@ def test_endpoint_reuse_rejects_different_export():
         build_spec_graph(resolved, "2026.11.10.3", through="rl")
 
 
-def test_rl_keeps_child_execution_profile_and_waits_for_sandbox():
+def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
     resolved = resolve_spec(SPEC, smoke=True)
     resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/sft", "step": 746}
     terminal = build_spec_graph(resolved, "2026.11.10.4", through="rl")
@@ -150,7 +164,7 @@ def test_rl_keeps_child_execution_profile_and_waits_for_sandbox():
     assert execution.container_profile == resolved["rl"]["execution"]["container_profile"] == 4
     assert execution.memory == resolved["rl"]["execution"]["memory"]
     assert execution.memory != resolved["execution"]["coordinator"]["memory"]
-    assert any(step.name.endswith("/sandbox-preflight") for step in terminal.deps)
+    assert not any("preflight" in step.name or "probe" in step.name for step in graph_handles([terminal]))
     resolved["execution"]["coordinator"]["container_profile"] = None
     with pytest.raises(ValueError, match="privileged coordinator"):
         build_spec_graph(resolved, "2026.11.10.4", through="rl")

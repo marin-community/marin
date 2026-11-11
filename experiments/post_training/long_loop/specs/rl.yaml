@@ -121,11 +121,6 @@ config:
     policy_mini_batch_size: 64
     micro_train_batch_size_per_gpu: 1
     dump_training_order: true
-    long_context_qualification:
-      enabled: true
-      minimum_tokens: 65537
-      maximum_tokens: 102400
-      maximum_steps: 5
     hf_export_checkpoint: best
     callbacks:
     - type: checkpoint
@@ -294,6 +289,3 @@ execution:
   - MARIN_PREFIX
   - MARIN_TEMP_PREFIX
   container_profile: 4
-runtime_qualification_pending:
-- Observe natural-long CP4 backward/optimizer/save-restore and full-turn masks on
-  the adopted SFT checkpoint

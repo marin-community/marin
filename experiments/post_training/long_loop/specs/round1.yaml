@@ -6,13 +6,13 @@ datasets:
     sha256: 006350cde6a1a7f5e9622158e2d35ef232037975512399df4e37fb8997d11bf2
   nonagentic:
     path: nonagentic.yaml
-    sha256: 33d8cb19de3a5675ca820d2bef86cfa23854b26667937ab9f0f688f18d3ff75e
+    sha256: c0ed43ff6f46efb553a7fdccba9a574880d545978899d2c0cd84bbfca717b08c
   agentic:
     path: agentic.yaml
-    sha256: ba0b5c689fee9ef9c935a87cc9a862930336d68fe9bacb913ab4acb4945407be
+    sha256: 5dde7b564f43785caf7d57fbe1419539a5b31d194b503144f44175d3f66a4f57
   heldout:
     path: heldout.yaml
-    sha256: a47e11b247260d57f3d2915d3c1bca71d6964a09eb7540b74bf9b71d8a4e0ac3
+    sha256: 2f9e3c3617f854e792bf445f5125c0cddd6b0ede1404fa255512b4981adaf3a9
   exclusions:
     path: exclusions.yaml
     sha256: 6ef9e6cc7f7265683a94cc987b12b0ca38e49be042e255c42105458e987a5896
@@ -39,7 +39,7 @@ archive:
   sha256: fbf7b18a38b9619cfe5196f8a66f1ac35c8cf1668ddb34dfe292abe86a87a142
 rl:
   path: rl.yaml
-  sha256: 5bd1153f17616da5b44847dd3ef24ec7d635d627b8257e7cbe8a32ec99d71672
+  sha256: 20a627e3ab27ae8a7ee6352f64c9d63b6e35e2ffc272467e95739df64df1ff2b
 evaluation:
   path: evaluation.yaml
   sha256: e1fccf76640875787cb5ed6a5cd19bc879fc402ab4a0a3c970ad4c4b433f5011
@@ -48,7 +48,6 @@ smoke_overrides:
   rl_steps: 5
   eval_tasks_per_benchmark: 1
   eval_replicas: 1
-
 storage:
   output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop
   temporary_prefix: s3://marin-us-east-08a/tmp

@@ -30,7 +30,10 @@ def main(source: Path, destination: Path) -> None:
         validate_generator_cfg(config.skyrl)
     else:
         validate_cfg(config.skyrl)
-    if config.skyrl.trainer.strategy == "megatron":
+    if config.skyrl.trainer.strategy == "megatron" and config.runtime.entrypoint not in {
+        RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
+        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
+    }:
         fs, key = filesystem_for(prefix_join(config.inputs.model.uri, "config.json"))
         model_bytes = fs.cat_file(key)
         model_dict = json.loads(model_bytes)

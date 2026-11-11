@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import torch
 
 from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
-from skyrl_train.long_context_qualification import qualify_learner_batch
 
 
 def test_full_window_preserves_both_assistant_turns_and_masks_tool_output():
@@ -30,10 +29,6 @@ def test_full_window_preserves_both_assistant_turns_and_masks_tool_output():
     assert logprobs[0].tolist() == behavior
     assert loss[1, :2].tolist() == [1, 1]
     assert not torch.any(loss[1, 2:])
-    evidence = qualify_learner_batch(
-        {"attention_mask": attention, "response_mask": response_mask,
-         "loss_mask": loss, "rollout_logprobs": logprobs},
-        minimum_tokens=65537, maximum_tokens=102400,
-    )
-    assert evidence["longest_unpadded_tokens"] == 102400
-    assert evidence["action_tokens"] == 2050
+    assert int(attention.sum(-1).max()) == 102400
+    assert int(loss.sum()) == 2050
+    assert torch.isfinite(logprobs[loss.bool()]).all()

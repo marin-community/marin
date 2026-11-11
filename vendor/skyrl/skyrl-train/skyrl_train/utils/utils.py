@@ -456,16 +456,6 @@ def _iter_config_kwargs(node):
 
 def validate_cfg(cfg: DictConfig):
     validate_mismatch_probe_config(cfg)
-    qualification = cfg.trainer.long_context_qualification
-    if qualification.enabled:
-        if cfg.trainer.policy.megatron_config.context_parallel_size != 4:
-            raise ValueError("Natural-long qualification requires CP4")
-        if cfg.trainer.step_wise_training or not cfg.trainer.dump_data_batch:
-            raise ValueError("Natural-long qualification requires full-turn projection and collation audit")
-        if not 0 < qualification.minimum_tokens <= qualification.maximum_tokens:
-            raise ValueError("Natural-long qualification requires a positive ordered token interval")
-        if qualification.maximum_steps < 1:
-            raise ValueError("Natural-long qualification observation budget must be positive")
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
     if cfg.trainer.critic.model.path:

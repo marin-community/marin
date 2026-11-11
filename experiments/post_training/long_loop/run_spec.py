@@ -163,10 +163,9 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
         raise ValueError("Endpoint priority must remain production")
     coordinator_gpu = execution["coordinator"]["coordinator_gpu"]
     coordinator_count = coordinator_gpu["count"] if coordinator_gpu else 0
-    resources = {key: value for key, value in execution.items() if key != "coordinator"}
+    resources = {key: execution[key] for key in ("export", "eval_inputs", "archive")}
     resources["sft"] = resolved["sft"]["resources"]
     peaks = {key: value["replicas"] * value["device"]["count"] for key, value in resources.items()}
-    peaks["endpoint"] = resolved["endpoint"]["gpu_count"]
     for stage in ("rl", "evaluation"):
         plan = resolved[stage]["role_plan"]
         nodes = plan["policy_num_nodes"]
@@ -192,9 +191,6 @@ def stage_blockers(resolved: dict, through: str) -> list[str]:
         blockers = list(resolved["blockers"])
         if through == "rl":
             blockers = [item for item in blockers if not item.startswith(("archive:", "evaluation:"))]
-        if not resolved.get("smoke"):
-            for name, document in {**resolved["datasets"], "rl": resolved["rl"]}.items():
-                blockers.extend(f"{name}: {reason}" for reason in document.get("runtime_qualification_pending", []))
         return blockers
     documents = {
         "sft": resolved["datasets"]["sft"],

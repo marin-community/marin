@@ -10,25 +10,28 @@ uv run python -m experiments.post_training.long_loop \
   --validation-output /tmp/long-loop/full --version 2026.11.10
 ```
 
-Add `--smoke` to use the same inputs with the spec's scale overrides. Add
-`--run --max-concurrent 1` only for an admitted run. The resolved JSON records the
+Add `--run --max-concurrent 1` for the real planned-budget run. No extra GPU
+smoke, probe or qualification job is scheduled. The resolved JSON records the
 spec digest, complete configs, dataset identities, scale changes and blockers.
 Strict SkyRL composition runs on the actual graph documents before allocation.
 The complete example is intentionally **not launchable yet**: the selected Smartie
-cohorts still need complete exclusion evidence and runtime qualification.
+cohorts still need their pinned exclusion evidence. The current SWE-only runtime
+bundle supplies it; CalibForge is excluded from that run.
 Use `--through sft` for the admitted SFT prefix while those checks finish.
 Before submission, copy the spec inputs into a relative workspace directory and
 pin `marin_revision` to the clean code commit; Iris bundles those explicit inputs.
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
-The smoke keeps the full SFT weight schedule, 262k SFT packing, 102,400-token RL
-window, CP4, GS8 and 32 agentic / 32 non-agentic consumed groups per update.
-Only update counts and evaluation scale may change. The old plumbing smoke used
-32k SFT, the non-agentic quick-loop selection and short-context RL. It verified
-stage handoffs but did not qualify the intended training geometry or data mix.
-Those historical commands remain reproducible at their original Git pins;
-the current entrypoint requires `--spec`.
+The current execution policy removes all natural-long qualification, including
+minimum-length observations and export blockers. Run normal batches and let actual
+long inputs fail naturally. CPU config validation and data-correctness assertions
+remain. The launcher checks adopted metadata on its CPU coordinator and does not
+allocate a separate endpoint or sandbox probe. Historical smoke scale overrides
+remain available for reproducing past records; they are not part of the current run.
+The next RL geometry is TP1/PP2/CP5/EP8 with a2a and sample packing, using 80 learner
+and 176 rollout H100. The original plumbing smoke tested handoffs at a smaller
+context and does not establish throughput for this geometry.
 
 The `.11` full SFT attempt inherited the old smoke's fixed initial mixture weights.
 Its source components matched the reproduction, but it omitted the 250-step weight
@@ -37,7 +40,7 @@ has not been restarted. The supplied SFT manifest restores all 19 schedule phase
 50B denotes scheduled packed positions, not 50B distinct supervised tokens.
 
 New jobs run on RNO2A at **production** priority, with at most **256 H100**.
-Missing inputs and failed qualification gates stop the run. A failed stage is not
+Missing inputs and data/config correctness failures stop the run. A failed stage is not
 replayed automatically. Keep this PR draft; no merge approval is implied.
 
 ## Historical plumbing evidence

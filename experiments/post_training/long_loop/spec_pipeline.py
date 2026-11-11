@@ -19,12 +19,10 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
-from experiments.post_training.long_loop.endpoint_probe import probe
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
-from experiments.post_training.long_loop.sandbox_preflight import sandbox_preflight
 from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
 
 
@@ -72,7 +70,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     verified = timed(
         apply(
             f"{name}/inputs",
-            remote(verify_inputs, resources=resources["inputs"]),
+            verify_inputs,
             version=version,
             output=OUT,
             manifests=(
@@ -91,7 +89,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         trained = timed(
             apply(
                 f"{name}/adopt-sft",
-                remote(verify_adopted_sft, resources=resources["inputs"]),
+                verify_adopted_sft,
                 version=version,
                 output=OUT,
                 checkpoint_pin=sft_pin,
@@ -133,7 +131,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         checked_handoff = timed(
             apply(
                 f"{name}/verify-handoff",
-                remote(verify_inputs, resources=resources["inputs"]),
+                verify_inputs,
                 version=version,
                 output=OUT,
                 manifests={"handoff": handoff},
@@ -155,6 +153,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             )
         )
     endpoint_pin = resolved.get("adopted_endpoint")
+    endpoint = None
     if endpoint_pin is not None:
         if (
             handoff is None
@@ -167,25 +166,13 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         checked_endpoint = timed(
             apply(
                 f"{name}/verify-endpoint",
-                remote(verify_inputs, resources=resources["inputs"]),
+                verify_inputs,
                 version=version,
                 output=OUT,
                 manifests={"endpoint": endpoint_pin},
             )
         )
         endpoint = replace(endpoint, deps=(*endpoint.deps, exported, checked_endpoint))
-    else:
-        endpoint = timed(
-            apply(
-                f"{name}/endpoint",
-                probe,
-                version=version,
-                output=OUT,
-                model_root=exported,
-                tokenizer_revision=tokenizer["revision"],
-                settings=resolved["endpoint"],
-            )
-        )
     adopted = {
         key: ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
         for key in ("agentic", "nonagentic", "heldout")
@@ -209,23 +196,6 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         coordinator_gpu=coordinator.coordinator_gpu,
         coordinator_timeout_hours=coordinator.coordinator_timeout_hours,
     )
-    sandbox_resources = resources["sandbox"]
-    if sandbox_resources.container_profile != job_pb2.ContainerProfile.Name(rl_execution.container_profile):
-        raise ValueError("Sandbox preflight and RL must use the same container profile")
-    sandbox = timed(
-        apply(
-            f"{name}/sandbox-preflight",
-            remote(sandbox_preflight, resources=sandbox_resources),
-            version=version,
-            output=OUT,
-            image=sandbox_resources.image,
-            container_profile=sandbox_resources.container_profile,
-            model_root=exported,
-            tokenizer=tokenizer,
-            generator=rl_config["generator"],
-            window=rl_config["context_budget"]["request_window_tokens"],
-        )
-    )
     learned = configured_rl_step(
         version=version,
         name=rl["name"],
@@ -245,7 +215,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         retained=rl["retained"],
         seed=rl["seed"],
     )
-    learned = timed(replace(learned, deps=(*learned.deps, endpoint, sandbox)))
+    learned = timed(replace(learned, deps=(*learned.deps, *((endpoint,) if endpoint is not None else ()))))
     if through == "rl":
         return learned
     evaluation = resolved["evaluation"]
@@ -283,7 +253,15 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     )
     report = report_step(
         version,
-        [*sft_evidence, trained, exported, endpoint, learned, eval_inputs, evaluated],
+        [
+            *sft_evidence,
+            trained,
+            exported,
+            *((endpoint,) if endpoint is not None else ()),
+            learned,
+            eval_inputs,
+            evaluated,
+        ],
         expected_rollouts=evaluation["expected_rollouts"],
         evaluation_selection=eval_inputs,
         additional_timing=[
@@ -311,7 +289,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             "sft": sft_pin["uri"] if sft_pin else trained,
             **({"sft_adoption": trained} if sft_pin else {"base": base}),
             "export": exported,
-            "endpoint": endpoint,
+            **({"endpoint": endpoint} if endpoint is not None else {}),
             "rl": learned,
             "eval_inputs": eval_inputs,
             "eval": evaluated,

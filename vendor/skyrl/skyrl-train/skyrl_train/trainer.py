@@ -27,7 +27,6 @@ import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
-from skyrl_train.long_context_qualification import LongContextQualification, QualificationStatus, qualify_optimizer_status
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
@@ -342,7 +341,6 @@ class RayPPOTrainer:
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
     _policy_version_step: int | None = None
-    _long_context_qualification: LongContextQualification | None = None
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
@@ -362,15 +360,6 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
-        qualification = cfg.trainer.long_context_qualification
-        self._long_context_qualification = (
-            LongContextQualification(
-                minimum_tokens=qualification.minimum_tokens,
-                maximum_tokens=qualification.maximum_tokens,
-                maximum_steps=qualification.maximum_steps,
-            )
-            if qualification.enabled else None
-        )
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -793,19 +782,8 @@ class RayPPOTrainer:
                 self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
-            if self._control.should_save_hf_model and (
-                self._long_context_qualification is None
-                or self._long_context_qualification.status is QualificationStatus.PASSED
-            ):
+            if self._control.should_save_hf_model:
                 await asyncio.to_thread(self.handle_hf_export)
-        if self._long_context_qualification is not None:
-            self._write_long_context_progress(self._long_context_qualification)
-            if self._long_context_qualification.status is not QualificationStatus.PASSED:
-                raise ValueError(
-                    "Natural-long qualification incomplete after "
-                    f"{completed_step} completed updates; native checkpoints retained; "
-                    f"longest observed sequence {self._long_context_qualification.longest_observed_tokens}"
-                )
 
     async def _save_checkpoints_with_residency(self) -> CheckpointSnapshot:
         """Save a checkpoint, swapping colocated training and inference residency when needed."""
@@ -1440,12 +1418,6 @@ class RayPPOTrainer:
             record_policy_step(self.global_step)
 
             stop = self._control.should_training_stop
-            if (
-                self._long_context_qualification is not None
-                and self._long_context_qualification.status is QualificationStatus.EXHAUSTED
-            ):
-                logger.warning("No qualifying natural-long batch within the observation budget; retaining completed steps")
-                stop = True
             if step_state.is_epoch_end:
                 await self._end_epoch(epoch)
                 stop = stop or self._control.should_training_stop
@@ -1686,11 +1658,6 @@ class RayPPOTrainer:
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
     async def _run_training(self, training_input: TrainingInputBatch, *, step_wall: StepWallTime | None = None):
-        qualification = self._long_context_qualification
-        qualification_evidence = None
-        if qualification is not None and qualification.status is QualificationStatus.PENDING:
-            qualification_evidence = qualification.observe(training_input, step=self.global_step)
-            self._write_long_context_progress(qualification)
         if (
             "ftpo_chosen_mask" in training_input
             and not training_input["loss_mask"].any()
@@ -1756,11 +1723,6 @@ class RayPPOTrainer:
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
             status = await asyncio.to_thread(self.train_critic_and_policy, training_input)
         self._policy_version_step = self.global_step
-        if qualification is not None and qualification_evidence is not None:
-            qualify_optimizer_status(status)
-            await self._qualify_checkpoint_restore(training_input, qualification_evidence)
-            qualification.qualified_step = self.global_step
-            self._write_long_context_progress(qualification)
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None and ftpo.early_stopping_chosen_win is not None:
@@ -1769,56 +1731,6 @@ class RayPPOTrainer:
                 self._ftpo_stopped = True
                 self._control.should_training_stop = True
         return status
-
-    def _write_long_context_progress(self, qualification: LongContextQualification) -> None:
-        payload = {
-            "status": qualification.status,
-            "step": self.global_step,
-            "observed_steps": qualification.observed_steps,
-            "maximum_steps": qualification.maximum_steps,
-            "longest_observed_tokens": qualification.longest_observed_tokens,
-            "minimum_tokens": qualification.minimum_tokens,
-            "maximum_tokens": qualification.maximum_tokens,
-            "qualified_step": qualification.qualified_step,
-        }
-        io.makedirs(self.cfg.trainer.export_path, exist_ok=True)
-        io.write_bytes_atomic(
-            join_resource_path(self.cfg.trainer.export_path, "long-context-qualification-progress.json"),
-            json.dumps(payload).encode(),
-        )
-        logger.info("Natural-long qualification progress: {}", payload)
-
-    async def _qualify_checkpoint_restore(self, training_input: TrainingInputBatch, evidence: dict) -> None:
-        """Reload the qualifying update's model/optimizer and compare the same learner forward."""
-        with Timer("qualification_save_restore", self.all_timings):
-            await self.context.pause_and_drain()
-            qualified = False
-            try:
-                await self.save_checkpoints()
-                before = await asyncio.to_thread(self.fwd_logprobs_values_reward, training_input)
-                expected = before["action_log_probs"].clone()
-                checkpoint = join_resource_path(self.cfg.trainer.ckpt_path, f"global_step_{self.global_step}", "policy")
-                # Free optimizer buffers before native restore, as in normal startup restore.
-                await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
-                refs = self.policy_model.async_run_ray_method("pass_through", "load_checkpoint",
-                    ckpt_dir=checkpoint, load_training_state=True)
-                await asyncio.gather(*refs)
-                await asyncio.to_thread(self.policy_model.backload_to_gpu, backload_optimizer=True, backload_model=True)
-                after = await asyncio.to_thread(self.fwd_logprobs_values_reward, training_input)
-                mask = training_input["loss_mask"].bool()
-                actual = after["action_log_probs"]
-                if not torch.allclose(actual[mask], expected[mask], rtol=1e-5, atol=1e-5):
-                    raise ValueError("Native restore changed qualifying-update action logprobs")
-                evidence.update(step=self.global_step, context_parallel_size=4, optimizer_update_completed=True,
-                    native_model_optimizer_scheduler_load_completed=True, checkpoint=checkpoint,
-                    restore_action_logprob_max_difference=float((actual[mask] - expected[mask]).abs().max()),
-                    restore_logprob_rtol=1e-5, restore_logprob_atol=1e-5)
-                io.write_bytes_atomic(join_resource_path(self.cfg.trainer.export_path, "long-context-qualification.json"),
-                    json.dumps(evidence).encode())
-                qualified = True
-            finally:
-                if qualified:
-                    self.context.resume()
 
     def _group_for_teacher_scoring(self, group: RolloutGroup) -> TrajectoryBatch:
         """Apply the learner's row selector without duplicating its metric side effects."""
