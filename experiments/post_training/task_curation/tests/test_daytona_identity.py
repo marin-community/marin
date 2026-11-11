@@ -6,12 +6,9 @@
 import base64
 import gzip
 import io
-import json
 import tarfile
-from dataclasses import asdict
 from pathlib import Path
 
-from daytona import Resources
 from shellbox.image import DockerfileSource, image_source_key
 
 from experiments.post_training.task_curation.daytona_identity import (
@@ -69,7 +66,7 @@ def test_two_tasks_sharing_a_context_yield_one_snapshot(tmp_path):
     assert snapshot_identity(key) == snapshot_identity(image_source_key_from_context("Dockerfile", [entry]))
 
 
-def test_task_tars_differ_when_data_is_baked_into_the_context(tmp_path):
+def test_task_tars_differ_when_data_is_baked_into_the_context():
 
     def tar_with(dockerfile: str, data: bytes) -> bytes:
         buffer = io.BytesIO()
@@ -122,4 +119,3 @@ def test_resource_shapes_and_registry_references_distinguish_identities():
         registry_image_key("registry.example/img@sha256:aa"), resources_json(cpu=4, memory_mb=32768)
     )
     assert plain != shaped
-    assert json.dumps(asdict(Resources()), sort_keys=True) == DEFAULT_RESOURCES

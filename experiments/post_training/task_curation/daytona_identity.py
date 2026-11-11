@@ -87,7 +87,7 @@ def resources_json(
     storage_mb: int | None = None,
     gpus: int | None = None,
 ) -> str:
-    """Serialize a machine shape the way ``_prepare`` builds ``Resources``."""
+    """Return Daytona resource JSON for CPU, MiB memory/storage, and GPU requests."""
     return json.dumps(
         asdict(
             Resources(
@@ -169,10 +169,8 @@ def _lowered_verifier_key(spec: Mapping) -> str:
 def identities_from_lowered_specs(specs: Iterable[Mapping]) -> Iterator[str]:
     """Yield snapshot identities for lowered Harbor task specs.
 
-    Each spec contributes its verifier build context (the ``environment/`` files of
-    the verifier resource list) with the verifier machine shape, plus the task
-    machine, which shares the default agent image and takes its shape from
-    ``runtime.task_machine`` when set.
+    Each spec contributes a verifier and task-machine identity. The task uses
+    its registry image when specified, otherwise shellbox's default agent image.
     """
     for spec in specs:
         task = spec.get("task") or {}
