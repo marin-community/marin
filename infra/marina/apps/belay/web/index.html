@@ -104,11 +104,11 @@
           <li><code>hero-mfu</code>: step time on one GB200 rack at hero scale, for an idea expected to change MFU a lot; skip it otherwise. A maintainer runs it.</li>
           <li><code>ladder</code>: all four <code>competitive-*</code> rungs, launched together, at the baseline's step count; after a <code>hero-mfu</code> result, each rung's steps are adjusted for the MFU change (better MFU means more steps). A ladder run without <code>hero-mfu</code> gives a provisional verdict: the idea needs a <code>hero-mfu</code> result before it joins the recipe.</li>
           <li><code>competitive-d512</code> … <code>competitive-d1280</code>: one rung of the ladder, against the current recipe's finished run at that size.</li>
-          <li><code>vanilla-d512</code> … <code>vanilla-d1280</code>: against a plain dense transformer (the Vanilla Track) at that size.</li>
+          <li><code>vanilla-d512</code> … <code>vanilla-d1280</code>: against a plain dense transformer (the Vanilla Track) at that size. An optional first step for a radical idea, or for a stronger signal than the recipe gives.</li>
           <li><code>moe-d512</code> … <code>moe-d1280</code>: against a basic MoE at that size.</li>
           <li><code>custom</code>: a study answered by an analysis of its runs, with no verdict. The approver sets its node and hours budget.</li>
         </ul>
-        <div class="muted">The usual path: <code>speedrun</code>, then <code>hero-mfu</code> if MFU will move a lot, then <code>ladder</code>. Maintainers promote ideas into the recipe from those results.</div>
+        <div class="muted">The usual path: optionally a <code>vanilla-*</code> Track first for a radical idea, then <code>speedrun</code>, then <code>hero-mfu</code> if MFU will move a lot, then <code>ladder</code>. Maintainers promote ideas into the recipe from those results.</div>
         <div class="muted">Example: <code>Track: moe-d512</code>, &ldquo;Replace the sigmoid router scoring with sqrt-softplus.&rdquo;</div></li>
       <li><b>Approval</b>: a maintainer reviews it on this page; reactions on GitHub do not approve anything.</li>
       <li><b>Run</b>: an agent runs it against the track's baseline and replies to your comment once, with a link to its row on the <a href="#status">Status</a> page. The reply is edited with the verdict when the runs finish.</li>
