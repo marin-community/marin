@@ -28,13 +28,13 @@ from dataclasses import dataclass, replace
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
+from finestore.rl.run_records import attempt_tracking
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
 from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
-from finestore.rl.run_records import attempt_tracking
 from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_receipt
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for

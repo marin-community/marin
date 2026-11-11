@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 import click
+from finestore.rl.run_records import AttemptRecord, attempt_lineage, attempt_tracking
 from marin.execution.artifact import RECORD_FILENAME, read_record
 from marin.rl import skyrl_records
 from marin.rl.rl_progress import RunSummary
@@ -24,16 +25,16 @@ from experiments.post_training import snowball_rl_presets as presets
 
 @dataclass
 class PublicationOutcome:
-    served_records: list[str] = field(default_factory=list)
-    unserved_records: list[str] = field(default_factory=list)
+    served_records: list[tuple[str, str]] = field(default_factory=list)
+    unserved_records: list[tuple[str, str] | str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     urls: dict[str, str] = field(default_factory=dict)
     retry: str | None = None
 
     def to_dict(self) -> dict:
         return {
-            "served_records": self.served_records,
-            "unserved_records": self.unserved_records,
+            "served_records": [list(key) for key in self.served_records],
+            "unserved_records": [list(key) if isinstance(key, tuple) else key for key in self.unserved_records],
             "errors": self.errors,
         } | ({"retry": self.retry} if self.retry is not None else {})
 
@@ -73,7 +74,7 @@ def build_record(
     preset: presets.Preset,
     *,
     attempt_id: str | None = None,
-    attempts: tuple[str | None, dict[str, skyrl_records.SkyRLLaunchReceipt]] | None = None,
+    attempts: tuple[str | None, dict[str, AttemptRecord]] | None = None,
 ) -> dict:
     """Build a terminal progress record from stored native outputs without live lookups."""
     current_id, receipts = attempts if attempts is not None else read_stored_skyrl_attempts(run_output)
@@ -81,7 +82,7 @@ def build_record(
     receipt = receipts.get(selected_id) if selected_id is not None else None
     if receipt is None:
         raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
-    launch, result = receipt.config, receipt.result
+    launch, result = receipt.native.config, receipt.native.result
     if result.state not in {"succeeded", "failed"}:
         raise ValueError("A progress record requires a terminal native attempt")
     evidence = []
@@ -96,33 +97,33 @@ def build_record(
     native = launch["run"]
     attempt_id = native["attempt_id"]
     provenance = result.provenance or {}
-    tracking = skyrl_records.read_skyrl_attempt_tracking(run_output, attempt_id)
+    tracking = attempt_tracking(receipt)
     started, finished = result.started_at, result.finished_at
-    is_current = attempt_id == current_id
-    metrics = skyrl_records.read_skyrl_metrics(run_output) if is_current else {}
-    invariants = gate.training_invariants(preset, metrics) if is_current else ()
+    history = attempt_lineage(launch["artifacts"]["export_root"], attempt_id)
+    metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
+    invariants = gate.training_invariants(preset, metrics) if history else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
     optimizer_steps = next((int(fact.value) for fact in invariants if fact.name == "planned_updates"), None)
-    lineage_ids = {attempt_id} | {row["attempt_id"] for row in metrics.values() if row.get("attempt_id")}
-    lineage_known = is_current and (
-        len(receipts) == 1 or (bool(metrics) and all(row.get("attempt_id") for row in metrics.values()))
-    )
     windows = [
-        (receipts[key].result.started_at, receipts[key].result.finished_at) if key in receipts else (None, None)
-        for key in lineage_ids
+        (
+            (entry.record.native.result.started_at, entry.record.native.result.finished_at)
+            if entry.record.launch is not None
+            else (None, None)
+        )
+        for entry in history
     ]
     elapsed = None
-    if lineage_known and all(start is not None and finish is not None for start, finish in windows):
+    if history and all(start is not None and finish is not None for start, finish in windows):
         durations = [presets.utc_millis(finish) - presets.utc_millis(start) for start, finish in windows]
         if any(value < 0 for value in durations):
             raise ValueError("Native completion precedes its recorded start")
         elapsed = sum(durations) / 1000
-    elif is_current:
-        evidence.append("Checkpoint lineage timing is unknown: attempt attribution or a native time window is missing.")
     else:
-        evidence.append("Historical updates and lineage timing are unknown because retries can change shared metrics.")
+        evidence.append(
+            "Checkpoint lineage timing is unknown: a shared attempt record or native time window is missing."
+        )
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
     record = {
@@ -207,9 +208,9 @@ def publish_runs(
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
         for attempt_id, receipt in attempts.items():
-            destination = str(StoragePath(path) / "exports/attempts" / attempt_id)
+            destination = (receipt.run_id, attempt_id)
             try:
-                if gate_required and attempt_id == current_id and receipt.result.state == "succeeded":
+                if gate_required and attempt_id == current_id and receipt.native.result.state == "succeeded":
                     if report_error:
                         raise ValueError(report_error)
                     if report is None or attempt_id not in report.run.attempt_ids:

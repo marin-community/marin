@@ -12,9 +12,20 @@ import click
 import pytest
 import yaml
 from click.testing import CliRunner
+from finestore.rl.run_records import (
+    AttemptRecord,
+    CheckpointReference,
+    LaunchReceipt,
+    read_attempts,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+)
+from finestore.store import DataStore
 from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl_records import read_skyrl_metrics
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import publish_rl_progress as publisher
@@ -22,7 +33,7 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
-from experiments.post_training.snowball_tests.fixtures import write_json, write_receipt
+from experiments.post_training.snowball_tests.fixtures import append_metrics, write_json, write_metrics, write_receipt
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
@@ -33,12 +44,12 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
         "native-composed",
         "native-failed",
         "invariant-failed",
-        "legacy-lineage",
+        "checkpoint-lineage",
         "lineage-missing-window",
-        "historical-unknown",
+        "canonical-only",
         "historical-retry",
-        "current-lineage-unknown",
-        "missing-tracking",
+        "unrelated-attempt",
+        "missing-startup",
         "train-long",
     ],
 )
@@ -83,7 +94,12 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
 """,
             [str(path)],
         )
-    if case in {"legacy-lineage", "lineage-missing-window", "historical-unknown", "current-lineage-unknown"}:
+    if case in {"native-failed", "historical-retry"}:
+        receipt["result"].update(state="failed", model=None)
+    write_receipt(source, receipt)
+    metrics = read_skyrl_metrics(str(source))
+    records = read_attempts(str(source / "exports"))
+    if case in {"checkpoint-lineage", "lineage-missing-window", "unrelated-attempt"}:
         ancestor = deepcopy(receipt)
         ancestor["config"]["run"]["attempt_id"] = "ancestor"
         ancestor["result"].update(
@@ -91,26 +107,27 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             started_at="2026-11-06T16:40:00+00:00",
             finished_at=None if case == "lineage-missing-window" else "2026-11-06T17:40:00+00:00",
         )
-        write_json(source / "exports/attempts/ancestor/receipt.json", ancestor)
-        if case in {"legacy-lineage", "lineage-missing-window"}:
-            for path in (source / "exports/metrics").glob("step-*.json"):
-                values = json.loads(path.read_text())
-                values["attempt_id"] = "ancestor" if values["step"] < 2 else "native-attempt"
-                write_json(path, values)
+        records["ancestor"] = AttemptRecord(
+            run_id=receipt["config"]["run"]["id"],
+            attempt_id="ancestor",
+            launch=LaunchReceipt.model_validate(ancestor),
+        )
+        if case != "unrelated-attempt":
+            records["native-attempt"] = records["native-attempt"].model_copy(
+                update={
+                    "resumed_step": 1,
+                    "parent": CheckpointReference(export_root=str(source / "exports"), attempt_id="ancestor", step=1),
+                }
+            )
+            metrics[1]["attempt_id"] = "ancestor"
     if case == "native-failed":
-        shutil.rmtree(source / "exports/metrics")
+        metrics = {}
     if case == "invariant-failed":
-        path = source / "exports/metrics/step-000001.json"
-        write_json(path, json.loads(path.read_text()) | {"policy/raw_grad_norm": float("nan")})
-    if case == "missing-tracking":
-        (source / "exports/attempts/native-attempt/tracking.json").unlink()
-    if case in {"native-failed", "historical-retry"}:
-        receipt["result"].update(state="failed", model=None)
-        (source / "terminal.json").unlink()
-        write_json(source / "exports/attempts/native-attempt/receipt.json", receipt)
-        write_json(source / "resolved-launch.yaml", {"config": receipt["config"]})
-    else:
-        write_receipt(source, receipt)
+        metrics[1]["policy/raw_grad_norm"] = float("nan")
+    if case == "missing-startup":
+        records["native-attempt"] = records["native-attempt"].model_copy(
+            update={"started_at": None, "vllm_version": None}
+        )
     if case == "historical-retry":
         retry = deepcopy(receipt)
         retry["config"]["run"]["attempt_id"] = "retry"
@@ -119,21 +136,39 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             started_at="2026-11-06T20:00:00+00:00",
             finished_at="2026-11-06T20:05:00+00:00",
         )
-        write_json(source / "exports/attempts/retry/receipt.json", retry)
+        records["retry"] = AttemptRecord(
+            run_id=retry["config"]["run"]["id"],
+            attempt_id="retry",
+            launch=LaunchReceipt.model_validate(retry),
+            started_at=retry["result"]["started_at"],
+        )
         write_json(source / "resolved-launch.yaml", {"config": retry["config"]})
+    with DataStore.open(run_records_root(str(source / "exports"))) as store:
+        table = register_run_tables(store).attempts
+        for record in records.values():
+            write_attempt(table, record)
+    write_metrics(source, metrics)
+    if case in {"native-failed", "historical-retry"}:
+        (source / "terminal.json").unlink()
+    if case == "historical-retry":
         native_json(
             """
 import sys
 from omegaconf import OmegaConf
 from skyrl_train.utils.tracking import Tracking
-config = OmegaConf.create({"trainer": {"export_path": sys.argv[1]}})
-with Tracking("snowball", "retry", "files", config) as tracker:
-    tracker.start(resumed_step=1)
+from finestore.rl.run_records import CheckpointReference
+config = OmegaConf.create({"trainer": {"export_path": sys.argv[1]},
+    "runtime": {"run_id": sys.argv[2], "attempt_id": "retry"}})
+with Tracking("snowball", "retry", "records", config) as tracker:
+    tracker.start(resumed_step=1, checkpoint=CheckpointReference(
+        export_root=sys.argv[1], attempt_id="native-attempt", step=1))
     tracker.log({"startup/load_checkpoints": 2.0}, step=1, commit=False)
 print("null")
 """,
-            [str(source / "exports")],
+            [str(source / "exports"), receipt["config"]["run"]["id"]],
         )
+    if case == "canonical-only":
+        shutil.rmtree(run_records_root(str(source / "exports")))
     if case == "native-composed":
         shutil.rmtree(source / "exports/dumped_evals")
 
@@ -142,36 +177,28 @@ print("null")
 
         monkeypatch.setattr("marin.rl.skyrl.run_skyrl", forbid_live)
         monkeypatch.setattr("marin.rl.skyrl.read_skyrl_launch_receipt", forbid_live)
-    selected = "ancestor" if case == "historical-unknown" else "native-attempt"
-    row = publication.build_record(str(source), presets.PRESETS["data-medium"], attempt_id=selected)
-    assert row["artifact_uri"] == str(source) and row["attempt_id"] == selected
-    if case == "historical-retry":
-        assert row["iris_job_id"] == "/tests/native-run"
-    assert row["run_id"] == receipt["config"]["run"]["id"]
-    assert row["series"] == name
+    row = publication.build_record(str(source), presets.PRESETS["data-medium"], attempt_id="native-attempt")
+    assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
+    assert row["iris_job_id"] == "/tests/native-run"
+    assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
     assert (
         row["label"] == f"{name} trainer.policy.optimizer_config.lr=2e-06 trainer.ref.optimizer_config.lr=0.01 "
         f"tasks={inputs.tasks} init=weights@pinned"
     )
     assert row["issue"] is None and row["verdict"] is None and row["gate_result"] is None
     assert row["evaluation"] is None and row["baseline"] is None and row["final"] is None
-    historical = case in {"historical-unknown", "historical-retry"}
     expected_time = (
-        None
-        if historical or case in {"lineage-missing-window", "current-lineage-unknown"}
-        else 7200 if case == "legacy-lineage" else 3600
+        None if case in {"canonical-only", "lineage-missing-window"} else 7200 if case == "checkpoint-lineage" else 3600
     )
-    expected_updates = None if historical else 0 if case == "native-failed" else 2
+    expected_updates = None if case == "canonical-only" else 0 if case == "native-failed" else 2
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
-    if historical:
-        assert row["status"] == "failed" and row["failed_facts"] == ["native_attempt"]
-    elif case in {"native-failed", "invariant-failed"}:
+    if case in {"native-failed", "historical-retry", "invariant-failed"}:
         assert row["status"] == "failed"
         assert ("finite_losses_and_gradients" if case == "invariant-failed" else "native_attempt") in row["failed_facts"]
     else:
         assert row["status"] == "succeeded" and row["failed_facts"] == []
-    if case == "missing-tracking":
+    if case == "missing-startup":
         assert row["wandb_url"] is None and row["engine"] is None
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
@@ -307,9 +334,13 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 74
     assert repeated.urls[str(sources[0])].endswith("&attempt=native-0")
     # A changed replicate invalidates the entire aggregate, including the unchanged replicate.
-    write_json(sources[0] / "exports/attempts/native-0/receipt.json", receipt)
+    write_receipt(sources[0], receipt)
+    retry_metrics = read_skyrl_metrics(str(sources[0]))
     receipt["config"]["run"]["attempt_id"] = "native-retry"
     write_receipt(sources[0], receipt)
+    for values in retry_metrics.values():
+        values["attempt_id"] = "native-retry"
+    append_metrics(sources[0], retry_metrics)
     stale = publication.publish_runs(
         [str(root) for root in sources],
         preset,
@@ -321,7 +352,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     historical = next(
         row for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"] if row["attempt_id"] == "native-0"
     )
-    assert historical["gate_result"] is None and historical["verdict"] is None and historical["optimizer_steps"] is None
+    assert (
+        historical["gate_result"] is None
+        and historical["verdict"] is None
+        and historical["optimizer_steps"] == preset.updates
+    )
     fresh_report, fresh_gate = saved_gate()
     fresh = publication.publish_runs(
         [str(root) for root in sources], preset, gate_path=fresh_gate, gate_required=True, service_url="http://localhost"
@@ -366,8 +401,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     second_receipt = json.loads((sources[1] / "terminal.json").read_text())
     failed_second = deepcopy(second_receipt)
     failed_second["result"]["state"] = "failed"
-    failed_receipt_path = sources[1] / "exports/attempts/native-1/receipt.json"
-    write_json(failed_receipt_path, failed_second)
+    write_receipt(sources[1], failed_second)
     (sources[1] / "terminal.json").unlink()
     stored_exists = StoragePath.exists
 
@@ -385,17 +419,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
             gate_required=True,
             service_url="http://localhost",
         )
-    assert blocked.unserved_records == [str(sources[0] / "exports/attempts/native-retry")]
+    assert blocked.unserved_records == [(receipt["config"]["run"]["id"], "native-retry")]
     assert blocked.errors == ["Gate storage unavailable"]
     assert set(blocked.served_records) == {
-        str(sources[0] / "exports/attempts/native-0"),
-        str(sources[1] / "exports/attempts/native-1"),
+        (receipt["config"]["run"]["id"], "native-0"),
+        (second_receipt["config"]["run"]["id"], "native-1"),
     }
     failed_row = next(
         row for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"] if row["attempt_id"] == "native-1"
     )
     assert failed_row["gate_result"] is None and "native_attempt" in failed_row["failed_facts"]
-    failed_receipt_path.unlink()
     write_receipt(sources[1], second_receipt)
     # Missing provenance produces an attributable INVALID through the actual gate.
     receipt["result"]["provenance"] = None
@@ -417,6 +450,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     )
     assert invalid_row["gate_result"]["verdict"] == "invalid" and invalid_row["gate_result"]["reason"]
     (sources[1] / "terminal.json").unlink()
+    (sources[1] / "resolved-launch.yaml").unlink()
     missing_report, missing_gate = saved_gate()
     assert missing_report.verdict == "invalid" and missing_report.run.attempt_ids == ("native-retry",)
     missing = publication.publish_runs(
@@ -429,7 +463,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert str(sources[1]) in missing.unserved_records and any(
         "No stored native receipt" in error for error in missing.errors
     )
-    write_json(sources[1] / "exports/attempts/native-1/receipt.json", second_receipt)
+    write_receipt(sources[1], second_receipt)
+    (sources[1] / "terminal.json").unlink()
     missing_current = deepcopy(second_receipt["config"])
     missing_current["run"]["attempt_id"] = "missing-latest"
     write_json(sources[1] / "resolved-launch.yaml", {"config": missing_current})
@@ -442,11 +477,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     )
     assert recovered_history.unserved_records == [str(sources[1])]
     assert len(recovered_history.errors) == 1 and "missing-latest" in recovered_history.errors[0]
-    assert str(sources[1] / "exports/attempts/native-1") in recovered_history.served_records
+    assert (second_receipt["config"]["run"]["id"], "native-1") in recovered_history.served_records
     historical_row = next(
         row for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"] if row["attempt_id"] == "native-1"
     )
-    assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] is None
+    assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] == preset.updates
     for root in controls:
         (root / gate.GATE_INPUTS_FILENAME).unlink()
     invalid_command = CliRunner().invoke(publication.main, ["--preset", "train-long"])

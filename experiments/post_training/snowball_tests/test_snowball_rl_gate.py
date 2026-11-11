@@ -25,8 +25,8 @@ from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from scipy.stats import t
 
@@ -34,7 +34,12 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.snowball_tests.fixtures import SELECTION_IDENTITY, write_receipt, write_metrics
+from experiments.post_training.snowball_tests.fixtures import (
+    SELECTION_IDENTITY,
+    append_metrics,
+    write_metrics,
+    write_receipt,
+)
 from experiments.post_training.snowball_tests.fixtures import answer as _answer
 from experiments.post_training.snowball_tests.fixtures import write_json as _json
 
@@ -699,20 +704,18 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, s
             receipt = json.loads((sources[0] / "terminal.json").read_text())
             if not phase["retry"]:
                 receipt["result"]["state"] = "failed"
-                _json(sources[0] / "attempts/native-0.json", receipt)
+                write_receipt(sources[0], receipt)
                 (sources[0] / "terminal.json").unlink()
                 return SimpleNamespace(state=JobState.FAILED)
+            metrics = read_skyrl_metrics(str(sources[0]), attempt_id="native-0")
             receipt["config"]["run"]["attempt_id"] = "native-retry"
             write_receipt(sources[0], receipt)
-            _json(sources[0] / "attempts/native-retry.json", receipt)
-            _json(sources[0] / "resolved-launch.yaml", {"config": receipt["config"]})
-            for path in (sources[0] / "exports/metrics").glob("*.json"):
-                row = json.loads(path.read_text())
+            for row in metrics.values():
                 row["attempt_id"] = "native-retry"
-                _json(path, row)
+            append_metrics(sources[0], metrics)
         if control and not phase["retry"]:
             (sources[0] / "terminal.json").unlink()
-            (sources[0] / "attempts/native-0.json").unlink(missing_ok=True)
+            (sources[0] / "resolved-launch.yaml").unlink()
             return SimpleNamespace(state=JobState.FAILED)
         completed = gate.completed_gate(preset, built.runs, built.gate)
         if completed is not None:
@@ -764,7 +767,9 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, s
         return
     if case == "pass":
         assert f"r0 planned_updates: {preset.updates} == {preset.updates}; within bound" in snapshot["constraints"]
-    paths = [str(root / f"exports/attempts/native-{index}") for index, root in enumerate(sources)]
+    paths = [
+        [f"{training.name}-{presets.PRESET_REVISION}", f"native-{index}"] for index, training in enumerate(built.runs)
+    ]
     if unavailable["value"]:
         assert snapshot["publication"] == {
             "served_records": paths[:1] if case == "partial-retry" else [],

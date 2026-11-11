@@ -64,7 +64,7 @@ def write_receipt(root: Path, receipt: dict) -> None:
     with DataStore.open(run_records_root(export_root)) as store:
         write_attempt(
             register_run_tables(store).attempts,
-            record.model_copy(update={"launch": LaunchReceipt.model_validate(receipt)}),
+            record.model_copy(update={"run_id": config["run"]["id"], "launch": LaunchReceipt.model_validate(receipt)}),
         )
 
 
@@ -77,6 +77,16 @@ def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
         for record in records.values():
             write_attempt(tables.attempts, record)
         tables.metrics.extend(
+            MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
+            for step, values in metrics.items()
+            for name, value in values.items()
+            if name not in ("step", "attempt_id", "metric_attempt_ids")
+        )
+
+
+def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
+    with DataStore.open(run_records_root(str(root / "exports"))) as store:
+        register_run_tables(store).metrics.extend(
             MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
             for step, values in metrics.items()
             for name, value in values.items()

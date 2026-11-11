@@ -73,10 +73,10 @@ Speed presets and data-short publish nothing. Native failures and failed trainin
 `status: failed` and name the `failed_facts`. Records contain stored native identity, lineage timing,
 source and engine facts, and the launcher's issue. The dashboard copies climbed metrics
 (`control → run`, change and noise), constraints, invariants, verdict and label from the gate report.
-Replicate counts identify aggregate results. Historical attempts carry their own native facts.
-Their update count and lineage duration are unknown because retries can rewrite shared step metrics.
-The current attempt's lineage duration is unknown when stored evidence cannot attribute it.
-Native receipts persist under the configured export root.
+Replicate counts identify aggregate results. Each attempt's update count uses its metric rows
+and recorded checkpoint parents. Lineage duration sums those native jobs' stored time windows.
+Missing shared records or time windows leave the corresponding measurements unknown. Native attempt
+records persist in FineStore under the configured export root.
 
 ## Change one input
 
