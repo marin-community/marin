@@ -219,6 +219,12 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                     # No assessment pins an inventory-only declaration, so the code's current one wins.
                     if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
                         update["declaration"] = declaration
+                    elif declaration.id in by_id:
+                        # The verdict describes runtime cost, not what the pinned assessment graded, so an
+                        # unselected source still picks up the current code's safety assessment.
+                        update["declaration"] = prior.declaration.model_copy(
+                            update={"daytona_safety": declaration.daytona_safety}
+                        )
                     rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
