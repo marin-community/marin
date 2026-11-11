@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate Grug on Megatron, plus a CP2 FlashAttention policy update on the frozen runtime.
+# Validate the softmax kernel, Grug Megatron gates, and a CP2 FlashAttention policy update on the frozen runtime.
 set -euo pipefail
 
 REPOSITORY_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -10,10 +10,11 @@ source "$REPOSITORY_ROOT/skyrl-train/ci/marin_nightly/resolve_runtime.sh" \
 echo "::: GPU and driver"
 nvidia-smi --query-gpu=name,driver_version --format=csv
 
-echo "::: running the Grug Megatron gates and CP2 FlashAttention smoke"
+echo "::: running the softmax kernel test, Grug Megatron gates and CP2 FlashAttention smoke"
 cd "$REPOSITORY_ROOT"
 JUNIT_XML="$REPOSITORY_ROOT/grug-megatron-junit.xml"
 test_targets=(
+  skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_softmax_confident_values_and_gradients
   skyrl-train/tests/gpu/test_grug_megatron.py
   skyrl-train/tests/gpu/test_grug_levanter_parity.py
   skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_flash_attention_cp2_forward_backward
