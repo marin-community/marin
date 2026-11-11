@@ -326,6 +326,63 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
+def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    original_inode = workdir.stat().st_ino
+
+    class StaleWorkdirProcess(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.workdir_replaced = False
+
+        async def exec(self, command, cwd=None, env=None, timeout=None):
+            if self.workdir_replaced and cwd is None:
+                raise OSError("Provider process retained the deleted working directory")
+            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+            self.workdir_replaced = workdir.stat().st_ino != original_inode
+            return result
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = StaleWorkdirProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+        )
+        try:
+            replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
+            assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
+            following = await machine.run(Command(("printf", "ready")))
+            assert (following.exit_code, following.stdout) == (0, b"ready")
+            assert workdir.stat().st_ino != original_inode
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> None:
+    class NoisyCountProcess(LocalProcess):
+        async def exec(self, command, **kwargs):
+            result = await super().exec(command, **kwargs)
+            result.result = "shell-init: getcwd failed\n" + result.result
+            return result
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = NoisyCountProcess()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("printf", "output"), output_limit_bytes=3))
+            assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"out", True)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
 def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
