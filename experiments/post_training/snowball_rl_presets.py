@@ -52,7 +52,7 @@ from experiments.post_training.task_curation.selection import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-PRESET_REVISION = "2026.11.06.1"
+PRESET_REVISION = "2026.11.11.1"
 RUN_PREFIX = "checkpoints/snowball-rl"
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
@@ -64,8 +64,8 @@ MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 DEFAULT_SELECTION_VERSION = "2026.11.04.1"
-DEFAULT_TEST_PANEL_NAME = "snowball-test-panel"
-DEFAULT_TEST_PANEL_VERSION = "2026.11.06.1"
+DEFAULT_EVAL_LITE_NAME = "eval-lite"
+DEFAULT_EVAL_LITE_VERSION = "2026.11.11.1"
 EVAL_REPLY_TOKENS = 8192
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
 
@@ -221,14 +221,14 @@ def configure_evaluation(evaluation: Evaluation, config: dict, tasks: ArtifactSt
     return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
-_TEST_PANEL = f"{DEFAULT_TEST_PANEL_NAME}@{DEFAULT_TEST_PANEL_VERSION}"
+_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
 EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
-            Evaluation(name="test_panel", file=Path(FULL_VALIDATION_FILENAME).stem, source=_TEST_PANEL),
-            Evaluation(name="test_panel_100", file=Path(VALIDATION_FILENAME).stem, source=_TEST_PANEL),
+            Evaluation(name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, source=_EVAL_LITE),
+            Evaluation(name="eval_lite_100", file=Path(VALIDATION_FILENAME).stem, source=_EVAL_LITE),
             Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4),
             Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
@@ -305,17 +305,17 @@ _GAPS = (
     Gap.NO_AGENTIC_TASKS,
     Gap.NO_IMAGE_SANDBOX,
 )
-_PANEL = EVALUATIONS["test_panel_100"]
+_PANEL = EVALUATIONS["eval_lite_100"]
 _LEARNING_MEDIUM = Preset(
     focus=Focus.LEARNING,
     duration=Duration.MEDIUM,
     recipe=_LEARNING,
     updates=25,
     measured=range(21, 26),
-    evaluations=(replace(EVALUATIONS["test_panel"], at_start=True),),
+    evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     keep_weights=True,
-    guards=(Metric("test_panel/family_mean", True),),
-    objectives=(Metric("test_panel/family_mean", True), Metric("test_panel/family_mean/gain_per_h100_hour", True)),
+    guards=(Metric("eval_lite/family_mean", True),),
+    objectives=(Metric("eval_lite/family_mean", True), Metric("eval_lite/family_mean/gain_per_h100_hour", True)),
     gaps=_GAPS,
     budget="105-120 min; 70-80 H100-h",
 )
@@ -330,8 +330,8 @@ PRESETS = MappingProxyType(
                 recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
                 updates=0,
                 measured=range(1),
-                evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["test_panel"]),
-                guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("test_panel/family_mean", True)),
+                evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["eval_lite"]),
+                guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
                 gaps=_GAPS,
                 budget="14-17 min; 2 H100-h",
             ),

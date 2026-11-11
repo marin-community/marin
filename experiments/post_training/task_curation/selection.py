@@ -93,7 +93,7 @@ TASK_MANIFEST_SCHEMA = pa.schema(
         pa.field("upstream_pass_rate", pa.float64()),
     ]
 )
-PANEL_MANIFEST_SCHEMA = pa.schema(
+EVAL_LITE_MANIFEST_SCHEMA = pa.schema(
     [
         *(field for field in TASK_MANIFEST_SCHEMA if field.name != "upstream_pass_rate"),
         *((name, pa.string()) for name in ("part", "source", "license")),
@@ -167,7 +167,7 @@ class HeldoutSelection:
     family_counts: dict[str, int]
 
 
-class PanelSource(BaseModel):
+class EvalLiteSource(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_id: str
@@ -179,7 +179,7 @@ class PanelSource(BaseModel):
     count: PositiveInt
 
 
-class PanelMeasurement(BaseModel):
+class EvalLiteMeasurement(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     uri: str
@@ -188,28 +188,28 @@ class PanelMeasurement(BaseModel):
     model_revision: str
 
 
-class PanelRecipe(BaseModel):
+class EvalLiteRecipe(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     version: str
-    sources: tuple[PanelSource, ...]
+    sources: tuple[EvalLiteSource, ...]
     training: tuple[HeldoutSource, ...]
     development: HeldoutSource
     fast_counts: dict[str, PositiveInt]
     seed: int
-    pass_rates: PanelMeasurement | None = None
+    pass_rates: EvalLiteMeasurement | None = None
 
 
 @dataclass(frozen=True)
-class PanelConfig:
-    recipe: PanelRecipe
+class EvalLiteConfig:
+    recipe: EvalLiteRecipe
     sources: dict[str, HeldoutSource]
     output_path: str
 
 
 @dataclass(frozen=True)
-class PanelRate:
+class EvalLiteRate:
     task_id: str
     task_digest: str
     model_revision: str
@@ -220,8 +220,8 @@ class PanelRate:
 
 
 @dataclass(frozen=True)
-class PanelSelection:
-    tasks: tuple[tuple[TaskSpec, PanelSource], ...]
+class EvalLiteSelection:
+    tasks: tuple[tuple[TaskSpec, EvalLiteSource], ...]
     fast: tuple[TaskSpec, ...]
     counts: dict[str, Counter[str]]
 
@@ -355,11 +355,11 @@ def _parquet_rows(path: StoragePath, column: str) -> Iterator[dict[str, Any]]:
 def _chat_panel_task(case: EvaluationCase) -> TaskSpec:
     task, operation = case.task, case.item.operation
     if not isinstance(operation, ChatGeneration | TextGeneration):
-        raise ValueError(f"Test panels require generated answers: {task.id}")
+        raise ValueError(f"EvalLite requires generated answers: {task.id}")
     if isinstance(operation, ChatGeneration) and operation.variants:
         zero_shot = [variant.context for variant in operation.variants if variant.fewshot == 0]
         if len(zero_shot) != 1:
-            raise ValueError(f"Test panel requires one zero-shot prompt: {task.id}")
+            raise ValueError(f"EvalLite requires one zero-shot prompt: {task.id}")
         task = task.model_copy(update={"context": zero_shot[0]})
     if "benchmark:mbppplus" in task.tags:
         problem = source_evidence(task)
@@ -604,11 +604,11 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
     )
 
 
-def _panel_measurements(measurement: PanelMeasurement | None) -> dict[str, PanelRate]:
+def _eval_lite_measurements(measurement: EvalLiteMeasurement | None) -> dict[str, EvalLiteRate]:
     if measurement is None:
         return {}
     with StoragePath(measurement.uri).open("rb") as stream:
-        rows = [PanelRate(**row) for row in pq.read_table(stream).to_pylist()]
+        rows = [EvalLiteRate(**row) for row in pq.read_table(stream).to_pylist()]
     by_id = {row.task_id: row for row in rows}
     if len(by_id) != len(rows) or len(rows) != measurement.rows:
         raise ValueError("Panel pass-rate rows must have unique task IDs and the declared population")
@@ -632,7 +632,7 @@ def _panel_keys(task: TaskSpec) -> PanelKeys:
     return PanelKeys(exact, (*exact, *statement))
 
 
-def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, PanelRate]) -> None:
+def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, EvalLiteRate]) -> None:
     if not {task.id for task in tasks} <= rates.keys():
         raise ValueError("Pass-rate evidence must cover every selected panel task")
     for task in tasks:
@@ -640,7 +640,7 @@ def _check_pass_rates(tasks: tuple[TaskSpec, ...], rates: Mapping[str, PanelRate
             raise ValueError(f"Pass-rate evidence measures different task content: {task.id}")
 
 
-def _fast_subset(recipe: PanelRecipe, selected: list[tuple[TaskSpec, PanelSource]]) -> tuple[TaskSpec, ...]:
+def _fast_subset(recipe: EvalLiteRecipe, selected: list[tuple[TaskSpec, EvalLiteSource]]) -> tuple[TaskSpec, ...]:
     """The seeded per-family fast quotas, in full-panel order."""
     if recipe.fast_counts.keys() != {part.family for _, part in selected}:
         raise ValueError("Fast-panel quotas must cover every selected family")
@@ -652,19 +652,19 @@ def _fast_subset(recipe: PanelRecipe, selected: list[tuple[TaskSpec, PanelSource
     )
 
 
-def select_test_panel(
-    recipe: PanelRecipe,
+def select_eval_lite(
+    recipe: EvalLiteRecipe,
     sources: Mapping[str, Iterator[TaskSpec]],
     excluded: Iterator[TaskSpec],
-    rates: Mapping[str, PanelRate],
-) -> PanelSelection:
+    rates: Mapping[str, EvalLiteRate],
+) -> EvalLiteSelection:
     """Select canonical tasks from source iterators, assigning duplicates to the first source."""
     excluded_keys = {key for task in excluded for key in _panel_keys(task).exclusion}
-    selected: list[tuple[TaskSpec, PanelSource]] = []
+    selected: list[tuple[TaskSpec, EvalLiteSource]] = []
     taken: set[tuple[str, str]] = set()
     audit: dict[str, Counter[str]] = {}
 
-    def candidates(part: PanelSource, counts: Counter[str]) -> Iterator[TaskSpec]:
+    def candidates(part: EvalLiteSource, counts: Counter[str]) -> Iterator[TaskSpec]:
         seen: set[tuple[str, str]] = set()
         for task in sources[part.source_id]:
             counts["input"] += 1
@@ -672,9 +672,9 @@ def select_test_panel(
             if not excluded_keys.isdisjoint(keys.exclusion):
                 counts["overlap"] += 1
             elif "eval" not in task.tags:
-                raise ValueError(f"Test panel source must reserve its tasks for evaluation: {task.id}")
+                raise ValueError(f"EvalLite source must reserve its tasks for evaluation: {task.id}")
             elif _grader_kind(task) not in LOCAL_GRADERS:
-                raise ValueError(f"Test panel requires a local grader: {task.id}")
+                raise ValueError(f"EvalLite requires a local grader: {task.id}")
             elif not taken.isdisjoint(keys.exact) or not seen.isdisjoint(keys.exact):
                 counts["duplicate"] += 1
             else:
@@ -687,7 +687,7 @@ def select_test_panel(
             candidates(part, counts), size=part.count, key=lambda task: seeded_order(task.id, recipe.seed)
         )
         if eligible < part.count:
-            raise ValueError(f"Test panel part shortfall: {part.source_id}: requested {part.count}, eligible {eligible}")
+            raise ValueError(f"EvalLite part shortfall: {part.source_id}: requested {part.count}, eligible {eligible}")
         selected.extend((task, part) for task in tasks)
         taken.update(key for task in tasks for key in _panel_keys(task).exact)
         counts.update(eligible=eligible, selected=len(tasks))
@@ -695,14 +695,14 @@ def select_test_panel(
     selected.sort(key=lambda entry: entry[0].id)
     if recipe.pass_rates is not None:
         _check_pass_rates(tuple(task for task, _ in selected), rates)
-    return PanelSelection(tuple(selected), _fast_subset(recipe, selected), audit)
+    return EvalLiteSelection(tuple(selected), _fast_subset(recipe, selected), audit)
 
 
-def prepare_test_panel(config: PanelConfig) -> None:
+def prepare_eval_lite(config: EvalLiteConfig) -> None:
     """Read pinned sources and publish the selected full panel, fast subset, manifest and audit summary."""
     recipe = config.recipe
-    rates = _panel_measurements(recipe.pass_rates)
-    selection = select_test_panel(
+    rates = _eval_lite_measurements(recipe.pass_rates)
+    selection = select_eval_lite(
         recipe,
         {name: _panel_source_tasks(source, {}) for name, source in config.sources.items()},
         (task for source in (*recipe.training, recipe.development) for task in _panel_source_tasks(source, {})),
@@ -715,19 +715,19 @@ def prepare_test_panel(config: PanelConfig) -> None:
             "aaii_category": part.aaii_category,
             "agentic": "agentic" in task.tags,
             "grader_kind": _grader_kind(task),
-            "part": part.source_id,
+            "part": part.source_id.lower().replace(":", "-"),
             "source": task.source.model_dump_json(),
             "license": part.license,
             "difficulty": 1 - rates[task.id].mean_score if rates else None,
         }
         for task, part in selection.tasks
     )
-    with TemporaryDirectory(prefix="test-panel-") as temporary:
+    with TemporaryDirectory(prefix="eval-lite-") as temporary:
         directory = Path(temporary)
         full = (task for task, _ in selection.tasks)
         write_parquet_file(task_records(full), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA)
         write_parquet_file(task_records(iter(selection.fast)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA)
-        write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=PANEL_MANIFEST_SCHEMA)
+        write_parquet_file(manifest, str(directory / TASK_MANIFEST_FILENAME), schema=EVAL_LITE_MANIFEST_SCHEMA)
         summary = {
             "recipe": recipe.model_dump(mode="json"),
             "full_validation_rows": len(selection.tasks),
@@ -739,7 +739,7 @@ def prepare_test_panel(config: PanelConfig) -> None:
         _publish_selection(directory, config.output_path, (FULL_VALIDATION_FILENAME, VALIDATION_FILENAME), summary)
 
 
-def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> ArtifactStep[Artifact]:
+def eval_lite_step(curated: dict[str, ArtifactStep], recipe: EvalLiteRecipe) -> ArtifactStep[Artifact]:
     """Bind panel sources and training/development exclusions to their versioned artifacts."""
     missing = {part.source_id for part in recipe.sources} - curated.keys()
     if missing:
@@ -756,7 +756,7 @@ def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> Artifac
         )
     )
 
-    def build_config(context: StepContext) -> PanelConfig:
+    def build_config(context: StepContext) -> EvalLiteConfig:
         *training, development = _resolved(context, excluded, exclusions)
         update = {
             "training": tuple(training),
@@ -776,13 +776,13 @@ def panel_step(curated: dict[str, ArtifactStep], recipe: PanelRecipe) -> Artifac
             )
             for part in recipe.sources
         }
-        return PanelConfig(recipe.model_copy(update=update), sources, context.output_path)
+        return EvalLiteConfig(recipe.model_copy(update=update), sources, context.output_path)
 
     return ArtifactStep(
         name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
         deps=(*inputs.values(), *exclusions, *((measurement_step,) if measurement_step is not None else ())),
-        run=prepare_test_panel,
+        run=prepare_eval_lite,
         build_config=build_config,
     )

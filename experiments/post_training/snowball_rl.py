@@ -20,7 +20,7 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
   --preset learning-medium --set trainer.algorithm.advantage_estimator=grpo \
     --set trainer.algorithm.group_advantage_min_size=null --version dev --run
   --preset speed-medium --require 'policy/mismatch/staleness0/log_ratio_abs_max<=0' --version dev --run
-  --preset learning-medium --require 'test_panel/aaii_category/coding/mean>=control' --version dev --run
+  --preset learning-medium --require 'eval_lite/aaii_category/coding/mean>=control' --version dev --run
   --preset learning-medium --version dev --run
   --preset data-short --tasks my-selection@2026.11.02 --version dev --run
   --preset train-long --set trainer.max_steps=100 --version dev --run
@@ -385,11 +385,11 @@ def build_run(
     ):
         raise click.BadParameter("candidate tasks use a different heldout input; curate against the default panel")
     if tasks is not None:
-        panel = presets.selection_artifact(f"{presets.DEFAULT_TEST_PANEL_NAME}@{presets.DEFAULT_TEST_PANEL_VERSION}")
+        panel = presets.selection_artifact(f"{presets.DEFAULT_EVAL_LITE_NAME}@{presets.DEFAULT_EVAL_LITE_VERSION}")
         excluded = summary["recipe"].get("exclusions", ())
         expected = str(StoragePath(panel.path()) / FULL_VALIDATION_FILENAME)
         if not any(row["uri"] == expected and row["version"] == panel.version for row in excluded):
-            raise click.BadParameter("candidate tasks must record the full test panel in recipe.exclusions")
+            raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
     chosen = preset.evaluations
     generating = preset.recipe.layout.role_plan.generate_only
     _refuse_judged(summary, "train")
@@ -825,7 +825,7 @@ def _run_command(function: Callable) -> click.Command:
     "--tasks",
     "tasks_name",
     metavar="NAME@VERSION",
-    help="Curated task selection at an immutable version, recording the full test panel in recipe.exclusions. "
+    help="Curated task selection at an immutable version, recording the full EvalLite in recipe.exclusions. "
     "Required by data presets, whose selection must hold out the same panel as the default; "
     "train-long defaults to the pinned snowball-100k.",
 )

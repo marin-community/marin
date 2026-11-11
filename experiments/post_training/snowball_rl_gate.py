@@ -10,7 +10,7 @@ with a new --require, or to check calibration by scoring a control against the o
 
 \b
 Examples, each after `uv run python -m experiments.post_training.snowball_rl_gate`:
-  --preset learning-medium --candidate RUN_NAME --require 'test_panel/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME --require 'eval_lite/aaii_category/coding/mean>=control'
   --preset speed-medium --leave-out r0
 """
 

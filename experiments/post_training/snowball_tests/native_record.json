@@ -1,6 +1,6 @@
 {
   "source": {
-    "source": "s3://marin-us-east-02a/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.06.1",
+    "source": "s3://marin-us-east-02a/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.11.1",
     "files": [
       "resolved-launch.yaml",
       "terminal.json",
@@ -13,13 +13,13 @@
     "config": {
       "schema_version": 1,
       "run": {
-        "id": "checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0-2026.11.06.1",
+        "id": "checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0-2026.11.11.1",
         "attempt_id": "6388601f29d7",
         "export_hf": true
       },
       "artifacts": {
-        "export_root": "s3://marin-us-east-02a/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.06.1/exports",
-        "attempts_root": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.06.1/attempts"
+        "export_root": "s3://marin-us-east-02a/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.11.1/exports",
+        "attempts_root": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.11.1/attempts"
       },
       "iris": {
         "allocation": {
@@ -31,7 +31,7 @@
           "num_nodes": 5
         },
         "wandb_entity": "marin-community",
-        "job_name": "checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.06.1-6388601f29d7",
+        "job_name": "checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-6388601f29d7",
         "cluster_config": "lib/iris/config/cw-us-east-02a.yaml",
         "parent_cluster_config": "lib/iris/config/marin.yaml"
       },
@@ -102,11 +102,11 @@
       "inputs": {
         "validation_data": [
           {
-            "identity": "rl-data/task-selection/snowball-test-panel@2026.11.06.1:88ee12a7",
+            "identity": "rl-data/task-selection/eval-lite@2026.11.11.1:88ee12a7",
             "kind": "directory",
-            "local_path": "/tmp/marinskyrl/data/snowball-test-panel",
+            "local_path": "/tmp/marinskyrl/data/eval-lite",
             "relative_path": "full_validation.parquet",
-            "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-test-panel/2026.11.06.1"
+            "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/eval-lite/2026.11.11.1"
           }
         ],
         "evaluation_data": {},
@@ -131,7 +131,7 @@
     },
     "result": {
       "state": "succeeded",
-      "iris_job_id": "/atqamar/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.06.1-coordinator-c6f8a606/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.06.1-6388601f29d7",
+      "iris_job_id": "/atqamar/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-coordinator-c6f8a606/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-6388601f29d7",
       "started_at": "2026-11-07T07:11:19.776000+00:00",
       "finished_at": "2026-11-07T08:51:35.243000+00:00",
       "provenance": {

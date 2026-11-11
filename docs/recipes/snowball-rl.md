@@ -38,7 +38,7 @@ W&B URLs and a Grafana dashboard link. Set `WANDB_API_KEY` before submission;
 | data-short | 8 H100, east | 256 candidate training tasks × four answers, up to 8,192 tokens; mixed-answer fraction; about 15 minutes |
 | speed-medium | 40 H100, east | ten synchronous updates with 4,096-token answers; median update time over updates 2–10 and staleness-0 k3 mismatch; about 40 minutes |
 | speed-long | 40 H100, east | 20 asynchronous updates, staleness 2 and TIS; median update time over updates 3–20 and staleness-0 k3 mismatch; 45–75 minutes |
-| learning-medium | 40 H100, east | full greedy test panel at update 0 and after 25 synchronous RLOO-N updates; final equal-family mean and score gain per H100-hour; about two hours |
+| learning-medium | 40 H100, east | full greedy EvalLite at update 0 and after 25 synchronous RLOO-N updates; final equal-family mean and score gain per H100-hour; about two hours |
 | data-medium | 40 H100, east | learning-medium on candidate tasks, using learning-medium controls |
 | train-long | 40 H100, east | asynchronous training, default 100 updates; checkpoints, 100-task panel every ten updates and HF export; no verdict |
 
@@ -96,7 +96,7 @@ Learning and train-long can change task sampling, optimizer, schedule and batch 
 Data presets require `--tasks` and refuse `--set`.
 
 Custom selections must use the default heldout development input and record the complete
-frozen test panel in their recipe's `exclusions`. The builder checks those recorded inputs.
+frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
 Create an immutable candidate through [task curation](../references/task-curation.md#final-task-selection).
 Selections with AI-judged tasks are refused before submission.
 The collected controls retain `snowball-100k@2026.11.04.1`; the updated selection recipe is a
@@ -168,7 +168,7 @@ Run stored comparisons on CPU:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl_gate \
-  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'test_panel/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME[@VERSION] --require 'eval_lite/aaii_category/coding/mean>=control'
 uv run python -m experiments.post_training.snowball_rl_gate \
   --preset speed-medium --leave-out r0
 ```
@@ -182,7 +182,7 @@ against the control commit, or gives the reason a local git comparison is unavai
 
 ## Tasks and evaluation
 
-The [test panel](../references/task-curation.md#snowball-test-panel) is the held-out set that
+The [EvalLite](../references/task-curation.md#eval-lite) is the held-out set that
 `speed-short`, the learning and data presets and `train-long` evaluate: 1,500 public benchmark
 tasks graded on the training machines, and a 100-task fast subset. It shows whether a change moves
 scores on tasks the model never trains on, measured against controls on the same panel; it is not a
@@ -208,7 +208,7 @@ Learning/data medium evaluates at update 0 and 25. Train-long evaluates before t
 every ten updates. Speed-short measures its primary throughput before its full-panel evaluation;
 quality answers and timing stay outside that throughput window. Saved metrics and primary answers
 normally live under `exports/metrics/` and `exports/dumped_evals/`; speed-short quality answers
-use `exports/test_panel/dumped_evals/eval_only/`. The configured export root and native receipt
+use `exports/eval_lite/dumped_evals/eval_only/`. The configured export root and native receipt
 identify their actual locations.
 
 ## Which experiment to run

@@ -122,8 +122,8 @@ configs = [load_launch_config(path) for path in sys.argv[1:]]
 def quality_request(config):
     if not config.inputs.get("evaluation_data"):
         return None
-    profile = parse_evaluation_profiles(config.skyrl.trainer.callbacks[0].additional_evaluations)["test_panel"]
-    merged = evaluation_profile_config(config.skyrl, profile, "test_panel")
+    profile = parse_evaluation_profiles(config.skyrl.trainer.callbacks[0].additional_evaluations)["eval_lite"]
+    merged = evaluation_profile_config(config.skyrl, profile, "eval_lite")
     return asyncio.run(native_request(
         get_vllm_sampling_params(merged.generator.eval_sampling_params),
         OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True), True))
@@ -198,10 +198,10 @@ print(json.dumps([{
                 assert row["wire"]["temperature"] == 1.0
                 assert row["wire"]["max_completion_tokens"] == (4096 if "speed-short-" in name else 8192)
                 assert row["wire"]["ignore_eos"] == ("speed-short-" in name)
-        for source in row["profile_inputs"].get("test_panel", []):
+        for source in row["profile_inputs"].get("eval_lite", []):
             assert (
                 source["identity"].partition(":")[0]
-                == f"{presets.SELECTION_PREFIX}/{presets.EVALUATIONS['test_panel'].source}"
+                == f"{presets.SELECTION_PREFIX}/{presets.EVALUATIONS['eval_lite'].source}"
             )
             assert source["relative_path"] == "full_validation.parquet"
         if row["training"] and row["validation"]:
@@ -225,8 +225,8 @@ print(json.dumps([{
 @pytest.mark.timeout(180)
 def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
     summary = (Path(presets.default_selection().path()) / "summary.json").read_text()
-    panel_name = presets.DEFAULT_TEST_PANEL_NAME
-    panel_version = presets.DEFAULT_TEST_PANEL_VERSION
+    panel_name = presets.DEFAULT_EVAL_LITE_NAME
+    panel_version = presets.DEFAULT_EVAL_LITE_VERSION
     panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
     monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
     (
@@ -234,12 +234,12 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
-        "2026.11.06.1": {
-            "speed-short": ("3c26e593", "4983e280"),
-            "data-short": ("f47923c5", "b8748fb5"),
-            "speed-medium": ("e268a2c8", "f3822837"),
-            "learning-medium": ("934e55eb", "4bdf2d67"),
-            "speed-long": ("5b99bc3f", "fa196cc1"),
+        "2026.11.11.1": {
+            "speed-short": ("bb0dec39", "a346692f"),
+            "data-short": ("a97f2928", "2a8e96b7"),
+            "speed-medium": ("badc116f", "925fbdb1"),
+            "learning-medium": ("b055454b", "383846e8"),
+            "speed-long": ("757304f8", "9a0ffd83"),
         }
     }[presets.PRESET_REVISION]
     paths = []
@@ -305,8 +305,8 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ]
     assert len({step.name for step in repeated.runs}) == 3
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
-    panel_name = presets.DEFAULT_TEST_PANEL_NAME
-    panel_version = presets.DEFAULT_TEST_PANEL_VERSION
+    panel_name = presets.DEFAULT_EVAL_LITE_NAME
+    panel_version = presets.DEFAULT_EVAL_LITE_VERSION
     new_panel = tmp_path / panel_name / "2026.11.05"
     new_panel.mkdir(parents=True)
     (new_panel / "summary.json").write_bytes((tmp_path / panel_name / panel_version / "summary.json").read_bytes())
@@ -332,8 +332,8 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     pin = snowball.snowball_rl_gate.control_pins("learning-medium")[0]
     for index in range(pin.runs):
         recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, index))
-    first = snowball.build_run(learning, requirements=("test_panel/mean>=0",))
-    second = snowball.build_run(learning, requirements=("test_panel/mean>=0.1",))
+    first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",))
+    second = snowball.build_run(learning, requirements=("eval_lite/mean>=0.1",))
     assert first.runs[0].name == second.runs[0].name == name()
     assert first.gate.name != second.gate.name
     original_name = name()
@@ -349,5 +349,5 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
     for tasks in (presets.default_selection(), selection):
-        with pytest.raises(click.BadParameter, match="full test panel"):
+        with pytest.raises(click.BadParameter, match="full EvalLite"):
             snowball.build_run(data, tasks=tasks)
