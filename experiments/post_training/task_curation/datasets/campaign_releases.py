@@ -62,6 +62,8 @@ def sources() -> list[RlDataSource]:
                 family="terminal-agent",
                 tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
                 count=2205,
+                daytona_snapshot_count=2181,
+                daytona_count_basis="shellbox-identity over the pinned tasks.parquet build contexts",
                 notes=(
                     "2,205 quality-admitted CalibForge tasks. Deprecated: each task bakes its data "
                     "into its own build context, so running the cohort provisions one Daytona "
@@ -92,6 +94,11 @@ def sources() -> list[RlDataSource]:
                 family="terminal-agent",
                 tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "deprecated"),
                 count=324,
+                daytona_snapshot_count=23,
+                daytona_count_basis=(
+                    "campaign provisioning record snapshot-capacity-check.json (the public lowered "
+                    "payloads carry no resource shapes and pin only two verifier contexts)"
+                ),
                 notes=(
                     "324 environment-admitted CalibForge tasks split 259 train / 65 validation. "
                     "Deprecated pending the snapshot-safe CalibForge rebuild: the campaign's "
@@ -122,6 +129,8 @@ def sources() -> list[RlDataSource]:
                 family="swe-repo",
                 tags=("agentic", "multi-turn", "campaign-release"),
                 count=8045,
+                daytona_snapshot_count=5,
+                daytona_count_basis="shellbox-identity over the pinned tasks.parquet build contexts",
                 notes=(
                     "8,045 quality-admitted SWE-Smith tasks. The release keeps only tasks that passed "
                     "the Daytona oracle and a Good quality verdict; quality review is not a "

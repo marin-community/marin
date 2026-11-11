@@ -297,7 +297,13 @@ quality control a pinned release performed outside curation, so inventory-only
 pointers surface that evidence in the Atlas. `daytona_safety` records whether
 running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMIT`,
 ten unique snapshots); every non-agentic source is safe automatically, and an
-agentic source stays `unassessed` until its snapshot requirement is assessed. A
+agentic source stays `unassessed` until its snapshot requirement is assessed.
+That assessment must be measured, not inferred: `daytona_snapshot_count` holds
+the distinct snapshot identities counted over the pinned task payloads with the
+shellbox identity rule (`daytona_identity.py`, fidelity-tested against
+`shellbox.image.image_source_key`), `daytona_count_basis` names the rule and
+payload source, and an agentic verdict without both collapses back to
+`unassessed`. A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed

@@ -6,7 +6,13 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from finestore.rl.curation import DaytonaSafety, IndependentQC, PipelineReference, SourceDeclaration
+from finestore.rl.curation import (
+    DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    DaytonaSafety,
+    IndependentQC,
+    PipelineReference,
+    SourceDeclaration,
+)
 from marin.execution.lazy import ArtifactStep
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -82,6 +88,15 @@ class SourceInfo:
     ``DAYTONA_SAFE_SNAPSHOT_LIMIT`` before declaring it safe or unsafe.
     """
 
+    daytona_snapshot_count: int | None = None
+    """Measured distinct snapshot identities over the pinned task payloads."""
+
+    daytona_count_basis: str | None = None
+    """Identity rule and payload source behind ``daytona_snapshot_count``."""
+
+    daytona_snapshot_threshold: int | None = None
+    """Snapshot budget in force when ``daytona_snapshot_count`` was measured."""
+
 
 @dataclass(frozen=True)
 class RlDataSource[ConfigT: CatalogConfig]:
@@ -128,6 +143,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 files=list(self.files),
             )
         tags = info.tags
+        measured = info.daytona_snapshot_count is not None and info.daytona_count_basis is not None
+        safety = info.daytona_safety
+        if not measured and safety is not DaytonaSafety.UNASSESSED:
+            safety = DaytonaSafety.UNASSESSED
         return SourceDeclaration(
             id=info.id,
             name=self.name,
@@ -165,7 +184,12 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,
-            daytona_safety=DaytonaSafety.SAFE if "agentic" not in tags else info.daytona_safety,
+            daytona_safety=DaytonaSafety.SAFE if "agentic" not in tags else safety,
+            daytona_snapshot_count=info.daytona_snapshot_count,
+            daytona_count_basis=info.daytona_count_basis,
+            daytona_snapshot_threshold=(
+                DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
+            ),
         )
 
 
