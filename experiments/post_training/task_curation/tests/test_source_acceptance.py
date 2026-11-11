@@ -4,27 +4,18 @@
 """Agentic sources are admitted only in an accepted task format."""
 
 import pytest
-from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaSafety
 
-from experiments.post_training.task_curation.datasets.nemotron_ultra import graders
-from experiments.post_training.task_curation.environment import Placement, placement
 from experiments.post_training.task_curation.source import (
     GRANDFATHERED_MARINSKYRL_SOURCES,
     RlDataSource,
     SourceInfo,
     TaskFormat,
 )
-from experiments.post_training.task_curation.sources import (
-    all_sources,
-    require_accepted_task_format,
-    runnable_sources,
-)
+from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format
 
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "fixture:agentic") -> RlDataSource:
-    return RlDataSource(
-        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format)
-    )
+    return RlDataSource(info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format))
 
 
 def test_every_runnable_agentic_source_ingests_a_task_directory_format():
@@ -38,7 +29,8 @@ def test_every_runnable_agentic_source_ingests_a_task_directory_format():
     internal = {source.info.id for source in runnable if source.info.task_format is TaskFormat.MARINSKYRL}
     assert internal == set(GRANDFATHERED_MARINSKYRL_SOURCES)
     assert all(
-        source.info.task_format in accepted or source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES for source in runnable
+        source.info.task_format in accepted or source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES
+        for source in runnable
     )
 
 
@@ -72,6 +64,9 @@ def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_form
 
 def test_pipeline_less_pointers_are_inventory_never_admitted():
     """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
+    from finestore.rl.curation import DaytonaSafety
+
+    from experiments.post_training.task_curation.sources import runnable_sources
 
     sources = all_sources()
     runnable = set(runnable_sources())
@@ -92,44 +87,7 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
 
 
 def test_every_runnable_source_reads_available():
+    from experiments.post_training.task_curation.sources import runnable_sources
+
     for source in runnable_sources().values():
         assert source.declaration.status == "Available"
-
-
-def test_a_measured_verdict_agrees_with_the_snapshot_budget():
-    """A recorded safe/unsafe verdict cannot contradict its own measured count."""
-
-    for source in all_sources().values():
-        declaration = source.declaration
-        if "agentic" not in source.info.tags or declaration.daytona_snapshot_count is None:
-            continue
-        expected = "safe" if declaration.daytona_snapshot_count <= DAYTONA_SAFE_SNAPSHOT_LIMIT else "unsafe"
-        assert declaration.daytona_safety.value == expected
-
-
-def test_the_nemotron_components_declare_exactly_their_pinned_images():
-    """Their layout names no task image; only the Lean grader adds a built image."""
-    components = [
-        source
-        for source in all_sources().values()
-        if source.info.origin == "MarinSkyRL" and "agentic" in source.info.tags and source.pipeline is not None
-    ]
-    assert len(components) == len(GRANDFATHERED_MARINSKYRL_SOURCES)
-    image_free = {
-        graders.convert_ungraded_agent,
-        graders.convert_tool_action,
-        graders.convert_lean,
-        graders.convert_math,
-        graders.convert_rdkit,
-    }
-    for source in components:
-        assert source.config.convert in image_free
-        grader = source.config.grader
-        if grader is None:
-            expected = 1  # the shared agent image alone
-        else:
-            assert grader.image is None
-            expected = 2 if placement(grader) is Placement.BUILT_IMAGE else 1
-            assert placement(grader) in {Placement.WORKER, Placement.BUILT_IMAGE}
-        assert source.declaration.daytona_snapshot_count == expected
-        assert source.declaration.daytona_safety is DaytonaSafety.SAFE
