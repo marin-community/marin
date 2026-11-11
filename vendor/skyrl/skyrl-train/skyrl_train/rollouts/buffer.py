@@ -146,6 +146,7 @@ class RolloutVerdict:
     selection: GroupSelectionResult | None
     rewards: GroupRewards | None
     work: GeneratedWork
+    masked_reasons: tuple[tuple[str, int], ...] = ()
 
     @property
     def trainable(self) -> bool:
@@ -168,9 +169,15 @@ class RolloutContentPolicy:
             )
         batch = group.trajectory_batch
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        exceptions = batch.get("exception_types") or []
+        masked = collections.Counter(
+            str(exceptions[index]) if index < len(exceptions) and exceptions[index] else "no_loss_tokens"
+            for index, mask in enumerate(batch["loss_masks"]) if not any(mask)
+        )
+        masked_reasons = tuple(sorted(masked.items()))
         if not decision.accepted:
-            return RolloutVerdict(group.uid, decision.rejections, None, None, work)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), GroupRewards.from_batch(batch), work)
+            return RolloutVerdict(group.uid, decision.rejections, None, None, work, masked_reasons)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), GroupRewards.from_batch(batch), work, masked_reasons)
 
 
 class RolloutWriter(Protocol):
@@ -220,6 +227,7 @@ class GroupDisposition:
     disposition: str
     tokens: int
     dwell_seconds: float | None
+    masked_reasons: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -626,7 +634,8 @@ class RolloutBuffer:
     def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
         dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
         self._dispositions.append(
-            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
+            GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell,
+                             rollout.verdict.masked_reasons)
         )
 
     def _batch_complete(self) -> bool:

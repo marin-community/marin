@@ -52,6 +52,16 @@ from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
+_MASKED_DISPOSITION_LOG_INTERVAL = 60.0
+
+
+async def _log_masked_dispositions(
+    step: int, required: int, groups: list[AdmittedRollout], counts: collections.Counter[str]
+) -> None:
+    while True:
+        await asyncio.sleep(_MASKED_DISPOSITION_LOG_INTERVAL)
+        logger.info("Masked rollout dispositions: policy_step={} admitted={}/{} masked_trajectories={} reasons={}",
+                    step, len(groups), required, sum(counts.values()), dict(sorted(counts.items())))
 
 
 @dataclass(frozen=True)
@@ -322,38 +332,51 @@ class TrainingContext:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
-        deadline = loop.time() + stall_timeout
-        while True:
-            timeout = max(deadline - loop.time(), 0.0)
-            admission = await self._until_failure(self._buffer.admit.remote(timeout))
-            await self._release(admission)
-            for policy_step, work in admission.generated:
-                record_generated_work(work, policy_step)
-            if self._rollout_spans:
+        masked_counts: collections.Counter[str] = collections.Counter()
+        reporter = asyncio.create_task(_log_masked_dispositions(
+            self._policy_step, self.config.batch_size, groups, masked_counts
+        ))
+        try:
+            deadline = loop.time() + stall_timeout
+            while True:
+                timeout = max(deadline - loop.time(), 0.0)
+                admission = await self._until_failure(self._buffer.admit.remote(timeout))
+                await self._release(admission)
+                for policy_step, work in admission.generated:
+                    record_generated_work(work, policy_step)
                 for outcome in admission.dispositions:
-                    record_group_disposition(
-                        disposition=outcome.disposition,
-                        tokens=outcome.tokens,
-                        step=self._policy_step,
-                        dwell_seconds=outcome.dwell_seconds,
+                    masked_counts.update(dict(outcome.masked_reasons))
+                if self._rollout_spans:
+                    for outcome in admission.dispositions:
+                        record_group_disposition(
+                            disposition=outcome.disposition,
+                            tokens=outcome.tokens,
+                            step=self._policy_step,
+                            dwell_seconds=outcome.dwell_seconds,
+                        )
+                record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
+                if admission.admitted:
+                    admitted = tuple(admission.admitted)
+                    groups.extend(admitted)
+                    if on_admitted is not None:
+                        await on_admitted(admitted)
+                    deadline = loop.time() + stall_timeout
+                if admission.selection is not None:
+                    if len(groups) != self.config.batch_size:
+                        raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
+                    if any(group.index != index for index, group in enumerate(groups)):
+                        raise ValueError("selected batch group indices are not ordered from zero")
+                    return RolloutBatchMetadata(
+                        self._policy_step,
+                        tuple(groups),
+                        {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
                     )
-            record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
-            if admission.admitted:
-                admitted = tuple(admission.admitted)
-                groups.extend(admitted)
-                if on_admitted is not None:
-                    await on_admitted(admitted)
-                deadline = loop.time() + stall_timeout
-            if admission.selection is not None:
-                if len(groups) != self.config.batch_size:
-                    raise ValueError(f"selected batch has {len(groups)} groups, expected {self.config.batch_size}")
-                if any(group.index != index for index, group in enumerate(groups)):
-                    raise ValueError("selected batch group indices are not ordered from zero")
-                return RolloutBatchMetadata(
-                    self._policy_step,
-                    tuple(groups),
-                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
-                )
+        finally:
+            reporter.cancel()
+            results = await asyncio.gather(reporter, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("Masked-disposition logging stopped: {}", result)
 
     async def state_dict(self) -> TrainingContextState:
         """Capture every dispatched group that no trained batch has consumed.
