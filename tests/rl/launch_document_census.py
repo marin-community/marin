@@ -3,13 +3,11 @@
 
 import inspect
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
 from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any
 
-import yaml
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, materialized_config
@@ -27,26 +25,6 @@ from experiments.post_training.task_sessions import validation
 VERSION = "2026.10.24"
 
 
-@dataclass(frozen=True)
-class LaunchDocument:
-    case: str
-    document: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class BuildFailure:
-    case: str
-    error_type: str
-    message: str
-
-
-@dataclass(frozen=True)
-class LaunchCensus:
-    cases: tuple[str, ...]
-    documents: tuple[LaunchDocument, ...]
-    failures: tuple[BuildFailure, ...]
-
-
 def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
 
@@ -59,14 +37,14 @@ def _iceball_step() -> ArtifactStep[SkyRLRun]:
     return iceball_micro.build_workflow(version=VERSION).rl
 
 
-def _probe_step(artifact_root: Path, settings: mismatch.ProbeSettings) -> ArtifactStep[SkyRLRun]:
+def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
     # The build-options wrapper displays/runs a graph. Its wrapped Click build body returns that graph.
     builder = inspect.unwrap(mismatch.main.callback)
     return builder(
         model_uri=str(artifact_root / "iceball-sft"),
         data_uri=str(artifact_root / "gsm8k"),
         input_version=VERSION,
-        **asdict(settings),
+        **settings,
     )
 
 
@@ -140,7 +118,10 @@ def launch_builders(
     }
     for options in _one_factor(probe_base, probe_axes):
         cache, replay, updates, resume, reuse = (options[name] for name in probe_base)
-        settings = mismatch.ProbeSettings(
+        key = f"mismatch/cache={cache}/replay={','.join(replay)}/updates={updates}/resume={resume}/reuse={reuse}"
+        builders[key] = partial(
+            _probe_step,
+            artifact_root,
             seed=17,
             prompt_count=2,
             samples_per_prompt=2,
@@ -151,12 +132,10 @@ def launch_builders(
             resume_path=str(artifact_root / "checkpoints") if resume else None,
             extra_trainer_modes=replay,
         )
-        key = f"mismatch/cache={cache}/replay={','.join(replay)}/updates={updates}/resume={resume}/reuse={reuse}"
-        builders[key] = partial(_probe_step, artifact_root, settings)
     return builders
 
 
-def _write_model_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> None:
+def _seed_dependency_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> None:
     for dependency in step.deps:
         if issubclass(dependency.artifact_type, SkyRLRun):
             write_artifact(
@@ -172,29 +151,28 @@ def _write_model_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> 
                 },
                 dependency.path(str(artifact_root)),
             )
-        if not issubclass(dependency.artifact_type, LevanterCheckpoint):
-            continue
-        location = StoragePath(dependency.path(str(artifact_root)))
-        if location.is_remote:
-            continue
-        checkpoint = Path(str(location)) / "hf"
-        checkpoint.mkdir(parents=True, exist_ok=True)
-        (checkpoint / "config.json").write_text("{}")
-        (checkpoint / "tokenizer_config.json").write_text("{}")
+        elif issubclass(dependency.artifact_type, LevanterCheckpoint):
+            location = StoragePath(dependency.path(str(artifact_root)))
+            if location.is_remote:
+                continue
+            checkpoint = Path(str(location)) / "hf"
+            checkpoint.mkdir(parents=True, exist_ok=True)
+            (checkpoint / "config.json").write_text("{}")
+            (checkpoint / "tokenizer_config.json").write_text("{}")
 
 
-def render_launch_census(artifact_root: Path) -> LaunchCensus:
+def render_launch_census(artifact_root: Path) -> tuple[dict[str, str], dict[str, str]]:
     """Render runtime documents using local metadata without running steps."""
     builders = launch_builders(artifact_root)
-    documents = []
-    failures = []
+    documents = {}
+    failures = {}
     with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
         for name, build in builders.items():
             try:
                 step = build()
-                _write_model_metadata(step, artifact_root)
+                _seed_dependency_metadata(step, artifact_root)
                 config = materialized_config(step, str(artifact_root))
-                documents.append(LaunchDocument(name, yaml.safe_load(config.launch_config_yaml)))
+                documents[name] = config.launch_config_yaml
             except Exception as error:
-                failures.append(BuildFailure(name, type(error).__name__, str(error)))
-    return LaunchCensus(tuple(builders), tuple(documents), tuple(failures))
+                failures[name] = f"{type(error).__name__}: {error}"
+    return documents, failures

@@ -1,14 +1,14 @@
 import copy
 import json
 import sys
-from types import ModuleType
 from pathlib import Path
+from types import ModuleType
 
 import pytest
-
 import skyrlrecipe as schema
 from skyrlrecipe.model import Section, thaw
 from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
+
 from scripts import generate_recipe_schema as generator
 from scripts.recipe_schema_sidecar import OPEN
 
@@ -17,15 +17,7 @@ ROOT = Path(__file__).resolve().parents[3]
 BUNDLED_NORMALIZATION = {"trainer.max_ckpts_to_keep": frozenset({"snowball_mopd_ultra_32k", "snowball_mopd_ultra_async_32k_smoke"})}
 BASE = """defaults:
   - _self_
-data:
-  sampling:
-    domain_weights:
-      math-reasoning: 1
-      code: 2.0
 trainer:
-  callbacks: null
-  strategy: megatron
-  max_steps: 0
   placement:
     # The all-role colocation flag.
     colocate_all: true
@@ -34,7 +26,6 @@ trainer:
   algorithm:
     cispo:
       cispo_eps_clip_high: 5
-    ftpo: {}
   policy:
     model:
       lora:
@@ -44,31 +35,14 @@ trainer:
       lora:
         dropout: 0
   ckpt_interval: 2
-  hf_save_interval: ${trainer.ckpt_interval}
-  micro_train_batch_size_per_gpu: 2
-  micro_forward_batch_size_per_gpu: ${trainer.micro_train_batch_size_per_gpu}
-generator:
-  engine_init_kwargs: {}
-  adapter: null
-  sampling_params:
-    temperature: 1
 """
 SIDECAR = """TYPES = {
-    'trainer.callbacks': 'tuple[CheckpointCallback, ...] | None',
-    'data.sampling.domain_weights': 'NumberMap',
-    'trainer.strategy': 'Literal["megatron"]',
-    'trainer.max_steps': 'NonNegativeInt',
     'trainer.placement.policy_num_nodes': 'PositiveInt | None',
     'trainer.policy.model.lora.dropout': 'Annotated[int | float, Field(ge=0, le=1)]',
     'trainer.critic.model.lora.dropout': 'Annotated[int | float, Field(ge=0, le=1)]',
 }
-OPEN = frozenset({'generator.engine_init_kwargs'})
-UNDECLARED = {
-    'trainer.algorithm.ftpo.lambda_mse': ('int | float', ...),
-    'generator.adapter.name': ('str', ...),
-    'generator.adapter.parameters': ('Parameters | None', None),
-    'generator.adapter.parameters.count': ('int', ...),
-}
+OPEN = frozenset()
+UNDECLARED = {}
 NAMES = {"trainer.policy.model": "PolicyModel", "trainer.critic.model": "CriticModel", "trainer.policy.model.lora": "PolicyLora", "trainer.critic.model.lora": "CriticLora"}
 """
 

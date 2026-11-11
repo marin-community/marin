@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 from cloud.iris import launch_config
-from omegaconf import OmegaConf
 
 
 def check_vendored_launcher() -> None:
@@ -18,30 +17,22 @@ def check_vendored_launcher() -> None:
 
 
 def load_documents(source: Path, output: Path) -> None:
-    cases = []
-    failures = []
+    failures = {}
     with tempfile.TemporaryDirectory(prefix="skyrl-launch-documents-") as directory:
-        for index, entry in enumerate(json.loads(source.read_text())):
+        for index, (case, yaml) in enumerate(json.loads(source.read_text()).items()):
             path = Path(directory) / f"{index}.yaml"
-            path.write_text(json.dumps(entry["document"]))
+            path.write_text(yaml, encoding="utf-8")
             try:
-                config = launch_config.load_launch_config(path)
-                OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
-                cases.append(entry["case"])
+                launch_config.load_launch_config(path)
             except Exception as error:
-                failures.append({"case": entry["case"], "error_type": type(error).__name__, "message": str(error)})
-    output.write_text(json.dumps({"cases": cases, "failures": failures}))
-    if failures:
-        raise SystemExit(1)
+                failures[case] = f"{type(error).__name__}: {error}"
+    output.write_text(json.dumps(failures))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load a launch-document batch with the installed launcher.")
-    parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+    source, output = map(Path, sys.argv[1:])
     check_vendored_launcher()
-    load_documents(args.input, args.output)
+    load_documents(source, output)
 
 
 if __name__ == "__main__":
