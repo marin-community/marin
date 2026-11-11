@@ -97,7 +97,7 @@ from experiments.belay.submit import (
     tracks_of_comment,
     with_launched,
 )
-from experiments.belay.sync import is_belay_file
+from experiments.belay.sync import is_belay_file, run_total_steps
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -878,3 +878,10 @@ def test_iris_jobs_lists_belays_iris_user_whoever_runs_it(monkeypatch: pytest.Mo
     monkeypatch.setenv("IRIS_USER", CONFIG.iris_user)
     iris_jobs()
     assert prefixes == [f"/{CONFIG.iris_user}/belay-"]
+
+
+def test_run_total_steps_prefers_the_stop_step_over_the_schedule() -> None:
+    schedule = {"trainer": {"trainer": {"num_train_steps": 30389}}}
+    assert run_total_steps(schedule) == 30389
+    assert run_total_steps({**schedule, "stop_after_steps": 12000}) == 12000
+    assert run_total_steps({}) is None

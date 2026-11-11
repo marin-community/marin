@@ -139,7 +139,7 @@ LADDER_RUNGS = {
     Track.COMPETITIVE_D1280: "d1280",
 }
 """Each ladder rung's Track and the tag its experiment id carries (``X0037d768``), so each rung has its own spec
-and run names while the app, which reads a run's experiment up to its first ``-``, needs no change."""
+and run names. The app records a rung's run under its idea's registry id and keeps the tagged id as its experiment."""
 REGISTRY_ID = re.compile(r"X\d{4}")
 
 

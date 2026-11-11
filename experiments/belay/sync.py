@@ -74,6 +74,12 @@ def is_belay_file(relative_path: str) -> bool:
     return not relative_path.startswith(DATA_BELAY_RUN_PREFIX)
 
 
+def run_total_steps(config: dict) -> int | None:
+    """The step a run stops at, from its W&B config: stop_after_steps, else the trainer's num_train_steps."""
+    trainer = config.get("trainer", {}).get("trainer", {})
+    return config.get("stop_after_steps") or trainer.get("num_train_steps")
+
+
 class Watcher:
     """One pass (``tick``) reports Belay's Iris runs with their W&B progress, the registry's results when the registry
     branch moved, and storage use at most hourly. ``token`` is the local demo's service token; on Marina the caller's
@@ -94,6 +100,7 @@ class Watcher:
         loss = run.summary.get("eval/paloma/macro_loss")
         return {
             "step": run.summary.get("_step"),
+            "total_steps": run_total_steps(run.config),
             "loss": float(loss) if loss is not None else None,
             "wandb_url": run.url,
             "finished": run.state == "finished",
