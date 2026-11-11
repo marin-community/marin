@@ -189,12 +189,14 @@ for the parser and the label mapping, run with a fake judge, and candidate
 responses for extraction and judge-prompt rendering. Grade candidate responses
 with the real judge only in step 5.
 
-When a fixture or a later step shows a defect that a change to the grader can
-fix, build a replacement grader from the contracts. Steps 5 and 6 compare it
-with the grader on the same responses, so a recommendation to fix the grader
-comes with the measured difference in error rate. When the audit finds no
-such defect, it needs no replacement, and step 6 estimates the error rate of
-the grader alone.
+When a fixture or a later step shows a defect that a change to the grader's
+code can fix, build a replacement grader from the contracts. For an LLM
+judge, this means a defect in a deterministic stage; report a defect in the
+judge model or its template as a finding, and measure a changed judge setup
+in step 5. Steps 5 and 6 compare the replacement with the grader on the same
+responses, so a recommendation to fix the grader comes with the measured
+difference in error rate. When the audit finds no such defect, it needs no
+replacement, and step 6 estimates the error rate of the grader alone.
 
 ## 4. Compare with the reference and stress the grader
 
