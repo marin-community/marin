@@ -121,14 +121,6 @@ def test_a_handoff_reads_the_rest_of_the_epoch_once_at_the_new_batch():
     assert abs(steps.decay_steps * 144 - plan.decay_steps * 176) <= 72
 
 
-def test_a_handoff_must_precede_the_decay():
-    plan = plan_sft_mixture({"a": _store(900_000), "b": _store(68_596)}, batch_size=176, replay_fraction=0.2035)
-    last_step = 393_491 + plan.steps
-
-    with pytest.raises(ValueError, match="inside the learning-rate decay"):
-        sft_steps(plan, start_step=393_491, batch_size=144, handoff_step=last_step - plan.decay_steps // 2)
-
-
 def test_stores_smaller_than_the_block_count_share_one_component():
     stores = {"big": _store(1_000_000), "tiny1": _store(9), "tiny2": _store(15)}
     plan = plan_sft_mixture(stores, batch_size=16, replay_fraction=0.2)

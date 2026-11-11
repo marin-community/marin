@@ -96,6 +96,7 @@ SFT_POOLED_COMPONENT = "sft/pooled"
 REPLAY_COMPONENT_PREFIX = "replay/"
 # 10.05: constant learning rate, then linear decay to 0.1x over the final tenth, with no warmup.
 SFT_DECAY_FRACTION = 0.1
+SFT_MIN_DECAY_STEPS = 2
 SFT_MIN_LR_RATIO = 0.1
 SPECIAL_TOKEN_LR_MULTIPLIER = math.sqrt(32)
 # The highest routed capacity factor that fits at CP4 x EP16 with the default remat slop. At 1.6875 the
@@ -160,7 +161,7 @@ class SftMixturePlan:
 
     @property
     def decay_steps(self) -> int:
-        return max(2, round(self.steps * SFT_DECAY_FRACTION))
+        return max(SFT_MIN_DECAY_STEPS, round(self.steps * SFT_DECAY_FRACTION))
 
 
 def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_fraction: float) -> SftMixturePlan:
@@ -214,7 +215,7 @@ def sft_steps(plan: SftMixturePlan, *, start_step: int, batch_size: int, handoff
     if not 0 < first_sequence < plan.run_sequences:
         raise ValueError(f"handoff step {handoff_step} is outside the epoch that starts at step {start_step}")
     num_train_steps = handoff_step + (plan.run_sequences - first_sequence) // batch_size
-    decay_steps = max(2, round(plan.decay_steps * plan.batch_size / batch_size))
+    decay_steps = max(SFT_MIN_DECAY_STEPS, round(plan.decay_steps * plan.batch_size / batch_size))
     if num_train_steps - decay_steps < handoff_step:
         raise ValueError(f"handoff step {handoff_step} falls inside the learning-rate decay")
     return SftSteps(handoff_step, first_sequence, num_train_steps, decay_steps)
@@ -310,7 +311,7 @@ def sft_data_config(
     if collisions := components.keys() & validation.keys():
         raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
     components.update(validation)
-    stages = [(step, {**weights, **{name: 0.0 for name in validation}}) for step, weights in stages]
+    stages = [(start, {**weights, **{name: 0.0 for name in validation}}) for start, weights in stages]
     return LmDataConfig(
         tokenizer=SFT_TOKENIZER,
         cache_dir=None,

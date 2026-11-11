@@ -841,10 +841,11 @@ class LmDataConfig:
     slots), and the current launch restores the checkpoint at the last ``end_step``. Restoring an earlier step
     re-reads data."""
     mixture_start_step: int | None = None
-    """The training step that reads the mixture's first sequence, for a run that continues on a new data store.
-    Each source then starts at the beginning of its shuffled order at this step, whatever the batch size, and a
-    restore at a later step continues in place. A restore before this step raises. The steps of ``train_weights``
-    stages count from this step. Requires the restart stop strategy, and excludes ``prior_context_phases``."""
+    """The training step that reads mixture sequence ``mixture_start_sequence``, the first by default, for a run that
+    continues on a new data store. By default each source starts at the beginning of its shuffled order at this step,
+    whatever the batch size. A restore at a later step continues in place, and a restore before this step raises.
+    ``MixtureStageUnit.STEP`` stage starts count from this step. Requires the restart stop strategy, and excludes
+    ``prior_context_phases``."""
     mixture_start_sequence: int = 0
     """The mixture sequence that ``mixture_start_step`` reads. A run that continues another run's mixture at a
     different batch size sets it to the sequences the other run read before this step, so it reads the rest of the
