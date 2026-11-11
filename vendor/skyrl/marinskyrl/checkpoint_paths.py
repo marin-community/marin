@@ -30,12 +30,12 @@ def selected_export_step(checkpoint_root: str, selection: str, latest_step: int)
     return int(best["step"])
 
 
-def trailing_validation_ema(history: list[dict], step: int, window: int) -> float | None:
-    """Adjusted EMA over a complete consecutive optimizer-step window; alpha=2/(window+1)."""
-    if window < 1:
+def trailing_validation_ema(history: list[dict], step: int, window: int, *, interval: int = 1) -> float | None:
+    """Adjusted EMA over complete scheduled validation observations; alpha=2/(window+1)."""
+    if window < 1 or interval < 1:
         raise ValueError("Validation EMA window must be positive")
     by_step = {int(row["step"]): float(row["reward"]) for row in history}
-    steps = list(range(step - window + 1, step + 1))
+    steps = list(range(step - (window - 1) * interval, step + 1, interval))
     if steps[0] < 1 or any(s not in by_step for s in steps):
         return None
     rewards = [by_step[s] for s in steps]

@@ -37,7 +37,7 @@ config:
     update_epochs_per_batch: 1
     micro_forward_batch_size_per_gpu: 1
     eval_batch_size: 256
-    eval_interval: 1
+    eval_interval: 2
     resume_mode: none
     max_ckpts_to_keep: -1
     seed: 20261020
@@ -132,7 +132,7 @@ config:
       save_steps: 1
       save_on_train_end: true
     - type: evaluation
-      eval_steps: 1
+      eval_steps: 2
       eval_before_train: false
       eval_on_train_end: true
     - type: best_checkpoint
@@ -140,14 +140,10 @@ config:
       expected_tasks: 120
       minimum_scored_tasks: 120
       ema_window: 5
+      evaluation_interval: 2
     - type: hf_model_save
       save_steps: -1
       save_on_train_end: true
-    - type: wall_time_budget
-      seconds: 28800
-      reserve: 1800
-      minimum_steps: 5
-      groups_per_step: 64
   generator:
     backend: vllm
     model_dtype: bfloat16
@@ -159,7 +155,6 @@ config:
       clear_cache: true
     weight_sync_transport: expert_block
     expert_block_sync:
-      timeout_seconds: 600
       verify: false
     gpu_memory_utilization: 0.75
     max_num_seqs: 64
@@ -223,7 +218,6 @@ config:
       max_bytes_per_step: null
       max_bytes_per_run: null
       required: true
-    engine_init_timeout_seconds: 600
   data:
     kind: parquet
     shuffle: true
@@ -289,7 +283,6 @@ execution:
   target_cluster: cw-rno2a
   parent_cluster_config: lib/iris/config/marin.yaml
   wandb_entity: marin-community
-  job_timeout_seconds: 32400
   required_env_vars:
   - DAYTONA_RL_API_KEY
   - DAYTONA_EVAL_API_KEY

@@ -23,6 +23,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.grug.checkpointing import load_grug_checkpoint
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- register optimizer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.runtime_timing import timed
 from experiments.post_training.long_loop.serving import SNOWBALL_CONTEXT_LIMIT
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
@@ -54,6 +55,10 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     config = json.loads(json.dumps(recipe))
     config["resources"]["target_cluster"] = None  # Already running inside the RNO2A coordinator.
     trainer = config["trainer"]["trainer"]
+    watchdog = trainer.setdefault("progress_watchdog", {})
+    for field in ("process_timeout", "startup_timeout", "step_timeout"):
+        watchdog.setdefault(field, f"{DEFAULT_TASK_TIMEOUT_SECONDS}s")
+    trainer["checkpointer"].setdefault("async_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
     trainer["id"] = run_id
     config["native_timing_root"] = prefix_join(output, "timing/native-sft")
     trainer["initialize_from"] = prefix_join(initializer, "native/step-0")

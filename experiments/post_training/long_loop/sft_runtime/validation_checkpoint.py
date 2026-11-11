@@ -20,8 +20,10 @@ from levanter.eval import TaggedEvaluator, eval_model
 from levanter.tensorstore_serialization import TensorStoreWriteConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+
 SELECTION_KIND = "snowball_sft_inline_loss_v1"
-CHECKPOINT_TIMEOUT = 30 * 60
+CHECKPOINT_TIMEOUT = DEFAULT_TASK_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)

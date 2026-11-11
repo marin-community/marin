@@ -25,9 +25,9 @@ def trace_retention(output: str, run_id: str, *, fraction: float, phase: str) ->
 
 
 def validation_selection(*, initial_model: str, task_count: int) -> dict:
-    """Require complete fixed-pool validation on every optimizer step for five-step EMA."""
+    """Select a complete five-observation EMA at the two-update validation cadence."""
     return {
-        "eval_interval": 1,
+        "eval_interval": 2,
         "eval_before_train": False,
         "hf_export_checkpoint": "best",
         "callbacks": [
@@ -37,6 +37,7 @@ def validation_selection(*, initial_model: str, task_count: int) -> dict:
                 "expected_tasks": task_count,
                 "minimum_scored_tasks": task_count,
                 "ema_window": 5,
+                "evaluation_interval": 2,
             }
         ],
     }

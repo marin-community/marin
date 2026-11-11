@@ -8,9 +8,13 @@ from pathlib import Path
 
 import pytest
 import yaml
+from marin.execution.lazy import StepContext
 from marin.experiment.cli import graph_handles
+from rigging.timing import Duration
 
+from experiments.post_training.long_loop import spec_pipeline
 from experiments.post_training.long_loop.__main__ import validate_graph
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.run_spec import allocation_peaks, resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
@@ -175,3 +179,44 @@ def test_rl_keeps_child_execution_profile_without_gpu_probe_jobs():
     resolved["execution"]["coordinator"]["container_profile"] = None
     with pytest.raises(ValueError, match="privileged coordinator"):
         build_spec_graph(resolved, "2026.11.10.4", through="rl")
+
+
+@pytest.mark.parametrize("override", [None, 345600])
+def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, override):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
+    resolved = resolve_spec(SPEC, smoke=False)
+    expected = DEFAULT_TASK_TIMEOUT_SECONDS if override is None else override
+    if override is not None:
+        resolved["execution"]["coordinator"].update(
+            job_timeout_seconds=override, coordinator_timeout_hours=override // 3600
+        )
+        resolved["rl"]["execution"]["job_timeout_seconds"] = override
+        resolved["evaluation"]["execution"]["job_timeout_seconds"] = override
+        resolved["execution"]["task_timeouts"] = {k: override for k in ("sft", "export", "eval_inputs", "archive")}
+    remote = spec_pipeline.remote
+    dispatched = {}
+
+    def collect(fn, **kwargs):
+        result = remote(fn, **kwargs)
+        dispatched[fn.__name__] = result.timeout
+        return result
+
+    monkeypatch.setattr(spec_pipeline, "remote", collect)
+    terminal = build_spec_graph(resolved, "2026.11.12", through="archive")
+    stages = graph_handles([terminal])
+    executions = [s.runtime_args["skyrl_execution"] for s in stages if "skyrl_execution" in s.runtime_args]
+    assert executions
+    assert all(e.job_timeout_seconds == expected for e in executions)
+    assert all(e.coordinator_timeout_hours * 3600 == expected for e in executions)
+    assert dispatched == {
+        k: Duration.from_seconds(expected) for k in ("export_sft", "prepare_micro", "archive_graph_run")
+    }
+    trained = next(s for s in stages if s.name.endswith("/sft"))
+    context = StepContext.for_run(str(tmp_path / "sft"), str(tmp_path), deps=trained.deps)
+    assert trained.build_config(context)["recipe"]["task_timeout_seconds"] == expected
+    assert not any(c["type"] == "wall_time_budget" for c in resolved["rl"]["config"]["trainer"]["callbacks"])
+    resolved["rl"]["wall_clock_budget"] = {"seconds": 43200, "drain_margin": 1800}
+    resolved["rl"]["execution"]["job_timeout_seconds"] = 32400
+    with pytest.raises(ValueError, match="exceed the explicit budget"):
+        build_spec_graph(resolved, "2026.11.13", through="rl")

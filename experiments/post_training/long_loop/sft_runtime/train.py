@@ -63,6 +63,7 @@ from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import prefix_join
+from rigging.timing import Duration
 
 from experiments.grug.checkpointing import (
     checkpoint_stores_master,
@@ -73,6 +74,7 @@ from experiments.grug.checkpointing import (
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.sft_runtime.model import (
     OFFLOAD_CARRY_REMAT_MODE,
     GrugModelConfig,
@@ -460,6 +462,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     tensorstore_cache_bytes: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
@@ -1618,6 +1621,7 @@ def run_grug(config: GrugRunConfig) -> None:
         max_retries_failure=config.max_retries_failure,
         max_retries_preemption=config.max_retries_preemption,
         max_task_failures=config.max_task_failures,
+        timeout=Duration.from_seconds(config.task_timeout_seconds),
     )
 
 

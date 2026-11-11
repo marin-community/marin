@@ -16,10 +16,12 @@ from marin.execution.remote import remote
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecution, SkyRLRolePlan
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import Duration
 
 from experiments.post_training.long_loop.adopted_sft import verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
@@ -27,6 +29,11 @@ from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
+    value = {
+        "job_timeout_seconds": DEFAULT_TASK_TIMEOUT_SECONDS,
+        "coordinator_timeout_hours": DEFAULT_TASK_TIMEOUT_SECONDS // 3600,
+        **value,
+    }
     gpu = value.get("coordinator_gpu")
     return IrisSkyRLExecution(
         **{
@@ -72,8 +79,9 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     resources = {
         key: ResourceConfig(**{**value, "device": draccus.decode(DeviceConfig, value["device"])})
         for key, value in execution.items()
-        if key != "coordinator"
+        if key not in {"coordinator", "task_timeouts"}
     }
+    timeouts = execution.get("task_timeouts", {})
     verified = timed(
         apply(
             f"{name}/inputs",
@@ -86,7 +94,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         )
     )
     sft_evidence = [verified]
-    recipe = resolved["sft"]
+    recipe = {**resolved["sft"], "task_timeout_seconds": timeouts.get("sft", DEFAULT_TASK_TIMEOUT_SECONDS)}
     sft_pin = resolved.get("adopted_sft")
     if sft_pin is not None:
         if through == "sft":
@@ -108,7 +116,6 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         base_manifest = resolved["initializer"]
         base = ArtifactStep.adopt(f"{name}/base", version, base_manifest["uri"], config=base_manifest)
         sft_evidence.append(base)
-        recipe = resolved["sft"]
         run_id = f"{name.replace('/', '-')}-sft-{version}"
         fresh_sft_config(output=f"/tmp/{name}/sft", initializer=base_manifest["uri"], recipe=recipe, run_id=run_id)
         trained = timed(
@@ -149,7 +156,12 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         exported = timed(
             apply(
                 f"{name}/sft-handoff",
-                remote(export_sft, resources=resources["export"], env_vars={"JAX_PLATFORMS": "cpu"}),
+                remote(
+                    export_sft,
+                    resources=resources["export"],
+                    env_vars={"JAX_PLATFORMS": "cpu"},
+                    timeout=Duration.from_seconds(timeouts.get("export", DEFAULT_TASK_TIMEOUT_SECONDS)),
+                ),
                 version=version,
                 output=OUT,
                 trained=trained,
@@ -191,6 +203,28 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         raise ValueError("Agentic and nonagentic source names overlap")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
     rl_execution = stage_execution(rl["execution"], coordinator)
+    budget = rl.get("wall_clock_budget")
+    callbacks = rl_config["trainer"].get("callbacks", [])
+    if any(callback["type"] == "wall_time_budget" for callback in callbacks):
+        raise ValueError("RL wall-time budgets belong in rl.wall_clock_budget, not trainer.callbacks")
+    if budget is not None:
+        required_lifetime = budget["seconds"] + budget["drain_margin"]
+        if coordinator.coordinator_timeout_hours * 3600 <= required_lifetime:
+            raise ValueError("Coordinator timeout must exceed the explicit RL budget plus drain margin")
+        if (
+            rl_execution.job_timeout_seconds
+            and rl_execution.job_timeout_seconds <= budget["seconds"] + budget["drain_margin"]
+        ):
+            raise ValueError("RL task timeout must exceed the explicit budget plus drain margin")
+        rl_config["trainer"]["callbacks"] = [
+            *callbacks,
+            {
+                "type": "wall_time_budget",
+                "seconds": budget["seconds"],
+                "drain_margin": budget["drain_margin"],
+                "groups_per_step": rl["role_plan"]["train_batch_size"],
+            },
+        ]
     if "local" in rl["config"]["environment"]["task_sessions"]:
         if (
             coordinator.container_profile != job_pb2.CONTAINER_PROFILE_PRIVILEGED
@@ -224,7 +258,11 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     eval_inputs = timed(
         apply(
             f"{name}/eval-inputs",
-            remote(prepare_micro, resources=resources["eval_inputs"]),
+            remote(
+                prepare_micro,
+                resources=resources["eval_inputs"],
+                timeout=Duration.from_seconds(timeouts.get("eval_inputs", DEFAULT_TASK_TIMEOUT_SECONDS)),
+            ),
             version=version,
             output=OUT,
             dataset=data["repo"],
@@ -280,7 +318,11 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     )
     archived = apply(
         f"{name}/archive",
-        remote(archive_graph_run, resources=resources["archive"]),
+        remote(
+            archive_graph_run,
+            resources=resources["archive"],
+            timeout=Duration.from_seconds(timeouts.get("archive", DEFAULT_TASK_TIMEOUT_SECONDS)),
+        ),
         version=version,
         output=OUT,
         settings=resolved["archive"],

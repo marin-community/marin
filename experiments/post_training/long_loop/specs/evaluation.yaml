@@ -178,7 +178,6 @@ execution:
   target_cluster: cw-rno2a
   parent_cluster_config: lib/iris/config/marin.yaml
   wandb_entity: null
-  job_timeout_seconds: 86400
   required_env_vars:
   - DAYTONA_EVAL_API_KEY
   - DAYTONA_TARGET

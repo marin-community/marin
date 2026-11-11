@@ -21,7 +21,9 @@ from marin.inference.iris import remote_inference
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.timing import Duration
 
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation, validate_selected_context
 from experiments.post_training.long_loop.timing import EventLog
 
@@ -64,6 +66,20 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
         priority=priority_band_value(launch["iris"]["priority"]),
         capability_origin=config.capability_origin,
         api_model=config.judge.location,
+    )
+    deadline = launch["iris"]["timeout"] or DEFAULT_TASK_TIMEOUT_SECONDS
+    inference = replace(
+        inference,
+        iris=replace(
+            inference.iris,
+            task_timeout=Duration.from_seconds(deadline),
+            endpoint_ready_timeout_seconds=deadline,
+            endpoint_health_timeout_seconds=deadline,
+        ),
+        engine=replace(inference.engine, startup_timeout_seconds=deadline),
+        broker=(
+            replace(inference.broker, broker_ready_timeout_seconds=deadline) if inference.broker is not None else None
+        ),
     )
     attempt = uuid4().hex
     destination = str(StoragePath(launch["artifacts"]["terminal_manifest_uri"]).parent)

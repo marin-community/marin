@@ -214,10 +214,7 @@ trainer:
         ttl_days: 30
     progress_watchdog:
       diagnostic_timeout: null
-      process_timeout: 30m
       startup_grace_period: 1s
-      startup_timeout: 30m
-      step_timeout: 15m
     quantization: null
     require_accelerator: true
     seed: 0

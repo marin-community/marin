@@ -22,6 +22,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.checkpointing import load_grug_checkpoint
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.sft_runtime.model import (
     GrugModelConfig,
     Transformer,
@@ -150,7 +151,7 @@ def convert(config: ImportConfig) -> None:
         # The SFT initializer reads the historical singleton shared-expert schema.
         legacy = eqx.tree_at(lambda m: m.stacked_blocks.stacked.shared, model, shared[0])
         state = {"params": legacy, "pending_qb_betas": jnp.zeros_like(model.stacked_blocks.stacked.mlp.router_bias)}
-        manager = GlobalAsyncCheckpointManager(timeout_secs=1800)
+        manager = GlobalAsyncCheckpointManager(timeout_secs=DEFAULT_TASK_TIMEOUT_SECONDS)
         save_checkpoint(state, 0, str(root / "step-0"), manager=manager, is_temporary=False)
         manager.wait_until_finished()
         template = jax.tree.map(lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype, sharding=a.sharding), state)

@@ -13,6 +13,8 @@ from typing import Any
 import draccus
 import yaml
 
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
+
 
 @dataclass(frozen=True)
 class FilePin:
@@ -107,6 +109,22 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    for stage in ("rl", "evaluation"):
+        config = result[stage]["config"]
+        generator = config["generator"]
+        generator.setdefault("engine_init_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+        generator.setdefault("expert_block_sync", {}).setdefault("timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+        generator.setdefault("weight_sync_pause_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+        retention = generator.get("trajectory_retention")
+        if retention is not None:
+            for field in ("publish_timeout_seconds", "shutdown_timeout_seconds"):
+                retention.setdefault(field, DEFAULT_TASK_TIMEOUT_SECONDS)
+        distributed = config["trainer"].setdefault("distributed", {})
+        for field in ("placement_group_timeout_seconds", "worker_collective_timeout_seconds"):
+            distributed.setdefault(field, DEFAULT_TASK_TIMEOUT_SECONDS)
+        config.setdefault("extra_env", {}).setdefault(
+            "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", str(DEFAULT_TASK_TIMEOUT_SECONDS)
+        )
     for name, document in {
         **result["datasets"],
         **{key: result[key] for key in ("rl", "evaluation", "archive", "initializer")},

@@ -207,52 +207,51 @@ class EvaluationStopConfig:
 
 @register_callback("wall_time_budget")
 class WallTimeBudgetCallback(TrainerCallback):
-    """Stop between complete steps with time reserved for drain, save and export."""
+    """Stop at a completed-step boundary after an explicit post-first-update budget."""
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, seconds: float, reserve: float, minimum_steps: int, groups_per_step: int):
-        if not 0 < reserve < seconds or minimum_steps < 1 or groups_per_step < 1:
+    def __init__(self, *, seconds: float, drain_margin: float, groups_per_step: int):
+        if seconds <= 0 or drain_margin < 0 or groups_per_step < 1:
             raise ValueError("Invalid training wall-time budget")
         self.seconds = seconds
-        self.reserve = reserve
-        self.minimum_steps = minimum_steps
+        self.drain_margin = drain_margin
         self.groups_per_step = groups_per_step
         self.started = None
         self.initial_step = None
 
     def on_train_begin(self, state, control, **kwargs):
-        self.started = time.monotonic()
         self.initial_step = state.global_step
         return control
 
     def on_log(self, state, control, *, logs, trainer, **kwargs):
-        if self.started is None or self.initial_step is None:
+        if self.initial_step is None:
             raise RuntimeError("Training budget clock was not started")
+        if trainer.first_optimizer_step_time is None:
+            return control
+        self.started = trainer.first_optimizer_step_time
         completed = state.global_step - self.initial_step
         if completed < 1:
             return control
         elapsed = time.monotonic() - self.started
         mean_step = elapsed / completed
-        remaining = self.seconds - self.reserve - elapsed
+        remaining = self.seconds - elapsed
         affordable = max(0, math.floor(remaining / mean_step))
         report = {
             "step": state.global_step,
             "completed_steps": completed,
             "elapsed_seconds": elapsed,
             "budget_seconds": self.seconds,
-            "reserve_seconds": self.reserve,
+            "drain_margin_seconds": self.drain_margin,
             "consumed_groups_per_hour": completed * self.groups_per_step * 3600 / elapsed,
             "additional_updates_at_observed_rate": affordable,
-            "semantics": "completed learner groups; includes validation and checkpoint work since training began",
+            "semantics": "wall clock since first optimizer completion; includes subsequent validation/checkpoint work",
         }
         io.write_bytes_atomic(
             join_resource_path(trainer.cfg.trainer.export_path, "training-budget.json"),
             json.dumps(report).encode(),
         )
-        if remaining < mean_step:
-            if completed < self.minimum_steps:
-                raise RuntimeError("RL budget cannot complete the minimum validation-selection window")
+        if remaining <= 0:
             control.should_training_stop = True
         return control
 
@@ -270,11 +269,13 @@ class BestCheckpointCallback(TrainerCallback):
         expected_tasks: int,
         minimum_scored_tasks: int,
         ema_window: int = 1,
+        evaluation_interval: int = 1,
         save_after_fraction: float = 0.0,
     ):
-        if ema_window < 1:
+        if ema_window < 1 or evaluation_interval < 1:
             raise ValueError("Validation EMA window must be positive")
         self.ema_window = ema_window
+        self.evaluation_interval = evaluation_interval
         validate_save_after_fraction(save_after_fraction)
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
@@ -283,6 +284,8 @@ class BestCheckpointCallback(TrainerCallback):
         self.save_after_fraction = save_after_fraction
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
+        if state.global_step % self.evaluation_interval:
+            return control
         root = trainer.cfg.trainer.ckpt_path
         best_path = join_resource_path(root, BEST_CHECKPOINT_FILENAME)
         if self.best_score is None and io.exists(best_path):
@@ -317,7 +320,8 @@ class BestCheckpointCallback(TrainerCallback):
                 "attempted": attempted, "scored": scored})
             io.makedirs(root, exist_ok=True)
             io.write_bytes_atomic(history_path, json.dumps(history).encode())
-            score = trailing_validation_ema(history, state.global_step, self.ema_window)
+            score = trailing_validation_ema(history, state.global_step, self.ema_window,
+                                            interval=self.evaluation_interval)
             if score is None:
                 return control
         if self.best_score is not None and score <= self.best_score:
@@ -341,6 +345,7 @@ class BestCheckpointCallback(TrainerCallback):
             "model_format": model_format,
             "raw_reward": raw_score,
             "ema_window": self.ema_window,
+            "evaluation_interval": self.evaluation_interval,
             "ema_alpha": 2 / (self.ema_window + 1),
             "selection": "Highest valid score; adjusted trailing-step EMA when window>1; earliest on ties",
         }

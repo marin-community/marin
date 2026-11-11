@@ -42,6 +42,7 @@ from experiments.post_training.long_loop.eval_runtime.profile import DATASET, RE
 from experiments.post_training.long_loop.eval_runtime.recipe import recipe, validate_environment_preflight
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
 from experiments.post_training.long_loop.eval_runtime.selection import selected_rollouts
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.rl_selection import validate_full_selection
 from experiments.post_training.long_loop.serving import check_context_limit, snowball_context_override
 from experiments.post_training.long_loop.sft import read_json
@@ -199,9 +200,9 @@ def evaluation_step(
             max_retries=0,
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=36,
+            coordinator_timeout_hours=DEFAULT_TASK_TIMEOUT_SECONDS // 3600,
             coordinator_name=f"long-loop-plumbing-{version}",
-            job_timeout_seconds=86400,
+            job_timeout_seconds=DEFAULT_TASK_TIMEOUT_SECONDS,
             required_env_vars=("DAYTONA_EVAL_API_KEY", "DAYTONA_TARGET", "TOGETHER_API_KEY", "MARIN_PREFIX"),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),

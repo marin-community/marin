@@ -151,3 +151,28 @@ editable; its parent is root-owned. Task identity, instructions, private tests,
 source revisions and row order are preserved and bound by per-row hashes.
 Only SWE rows receive this overlay. Bind the derived manifest in the next run
 spec; the running `.10.10` and the Micro210 task permissions remain unchanged.
+
+
+New submissions default to three-day task/coordinator deadlines, from
+`execution_policy.DEFAULT_TASK_TIMEOUT_SECONDS`. RL has no wall-time callback
+unless its pinned stage document explicitly supplies:
+
+```yaml
+wall_clock_budget:
+  seconds: 43200
+  drain_margin: 1800
+```
+
+That optional clock starts at the first optimizer completion. It stops at a
+completed-step boundary after the budget expires; it does not subtract startup,
+a drain reserve or a minimum number of steps from training. An in-flight step
+may finish before finalization. The launcher rejects a task/coordinator timeout
+that does not exceed budget plus drain margin. Overrides remain explicit in
+`rl.execution.job_timeout_seconds`, `evaluation.execution.job_timeout_seconds`,
+`execution.coordinator`, or `execution.task_timeouts` for SFT/export/eval-inputs/archive.
+
+Future RL validation runs every two optimizer steps. Checkpoint selection uses
+five complete validation observations at that cadence, with missing observations
+rejected; the same best checkpoint goes to Micro210, HF and archive.
+Historical `.11.2` uses its immutable eight-hour callback, nine-hour task deadline
+and every-step validation. These source defaults do not modify that job.

@@ -45,3 +45,9 @@ async def test_best_callback_persists_window_and_restarts_without_changing_tie(t
         await callback.on_evaluate_async(state, control, trainer=trainer, metrics={
             "eval/all/num_attempted": 2, "eval/all/num_scored": 2, "eval/all/avg_verifier_score": 0.7,
         })
+
+
+def test_five_observation_ema_at_two_step_cadence():
+    rows = [{"step": step, "reward": 0.5} for step in (2, 4, 6, 8, 10)]
+    assert trailing_validation_ema(rows, 10, 5, interval=2) == pytest.approx(0.5)
+    assert trailing_validation_ema(rows[1:], 10, 5, interval=2) is None

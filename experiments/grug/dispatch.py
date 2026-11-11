@@ -58,6 +58,7 @@ def dispatch_grug_training_run(
     priority: int = INHERIT_PRIORITY,
     extras: list[str] | None = None,
     termination_grace: Duration = Duration.from_seconds(60),
+    timeout: Duration | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -86,6 +87,7 @@ def dispatch_grug_training_run(
         processes_per_task=processes_per_task,
         priority=priority,
         termination_grace=termination_grace,
+        timeout=timeout,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)

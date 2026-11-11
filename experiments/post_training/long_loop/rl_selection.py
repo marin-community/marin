@@ -24,10 +24,11 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
     if len(rows) != len(history):
         raise ValueError("Duplicate validation steps")
     scores = {}
+    interval = best.get("evaluation_interval", 1)
     weights = [(2 / 3) ** age for age in reversed(range(5))]
     for step in sorted(rows):
-        window = [rows.get(index) for index in range(step - 4, step + 1)]
-        if step < 5 or any(row is None for row in window):
+        window = [rows.get(index) for index in range(step - 4 * interval, step + 1, interval)]
+        if step < 5 * interval or step % interval or any(row is None for row in window):
             continue
         if any(row["attempted"] != expected or row["scored"] != expected for row in window):
             raise ValueError("Validation cohort coverage changed")

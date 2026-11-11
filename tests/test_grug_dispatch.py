@@ -28,10 +28,12 @@ def test_dispatch_forwards_allocator_environment_and_typed_grace(monkeypatch):
         local_entrypoint=_noop,
         resources=ResourceConfig.with_cpu(),
         termination_grace=Duration.from_seconds(90),
+        timeout=Duration.from_seconds(259200),
     )
 
     assert submitted[0].environment.env_vars["LD_PRELOAD"] == "libjemalloc.so.2"
     assert submitted[0].environment.env_vars["MALLOC_CONF"] == "background_thread:true,narenas:2"
 
     assert submitted[0].termination_grace == Duration.from_seconds(90)
+    assert submitted[0].timeout == Duration.from_seconds(259200)
     assert "IRIS_PREEMPTION_GRACE_SECONDS" not in submitted[0].environment.env_vars

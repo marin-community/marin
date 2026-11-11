@@ -28,6 +28,7 @@ from marin.rl.skyrl import (
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive_selection import trace_retention, validation_selection
+from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -90,9 +91,9 @@ def smoke_rl_step(
             max_retries=0,
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=36,
+            coordinator_timeout_hours=DEFAULT_TASK_TIMEOUT_SECONDS // 3600,
             coordinator_name=f"long-loop-plumbing-{version}",
-            job_timeout_seconds=36 * 60 * 60,
+            job_timeout_seconds=DEFAULT_TASK_TIMEOUT_SECONDS,
             wandb_entity="marin-community",
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             required_env_vars=(
@@ -213,10 +214,9 @@ def full_recipe(*, initial_model: str, validation_tasks: int, source_routes: dic
     trainer.update(selection)
     trainer["callbacks"] = [
         {"type": "checkpoint", "save_steps": 1, "save_on_train_end": True},
-        {"type": "evaluation", "eval_steps": 1, "eval_before_train": False, "eval_on_train_end": True},
+        {"type": "evaluation", "eval_steps": 2, "eval_before_train": False, "eval_on_train_end": True},
         *selection["callbacks"],
         {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
-        {"type": "wall_time_budget", "seconds": 8 * 3600, "reserve": 1800, "minimum_steps": 5, "groups_per_step": 64},
     ]
     for role in ("policy", "ref"):
         trainer[role]["megatron_config"]["context_parallel_size"] = 4
