@@ -3,6 +3,7 @@ const number = new Intl.NumberFormat('en-US');
 const labels = {good: 'Good', some_issues: 'Some issues', bad: 'Bad', unknown: 'Unknown', unassessed: 'Not assessed'};
 const daytonaLabels = {safe: 'Safe', unsafe: 'Unsafe'};
 const useLabels = {train: 'Training', eval: 'Evaluation', unprocessed: 'Not processed'};
+const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['independent', 'Independent QC'], ['daytona', 'Daytona safe'], ['area', 'Top curriculum area']];
 const state = {sources: [], sort: 'examples', direction: -1, daytonaSnapshotLimit: null};
 
@@ -109,7 +110,7 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   const controls = row.curation?.verification;
   const fields = [
-    ['Catalog', row.origin], ['Status', row.status], ['Oracle validation', row.oracle_validation], ['Converted examples', row.coverage?.example_count],
+    ['Catalog', row.origin], ['Status', row.status], ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)], ['Converted examples', row.coverage?.example_count],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
     ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
     ['Daytona safe', daytonaLabels[row.daytona_safety]],
