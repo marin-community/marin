@@ -48,20 +48,21 @@ async def test_busy_provider_waits_past_eight_attempts_with_capped_backoff() -> 
     ] * 3
     backend = Backend((*failures, provider_completion()))
     time = Time()
-    waiting = WaitingBackend(backend, 3600, 1, 120, 2, clock=time.clock, sleep=time.sleep)
+    waiting = WaitingBackend(backend, 3600, 1, 120, 2, role="solver", clock=time.clock, sleep=time.sleep)
     result = await waiting.complete((), LLMPolicy())
     assert result.content == "answer" and len(backend.calls) == 13
     assert len(result.attempts) == 12
     assert max(time.waits) == 120 and time.waits[:4] == [1, 2, 4, 8]
 
 
-async def test_busy_provider_stops_at_window_not_attempt_count() -> None:
+async def test_busy_provider_stops_at_window_not_attempt_count(caplog: pytest.LogCaptureFixture) -> None:
     backend = Backend((unavailable(),) * 10)
     time = Time()
-    waiting = WaitingBackend(backend, 5, 1, 60, 2, clock=time.clock, sleep=time.sleep)
-    with pytest.raises(ModelUnavailable, match="5s"):
+    waiting = WaitingBackend(backend, 5, 1, 60, 2, role="solver", clock=time.clock, sleep=time.sleep)
+    with pytest.raises(ModelUnavailable, match=r"MODEL role=solver model=.* unavailable for 5s"):
         await waiting.complete((), LLMPolicy())
     assert time.now == 5 and time.waits == [1, 2, 2]
+    assert f"MODEL role=solver model={backend.model} unavailable; 4.0s left" in caplog.text
     assert len(backend.calls) == 3
 
 
@@ -70,7 +71,9 @@ async def test_provider_400_is_not_waited_or_retried() -> None:
     backend = Backend((rejection,))
     time = Time()
     with pytest.raises(ModelRequestRejected) as caught:
-        await WaitingBackend(backend, 3600, 1, 60, 2, clock=time.clock, sleep=time.sleep).complete((), LLMPolicy())
+        await WaitingBackend(backend, 3600, 1, 60, 2, role="solver", clock=time.clock, sleep=time.sleep).complete(
+            (), LLMPolicy()
+        )
     assert caught.value is rejection and not time.waits
 
 

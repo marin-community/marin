@@ -128,7 +128,7 @@ class GlmInference(InferenceClient):
             )
         except ModelUnavailable as error:
             raise Restart(
-                "GLM transport exhausted its retry or hold budget", retries=_retries(error.attempts)
+                f"{error}: transport exhausted its retry or hold budget", retries=_retries(error.attempts)
             ) from error
         except ContextExhausted as error:
             raise ContextExceeded(error.body) from error

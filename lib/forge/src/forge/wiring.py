@@ -411,6 +411,7 @@ async def runtime(
                 provider.backoff_initial,
                 provider.backoff_maximum,
                 provider.backoff_factor,
+                role=role,
             )
         decision_model = None
         if (decision_name := policy.setting("decision_model.model", str)) == CLEF_MODEL:

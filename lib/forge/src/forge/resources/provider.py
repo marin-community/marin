@@ -25,12 +25,13 @@ class WaitingBackend(CompletionBackend):
         maximum: float,
         factor: float,
         *,
+        role: str,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if unavailable_wait <= 0 or initial <= 0 or maximum <= 0 or factor < 1:
             raise ValueError("Provider availability window and backoff must be positive; factor must be at least 1")
-        self.client, self.unavailable_wait = client, unavailable_wait
+        self.client, self.unavailable_wait, self.role = client, unavailable_wait, role
         self.initial, self.maximum, self.factor = initial, maximum, factor
         self.clock, self.sleep = clock, sleep
 
@@ -58,11 +59,18 @@ class WaitingBackend(CompletionBackend):
                 attempts.extend(error.attempts)
                 remaining = deadline - self.clock()
                 if remaining <= 0:
-                    raise ModelUnavailable(f"GLM unavailable for {self.unavailable_wait}s", attempts) from error
+                    raise ModelUnavailable(
+                        f"{self._name()} unavailable for {self.unavailable_wait}s", attempts
+                    ) from error
                 wait = min(delay, remaining)
-                logging.warning("GLM unavailable; %.1fs left in availability window, retrying in %.1fs", remaining, wait)
+                logging.warning(
+                    "%s unavailable; %.1fs left in availability window, retrying in %.1fs", self._name(), remaining, wait
+                )
                 await self.sleep(wait)
                 delay = min(delay * self.factor, self.maximum)
             else:
                 return replace(result, attempts=(*attempts, *result.attempts), wall_time=self.clock() - started)
-        raise ModelUnavailable(f"GLM unavailable for {self.unavailable_wait}s", attempts)
+        raise ModelUnavailable(f"{self._name()} unavailable for {self.unavailable_wait}s", attempts)
+
+    def _name(self) -> str:
+        return f"MODEL role={self.role} model={self.model}"
