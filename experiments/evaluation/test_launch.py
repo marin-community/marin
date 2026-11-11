@@ -1,9 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Durable identities across command-line evaluation relaunches."""
+"""Command-line evaluation launch and relaunch behavior."""
 
+import json
+import os
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -14,10 +17,13 @@ from click.testing import CliRunner
 from marin.evaluation.evalchemy import runtime
 from marin.evaluation.hardware import Platform
 from marin.evaluation.records import RunStatus
-from marin.evaluation.runner import EvaluationBatch, _record
+from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
+from marin.inference.iris import RemoteInferenceStartupError
+from rigging.provenance import launch_provenance
 
 import experiments.evaluation.launch as launch_module
+import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
@@ -26,6 +32,9 @@ from experiments.evaluation.models import models
 
 @pytest.fixture
 def submitted_batches(monkeypatch):
+    monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_TARGET", "test-target")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -59,6 +68,81 @@ def _command(tmp_path: Path) -> list[str]:
         "repeatable-evals",
         "--no-wait",
     ]
+
+
+@pytest.fixture
+def harbor_task_workspace():
+    with tempfile.TemporaryDirectory(prefix=".harbor-launch-", dir=Path(__file__).parents[2]) as directory:
+        root = Path(directory)
+        task = root / "dataset" / "task"
+        (task / "environment").mkdir(parents=True)
+        (task / "tests").mkdir()
+        (task / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+        (task / "instruction.md").write_text("Complete the task.\n")
+        (task / "task.toml").write_text(
+            '[task]\nname = "test/launch"\n[environment]\n'
+            f'docker_image = "example.test/task@sha256:{"a" * 64}"\n'
+            'allow_internet = false\nworkdir = "/workspace"\n'
+        )
+        yield root
+
+
+def test_launch_preflights_prepared_task_with_hosted_judge(
+    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
+):
+    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
+    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    root = harbor_task_workspace
+    task_config = root / "dataset" / "task" / "task.toml"
+    task_config.write_text(
+        task_config.read_text() + '[environment.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+        'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\nTAU2_USER_MODEL = "${TAU2_USER_MODEL}"\n'
+        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
+        'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
+        'TAU2_NL_ASSERTIONS_MODEL = "${TAU2_NL_ASSERTIONS_MODEL}"\n'
+    )
+    policy = root / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "local", "kwargs": {"judge_access": "runtime"}},
+                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
+                "datasets": [{"path": "dataset"}],
+            }
+        )
+    )
+    command = [
+        "launch",
+        "--model",
+        "qwen3-8b",
+        "--harbor-config",
+        str(policy),
+        "--platform",
+        "gpu",
+        "--accelerator",
+        "H100x1",
+        "--federated_cluster",
+        "cw-rno2a",
+        "--records-prefix",
+        str(tmp_path),
+        "--no-wait",
+    ]
+    runner = CliRunner()
+    rejected = runner.invoke(cli, command)
+    assert rejected.exit_code != 0
+    assert submitted_batches == []
+
+    accepted = runner.invoke(cli, [*command, "--judge-model", "qwen3-0.6b", "--judge-accelerator", "H100x1"])
+
+    assert accepted.exit_code == 0, accepted.output
+    batch = submitted_batches[0]
+    config = batch.evaluations[0].executor.config
+    assert config.benchmark.n_benchmark == 1
+    assert config.verifier_env_keys == ()
+    assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
+    assert batch.judge.api_model == "qwen3-0.6b"
 
 
 @pytest.mark.parametrize("explicit_run_id", [True, False])
@@ -103,7 +187,6 @@ def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
     partial.parent.mkdir(parents=True)
     partial.write_text('{"response":"already generated"}')
     executed.clear()
-    monkeypatch.setattr(launch_module, "evalchemy_runtime_source_hash", lambda: "a" * 64)
 
     second = runner.invoke(cli, [*command, "--run-id", batch.group_id, "--instances", "8", "--max-concurrent", "8"])
     assert second.exit_code == 0, second.output
@@ -168,23 +251,6 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
     assert executed == []
 
 
-@pytest.fixture
-def runtime_checkout(tmp_path, monkeypatch):
-    root = tmp_path / "runtime"
-    for directory in runtime._RUNTIME_DIRECTORIES:
-        source = root / directory / "source.py"
-        source.parent.mkdir(parents=True)
-        source.write_text("value = 1\n")
-    for filename in runtime._RUNTIME_FILES:
-        source = root / filename
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("runtime input\n")
-    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    monkeypatch.setattr(runtime, "find_project_root", lambda _start: root)
-    return root
-
-
 def _pipeline_spec(tmp_path):
     return LaunchSpec(
         model=models()["qwen3-8b"],
@@ -203,8 +269,7 @@ def _pipeline_spec(tmp_path):
     )
 
 
-@pytest.mark.parametrize("dependency", ["lib/finestore/src/source.py", "lib/rigging/src/source.py"])
-def test_pipeline_dependency_update_reuses_completed_step_and_partial_archive(tmp_path, runtime_checkout, dependency):
+def test_pipeline_changed_launch_tree_creates_new_steps_and_preserves_partial_archive(tmp_path, monkeypatch):
     spec = _pipeline_spec(tmp_path)
     before = prepare_evaluation_batch(spec)
     executed = []
@@ -221,35 +286,116 @@ def test_pipeline_dependency_update_reuses_completed_step_and_partial_archive(tm
     partial.write_text('{"response":"already generated"}')
     executed.clear()
 
-    source = runtime_checkout / dependency
-    source.write_text(source.read_text() + "dependency update\n")
+    captured = launch_provenance()
+    monkeypatch.setattr(runtime, "launch_provenance", lambda: replace(captured, tree_hash="changed-tree"))
     after = prepare_evaluation_batch(spec)
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert after.group_id == before.group_id
     assert after.evaluations[0].identity.eval_runtime != before.evaluations[0].identity.eval_runtime
-    assert executed == [pending.identity.run_id]
-    assert after.evaluations[1].identity.output_dir == pending.identity.output_dir
+    assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
+    assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
+    assert after.evaluations[1].identity.output_dir != pending.identity.output_dir
     assert partial.read_text() == '{"response":"already generated"}'
 
 
-@pytest.mark.parametrize("filename", ["vendor/evalchemy/eval/source.py", "vendor/evalchemy/uv.lock"])
-def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_checkout, filename):
-    spec = _pipeline_spec(tmp_path)
-    before = prepare_evaluation_batch(spec)
-    executed = []
+@pytest.mark.parametrize("platform,accelerator", [("tpu", "v5litepod-4"), ("gpu", "GB200x1")])
+def test_policy_judge_rejects_incompatible_placement_before_submission(
+    tmp_path, submitted_batches, platform, accelerator
+):
+    config = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    command = [
+        *_command(tmp_path),
+        "--evals",
+        "financebench",
+        "--policy-finalization-config",
+        str(config),
+        "--platform",
+        platform,
+        "--accelerator",
+        accelerator,
+    ]
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code != 0
+    assert submitted_batches == []
 
-    def execute(evaluation, _output_path):
-        executed.append(evaluation.identity.run_id)
-        return {"finished": evaluation.identity.run_id}
 
-    StepRunner().run(build_evaluation_steps(before, execute))
-    executed.clear()
-    source = runtime_checkout / filename
-    source.write_text(source.read_text() + "evaluator update\n")
-    after = prepare_evaluation_batch(spec)
-    StepRunner().run(build_evaluation_steps(after, execute))
+@pytest.mark.parametrize(
+    "records_prefix",
+    ["s3://marin-rno2a/marin/evals", "s3://marin-us-east-02a/marin/evals/ablations/regrade-20261009"],
+)
+def test_policy_launch_rejects_records_prefix_outside_evaldash(tmp_path, submitted_batches, records_prefix):
+    command = _command(tmp_path)
+    command[command.index("--records-prefix") + 1] = records_prefix
+    command[command.index("--evals") + 1] = "financebench"
+    config = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    command.extend(["--policy-finalization-config", str(config)])
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code != 0
+    assert "not catalogued by EvalDash" in result.output
+    assert submitted_batches == []
 
-    assert after.group_id == before.group_id
-    assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
-    assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
+
+def test_policy_snapshot_uses_project_python_and_preserves_judge_configuration(tmp_path):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    system_python = bin_dir / "python3"
+    system_python.write_text("#!/bin/sh\necho 'system Python has no project dependencies' >&2\nexit 1\n")
+    system_python.chmod(0o755)
+    snapshots = tmp_path / "snapshots"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; CONFIG_SNAPSHOT_DIR="$2"; ' 'snapshot_launch_configs --policy-finalization-config "$3"',
+            "snapshot",
+            str(campaign / "common.sh"),
+            str(snapshots),
+            str(campaign / "finalization.yaml"),
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "UV_NO_SYNC": "1",
+            "MARIN_DIR": str(Path(__file__).resolve().parents[2]),
+        },
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    snapshot = snapshots / result.stdout.strip()
+    manifest = json.loads((snapshot / "launch.json").read_text())
+    assert {row["kind"] for row in manifest["files"]} == {
+        "policy-finalization-config",
+        "judge_model_config",
+    }
+
+
+def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path, submitted_batches, monkeypatch):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    command = _command(tmp_path)
+    command[command.index("--evals") + 1] = "financebench"
+    command.extend(["--policy-finalization-config", str(campaign / "finalization.yaml")])
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code == 0, result.output
+    executor = submitted_batches[-1].evaluations[0].executor
+
+    class FailedJob:
+        job_id = "/test/policy-judge"
+
+        def logs(self, *, max_lines):
+            return ("endpoint registration failed",)
+
+    @contextmanager
+    def failed_inference(_config):
+        raise RemoteInferenceStartupError("endpoint registration failed", (FailedJob(),))
+        yield
+
+    monkeypatch.setattr(policy_module, "precache_inference_model", lambda _config: None)
+    monkeypatch.setattr(policy_module, "remote_inference", failed_inference)
+    with pytest.raises(EvaluationError) as caught:
+        executor(None, str(tmp_path / "output"), {}, backend_state=lambda: None)
+    assert caught.value.status is RunStatus.INFRA_FAILED
+    assert caught.value.jobs == {"policy-judge": "/test/policy-judge"}
+    assert caught.value.log_tails == {"policy-judge": ("endpoint registration failed",)}

@@ -1,12 +1,12 @@
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-
 import harbor.hugging_face_dataset
+import pytest
 from harbor.job import Job
 from harbor.models.benchmark import BenchmarkMetadata, MetricKind, MetricMetadata
 from harbor.models.job.config import DatasetConfig, JobConfig
+from harbor.models.trial.config import AgentConfig
+from pydantic import ValidationError
 
 
 def _write_task(root: Path, name: str) -> None:
@@ -31,6 +31,7 @@ async def test_job_describes_dataset_before_and_after_task_cap(tmp_path: Path) -
         _write_task(dataset, name)
 
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="metadata-test",
         jobs_dir=tmp_path / "jobs",
         datasets=[DatasetConfig(path=dataset, task_names=["task-*"], n_tasks=1)],
@@ -84,6 +85,7 @@ async def test_job_resolves_hugging_face_task_dataset(
 
     monkeypatch.setattr(harbor.hugging_face_dataset, "snapshot_download", download)
     config = JobConfig(
+        agents=[AgentConfig(name="pi")],
         job_name="hf-metadata-test",
         jobs_dir=tmp_path / "jobs",
         datasets=[DatasetConfig(name="hf://example/tasks", ref="main", n_tasks=1)],

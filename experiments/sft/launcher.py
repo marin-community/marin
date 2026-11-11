@@ -68,7 +68,7 @@ import hashlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Protocol, runtime_checkable
 
@@ -223,8 +223,11 @@ def _levanter_train_config(
         # A converted checkpoint emits a tokenizer already padded to its model vocab. Native init
         # has no HF reference from which the generic padding helper could re-derive that vocab.
         pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
-        hf_save_steps=num_train_steps,  # one HF export at the end
+        # One HF export: the trainer's forced end-of-run hook pass. A period equal to the run
+        # length would also fire on the last step and export the same step twice.
+        hf_save_steps=num_train_steps + 1,
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )
@@ -537,6 +540,16 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     wandb_project: str = "marin-sft-launcher"
+    checkpointer: CheckpointerConfig = field(
+        default_factory=lambda: CheckpointerConfig(
+            save_interval=timedelta(minutes=30), keep=None, keep_last_temporary_checkpoints=1
+        )
+    )
+    """Rolling resume checkpoints every 30 minutes; only the final checkpoint is permanent.
+
+    Set ``keep=[{"every": N}]`` to retain intermediate permanent checkpoints explicitly.
+    Marin resolves permanent and temporary paths from the run's output directory at launch.
+    """
 
     def __post_init__(self) -> None:
         if (self.num_train_steps is None) == (self.num_train_epochs is None):
@@ -648,6 +661,12 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=False)
 
 
+def sft_run_id(spec: SFTSpec) -> str:
+    """Include the artifact name so a shared version does not merge tracker histories."""
+    identity = hashlib.sha256(f"{spec.name}@{spec.version}".encode()).hexdigest()[:12]
+    return f"{spec.name.split('/')[-1]}-{spec.version}-{identity}"
+
+
 def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
@@ -658,6 +677,7 @@ def _trainer(
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        id=sft_run_id(spec),
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
         steps_per_eval=500,
@@ -670,12 +690,7 @@ def _trainer(
             project=spec.wandb_project,
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
-        checkpointer=CheckpointerConfig(
-            base_path="checkpoints/",
-            save_interval=timedelta(minutes=30),
-            keep=[{"every": 5000}],
-            append_run_id_to_base_path=True,
-        ),
+        checkpointer=spec.checkpointer,
     )
 
 

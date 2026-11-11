@@ -22,7 +22,7 @@ from iris.client.workload import JobStatus
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
 from iris.cluster.controller.autoscaler.provisioning import STOCKOUT_MARKER
 from iris.cluster.types import JobName
-from iris.resources.state import JobState, is_job_finished
+from iris.resources.state import JobState, TaskState, is_job_finished
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff
 
@@ -117,10 +117,14 @@ def _row(job: JobStatus | None) -> str:
 
 
 def _child_started(child: JobStatus) -> bool:
-    """A child has left the queue once it reaches RUNNING or a terminal state other than UNSCHEDULABLE."""
-    return child.state is JobState.RUNNING or (
-        is_job_finished(child.state) and child.state is not JobState.UNSCHEDULABLE
-    )
+    """A child has left the queue once one of its tasks runs, or it finished other than UNSCHEDULABLE.
+
+    The job state alone is not enough: a Kubernetes gang reports a RUNNING job while
+    Kueue still holds every task in BUILDING, waiting for admission.
+    """
+    if child.task_state_counts.get(TaskState.RUNNING, 0) > 0:
+        return True
+    return is_job_finished(child.state) and child.state is not JobState.UNSCHEDULABLE
 
 
 def _pick_child(parent_job_id: str, jobs: list[JobStatus]) -> JobStatus | None:
@@ -210,13 +214,15 @@ def wait_for_child_job(
     child_wait_timeout: float,
     repo_root: Path,
     resource_exhaustion_policy: ResourceExhaustionPolicy,
+    child_wait_timeout_policy: ResourceExhaustionPolicy,
 ) -> WaitResult:
     """Wait for a parent job to terminate or shut it down after resource exhaustion.
 
-    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within
-    ``child_wait_timeout`` — this catches a parent stuck in the queue before it ever launches work.
-    Once a child has started, the child wait timeout is dropped — total runtime is bounded by the
-    caller's wall clock (e.g. GitHub ``timeout-minutes``).
+    If no child task reaches RUNNING within ``child_wait_timeout``, the escalate policy
+    raises ``TimeoutError`` — this catches a parent stuck in the queue before it ever launches work —
+    and the shutdown policy cancels the parent and reports the wait as resource exhaustion.
+    Once a child has started, its queue timeout is dropped. A later selected child gets a fresh
+    queue deadline. Total runtime remains bounded by the caller's wall clock.
     """
     prefix = _job_id_prefix(job_id)
     deadline = time.monotonic() + child_wait_timeout
@@ -226,6 +232,7 @@ def wait_for_child_job(
         jitter=0.0,
     )
     child_running = False
+    selected_child_id = None
     with open_iris_client(config_file=iris_config, workspace=repo_root, controller_url=controller_url) as client:
         while True:
             jobs = client.list_jobs(prefix=prefix)
@@ -238,20 +245,29 @@ def wait_for_child_job(
                 return result
 
             child = _pick_child(job_id, jobs)
+            if child is not None:
+                if selected_child_id is not None and child.job_id != selected_child_id:
+                    deadline = time.monotonic() + child_wait_timeout
+                    child_running = False
+                selected_child_id = child.job_id
             if not child_running and child is not None and _child_started(child):
                 child_running = True
                 click.echo(
-                    f"Child {child.job_id} reached {child.state.name}; dropping queue timeout.",
+                    f"Child {child.job_id} has a running task; dropping queue timeout.",
                     err=True,
                 )
 
             click.echo(f"parent={_row(parent)} child={_row(child)}", err=True)
 
             if not child_running and time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"No child reached RUNNING within {child_wait_timeout:.0f}s. "
+                reason = (
+                    f"No child task reached RUNNING within {child_wait_timeout:.0f}s. "
                     f"parent={_row(parent)} child={_row(child)}"
                 )
+                if child_wait_timeout_policy is ResourceExhaustionPolicy.SHUTDOWN:
+                    client.cancel_job(parent.job_id)
+                    return WaitResult(status=parent, resource_exhaustion_reason=reason)
+                raise TimeoutError(reason)
 
             time.sleep(backoff.next_interval())
 
@@ -704,7 +720,7 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     default=None,
     type=float,
     help=(
-        "Fail fast if no child reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
+        "Fail fast if no child task reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
         "once a child runs, total runtime is bounded by the caller's wall clock."
     ),
 )
@@ -713,6 +729,13 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     required=True,
     type=click.Choice([policy.value for policy in ResourceExhaustionPolicy]),
     help="Escalate resource exhaustion as a failure, or shut down the job and emit a warning.",
+)
+@click.option(
+    "--child-wait-timeout-policy",
+    default=ResourceExhaustionPolicy.ESCALATE.value,
+    show_default=True,
+    type=click.Choice([policy.value for policy in ResourceExhaustionPolicy]),
+    help="When --child-wait-timeout expires: fail, or shut down the job and report resource exhaustion.",
 )
 def wait(
     job_id: str,
@@ -723,6 +746,7 @@ def wait(
     github_output: bool,
     child_wait_timeout: float | None,
     resource_exhaustion_policy: str,
+    child_wait_timeout_policy: str,
 ) -> None:
     """Poll an Iris job and exit non-zero for failures that require escalation."""
     if child_wait_timeout is not None and timeout is not None:
@@ -741,6 +765,7 @@ def wait(
             child_wait_timeout=child_wait_timeout,
             repo_root=_REPO_ROOT,
             resource_exhaustion_policy=ResourceExhaustionPolicy(resource_exhaustion_policy),
+            child_wait_timeout_policy=ResourceExhaustionPolicy(child_wait_timeout_policy),
         )
     else:
         click.echo(f"Waiting for {job_id!r} every {poll_interval}s ...", err=True)

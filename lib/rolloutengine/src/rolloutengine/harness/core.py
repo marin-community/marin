@@ -55,7 +55,9 @@ class ModelSession(Protocol):
     nothing, so the harness can send it again. If the harness ends before its next request, the record
     keeps the cancelled request without an answer. When a limit ends the attempt, the next ``start`` or
     ``reply`` raises ``LimitReached``, and the harness lets it propagate. A failed model request raises
-    ``RolloutEnded`` with the model's error as its cause. A harness that catches a refusal and asks again
+    ``RolloutEnded`` with the model's error as its cause. ``ContextWindowExceeded`` rejects only the
+    current request; a harness can shorten its observations or compact and retry under the same limits.
+    A harness that catches a refusal and asks again
     runs until a turn or attempt deadline. Each request after the end of the attempt yields before it
     raises, so a harness that asks again in a loop does not stop other attempts.
     """

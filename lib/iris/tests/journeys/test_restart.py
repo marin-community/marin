@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 def test_controller_when_reopened_preserves_attempt_and_resumes_without_duplicate_launch(journey):
-    job = journey.submit("restart", failure_retries=1)
+    job = journey.submit("restart", failure_retries=1, termination_grace=Duration.from_seconds(60))
     journey.settle()
     journey.fail(job[0])
     journey.settle()
@@ -13,6 +14,8 @@ def test_controller_when_reopened_preserves_attempt_and_resumes_without_duplicat
     before = journey.task(job[0])
     journey.restart()
     after = journey.task(job[0])
+    stored = journey.controller.get_job_status(job.wire_id).request
+    assert stored.termination_grace.milliseconds == 60_000
     journey.succeed(job[0])
     journey.settle()
 

@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use xxhash_rust::xxh3;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 // Generate __eq__ and __hash__
 #[pyclass(eq, eq_int, from_py_object)]
 pub enum HashAlgorithm {

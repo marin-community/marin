@@ -13,7 +13,7 @@ mod provider;
 mod remote;
 
 pub use admission::QueryCacheAdmission;
-pub use cached::CachedObjectStore;
+pub use cached::{CachePins, CachedObjectStore};
 pub use legacy::LegacyObjectStore;
 pub use provider::is_remote_object_store;
 pub use remote::{build_remote_object_store, RemoteObjectStore};
@@ -67,12 +67,6 @@ pub struct ObjectReference {
 pub enum ScanSource {
     Local(PathBuf),
     Remote(String),
-}
-
-pub enum CacheMode<'a> {
-    Query(&'a QueryCacheAdmission),
-    /// Use existing cache entries without populating misses or recording demand.
-    Disabled,
 }
 
 /// Result of a best-effort batch deletion.
@@ -206,6 +200,30 @@ pub trait ObjectStore: Send + Sync {
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError>;
 
+    /// Read an immutable object's byte range without materializing the object.
+    /// Cached stores serve resident bytes locally and forward misses directly.
+    async fn read_range(
+        &self,
+        reference: &ObjectReference,
+        range: std::ops::Range<u64>,
+    ) -> Result<Option<bytes::Bytes>, StatsError>;
+
+    /// Read several ranges, allowing providers to coalesce adjacent requests.
+    async fn read_ranges(
+        &self,
+        reference: &ObjectReference,
+        ranges: &[std::ops::Range<u64>],
+    ) -> Result<Option<Vec<bytes::Bytes>>, StatsError> {
+        let mut bytes = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            let Some(part) = self.read_range(reference, range.clone()).await? else {
+                return Ok(None);
+            };
+            bytes.push(part);
+        }
+        Ok(Some(bytes))
+    }
+
     /// Whether one exact immutable object exists without reading its contents.
     async fn exists(&self, id: &ObjectId) -> Result<bool, StatsError> {
         let prefix = ObjectPrefix::table(id.table_name(), id.relative_key())?;
@@ -264,26 +282,13 @@ pub trait ObjectStore: Send + Sync {
         Ok(None)
     }
 
-    /// Resolve an input using the cache when present, otherwise its backing
-    /// scan location. Callers must protect cached paths from concurrent eviction.
-    async fn scan_source(
+    /// Keep a cached file readable until the supplied pin set is dropped.
+    async fn pin_cached_path(
         &self,
         reference: &ObjectReference,
-        cache_mode: CacheMode<'_>,
-    ) -> Result<ScanSource, StatsError> {
-        if let Some(path) = self.cached_path(reference).await? {
-            return Ok(ScanSource::Local(path));
-        }
-        if let Some(url) = self.remote_scan_url(&reference.id) {
-            if let CacheMode::Query(query) = cache_mode {
-                self.warm_query(reference, query);
-            }
-            return Ok(ScanSource::Remote(url));
-        }
-        Err(StatsError::Internal(format!(
-            "object store has no scan source for {:?}",
-            reference.id.as_str()
-        )))
+        _pins: &CachePins,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.cached_path(reference).await
     }
 
     /// Consider an optional fill after a query cache miss. Reuse history and

@@ -36,7 +36,7 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SELECTION_PREFIX = "rl-data/task-selection"
-DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
+DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
@@ -47,14 +47,12 @@ JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 def training_recipe(steps: int) -> dict:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
-    plan = SNOWBALL_RECIPE.role_plan
     preset = replace(
         DEFAULT,
         label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
         max_staleness_steps=0,
-        generation_workers=plan.train_batch_size,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",
@@ -75,6 +73,12 @@ def training_recipe(steps: int) -> dict:
         NCCL_IB_DISABLE="1",
         NCCL_SOCKET_FAMILY="AF_INET",
     )
+    config["generator"]["trajectory_reward_shaping"] = {
+        "enabled": True,
+        # Enabling shaping would also apply the DAPO overlong penalty over the derived l_cache window.
+        "overlong": {"penalty_scale": 0.0},
+        "reasoning_span": {"penalty": 0.1, "target": "marker"},
+    }
     trainer = config["trainer"]
     trainer.update(
         seed=SEED,
@@ -105,6 +109,7 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
+    export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
@@ -152,7 +157,7 @@ def build_run(
             wandb_entity="marin-community",
             required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
         ),
-        export_hf=True,
+        export_hf=export_hf,
     )
 
 
@@ -161,8 +166,9 @@ def build_run(
     "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @rl_build_options
-def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
+def main(selection_uri: str, steps: int, export_hf: bool) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -178,6 +184,7 @@ def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
         resolve_version(name, None),
         selection=selection,
         steps=steps,
+        export_hf=export_hf,
     )
 
 

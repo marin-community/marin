@@ -238,6 +238,8 @@ class JobResult(BaseModel):
     stats: JobStats
     trial_results: list[TrialResult] = Field(default_factory=list)
     benchmark_metadata: tuple[BenchmarkMetadata, ...] = ()
+    canonical_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    metric_evidence: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

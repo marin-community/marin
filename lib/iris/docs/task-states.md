@@ -355,3 +355,7 @@ Job state is computed from task state counts in `_compute_job_state()`:
 
 The ordering matters -- earlier rules take priority. A job with one succeeded
 task and one failed task (beyond tolerance) is `FAILED`, not `RUNNING`.
+
+A `RUNNING` job can still have pending replicas. Its job status includes the
+cached scheduler reason and autoscaler hint for those replicas when available;
+inspect `task_state_counts` to see how many remain pending.

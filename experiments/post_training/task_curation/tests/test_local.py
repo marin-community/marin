@@ -12,6 +12,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click.testing import CliRunner
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -28,6 +29,8 @@ from experiments.post_training.task_curation.campaign import CampaignFailed, Cam
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
+from experiments.post_training.task_curation.driver import main as curation_main
+from experiments.post_training.task_curation.images.build import MissingEnvironmentArtifact
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -114,6 +117,27 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     assert successful["processed_rows"] == 1
     assert successful["admitted"] is None
     assert successful["verification_status"] is None
+
+
+def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path):
+    cache = tmp_path / "cache"
+    result = CliRunner().invoke(
+        curation_main,
+        [
+            "--mode",
+            "quick",
+            "--source",
+            "evalchemy-math500",
+            "--cache-dir",
+            str(cache),
+            "--artifact-root",
+            str(tmp_path / "remote"),
+            "--output-root",
+            str(tmp_path / "output"),
+        ],
+    )
+    assert isinstance(result.exception, MissingEnvironmentArtifact)
+    assert str(cache / "images") in str(result.exception)
 
 
 def answer_from_auxiliary(row, context):

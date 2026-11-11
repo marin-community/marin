@@ -12,6 +12,9 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import signal
+import tempfile
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -20,22 +23,26 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
-from levanter.checkpoint import CheckpointerConfig
+from jax.sharding import AxisType, Mesh, NamedSharding, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import compact_grug_mesh, compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+
+from experiments.grug.preemption import GracefulPreemption
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -55,18 +62,31 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
     return variants
 
 
+def test_grug_preemption_records_sigterm_until_completed_step():
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    preemption = GracefulPreemption()
+    preemption.install()
+    try:
+        assert not preemption.should_stop(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert preemption.should_stop(2)
+    finally:
+        preemption.restore()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
+
+
 def _variant_module_name(variant: str, module: str) -> str:
     return f"experiments.grug.{variant}.{module}"
 
 
 def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
-    assert _compact_grug_mesh_shape(
+    assert compact_grug_mesh_shape(
         process_count=32,
         local_device_count=4,
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 1, 16, 1)
+    ) == (4, 2, 16, 1, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -76,7 +96,7 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
     size 1 instead of dropping it so size-1 cases (e.g. the GPU canary) don't fall through
     a separate "axis absent" code path. See #6252 for the bug this contract prevents.
     """
-    assert _compact_grug_mesh_shape(
+    assert compact_grug_mesh_shape(
         process_count=1,
         local_device_count=4,
         expert_axis_size=1,
@@ -85,55 +105,74 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
     ) == (1, 4, 1, 1, 1)
 
 
+@pytest.mark.multidevice
 def test_compact_grug_mesh_axis_sizes():
     """Distinct context and expert widths detect swapped axis positions."""
-    run_on_cpu_devices(
-        device_count=8,
-        script="""
-        from levanter.grug.sharding import compact_grug_mesh
-
+    with use_test_devices(8):
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = jax.devices()
+        device_count = len(devices)
+        if device_count % 8:
+            pytest.skip("compact Grug topology requires a device count divisible by eight")
         mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2, expert_axis_size=4)
         assert tuple(mesh.shape.items()) == (
             ("replica_dcn", 1),
-            ("data", 1),
-            ("context", 2),
+            ("data", device_count // 8),
             ("expert", 4),
+            ("context", 2),
             ("model", 1),
         ), mesh.shape
-        """,
-    )
 
 
+_CONTEXT_BEFORE_EXPERT_AXES = ("replica_dcn", "data", "context", "expert", "model")
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize(("replica", "expert"), [(1, 8), (2, 4), (1, 2), (2, 1)])
+def test_compact_grug_mesh_keeps_cp1_device_assignment(replica, expert):
+    """At context=1 the expert-before-context mesh places every device where the old order did."""
+    with use_test_devices(8):
+        if jax.process_count() != 1 or len(jax.devices()) != 8:
+            pytest.skip("the layout comparison needs exactly eight devices in one process")
+        mesh = compact_grug_mesh(replica_axis_size=replica, expert_axis_size=expert, context_axis_size=1)
+        old_devices = np.asarray(jax.devices(), dtype=object).reshape(replica, 8 // (replica * expert), 1, expert, 1)
+
+        def coordinates(devices, axis_names):
+            return {
+                device.id: {name: int(index) for name, index in zip(axis_names, position, strict=True)}
+                for position, device in np.ndenumerate(devices)
+            }
+
+        assert coordinates(mesh.devices, mesh.axis_names) == coordinates(old_devices, _CONTEXT_BEFORE_EXPERT_AXES)
+
+
+@pytest.mark.multidevice
 def test_legacy_checkpoint_restore_with_unit_context_axis():
     """Adding a size-one context axis preserves checkpoint values and placement."""
-    run_on_cpu_devices(
-        device_count=8,
-        script="""
-        import tempfile
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.checkpoint import load_checkpoint, save_checkpoint
-        from levanter.grug.sharding import compact_grug_mesh
-
+    with use_test_devices(4) as selected_devices:
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = np.asarray(selected_devices, dtype=object)
+        device_count = len(devices)
         legacy_mesh = Mesh(
-            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            devices.reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
-        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
-        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 4, "context": 1, "expert": 2, "model": 1}, mesh.shape
+        mesh = Mesh(
+            devices.reshape(1, device_count // 2, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
 
         spec = P(("replica_dcn", "data", "expert"), None)
-        shape = (8, 4)
+        shape = (device_count, 4)
         legacy_sharding = NamedSharding(legacy_mesh, spec)
         sharding = NamedSharding(mesh, spec)
         assert sharding.devices_indices_map(shape) == legacy_sharding.devices_indices_map(shape)
 
-        written = jax.device_put(jnp.arange(32, dtype=jnp.float32).reshape(shape), legacy_sharding)
+        written = jax.device_put(jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape), legacy_sharding)
         with tempfile.TemporaryDirectory() as tmpdir:
             with jax.set_mesh(legacy_mesh):
                 save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
@@ -146,38 +185,32 @@ def test_legacy_checkpoint_restore_with_unit_context_axis():
 
         assert restored.sharding == sharding, restored.sharding
         np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
-        """,
-    )
 
 
+@pytest.mark.multidevice
 def test_legacy_checkpoint_restore_with_context_sharding():
     """A legacy expert checkpoint restores with its target context partitioning."""
-    run_on_cpu_devices(
-        device_count=8,
-        script="""
-        import tempfile
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.checkpoint import load_checkpoint, save_checkpoint
-        from levanter.grug.sharding import compact_grug_mesh
-
+    with use_test_devices(4) as selected_devices:
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = np.asarray(selected_devices, dtype=object)
+        device_count = len(devices)
         legacy_mesh = Mesh(
-            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            devices.reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
-        mesh = compact_grug_mesh(expert_axis_size=2, context_axis_size=2, replica_axis_size=1)
-        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 2, "context": 2, "expert": 2, "model": 1}, mesh.shape
+        mesh = Mesh(
+            devices.reshape(1, device_count // 4, 2, 2, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
 
         # An expert stack [experts, fan_in, fan_out]: four shards on the target mesh, two on the
         # mesh that wrote it.
         shape = (4, 3, 2)
         written = jax.device_put(
-            jnp.arange(24, dtype=jnp.float32).reshape(shape),
+            jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape),
             NamedSharding(legacy_mesh, P("expert", None, None)),
         )
         sharding = NamedSharding(mesh, P(("expert", "context"), None, None))
@@ -195,8 +228,6 @@ def test_legacy_checkpoint_restore_with_context_sharding():
 
         assert restored.sharding == sharding, restored.sharding
         np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
-        """,
-    )
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -330,7 +361,7 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     always have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1
     instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
@@ -399,7 +430,7 @@ def test_grug_moe_model_init_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1,
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1,
     so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
     "axis absent" branch.
     """
@@ -455,7 +486,8 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
     assert with_ema_state_shape.ema_params is not None
 
 
-def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
+@pytest.mark.parametrize("preempt", [False, True])
+def test_grug_base_run_metrics_and_preemption_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preempt: bool):
     train_module = importlib.import_module("experiments.grug.base.train")
     model_module = importlib.import_module("experiments.grug.base.model")
 
@@ -517,9 +549,25 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
                 compute_bpb=False,
             ),
         )
-        train_module.run_grug(run_cfg)
+        if preempt:
+            original_should_stop = GracefulPreemption.should_stop
+
+            def request_preemption(self: GracefulPreemption, completed_step: int) -> bool:
+                self._request_stop(signal.SIGTERM, None)
+                return original_should_stop(self, completed_step)
+
+            monkeypatch.setattr(GracefulPreemption, "should_stop", request_preemption)
+            with pytest.raises(SystemExit) as exited:
+                train_module.run_grug(run_cfg)
+            assert exited.value.code == 128 + signal.SIGTERM
+        else:
+            train_module.run_grug(run_cfg)
     finally:
         logger.removeHandler(handler)
+
+    if preempt:
+        assert list((variant_tmp / "checkpoints").rglob("metadata.json"))
+        return
 
     records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
     finish_records = [record for record in records if record.get("event") == "finish"]

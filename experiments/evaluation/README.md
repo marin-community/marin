@@ -40,7 +40,7 @@ For example, run an Evalchemy task and a Harbor benchmark on shared GPU serving:
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-32b \
   --evals gsm8k-smoke \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
   --federated_cluster cw-rno2a --limit 2
 ```
 
@@ -87,9 +87,9 @@ Evalchemy and Harbor run from [vendor/evalchemy](../../vendor/evalchemy/README.m
 and [vendor/harbor](../../vendor/harbor/README.md). Each has a separate environment
 and frozen lockfile. Neither is installed in the main workspace environment.
 
-Historical cohorts pinned to external evaluator commits require their recorded
-Marin checkout. The current launcher rejects those configurations with the vendored
-runtimes. Historical records remain readable.
+Historical cohorts pinned to external Evalchemy commits require their recorded
+Marin checkout. The current launcher rejects those configurations with vendored
+Evalchemy. Historical records remain readable.
 
 ### Evalchemy
 

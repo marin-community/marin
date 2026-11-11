@@ -47,6 +47,7 @@ known-first-party = ["rolloutengine"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
-project-includes = ["src"]
+use-ignore-files = false
+project-includes = ["src/**/*.py"]
 search-path = ["src"]
 python-interpreter = "../../.venv/bin/python"

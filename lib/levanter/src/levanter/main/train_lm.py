@@ -5,7 +5,7 @@ import dataclasses
 import functools
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import equinox as eqx
@@ -32,8 +32,10 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_conf
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -69,6 +71,8 @@ class TrainLmConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_save_chat_template: Optional[str] = None
+    """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
     hf_generation_eos_token_ids: Optional[list[int]] = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
@@ -108,6 +112,28 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
+    """Reapply the requested Snowball runtime settings after an HF config reload.
+
+    The HF config is authoritative for every architecture field. The FP32 router dot
+    flag, the MoE implementation and the MoE capacity factor are not in HF metadata, so
+    they are copied from the requested config. The requested reference checkpoint and
+    tokenizer are kept too.
+    """
+    if not isinstance(requested, SnowballConfig):
+        return reloaded
+    if not isinstance(reloaded, SnowballConfig):
+        raise ValueError("HF reload changed the Snowball model type")
+    return replace(
+        reloaded,
+        router_dot_fp32=requested.router_dot_fp32,
+        moe_implementation=requested.moe_implementation,
+        moe_capacity_factor=requested.moe_capacity_factor,
+        reference_checkpoint=requested.reference_checkpoint,
+        tokenizer=requested.tokenizer,
+    )
+
+
 def _load_lm_model_from_configured_source(
     *,
     config: TrainLmConfig,
@@ -122,9 +148,11 @@ def _load_lm_model_from_configured_source(
         assert converter is not None
         model = converter.load_pretrained(
             config.model.model_type,
-            config=config.model if not config.use_hf_model_config else None,
+            # main already resolved HF architecture and reapplied runtime-only settings.
+            # Passing None here would reload a second time and discard those settings.
+            config=config.model,
             axis_mapping=parameter_axis_mapping,
-            dtype=trainer.mp.compute_dtype,
+            dtype=hf_load_dtype(trainer.mp),
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
@@ -148,6 +176,9 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
+    if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
+        if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
+            raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
@@ -189,7 +220,10 @@ def main(config: TrainLmConfig):
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
-            config.model = converter.config_from_hf_config(converter.default_hf_config)
+            config.model = preserve_hf_runtime_settings(
+                converter.config_from_hf_config(converter.default_hf_config),
+                config.model,
+            )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
@@ -340,7 +374,7 @@ def main(config: TrainLmConfig):
                 trainer.device_mesh,
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.mp,
+                mp=trainer.mp,
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
@@ -386,6 +420,7 @@ def main(config: TrainLmConfig):
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                chat_template=config.hf_save_chat_template,
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,
                 merged_hf_save_path=config.merged_hf_save_path,
