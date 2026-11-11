@@ -313,14 +313,16 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
         "model_format",
         "max_turns",
         "summarization_threshold_chars",
+        "rejected_context",
     ),
     [
-        (32000, 65536, 16384, 768, True, "openai", None, 256),
-        (16000, 16384, 16384, 384, True, "openai", None, None),
-        (32000, 65536, 128, 128, True, "openai", None, None),
-        (32000, 65536, 16384, 768, False, "openai", None, None),
-        (32000, 65536, 16384, 768, True, "k2_horizon", None, None),
-        (32000, 65536, 16384, 768, True, "openai", 1, None),
+        (32000, 65536, 16384, 768, True, "openai", None, 256, False),
+        (16000, 16384, 16384, 384, True, "openai", None, None, False),
+        (32000, 65536, 128, 128, True, "openai", None, None, False),
+        (32000, 65536, 16384, 768, False, "openai", None, None, False),
+        (32000, 65536, 16384, 768, True, "k2_horizon", None, None, False),
+        (32000, 65536, 16384, 768, True, "openai", 1, None, False),
+        (32000, 65536, 16384, 768, True, "openai", None, None, True),
     ],
 )
 async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
@@ -334,6 +336,7 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     model_format,
     max_turns,
     summarization_threshold_chars,
+    rejected_context,
 ):
     root = Path(__file__).parents[4] / "src" / "harbor"
     monkeypatch.syspath_prepend(str(root / "agents" / "installed"))
@@ -342,7 +345,7 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     if summarization_threshold_chars is not None:
         counts_sequence.append(128)
     if max_turns is None:
-        counts_sequence.append(min(32768, server_context))
+        counts_sequence.append(prompt_tokens if rejected_context else min(32768, server_context))
     counts = iter(counts_sequence)
     tokenized = []
     tokenization_trial_ids = []
@@ -405,6 +408,11 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
                 200, json={"count": next(counts), "max_model_len": server_context}
             )
         assert request.url.path == "/v1/chat/completions"
+        if rejected_context and completions:
+            return httpx.Response(
+                400,
+                json={"error": {"message": "Context limit reached", "type": "context_length_exceeded", "code": 400}},
+            )
         assert "drop_params" not in payload
         # Keep the real SDK signature and serialization in the tested path.
         payload["extra_headers"] = dict(request.headers)

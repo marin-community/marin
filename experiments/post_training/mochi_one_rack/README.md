@@ -10,7 +10,7 @@ Agent trials have four model turns and a five-minute execution limit; Harbor sti
 
 The recipe comes from Ben's long-loop recipe at `bf163020a7115d85fd3fcb02099d3abfda3b6cf2`. It preserves RLOO-N and eight responses per prompt group, using two groups per update. Two rollout workers share the 16-trial Harbor allowance, giving each worker enough slots to execute an eight-response group together. Sample packing enables the existing Megatron context-parallel path; training still uses full trajectories. It keeps zero-reward groups for this runtime smoke, so the controlled length probe is not filtered out. The real tasks are two original Harbor CalibForge tasks and two non-agentic arithmetic/sequence tasks from Ben's pinned mixed-task artifact. The second stage has five fixed pairs, each with one agentic and one non-agentic task. Its first pair replaces the arithmetic prompt with a clearly marked visible ledger plus the same question and verifier. The remaining pairs use the original tasks. This exercises the controlled length probe once across the five updates. Its rendered prompt has 31,611 valid tokens; it does not use masked padding to reach that length.
 
-`data.py` checks the original Parquet SHA-256 values before selection and emits a manifest of task identities and stage checksums. The tokenizer and chat template are copied without changes from the SFT run's `2026.09.18` tokenizer. The source tokenizer manifest pins their hashes. Generation stops on both token IDs 128001 and 128009. Mini-SWE sends an OpenAI Bash tool definition; automatic tool selection uses the existing Hermes parser, matching the SFT template's `<tool_call>` JSON format.
+`data.py` checks the original Parquet SHA-256 values before selection and emits a manifest of task identities and stage checksums. The tokenizer and chat template are copied without changes from the SFT run's `2026.09.18` tokenizer. The source tokenizer manifest pins their hashes. Generation stops on both token IDs 128001 and 128009. Mini-SWE sends an OpenAI Bash tool definition; automatic tool selection uses the existing Hermes parser, matching the SFT template's `<tool_call>` JSON format. A typed context rejection ends the installed agent normally so Harbor can verify the sampled prefix; other request errors keep their existing handling.
 
 After the CPU export completes and the original tokenizer files and generation config are present, run `handoff.py` in the vendored SkyRL CPU environment with `--hf-root` set to the private export URI. It validates shard sizes against the completed export receipts and writes SkyRL's immutable portable-model manifest. It preserves the original tokenizer bytes and uses the exporter's shard SHA-256 values. Verify tokenizer and policy metadata staging before allocating GPUs.
 
@@ -18,7 +18,7 @@ Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9270
+  --stage 32k --version 2026.11.11.9271
 ```
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. The recipe explicitly selects Daytona's `us` target, which full Harbor trials require in their host connection. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.
