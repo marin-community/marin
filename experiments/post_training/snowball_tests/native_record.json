@@ -30,7 +30,7 @@
           "memory": "1800GB",
           "num_nodes": 5
         },
-        "wandb_entity": "atqamar-oa",
+        "wandb_entity": "marin-community",
         "job_name": "checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.06.1-6388601f29d7",
         "cluster_config": "lib/iris/config/cw-us-east-02a.yaml",
         "parent_cluster_config": "lib/iris/config/marin.yaml"
