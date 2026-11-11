@@ -17,7 +17,7 @@ import tomli_w
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-from experiments.post_training.long_loop.eval_runtime.pi_image import with_pi_runtime
+from experiments.post_training.long_loop.eval_runtime.pi_image import PiPathScope, with_pi_runtime
 from experiments.post_training.long_loop.rl_dataset_admission import file_digest
 
 AGENT_USER = "longloop-agent"
@@ -36,8 +36,6 @@ RUN useradd --create-home --user-group --uid 10001 --shell /bin/bash {AGENT_USER
     && chown -R {AGENT_USER}:{AGENT_USER} /testbed /logs/agent /output {AGENT_HOME} \\
     && chmod 0755 /testbed \\
     && chown root:root / && chmod 0755 /
-ENV HOME={AGENT_HOME} VIRTUAL_ENV={VIRTUAL_ENV}
-ENV PATH={VIRTUAL_ENV}/bin:{AGENT_HOME}/.local/bin:${{PATH}}
 """
 
 
@@ -45,13 +43,12 @@ def pi_nonroot_task(task: TaskSpec) -> TaskSpec:
     """Keep task identity and grading, adding Pi and workspace ownership to SWE images."""
     if task.source.dataset != SOURCE:
         return task
-    prepared = with_pi_runtime(task)
+    prepared = with_pi_runtime(task, path_scope=PiPathScope.AGENT)
     files = {resource.path: resource for resource in prepared.resources.verifier}
     config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
-    config.setdefault("agent", {})["user"] = AGENT_USER
-    config.setdefault("environment", {}).setdefault("env", {}).update(
-        HOME=AGENT_HOME, VIRTUAL_ENV=VIRTUAL_ENV, PATH=AGENT_PATH
-    )
+    agent = config.setdefault("agent", {})
+    agent["user"] = AGENT_USER
+    agent.setdefault("env", {}).update(HOME=AGENT_HOME, VIRTUAL_ENV=VIRTUAL_ENV, PATH=AGENT_PATH)
     dockerfile = resource_bytes(files["environment/Dockerfile"]).decode() + NONROOT_LAYER
     replacements = {"task.toml": tomli_w.dumps(config).encode(), "environment/Dockerfile": dockerfile.encode()}
     resources = tuple(r for r in prepared.resources.verifier if r.path not in replacements) + tuple(
@@ -131,9 +128,10 @@ def main() -> None:
         raise ValueError("Only SWE validation rows may change")
     receipt = {
         **manifest,
+        "execution_overlay_version": "pi-agent-scoped-env-v2",
         "upstream_manifest_sha256": file_digest(args.input / "manifest.json"),
         "marin_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        "policy": "Pi 0.87.0, non-root longloop-agent, writable workspace under root-owned /",
+        "policy": "Pi 0.87.0, UID10001; agent-only HOME/virtualenv/PATH; original verifier environment and user",
         "files": files,
     }
     (args.output / "manifest.json").write_text(json.dumps(receipt, indent=2) + "\n")

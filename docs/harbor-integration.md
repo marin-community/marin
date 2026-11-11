@@ -5,6 +5,12 @@ It stops inference when the batch ends. The candidate is the model under evaluat
 An optional judge model is shared across the batch.
 Iris runs the evaluator worker. Shellbox runs task commands and graders.
 
+Task packages can set `[agent.env]` in `task.toml` for agent-only process
+variables. Trial `agent.env` values override matching task keys. These values
+apply to agent setup and execution, including its child commands, but not to
+the task verifier. Use this scope for an agent's HOME, virtualenv and PATH;
+`[environment.env]` and Dockerfile `ENV` also affect the verifier.
+
 Harbor supports `local` (bubblewrap, the default), `daytona`, `qemu` and `shellsim`.
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) to choose a model and suite.
 Preflight checks the policy and model settings before allocating evaluation resources.

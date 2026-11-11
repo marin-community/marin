@@ -67,7 +67,8 @@ def test_pi_nonroot_parquet_preserves_tasks_and_private_verifier(tmp_path):
     assert config["agent"]["user"] != "root"
     assert config["verifier"]["user"] == "root"
     assert config["environment"]["workdir"] == "/testbed"
-    assert config["environment"]["env"]["HOME"] != "/root"
+    assert config["agent"]["env"]["HOME"] != "/root"
+    assert config["environment"] == tomllib.loads(resource_bytes(original.resources.verifier[0]).decode())["environment"]
     package = json.loads(files["environment/long-loop-pi/package.json"])
     assert "@earendil-works/pi-coding-agent" in package["dependencies"]
     assert output[1]["task_spec"] == raw[1]

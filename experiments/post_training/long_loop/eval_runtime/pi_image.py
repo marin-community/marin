@@ -4,6 +4,7 @@
 """Add the frozen Pi runtime to the experiment's restored Harbor images."""
 
 import tomllib
+from enum import StrEnum
 from pathlib import Path
 
 import tomli_w
@@ -14,7 +15,12 @@ RECIPE = Path(__file__).with_suffix("")
 NODE_IMAGE = "node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d"
 
 
-def with_pi_runtime(task: TaskSpec) -> TaskSpec:
+class PiPathScope(StrEnum):
+    IMAGE = "image"
+    AGENT = "agent"
+
+
+def with_pi_runtime(task: TaskSpec, *, path_scope: PiPathScope) -> TaskSpec:
     """Preserve the task image and files, adding an isolated locked Pi install."""
     files = {resource.path: resource for resource in task.resources.verifier}
     config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
@@ -38,8 +44,13 @@ def with_pi_runtime(task: TaskSpec) -> TaskSpec:
         + dockerfile
         + "\nCOPY --from=long_loop_pi_runtime /usr/local/bin/node /opt/long-loop-node/node\n"
         "COPY --from=long_loop_pi_runtime /opt/long-loop-pi /opt/long-loop-pi\n"
-        "ENV PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH}\n"
-        'RUN test "$(pi --version)" = "0.87.0"\n'
+        + (
+            "ENV PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH}\n"
+            if path_scope is PiPathScope.IMAGE
+            else ""
+        )
+        + "RUN PATH=/opt/long-loop-node:/opt/long-loop-pi/node_modules/.bin:${PATH} "
+        'bash -c \'test "$(pi --version)" = "0.87.0"\'\n'
     )
     replacements = {
         "task.toml": tomli_w.dumps(config).encode(),

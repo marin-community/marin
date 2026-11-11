@@ -79,6 +79,10 @@ class SolutionConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     timeout_sec: float | None = None
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment overrides for agent processes only; never passed to the verifier.",
+    )
     user: str | int | None = Field(
         default=None,
         description="Username or UID to run the agent as. None uses the environment's default USER (e.g., root).",

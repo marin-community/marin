@@ -4,6 +4,7 @@
 """Run the Pi and verifier file lifecycle with real guest UID 10001, without inference."""
 
 import json
+import shlex
 
 import pytest
 
@@ -13,9 +14,13 @@ from harbor.host_capabilities import DaytonaConnection, HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
 from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.image import DockerfileSource
+from shellbox.machine import Command, MachineSpec
+from skyrl_train.dataset.harbor_import import harbor_trial_task, restore_harbor_trial_task
+from taskcompendium.models import Source
 
 from experiments.post_training.long_loop.eval_runtime.pi_image import NODE_IMAGE
-from experiments.post_training.long_loop.pi_rl_data import AGENT_HOME, AGENT_PATH, NONROOT_LAYER
+from experiments.post_training.long_loop.pi_rl_data import AGENT_HOME, AGENT_PATH, NONROOT_LAYER, pi_nonroot_task
 
 
 @pytest.mark.docker
@@ -31,9 +36,9 @@ async def test_pi_setup_cleanup_and_verifier_as_nonroot(tmp_path, monkeypatch):
     (task / "instruction.md").write_text("Write the answer in /testbed.")
     (task / "task.toml").write_text(
         '[agent]\nuser="10001"\ntimeout_sec=30\n'
+        f'[agent.env]\nHOME="{AGENT_HOME}"\nPATH="{AGENT_PATH}"\n'
         '[verifier]\nuser="10001"\ntimeout_sec=30\n'
         '[environment]\nworkdir="/testbed"\n'
-        f'[environment.env]\nHOME="{AGENT_HOME}"\nPATH="{AGENT_PATH}"\n'
     )
     message = {"role": "assistant", "content": [{"type": "text", "text": "Done."}], "stopReason": "stop"}
     events = "\n".join(
@@ -103,3 +108,110 @@ async def test_pi_setup_cleanup_and_verifier_as_nonroot(tmp_path, monkeypatch):
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert (trial.paths.verifier_dir / "verifier-uid").read_text().strip() == "10001"
     assert trial.paths.result_path.exists()
+
+
+@pytest.mark.docker
+@pytest.mark.asyncio
+@pytest.mark.timeout(300)
+async def test_pi_overlay_preserves_original_verifier_environment(tmp_path, monkeypatch):
+    monkeypatch.setattr(daytona, "DaytonaMachineFactory", lambda *args, **kwargs: DockerMachineFactory())
+    original = tmp_path / "original"
+    environment = original / "environment"
+    environment.mkdir(parents=True)
+    (original / "instruction.md").write_text("Write the answer in /testbed.")
+    (original / "task.toml").write_text(
+        '[agent]\nuser="root"\ntimeout_sec=30\n'
+        '[verifier]\nuser="root"\ntimeout_sec=30\n'
+        '[environment]\nworkdir="/testbed"\n'
+        '[environment.env]\nHOME="/root"\nVIRTUAL_ENV="/task-specified-venv"\n'
+        'PATH="/usr/local/bin:/usr/bin:/bin"\n'
+    )
+    probe = (
+        "import json,os,sys; print(json.dumps({"
+        "'PATH':os.environ['PATH'],'HOME':os.environ['HOME'],"
+        "'VIRTUAL_ENV':os.environ.get('VIRTUAL_ENV'),"
+        "'python':sys.executable,'prefix':sys.prefix}))"
+    )
+    (environment / "Dockerfile").write_text("FROM python:3.12-slim-bookworm\nWORKDIR /testbed\n")
+    baseline_machine = await DockerMachineFactory().create(
+        MachineSpec(
+            source=DockerfileSource(environment, environment / "Dockerfile"),
+            env={"HOME": "/root", "VIRTUAL_ENV": "/task-specified-venv", "PATH": "/usr/local/bin:/usr/bin:/bin"},
+            workdir="/testbed",
+        )
+    )
+    try:
+        baseline = await baseline_machine.run(Command(("python", "-c", probe)))
+        assert baseline.exit_code == 0, baseline.stderr
+        expected_verifier = json.loads(baseline.stdout)
+    finally:
+        await baseline_machine.close()
+    message = {"role": "assistant", "content": [{"type": "text", "text": "Done."}], "stopReason": "stop"}
+    events = "\n".join(
+        json.dumps(e)
+        for e in ({"type": "message_end", "message": message}, {"type": "agent_end", "messages": [message]})
+    )
+    # Stub only the model-facing CLI after the production runtime layer is built.
+    (environment / "pi").write_text(
+        "#!/bin/bash\nset -eu\n"
+        'if [ "${1:-}" = --version ]; then echo 0.87.0; exit 0; fi\n'
+        'test "$(id -u)" = 10001\n'
+        f"python -c {shlex.quote(probe)} > /testbed/agent-env.json\n"
+        f"cat <<'PI_EVENTS'\n{events}\nPI_EVENTS\n"
+    )
+    tests = original / "tests"
+    tests.mkdir()
+    (tests / "test.sh").write_text(
+        "#!/bin/bash\nset -eu\n"
+        'test "$(id -u)" = 0\n'
+        f"python -c {shlex.quote(probe)} > /logs/verifier/env.json\n"
+        "printf '{\"reward\":1.0}' > /logs/verifier/reward.json\n"
+        "cp /testbed/agent-env.json /logs/verifier/agent-env.json\n"
+    )
+    task = harbor_trial_task(
+        original,
+        source=Source(
+            dataset="long-loop-smartie-swesmith",
+            revision="fixture",
+            row="1",
+            importer_revision="fixture",
+        ),
+    )
+    prepared = pi_nonroot_task(task)
+    restored = tmp_path / "derived"
+    restore_harbor_trial_task(prepared, restored)
+    with (restored / "environment/Dockerfile").open("a") as dockerfile:
+        dockerfile.write(
+            "\nCOPY pi /opt/long-loop-pi/node_modules/.bin/pi\nRUN chmod 0755 /opt/long-loop-pi/node_modules/.bin/pi\n"
+        )
+    trial = await Trial.create(
+        TrialConfig(
+            task=TaskConfig(path=restored),
+            trial_name="pi-verifier-env",
+            trials_dir=tmp_path / "trials",
+            environment=EnvironmentConfig(type="daytona"),
+            agent=AgentConfig(
+                name="pi",
+                model_name="hosted_vllm/sft-handoff",
+                model_alias="hosted_vllm/sft-handoff",
+                kwargs={
+                    "version": "0.87.0",
+                    "api_base": "https://model.example.test/v1",
+                    "api_key": "EMPTY",
+                    "thinking_format": "chat-template",
+                },
+            ),
+        ),
+        host_capabilities=HostCapabilities(
+            daytona=DaytonaConnection(api_key="unused-transport-fixture", api_url="https://daytona.invalid", target="us")
+        ),
+    )
+    result = await trial.run()
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    actual = json.loads((trial.paths.verifier_dir / "env.json").read_text())
+    assert actual == expected_verifier
+    agent_env = json.loads((trial.paths.verifier_dir / "agent-env.json").read_text())
+    assert agent_env["HOME"] == AGENT_HOME
+    assert agent_env["PATH"] == AGENT_PATH
+    assert agent_env["python"].startswith(AGENT_HOME + "/venv/")
