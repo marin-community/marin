@@ -5,33 +5,31 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
-from importlib.resources import files
 import json
 import math
 import os
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, Optional, Protocol, get_args, get_origin
+from typing import Any, Dict, Optional, Protocol
 
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
-
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.rollouts.harbor_settings import concurrent_trials
+from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
+from skyrlrecipe.documents import set_path
 
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
-from marinskyrl.environment_contract import TrainingType
 from marinskyrl.distillation import DistillationPlan, compile_distillation_plan, validate_distillation_runtime_support
-from marinskyrl.resource_locator import join_resource_path, model_source_for_path
-from marinskyrl.speculative_decoding import parse_speculative_decoding_config
-from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
-from skyrlrecipe.model import FrozenMap, Section
-from skyrlrecipe.documents import set_path
 from marinskyrl.entrypoints import RL_ENTRYPOINTS
+from marinskyrl.environment_contract import TrainingType
+from marinskyrl.resource_locator import join_resource_path, model_source_for_path
+from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
+from marinskyrl.speculative_decoding import parse_speculative_decoding_config
 
 # Directory containing the bundled example RL config YAML files.
 SKYRL_CONFIG_DIR = Path(__file__).parent / "configs"
@@ -451,56 +449,16 @@ def _skyrl_config_sections(
     return sections
 
 
-def _schema_admission() -> tuple[frozenset[str], frozenset[str]]:
-    """Return admitted field paths and open-mapping prefixes from the author schema."""
-    paths: set[str] = set()
-    mappings: set[str] = set()
-
-    def visit(annotation: Any, path: str) -> None:
-        if isinstance(annotation, type) and issubclass(annotation, Section):
-            for name, field in annotation.model_fields.items():
-                child = f"{path}.{name}" if path else name
-                paths.add(child)
-                visit(field.annotation, child)
-        elif annotation is FrozenMap or get_origin(annotation) in (dict, Mapping):
-            mappings.add(path)
-        else:
-            for child in get_args(annotation):
-                visit(child, path)
-
-    visit(SkyRLRecipe, "")
-    paths = {RESOLVED_HARBOR_CONFIG_KEY if path == "terminal_bench" else path for path in paths}
-    mappings = {RESOLVED_HARBOR_CONFIG_KEY if path == "terminal_bench" else path for path in mappings}
-    return frozenset(paths), frozenset(mappings)
-
-
-_SCHEMA_CONFIG_PATHS, _MAPPING_CONFIG_PATHS = _schema_admission()
-
-
-def _path_allows_new_keys(path: str) -> bool:
-    return path in _SCHEMA_CONFIG_PATHS or any(
-        path == root or path.startswith(f"{root}.") for root in _MAPPING_CONFIG_PATHS
-    )
-
-
 def _merge_config_mapping(config: DictConfig, values: Mapping[str, Any], prefix: str = "") -> None:
-    """Merge launch values into declared SkyRL config paths."""
+    """Merge validated recipe values and launcher settings into the composed config."""
     for key, value in values.items():
         path = f"{prefix}.{key}" if prefix else key
-        current = OmegaConf.select(config, path, default=...)
-        key_exists = current is not ...
         if isinstance(value, Mapping):
-            if not isinstance(current, DictConfig):
-                if key_exists and current is not None and not _path_allows_new_keys(path):
-                    raise ValueError(f"SkyRL config key {path!r} is not a mapping in ppo_base_config")
-                if not key_exists and not _path_allows_new_keys(path):
-                    raise ValueError(f"SkyRL config contains unknown key {path!r}")
-                OmegaConf.update(config, path, {}, merge=False, force_add=_path_allows_new_keys(path))
+            if not isinstance(OmegaConf.select(config, path), DictConfig):
+                OmegaConf.update(config, path, {}, merge=False, force_add=True)
             _merge_config_mapping(config, value, path)
-            continue
-        if not key_exists and not _path_allows_new_keys(path):
-            raise ValueError(f"SkyRL config contains unknown key {path!r}")
-        OmegaConf.update(config, path, copy.deepcopy(value), merge=False, force_add=_path_allows_new_keys(path))
+        else:
+            OmegaConf.update(config, path, copy.deepcopy(value), merge=False, force_add=True)
 
 
 def _compose_config_groups(config_groups: Mapping[str, str], *, config_name: str | None) -> DictConfig:

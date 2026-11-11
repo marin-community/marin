@@ -104,7 +104,6 @@ def test_context_budget_derives_overlong_window_for_single_and_multi_turn(
 
 
 def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
-    penalty_scale = 0.0
     config = tmp_path / "overlong.yaml"
     config.write_text(
         yaml.safe_dump(
@@ -116,7 +115,7 @@ def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
                     "generated_budget_fraction": 0.375,
                     "overlong_cache_fraction": 0.25,
                 },
-                "generator": {"trajectory_reward_shaping": {"overlong": {"penalty_scale": penalty_scale}}},
+                "generator": {"trajectory_reward_shaping": {"overlong": {"penalty_scale": 0.0}}},
             }
         )
     )
@@ -125,7 +124,7 @@ def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
 
     cfg = compose_skyrl_config(parsed, {"job_name": "overlong-override", "num_nodes": 4}, _HPCStub()).config
     assert cfg.generator.trajectory_reward_shaping.overlong == {
-        "l_max": 12288, "l_cache": 3072, "penalty_scale": penalty_scale
+        "l_max": 12288, "l_cache": 3072, "penalty_scale": 0.0
     }
 
 

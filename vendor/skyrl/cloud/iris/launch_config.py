@@ -2,35 +2,32 @@
 
 from __future__ import annotations
 
+import posixpath
+import tempfile
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-import posixpath
-import tempfile
 from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf
-
-from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
+from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import validate_objective
+from skyrlrecipe import RLEntrypoint
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
-from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from cloud.iris.rl_config_translation import (
     compose_skyrl_config,
     parse_rl_config,
     registered_rl_entrypoint_module,
     training_type_for_entrypoint,
 )
+from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
-from marinskyrl.entrypoints import RL_ENTRYPOINTS
-from skyrlrecipe import RLEntrypoint
-from skyrlrecipe.rules import validate_tp_divides_heads
 from marinskyrl.distillation import validate_generation_logprobs
+from marinskyrl.entrypoints import RL_ENTRYPOINTS
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.task_sources import data_source
-
 
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
 
@@ -171,9 +168,7 @@ class SkyRLLaunchConfig:
 
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
-    schema = OmegaConf.structured(SkyRLLaunchConfig)
-    composed = OmegaConf.merge(schema, raw)
-    return composed
+    return OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
 
 
 def _is_source_recipe(skyrl: DictConfig) -> bool:
@@ -184,28 +179,16 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
-    nodes_unset = OmegaConf.is_missing(config.iris.allocation, "num_nodes")
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as source_file:
         OmegaConf.save(OmegaConf.create(raw_skyrl), source_file.name, resolve=False)
         parsed = parse_rl_config(source_file.name)
-        if nodes_unset:
-            required_counts = (
-                "trainer.placement.policy_num_nodes",
-                "trainer.placement.ref_num_nodes",
-                "generator.num_inference_engines",
-            )
-            expanded = OmegaConf.create(parsed.raw)
-            missing = [path for path in required_counts if OmegaConf.select(expanded, path) is None]
-            if missing:
-                raise ValueError(
-                    "iris.allocation.num_nodes is unset; the expanded recipe must set " + ", ".join(missing)
-                )
         parameters = {
             "job_name": str(config.iris.job_name),
             "experiments_dir": str(config.runtime.experiments_dir),
+            "num_nodes": int(config.iris.allocation.num_nodes),
             "gpus_per_node": int(config.iris.allocation.gpus_per_node),
             "model_path": str(config.inputs.model.local_path),
             "model_source_uri": model_uri if model_is_cloud else None,
@@ -220,8 +203,6 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
             "export_hf_artifact": bool(config.run.export_hf),
             "seed": int(config.run.seed),
         }
-        if not nodes_unset:
-            parameters["num_nodes"] = int(config.iris.allocation.num_nodes)
         compiled = compose_skyrl_config(
             parsed,
             parameters,
@@ -246,22 +227,6 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     return compose_launch_config(resolved)
 
 
-def _fill_launch_fields(config: DictConfig) -> None:
-    """Fill omitted allocation and runtime profile fields."""
-    skyrl = OmegaConf.to_container(config.skyrl, resolve=True)
-    if not isinstance(skyrl, dict):
-        raise TypeError("skyrl must be a mapping")
-    checkpoint_export = config.run.mode == RunMode.CHECKPOINT_EXPORT
-    plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
-    if OmegaConf.is_missing(config.iris.allocation, "num_nodes"):
-        config.iris.allocation.num_nodes = derive_num_nodes(plan)
-    if OmegaConf.is_missing(config.runtime, "profile"):
-        config.runtime.profile = runtime_profile_for_strategy(
-            skyrl.get("trainer", {}).get("strategy"),
-            mode=RuntimeMode.CHECKPOINT_EXPORT if checkpoint_export else RuntimeMode.TRAINING,
-        ).value
-
-
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
@@ -269,7 +234,6 @@ def load_launch_config(path: Path) -> DictConfig:
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
         config = _compose_source_recipe(config)
-    _fill_launch_fields(config)
     probe = config.skyrl.get("trainer", {}).get("mismatch_probe", {})
     if probe.get("enabled") and not probe.get("archive_uri"):
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))
@@ -382,11 +346,6 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError(
             f"runtime.profile={runtime['profile']!r} does not match SkyRL trainer strategy ({expected_profile.value!r})"
         )
-    generator = skyrl.get("generator", {})
-    validate_tp_divides_heads(
-        int(generator["inference_engine_tensor_parallel_size"]),
-        skyrl.get("model_num_attention_heads"),
-    )
     trainer_seed = skyrl.get("trainer", {}).get("seed")
     if trainer_seed != run["seed"]:
         raise ValueError(f"run.seed={run['seed']} does not match skyrl.trainer.seed={trainer_seed!r}")

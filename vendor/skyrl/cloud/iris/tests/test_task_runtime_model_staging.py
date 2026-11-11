@@ -1,7 +1,7 @@
-from argparse import Namespace
 import hashlib
-from pathlib import Path
 import shutil
+from argparse import Namespace
+from pathlib import Path
 
 import fsspec
 import numpy as np
@@ -22,8 +22,8 @@ from cloud.iris.task_runtime import (
     prepare_policy_model,
     prepare_policy_tokenizer,
 )
-from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from marinskyrl.resource_locator import RolloutModelLoading
+from marinskyrl.speculative_decoding import SpeculatorModelConfig
 
 
 @pytest.mark.parametrize(
@@ -148,7 +148,7 @@ def test_artifact_draft_staging_requires_matching_manifest_identity(tmp_path, mo
         cache_ttl_days=14, cache_source_prefix="s3://region/run",
     )
     assert artifact.source_uri == artifact_uri and artifact.source_identity == manifest.identity
-    mismatched = SpeculatorModelConfig(source_uri=artifact_uri, source_identity="sha256:" + "b" * 64)
+    mismatched = SpeculatorModelConfig(source_uri=artifact_uri, source_identity="legacy-draft-id")
     with pytest.raises(ValueError, match="identity mismatch"):
         prepare_draft_model(
             mismatched, cache_ttl_days=14, cache_source_prefix="s3://region/run",
