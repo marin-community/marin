@@ -31,17 +31,20 @@ import json
 import math
 import random
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import pyarrow.parquet as pq
 from daytona import Resources
-from rolloutengine.machines import _install_resources, task_machine
+from harbor.environments.daytona import machine_spec
+from harbor_config.models.task.config import EnvironmentConfig
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, snapshot_identity
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, NetworkPolicy
+from shellbox.machine import HostImage, NetworkPolicy
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec
+from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 
 def _resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int) -> Resources:
@@ -95,10 +98,11 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
 
 
 async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> LivenessResult:
+    """Grade an empty submission with the task's own grader, on a fresh grading machine."""
     task = TaskSpec.model_validate(spec["task"])
     runtime = MachineRuntimeSpec.model_validate(
         {
-            **(spec["runtime"]["task_machine"] or {}),
+            **(spec["runtime"].get("verifier_machine") or {}),
             "backend": "daytona",
             "network": NetworkPolicy.ALLOW,
             "gpus": 0,
@@ -111,41 +115,42 @@ async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> Live
         RegistryImage(task.environment_requirements.docker_image),
         _resources(runtime.cpus, runtime.memory_mb, runtime.storage_mb, runtime.gpus),
     )
-    workdir = task.environment_requirements.working_directory or "/app"
+    requirements = task.environment_requirements
+    spec_machine = machine_spec(
+        EnvironmentConfig(
+            docker_image=requirements.docker_image,
+            workdir=requirements.working_directory,
+            cpus=runtime.cpus,
+            memory_mb=runtime.memory_mb,
+            storage_mb=runtime.storage_mb,
+        ),
+        Path("/nonexistent"),
+        {},
+        cpus=runtime.cpus,
+        memory_mb=runtime.memory_mb,
+        storage_mb=runtime.storage_mb,
+    )
+    grader_environment = getattr(task.grader, "environment", None)
+    if grader_environment is not None and grader_environment.packages_lock is not None:
+        # A packaged grader runs from the host image the lock resolves to, exactly as the
+        # rollout runner maps a package lock (rolloutengine.machines._machine_spec).
+        spec_machine = replace(spec_machine, source=HostImage())
     try:
-        async with task_machine(task, factory, runtime, cleanup_timeout=runtime.cleanup_timeout or 120.0) as machine:
-            # A grading machine installs the verifier resources under /tests; the task
-            # machine only installs all/worker, so the phase adds them here.
-            await _install_resources(machine, task.resources.verifier)
-            await machine.run(Command(("mkdir", "-p", "/logs/verifier"), timeout=60))
-            result = await machine.run(Command(("bash", "-lc", VERIFIER_COMMAND), cwd=workdir, timeout=VERIFIER_TIMEOUT))
-            reward = None
-            read = await machine.run(Command(("cat", REWARD_PATH), timeout=60))
-            if read.exit_code == 0:
-                text = read.stdout.decode(errors="replace").strip().splitlines()
-                reward = float(text[-1]) if text else None
+        result = await grade_empty_in_sandbox(task, factory, spec_machine, timeout=VERIFIER_TIMEOUT)
     except TimeoutError as error:
         return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
     except Exception as error:
         return LivenessResult(
             task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500]
         )
-    if result.reason == ExitReason.TIMED_OUT:
-        return LivenessResult(task.id, base, "timeout", None, reward, snapshot)
-    if result.exit_code != 0:
+    if result.status is not Outcome.SUCCESS:
         return LivenessResult(
-            task.id,
-            base,
-            "infra_error",
-            result.exit_code,
-            reward,
-            snapshot,
-            result.stderr.decode(errors="replace")[-300:],
+            task.id, base, "infra_error", None, result.reward, snapshot, (result.error or str(result.status))[:300]
         )
-    if reward is None:
-        return LivenessResult(task.id, base, "missing_reward", result.exit_code, None, snapshot)
-    outcome = "negative_verdict" if reward < 1.0 else "positive_reward"
-    return LivenessResult(task.id, base, outcome, result.exit_code, reward, snapshot)
+    if result.reward is None:
+        return LivenessResult(task.id, base, "missing_reward", None, None, snapshot)
+    outcome = "negative_verdict" if result.reward < 1.0 else "positive_reward"
+    return LivenessResult(task.id, base, outcome, 0, result.reward, snapshot)
 
 
 async def run(specs: dict[str, dict], bases: dict[str, str], task_ids: list[str], output: Path) -> None:
@@ -161,15 +166,21 @@ async def run(specs: dict[str, dict], bases: dict[str, str], task_ids: list[str]
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lowered", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, help="rebuild manifest naming each task's base")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sample-per-base", type=int, default=20)
     parser.add_argument("--limit", type=int, default=0, help="cap the sample for a pilot run")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     specs = load_specs(args.lowered)
-    manifest = json.loads(args.manifest.read_text())
-    bases = {row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")}
+    if args.manifest is not None:
+        manifest = json.loads(args.manifest.read_text())
+        bases = {
+            row["task_id"]: row["base_ref"] for row in manifest["tasks"] if row.get("status", "").startswith("rebuilt")
+        }
+    else:
+        # A published cohort carries each task's own base in its spec.
+        bases = {task_id: spec["task"]["environment_requirements"]["docker_image"] for task_id, spec in specs.items()}
     task_ids = sample_by_base(specs, bases, args.sample_per_base, args.seed)
     if args.limit:
         task_ids = task_ids[: args.limit]
