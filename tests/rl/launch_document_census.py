@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import json
 from collections.abc import Callable
 from functools import partial
 from itertools import product
@@ -15,10 +16,10 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import async_rl, iceball_micro, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import iceball_micro, skyrl_port_smoke, snowball_online_eagle, snowball_rl
+from experiments.post_training import snowball_rl_presets as snowball
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
-from experiments.post_training.inventory import train_quick_loop as inventory
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
 
@@ -29,8 +30,30 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
     return curriculum.build_arms(specs=(arm,), scale=scale, policy=policy, version=VERSION)[arm.name].rl
 
 
-def _async_step(preset, settings=()) -> ArtifactStep[SkyRLRun]:
-    return async_rl.build_run(curriculum.SNOWBALL_POLICY, preset, VERSION, settings=settings).rl
+def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
+    panel = snowball.selection_artifact(f"{snowball.DEFAULT_EVAL_LITE_NAME}@{snowball.DEFAULT_EVAL_LITE_VERSION}")
+    selection = snowball.default_selection()
+    for source, full_rows in ((selection, 910), (panel, 1500)):
+        summary = {
+            "recipe": {
+                "heldout": [],
+                "exclusions": [
+                    {"uri": str(StoragePath(panel.path()) / snowball.FULL_VALIDATION_FILENAME), "version": panel.version}
+                ],
+            },
+            "training_rows": 100000,
+            "validation_rows": 100,
+            "full_validation_rows": full_rows,
+            "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
+        }
+        path = StoragePath(source.path()) / snowball.SUMMARY_FILENAME
+        path.parent.mkdirs()
+        path.write_text(json.dumps(summary))
+    return snowball_rl.build_run(
+        preset,
+        tasks=selection if preset.focus == snowball.Focus.DATA else None,
+        settings=tuple(map(snowball.parse_setting, settings)),
+    ).runs[0]
 
 
 def _iceball_step() -> ArtifactStep[SkyRLRun]:
@@ -46,11 +69,6 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
         input_version=VERSION,
         **settings,
     )
-
-
-def _inventory_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
-    selection = ArtifactStep.adopt("rl-data/task-selection/census", VERSION, str(artifact_root / "selection"))
-    return inventory.build_run(VERSION, selection=selection)
 
 
 def _port_smoke_step(stage: str) -> ArtifactStep[SkyRLRun]:
@@ -71,13 +89,14 @@ def launch_builders(
         if (policy is curriculum.SNOWBALL_POLICY) != scale.startswith("snowball-"):
             continue
         builders[name] = partial(_curriculum_step, scale, policy, arm)
-    for label, preset in async_rl.PRESETS.items():
-        builders[f"async/{label}"] = partial(_async_step, preset)
-    default = async_rl.PRESETS["default"]
-    builders["async/settings/checkpoint-interval"] = partial(
-        _async_step, default, ("trainer.max_steps=3", "trainer.eval_interval=2")
+    for label, preset in snowball.PRESETS.items():
+        builders[f"snowball/{label}"] = partial(_snowball_step, preset)
+    builders["snowball/settings/optimizer"] = partial(
+        _snowball_step, snowball.PRESETS["learning-medium"], ("trainer.policy.optimizer_config.lr=2e-6",)
     )
-    builders["async/settings/sampling"] = partial(_async_step, default, ("generator.sampling_params.temperature=0.9",))
+    builders["snowball/settings/context-budget"] = partial(
+        _snowball_step, snowball.PRESETS["train-long"], ("context_budget.request_window_tokens=32768",)
+    )
     canary_base = {"preset": "dry", "lane": "async", "model": canary.DEFAULT_MODEL, "checkpoint": False, "export": False}
     canary_axes = {
         "preset": canary.PRESETS,
@@ -99,7 +118,6 @@ def launch_builders(
         settings=("context_budget.request_window_tokens=256", "context_budget.max_new_tokens_per_turn=128"),
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
-    builders["inventory/train"] = partial(_inventory_step, artifact_root)
     for stage in ("train", "resume"):
         builders[f"port-smoke/{stage}"] = partial(_port_smoke_step, stage)
     builders["iceball/workflow"] = _iceball_step
