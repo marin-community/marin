@@ -66,7 +66,7 @@ def test_rollout_overrides_change_the_run_identity(monkeypatch) -> None:
         settings=("trainer.rollout_buffer.max_in_flight=1",),
     )
     seeded = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.18", seed=23)
-    assert seeded.rl.name == f'{run.rl.name}-set-{async_rl.fingerprint_hash("trainer.seed=23")}'
+    assert seeded.rl.name == f"{run.rl.name}-set-3c284a12"
     assert capped.rl.name != run.rl.name
     assert capped.evaluation.name != run.evaluation.name
 
