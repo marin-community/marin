@@ -386,7 +386,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install local sandbox tools
-        run: |
+        run: &install_sandbox_tools |
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
@@ -410,9 +411,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install local sandbox tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap umoci busybox-static
+        run: *install_sandbox_tools
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
