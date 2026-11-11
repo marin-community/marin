@@ -94,9 +94,6 @@ class SourceInfo:
     daytona_count_basis: str | None = None
     """Identity rule and payload source behind ``daytona_snapshot_count``."""
 
-    daytona_snapshot_threshold: int | None = None
-    """Snapshot budget in force when ``daytona_snapshot_count`` was measured."""
-
 
 @dataclass(frozen=True)
 class RlDataSource[ConfigT: CatalogConfig]:

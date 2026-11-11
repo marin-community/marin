@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import math
+import stat
 import tarfile
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
@@ -35,15 +36,18 @@ AGENTIC_DEFAULT_IMAGE_KEY = "shellbox-default-agent"
 DEFAULT_RESOURCES = json.dumps(asdict(Resources()), sort_keys=True)
 """Resources JSON for tasks whose payload specifies no machine shape."""
 
+DIRECTORY_MODE = 0o40755
+"""Mode of a synthesized parent directory: type bits plus the common 0755."""
+
 IDENTITY_RULE = "shellbox: sha256(image_source_key + NUL + resources-json), first 40 hex characters"
 
 
 @dataclass(frozen=True)
 class ContextFile:
-    """One entry of an in-memory Docker build context.
+    """One entry of a build context as the extracted filesystem would present it.
 
-    Directories carry a mode and no content; symlinks carry ``link``; regular
-    files carry ``content``.
+    ``mode`` is the full ``st_mode`` including type bits (regular file, directory
+    or symlink); directories carry no content, symlinks carry ``link``.
     """
 
     name: str
@@ -52,16 +56,32 @@ class ContextFile:
     link: str | None = None
 
 
+def _with_parents(files: list[ContextFile]) -> list[ContextFile]:
+    """Add every implicit parent directory the extracted tree would contain."""
+    known = {item.name for item in files}
+    completed = list(files)
+    for item in files:
+        parts = item.name.split("/")
+        for depth in range(1, len(parts)):
+            parent = "/".join(parts[:depth])
+            if parent not in known:
+                known.add(parent)
+                completed.append(ContextFile(name=parent, mode=DIRECTORY_MODE))
+    return completed
+
+
 def image_source_key_from_context(dockerfile_name: str, files: Iterable[ContextFile]) -> str:
     """Hash a build context exactly like :func:`shellbox.image.image_source_key`.
 
     The dockerfile name is relative to the context root. Entries hash in Path
     order (per path segment, not plain string order) as ``path\\0mode\\0`` followed
-    by the symlink target or file bytes; directories contribute no bytes.
+    by the symlink target or file bytes; directories contribute no bytes. Parent
+    directories are synthesized so archives that omit them hash like the
+    extracted tree.
     """
     digest = hashlib.sha256()
     digest.update(f"{dockerfile_name}\0".encode())
-    for context_file in sorted(files, key=lambda item: tuple(item.name.split("/"))):
+    for context_file in sorted(_with_parents(list(files)), key=lambda item: tuple(item.name.split("/"))):
         digest.update(f"{context_file.name}\0".encode())
         digest.update(f"{context_file.mode}\0".encode())
         if context_file.link is not None:
@@ -102,7 +122,11 @@ def resources_json(
 
 
 def _context_files_from_tar(archive: tarfile.TarFile, root: str) -> list[ContextFile]:
-    """Extract the ``root`` subtree of a task tar as build-context entries."""
+    """Extract the ``root`` subtree of a task tar as extracted-filesystem entries.
+
+    Tar modes carry permission bits only, so the type bits are OR'd in and
+    implicit parent directories are synthesized by the context hash.
+    """
     members = [member for member in archive.getmembers() if member.name.startswith(root)]
     if not members:
         raise ValueError(f"task tar has no {root} build context")
@@ -112,11 +136,13 @@ def _context_files_from_tar(archive: tarfile.TarFile, root: str) -> list[Context
         if not relative:
             continue
         if member.issym():
-            files.append(ContextFile(name=relative, mode=member.mode, link=member.linkname))
+            files.append(ContextFile(name=relative, mode=member.mode | stat.S_IFLNK, link=member.linkname))
         elif member.isdir():
-            files.append(ContextFile(name=relative, mode=member.mode))
+            files.append(ContextFile(name=relative, mode=member.mode | stat.S_IFDIR))
         else:
-            files.append(ContextFile(name=relative, mode=member.mode, content=archive.extractfile(member).read()))
+            files.append(
+                ContextFile(name=relative, mode=member.mode | stat.S_IFREG, content=archive.extractfile(member).read())
+            )
     return files
 
 
@@ -157,7 +183,7 @@ def _lowered_verifier_key(spec: Mapping) -> str:
         files.append(
             ContextFile(
                 name=path[len(prefix) :],
-                mode=int(item.get("mode", "644"), 8),
+                mode=int(item.get("mode") or "644", 8) | stat.S_IFREG,
                 content=_decoded_source(item["source"]),
             )
         )
