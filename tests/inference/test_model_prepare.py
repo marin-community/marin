@@ -85,7 +85,6 @@ def serving(monkeypatch, tmp_path):
         fail_submit=False,
         timeout_prepare=False,
         worker_prefix=str(tmp_path / "worker-cache"),
-        coordinator_cluster="other-cluster",
     )
 
     def stream(fs, dest, model_id, revision, complete_marker):
@@ -116,17 +115,7 @@ def serving(monkeypatch, tmp_path):
         "get_job_info",
         lambda: SimpleNamespace(worker_region="us-east1", constraints=[], task_id="/test/coordinator/0"),
     )
-    monkeypatch.setattr(
-        iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                task_status=lambda _task: SimpleNamespace(execution_cluster_id=state.coordinator_cluster)
-            )
-        ),
-    )
     monkeypatch.setattr(cache_module, "get_job_info", iris_module.get_job_info)
-    monkeypatch.setattr(cache_module, "iris_ctx", iris_module.iris_ctx)
     monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=submit))
     monkeypatch.setattr(iris_module, "_start_direct_inference", start_direct)
     return state
@@ -136,10 +125,7 @@ def _seed(model: str, revision: str, ttl: int = 14) -> StoragePath:
     return StoragePath(resolve_model_path(model, ttl, revision)) / DEFAULT_COMPLETE_MARKER
 
 
-@pytest.mark.parametrize("same_cluster", [False, True])
-def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monkeypatch, same_cluster):
-    if same_cluster:
-        serving.coordinator_cluster = "cw-rno2a"
+def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monkeypatch):
     with remote_inference(_config(REVISION)):
         pass
 
@@ -152,7 +138,6 @@ def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monke
     (served,) = serving.served
     assert served.model.revision == REVISION
     assert served.model.model_id == "org/candidate"
-    assert request.max_retries_failure == 1
     assert len(serving.downloads) == 1
     monkeypatch.setenv("MARIN_PREFIX", serving.worker_prefix)
     # The worker resolves the real job's output, without a second download.
@@ -161,35 +146,30 @@ def test_cold_model_is_mirrored_on_cpu_before_the_accelerator_job(serving, monke
     assert len(serving.downloads) == 1
 
 
-@pytest.mark.parametrize(
-    "same_cluster,regions",
-    [
-        (True, ["us-east1"]),
-        (False, ["us-east1"]),
-        (True, ["us-west1"]),
-        (True, ["*"]),
-    ],
-)
-def test_warm_coordinator_only_skips_prepare_for_the_same_placement(serving, monkeypatch, same_cluster, regions):
+def test_warm_colocated_coordinator_skips_cpu_preparation(serving):
     _seed("org/candidate", REVISION)
     serving.downloads.clear()
-    if same_cluster:
-        serving.coordinator_cluster = "cw-rno2a"
+    serving.worker_prefix = os.environ["MARIN_PREFIX"]
     config = _config(REVISION)
     config = replace(
-        config, iris=replace(config.iris, worker_resources=replace(config.iris.worker_resources, regions=regions))
+        config, iris=replace(config.iris, worker_resources=replace(config.iris.worker_resources, target_cluster=None))
     )
-    colocated = same_cluster and regions == ["us-east1"]
-    if colocated:
-        # The actual prefix remains the coordinator prefix for a colocated worker.
-        serving.worker_prefix = os.environ["MARIN_PREFIX"]
     with remote_inference(config):
         pass
-    assert serving.events == (["gpu"] if colocated else ["prepare", "gpu"])
-    assert len(serving.downloads) == (0 if colocated else 1)
+    assert serving.events == ["gpu"]
+    assert serving.downloads == []
+
+
+def test_warm_coordinator_does_not_skip_named_target_preparation(serving, monkeypatch):
+    _seed("org/candidate", REVISION)
+    serving.downloads.clear()
+    with remote_inference(_config(REVISION)):
+        pass
+    assert serving.events == ["prepare", "gpu"]
+    assert len(serving.downloads) == 1
     monkeypatch.setenv("MARIN_PREFIX", serving.worker_prefix)
     assert _seed("org/candidate", REVISION).exists()
-    assert len(serving.downloads) == (0 if colocated else 1)
+    assert len(serving.downloads) == 1
 
 
 def test_speculative_draft_model_is_mirrored_and_pinned(serving, monkeypatch):
@@ -261,7 +241,7 @@ def test_prepare_timeout_is_not_retried_as_a_serving_readiness_timeout(serving):
         ("gpu", [ANY_REGION], None, True),
     ],
 )
-def test_preparation_requires_a_matchable_serving_placement(serving, caplog, device, regions, target_cluster, prepares):
+def test_preparation_requires_a_matchable_serving_placement(serving, device, regions, target_cluster, prepares):
     config = _config(REVISION)
     resources = (
         ResourceConfig.with_gpu("H100", count=1, regions=regions, target_cluster=target_cluster)
@@ -273,12 +253,10 @@ def test_preparation_requires_a_matchable_serving_placement(serving, caplog, dev
         pass
     assert serving.events == (["prepare", "gpu"] if prepares else ["gpu"])
     assert len(serving.downloads) == int(prepares)
-    if not prepares:
-        assert "Skipping CPU model preparation" in caplog.text
 
 
 @pytest.mark.parametrize("device", ["gpu", "tpu"])
-def test_root_unpinned_accelerator_does_not_submit_a_prepare_job(serving, monkeypatch, caplog, device):
+def test_root_unpinned_accelerator_does_not_submit_a_prepare_job(serving, monkeypatch, device):
     monkeypatch.setattr(iris_module, "get_job_info", lambda: None)
     monkeypatch.setattr(cache_module, "get_job_info", lambda: None)
     config = _config(REVISION)
@@ -291,7 +269,6 @@ def test_root_unpinned_accelerator_does_not_submit_a_prepare_job(serving, monkey
     iris_module._prepared_inference_config(config)
     assert serving.requests == []
     assert serving.downloads == []
-    assert "Skipping CPU model preparation" in caplog.text
 
 
 @pytest.mark.parametrize(

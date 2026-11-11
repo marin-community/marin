@@ -9,7 +9,6 @@ from dataclasses import dataclass, replace
 
 from fray.client import Client, JobHandle, wait_all
 from fray.types import ANY_REGION, Entrypoint, EnvironmentConfig, GpuConfig, JobRequest, ResourceConfig, TpuConfig
-from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
 from levanter.model_cache import CacheMode, resolve_hf_model_ref
@@ -155,6 +154,8 @@ def _prepare_job_request(entry: str, iris: IrisConfig, environment: EnvironmentC
 
 
 def _coordinator_matches_serving_placement(resources: ResourceConfig) -> bool:
+    if resources.target_cluster is not None:
+        return False
     info = get_job_info()
     if info is None or info.worker_region is None:
         return False
@@ -166,6 +167,4 @@ def _coordinator_matches_serving_placement(resources: ResourceConfig) -> bool:
         expected = region_constraint([info.worker_region])
         if any(c.key == WellKnownAttribute.REGION and c != expected for c in info.constraints):
             return False
-    if resources.target_cluster is None:
-        return True
-    return iris_ctx().client.task_status(info.task_id).execution_cluster_id == resources.target_cluster
+    return True
