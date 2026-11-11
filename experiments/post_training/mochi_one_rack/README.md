@@ -29,7 +29,16 @@ uv run python -m experiments.post_training.mochi_one_rack.launch \
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. The recipe explicitly selects Daytona's `us` target, which full Harbor trials require in their host connection. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. The `4k` terminal runs the initial job and its short-context continuation. Inspect its applied update 5 before launching `--stage 32k`. `--stage 4k-initial` stops after checkpoint 4. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.
 
-Pass `--initial-four-k-version` to reuse a completed checkpoint-4 artifact when retrying short continuation. After short continuation succeeds, use a fresh version with `--stage 32k --four-k-version <completed-4k-version>` to reuse its checkpoint 5. Artifact names under `checkpoints/mochi-muonh/` keep these fresh-optimizer runs separate from the earlier AdamW experiment. Native checkpoints retain the Muon momentum, Adam moments, FP32 masters, optimizer counters, schedule and RNG state.
+Pass `--initial-four-k-version` to reuse a completed checkpoint-4 artifact when retrying short continuation. After short continuation succeeds, use a fresh version with `--stage 32k --four-k-version <completed-4k-version>` to reuse its checkpoint 5. If the initial and resumed 4K jobs used different versions, pass both versions so the graph reuses the same dependencies:
+
+```bash
+uv run python -m experiments.post_training.mochi_one_rack.launch \
+  --stage 32k --version 2026.11.11.9302 \
+  --initial-four-k-version 2026.11.11.9300 \
+  --four-k-version 2026.11.11.9301
+```
+
+Artifact names under `checkpoints/mochi-muonh/` keep these fresh-optimizer runs separate from the earlier AdamW experiment. Native checkpoints retain the Muon momentum, Adam moments, FP32 masters, optimizer counters, schedule and RNG state.
 
 The wheel in `config/external/vllm/mochi-gb200.toml` is experimental. `runtime.vllm_backend()` selects it through Marin's ordinary CUDA serving launcher without changing the promoted `gpu.toml`. The vendored SkyRL lock selects the same vLLM bytes for every aarch64 GPU job, rather than providing an opt-in selector. It also changes the ARM Torch/CUDA/native dependency stack and removes the ARM speculators and hs-connectors dependencies. The standalone Marin serving selector has CPU validation only; this RL experiment exercises the SkyRL route. Its Python implementation is the merged schema-3 source `3004cd8f163299116b96d1b324cfff418c387388`; its SM100 native payloads are byte-identical to release `5fa2e9bad66dcc2b9836e657323214aefc179a7f`. The matching Torch 2.14.1/cu132 FlashAttention package retains FA2 kernels and excludes an incompatible optional FA4 namespace. Artifact manifests are attached to the task-scoped prerelease.
 

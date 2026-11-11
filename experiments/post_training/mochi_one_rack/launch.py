@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Restart Hero MuonH at 4K before running five near-limit 32K updates."""
+"""Restart Hero MuonH at 4K before five 32K updates, including a near-limit probe."""
 
 from dataclasses import dataclass, replace
 from pathlib import Path

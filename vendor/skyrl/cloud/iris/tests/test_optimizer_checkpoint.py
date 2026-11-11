@@ -1,5 +1,4 @@
 from pathlib import Path
-import time
 
 import pytest
 import torch
@@ -57,7 +56,8 @@ def restore_worker(rank: int, root: str) -> None:
         def restore():
             # Exclusive creation fails if another rank on this host is restoring.
             with (path / "active-restore").open("x"):
-                time.sleep(0.05)
+                if rank:
+                    assert (path / f"restored-{rank - 1}").read_text() == "complete"
                 (path / f"restored-{rank}").write_text("complete")
             (path / "active-restore").unlink()
 

@@ -118,12 +118,8 @@ def megatron_grug_expert_bank(name: str) -> str | None:
 def _expert_bank_step_(
     matrices: list[tuple[Tensor, Tensor]], *, lr: float, expert_parallel_group: dist.ProcessGroup | None
 ) -> None:
-    """Project a routed bank onto one Frobenius sphere, as Hero EP does.
-
-    Matrices stay local to their expert owner. Only two FP32 norm scalars,
-    followed by the candidate norm, cross the expert-parallel group. Directions
-    occupy consumed gradients, so the bank never needs a second full copy.
-    """
+    """Update a routed bank on one Frobenius sphere; consume its directions."""
+    # Reduce norm scalars across expert owners without gathering their matrices.
     norms = torch.stack(
         [
             torch.stack([_matrix_norm(value).square().sum() for value, _ in matrices]).sum(),

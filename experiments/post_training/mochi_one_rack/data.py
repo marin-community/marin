@@ -24,6 +24,7 @@ NONAGENTIC_IDS = (
     "nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym-e29ff0e4b35890886ebf161edbbcaa807234f8a7a4119b121b4e29755dcb9f76",
     "reasoning_gym_generated-60f84bd9d331d39b51ce0befb27ba00cb0c7204b809dc3baa9c5d9d2324e428b",
 )
+PROBE_TEXT_TOKEN_LIMIT = 31_600
 
 
 def selected_tasks(root: Path) -> dict[str, dict]:
@@ -52,14 +53,14 @@ def length_probe(task: dict, tokenizer) -> tuple[dict, int]:
         count = (start + stop + 1) // 2
         text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines[:count])
         text += "\nFinal question: " + question
-        if len(tokenizer.encode(text, add_special_tokens=False)) <= 31_600:
+        if len(tokenizer.encode(text, add_special_tokens=False)) <= PROBE_TEXT_TOKEN_LIMIT:
             start = count
         else:
             stop = count - 1
     text = "This is a controlled context-length probe. Read the final question.\n" + "".join(lines[:start])
     text += "\nFinal question: " + question
     tokens = len(tokenizer.encode(text, add_special_tokens=False))
-    assert 31_500 <= tokens <= 31_600
+    assert 31_500 <= tokens <= PROBE_TEXT_TOKEN_LIMIT
     task["context"]["events"][-1]["content"] = text
     task["id"] = "mochi-controlled-length-probe:visible-ledger-arithmetic"
     task["source"] = {
