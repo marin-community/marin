@@ -392,6 +392,14 @@ runs, with the rung in their id (`runs/X0037d768.yaml`, `belay-X0037d768-seed0`)
 go on the one `X####` entry and thread. The idea stays running until its last rung finishes, and that rung scores
 the entry.
 
+**Official and informal ladders.** A ladder is official only when each rung trains at equal compute with its
+baseline at hero-scale MFU. `B new-idea` reads the idea's most recent `hero-mfu` result, its s/step change `r`
+(+0.05 is 5% slower per step at hero scale), and launches each rung at its baseline's steps ÷ (1 + r) (`--num-steps`
+on the variant), recording the trial as protocol `hero_mfu_matched` with a note naming the hero-mfu trial. With no
+hero-mfu result the rungs launch at the baseline's steps, recorded `equal_steps` with the note "informal ladder
+rung". Informal ladders are fine before an idea has a hero-mfu result; only official ones give a scale projection,
+and the page shows informal ones without a verdict. A `hero-mfu` run needs a maintainer (see its row below).
+
 `B tracks` prints the one definition of every Track: its code branch, exact launch command, hardware, priority,
 metric and rule. Nothing else spells out a launch.
 

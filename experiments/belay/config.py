@@ -115,6 +115,18 @@ class Track(StrEnum):
     CUSTOM = "custom"
 
 
+class Protocol(StrEnum):
+    """How a trial's runs were held against their baseline; recorded on each registry trial."""
+
+    EQUAL_STEPS = "equal_steps"
+    """The Track's baseline step count. On the ladder this is an informal comparison."""
+    FIXED_TIME = "fixed_time"
+    """The speedrun's stage 2: the steps that fit ``train_seconds`` at the probe's measured step time."""
+    HERO_MFU_MATCHED = "hero_mfu_matched"
+    """A ladder rung at equal compute with its baseline at hero-scale MFU: the baseline's steps divided by one plus
+    the idea's latest hero-mfu s/step change. Only these ladders give an official scale projection."""
+
+
 class Comparison(StrEnum):
     """What a Track holds equal between the variant and its control; every post states it above its table."""
 

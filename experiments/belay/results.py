@@ -77,6 +77,20 @@ BPB = "eval/paloma/macro_bpb"
 SKIP_STEPS = 5  # compile and warm-up steps left out of a run's median s/step
 
 
+# The hero-mfu Track's metric: wall-clock seconds per step over steps [6, 24) of its 30-step run, as
+# belay_hero_mfu.py --accept measures it. No run logs it; it is computed from each step's log time.
+WALL_STEP_TIME = "s/step"
+WALL_STEPS = (6, 24)
+
+
+def wall_step_time(timestamps: dict[int, float]) -> float:
+    """Seconds per step between the first and last logged steps inside ``WALL_STEPS`` (step -> log time)."""
+    steps = sorted(s for s in timestamps if WALL_STEPS[0] <= s < WALL_STEPS[1])
+    if len(steps) < 2:
+        raise SystemExit(f"refusing: fewer than two logged steps in {WALL_STEPS}")
+    return (timestamps[steps[-1]] - timestamps[steps[0]]) / (steps[-1] - steps[0])
+
+
 def measure(name: str, metric: str, skip: int = SKIP_STEPS) -> Measure:
     """Steps, final ``metric``, median s/step and tokens of the finished W&B run ``name``; refuses an unfinished one."""
     matches = list(wandb.Api().runs(CONFIG.wandb_project, filters={"display_name": name}, order="-created_at"))
@@ -86,7 +100,11 @@ def measure(name: str, metric: str, skip: int = SKIP_STEPS) -> Measure:
     durations = [row[STEP_TIME] for row in run.scan_history(keys=["_step", STEP_TIME]) if row["_step"] >= skip]
     if not durations:
         raise SystemExit(f"refusing: {name} logged no {STEP_TIME} after step {skip}")
-    loss = run.summary.get(metric)
+    if metric == WALL_STEP_TIME:
+        rows = run.scan_history(keys=["global_step", "_timestamp"])
+        loss = wall_step_time({int(row["global_step"]): row["_timestamp"] for row in rows})
+    else:
+        loss = run.summary.get(metric)
     return Measure(
         name=name,
         steps=int(run.summary["_step"]) + 1,
