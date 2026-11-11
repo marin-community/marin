@@ -52,6 +52,7 @@ from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import (
     InferenceBackendState,
+    InferenceStartupPhase,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -698,6 +699,7 @@ def _inference_session(stack: ExitStack, config: RemoteInferenceConfig) -> Remot
     return retry_with_backoff(
         lambda: stack.enter_context(remote_inference(config)),
         retryable=lambda error: isinstance(error, RemoteInferenceStartupError)
+        and error.phase is InferenceStartupPhase.SERVING
         and isinstance(error.__cause__, TimeoutError),
         max_attempts=config.iris.max_retries_failure + 1,
         operation="evaluation inference startup",
