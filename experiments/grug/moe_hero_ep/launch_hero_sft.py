@@ -178,16 +178,51 @@ def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_
     )
 
 
+SFT_POSITION_METADATA_KEY = "sft_mixture_position"
+
+
+@dataclass(frozen=True)
+class SftMixturePosition:
+    """Where a run reads its SFT epoch: ``step`` reads mixture sequence ``sequence``, ``batch_size`` per step.
+
+    ``plan_dp_racks`` is the rack count that planned the epoch's mixture blocks. Each checkpoint records the
+    position, so a later handoff resumes the same stream however many handoffs came before.
+    """
+
+    plan_dp_racks: int
+    step: int
+    sequence: int
+    batch_size: int
+
+    def sequence_at(self, step: int) -> int:
+        if step < self.step:
+            raise ValueError(f"step {step} precedes this run's first step {self.step}")
+        return self.sequence + (step - self.step) * self.batch_size
+
+    def checkpoint_metadata(self) -> dict[str, object]:
+        return {SFT_POSITION_METADATA_KEY: dataclasses.asdict(self)}
+
+    @classmethod
+    def recorded_in(cls, metadata: Mapping[str, object]) -> "SftMixturePosition | None":
+        raw = metadata.get(SFT_POSITION_METADATA_KEY)
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"{SFT_POSITION_METADATA_KEY} must be a mapping, got {raw!r}")
+        return cls(**raw)
+
+
 @dataclass(frozen=True)
 class SftHandoff:
-    """A run of the same SFT epoch to continue, from its permanent checkpoint at ``step``.
+    """A run of the same SFT epoch to continue from its permanent checkpoint at ``step``.
 
-    The continuing run plans the epoch at ``parent_dp_racks`` and reads at its own batch size.
+    ``step`` reads mixture sequence ``sequence`` of the epoch that ``plan_dp_racks`` racks planned.
     """
 
     checkpoint: str
     step: int
-    parent_dp_racks: int
+    plan_dp_racks: int
+    sequence: int
 
 
 @dataclass(frozen=True)
@@ -200,24 +235,23 @@ class SftSteps:
     decay_steps: int
 
 
-def sft_steps(plan: SftMixturePlan, *, start_step: int, batch_size: int, handoff_step: int | None = None) -> SftSteps:
-    """Steps that read the rest of the plan's epoch once at ``batch_size``, from ``handoff_step`` if set.
+def sft_steps(plan: SftMixturePlan, *, start_step: int, batch_size: int, handoff: SftHandoff | None = None) -> SftSteps:
+    """Steps that read the rest of the plan's epoch once at ``batch_size``, from ``handoff`` if set.
 
-    The handoff offset assumes all preceding steps used the plan's batch size. The decay covers the same final
-    sequences as the plan's, and fewer than ``batch_size`` sequences at the end of the epoch stay unread.
+    The decay covers the same final sequences as the plan's, and fewer than ``batch_size`` sequences at the
+    end of the epoch stay unread.
     """
-    if handoff_step is None:
+    if handoff is None:
         if batch_size != plan.batch_size:
             raise ValueError(f"batch {batch_size} does not match the plan's {plan.batch_size}")
         return SftSteps(start_step, 0, start_step + plan.steps, plan.decay_steps)
-    first_sequence = (handoff_step - start_step) * plan.batch_size
-    if not 0 < first_sequence < plan.run_sequences:
-        raise ValueError(f"handoff step {handoff_step} is outside the epoch that starts at step {start_step}")
-    num_train_steps = handoff_step + (plan.run_sequences - first_sequence) // batch_size
+    if not 0 < handoff.sequence < plan.run_sequences:
+        raise ValueError(f"handoff sequence {handoff.sequence} is outside the {plan.run_sequences}-sequence epoch")
+    num_train_steps = handoff.step + (plan.run_sequences - handoff.sequence) // batch_size
     decay_steps = max(SFT_MIN_DECAY_STEPS, round(plan.decay_steps * plan.batch_size / batch_size))
-    if num_train_steps - decay_steps < handoff_step:
-        raise ValueError(f"handoff step {handoff_step} falls inside the learning-rate decay")
-    return SftSteps(handoff_step, first_sequence, num_train_steps, decay_steps)
+    if num_train_steps - decay_steps < handoff.step:
+        raise ValueError(f"handoff step {handoff.step} falls inside the learning-rate decay")
+    return SftSteps(handoff.step, handoff.sequence, num_train_steps, decay_steps)
 
 
 def _store_component(store: SftStore) -> DatasetComponent:
@@ -341,15 +375,40 @@ def special_token_init(start_step: int, tokenizer_path: str = SFT_TOKENIZER) -> 
     )
 
 
-def checkpoint_step(checkpoint: str) -> int:
-    """The step recorded in a complete checkpoint's ``metadata.json``."""
+def permanent_checkpoint_metadata(checkpoint: str) -> dict[str, object]:
+    """A complete permanent checkpoint's ``metadata.json``."""
     metadata = json.loads((StoragePath(checkpoint) / "metadata.json").read_text())
     if metadata.get("is_temporary"):
         raise ValueError(f"{checkpoint} is a temporary checkpoint")
+    if StoragePath(checkpoint).name != f"step-{int(metadata['step'])}":
+        raise ValueError(f"{checkpoint} records step {metadata['step']}")
+    return metadata
+
+
+def checkpoint_step(checkpoint: str) -> int:
+    """The step recorded in a complete checkpoint's ``metadata.json``."""
+    return int(permanent_checkpoint_metadata(checkpoint)["step"])
+
+
+def sft_handoff(checkpoint: str, *, start_step: int, parent_dp_racks: int | None) -> SftHandoff:
+    """The handoff from a permanent checkpoint of a run of the epoch that starts at ``start_step``.
+
+    The checkpoint's recorded mixture position sets where the handoff resumes. A checkpoint that records none
+    comes from a run that read the epoch from ``start_step`` on ``parent_dp_racks`` racks.
+    """
+    metadata = permanent_checkpoint_metadata(checkpoint)
     step = int(metadata["step"])
-    if StoragePath(checkpoint).name != f"step-{step}":
-        raise ValueError(f"{checkpoint} records step {step}")
-    return step
+    rack_batch_size = hero_rack_batch_size(HERO_MODEL_CONFIG.max_seq_len)
+    position = SftMixturePosition.recorded_in(metadata)
+    if position is None:
+        if parent_dp_racks is None:
+            raise ValueError(f"{checkpoint} records no SFT mixture position; give the racks of the run that wrote it")
+        position = SftMixturePosition(
+            plan_dp_racks=parent_dp_racks, step=start_step, sequence=0, batch_size=rack_batch_size * parent_dp_racks
+        )
+    elif parent_dp_racks is not None and position.batch_size != rack_batch_size * parent_dp_racks:
+        raise ValueError(f"{checkpoint} records batch {position.batch_size}, not {parent_dp_racks} racks")
+    return SftHandoff(checkpoint, step, position.plan_dp_racks, position.sequence_at(step))
 
 
 def build_sft_run(
@@ -401,10 +460,11 @@ def build_sft_run(
     rack_batch_size = hero_rack_batch_size(model.max_seq_len)
     batch_size = rack_batch_size * dp_racks
     stores = load_sft_stores()
-    plan_racks = dp_racks if handoff is None else handoff.parent_dp_racks
+    plan_racks = dp_racks if handoff is None else handoff.plan_dp_racks
     plan = plan_sft_mixture(stores, batch_size=rack_batch_size * plan_racks, replay_fraction=replay_fraction)
-    steps = sft_steps(
-        plan, start_step=start_step, batch_size=batch_size, handoff_step=None if handoff is None else handoff.step
+    steps = sft_steps(plan, start_step=start_step, batch_size=batch_size, handoff=handoff)
+    position = SftMixturePosition(
+        plan_dp_racks=plan_racks, step=steps.first_step, sequence=steps.first_sequence, batch_size=batch_size
     )
     num_train_steps = steps.num_train_steps
     stop_step = num_train_steps if stop_after_steps is None else steps.first_step + stop_after_steps
@@ -450,6 +510,7 @@ def build_sft_run(
         router_bias_mode=router_bias_mode,
         special_tokens=special_token_init(start_step),
         expert_placement=expert_placement,
+        checkpoint_metadata=position.checkpoint_metadata(),
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -668,7 +729,8 @@ def _grad_norm(value: str) -> float | None:
     "--handoff-dp-racks",
     type=click.IntRange(min=1),
     default=None,
-    help="Data-parallel racks of the run that wrote --handoff-checkpoint.",
+    help="Data-parallel racks of the run that wrote --handoff-checkpoint. Required only when the checkpoint "
+    "records no SFT mixture position.",
 )
 @build_options
 def main(
@@ -688,17 +750,18 @@ def main(
     handoff_checkpoint: str | None,
     handoff_dp_racks: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    if (handoff_checkpoint is None) != (handoff_dp_racks is None):
-        raise click.UsageError("--handoff-checkpoint and --handoff-dp-racks go together")
+    if handoff_checkpoint is None and handoff_dp_racks is not None:
+        raise click.UsageError("--handoff-dp-racks needs --handoff-checkpoint")
+    start_step = checkpoint_step(initialize_from)
     handoff = (
         None
-        if handoff_checkpoint is None or handoff_dp_racks is None
-        else SftHandoff(handoff_checkpoint, checkpoint_step(handoff_checkpoint), handoff_dp_racks)
+        if handoff_checkpoint is None
+        else sft_handoff(handoff_checkpoint, start_step=start_step, parent_dp_racks=handoff_dp_racks)
     )
     return build_sft_run(
         run_id=run_id,
         initialize_from=initialize_from,
-        start_step=checkpoint_step(initialize_from),
+        start_step=start_step,
         muon_lr=muon_lr,
         adam_lr=adam_lr,
         max_grad_norm=_grad_norm(max_grad_norm),

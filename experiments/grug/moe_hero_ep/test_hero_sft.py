@@ -27,10 +27,13 @@ from experiments.grug.moe_hero_ep.expert_placement import (
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
+    SftHandoff,
+    SftMixturePosition,
     SftStore,
     one_epoch_weight_stages,
     plan_sft_mixture,
     sft_components,
+    sft_handoff,
     sft_steps,
 )
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
@@ -112,13 +115,33 @@ def test_one_epoch_stages_read_every_sft_store_exactly_once():
 
 def test_a_handoff_reads_the_rest_of_the_epoch_once_at_the_new_batch():
     plan = plan_sft_mixture({"a": _store(900_000), "b": _store(68_596)}, batch_size=176, replay_fraction=0.2035)
+    handoff = SftHandoff("s3://bucket/step-394552", 394_552, plan_dp_racks=11, sequence=(394_552 - 393_491) * 176)
 
-    steps = sft_steps(plan, start_step=393_491, batch_size=144, handoff_step=394_552)
+    steps = sft_steps(plan, start_step=393_491, batch_size=144, handoff=handoff)
 
-    assert steps.first_sequence == (394_552 - 393_491) * 176
     read = steps.first_sequence + (steps.num_train_steps - steps.first_step) * 144
     assert plan.run_sequences - 144 < read <= plan.run_sequences
     assert abs(steps.decay_steps * 144 - plan.decay_steps * 176) <= 72
+
+
+def _write_sft_checkpoint(path, step: int, position: SftMixturePosition | None = None) -> str:
+    path.mkdir(parents=True)
+    recorded = {} if position is None else position.checkpoint_metadata()
+    metadata = {"step": step, "timestamp": "2026-11-11T00:00:00", "is_temporary": False, **recorded}
+    (path / "metadata.json").write_text(json.dumps(metadata))
+    return str(path)
+
+
+def test_a_second_handoff_resumes_where_the_first_one_left_off(tmp_path):
+    # An 11-rack run written before positions were recorded, handed to 9 racks, then to 8.
+    first = sft_handoff(_write_sft_checkpoint(tmp_path / "step-394552", 394_552), start_step=393_491, parent_dp_racks=11)
+    nine_racks = SftMixturePosition(plan_dp_racks=11, step=first.step, sequence=first.sequence, batch_size=144)
+    second_checkpoint = _write_sft_checkpoint(tmp_path / "nine" / "step-395000", 395_000, nine_racks)
+
+    second = sft_handoff(second_checkpoint, start_step=393_491, parent_dp_racks=None)
+
+    assert first.sequence == (394_552 - 393_491) * 176
+    assert second == SftHandoff(second_checkpoint, 395_000, plan_dp_racks=11, sequence=first.sequence + 448 * 144)
 
 
 def test_stores_smaller_than_the_block_count_share_one_component():

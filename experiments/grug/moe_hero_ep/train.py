@@ -10,7 +10,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -70,6 +70,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
+from experiments.grug.moe_hero_ep.expert_placement import CHECKPOINT_METADATA_KEY as EXPERT_PLACEMENT_METADATA_KEY
 from experiments.grug.moe_hero_ep.expert_placement import ExpertPlacement
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
@@ -393,10 +394,14 @@ class GrugTrainerConfig:
     special_tokens: SpecialTokenInit | None = None
     # Renumber the routed experts of the placement's source checkpoint once, when the run restores it.
     expert_placement: ExpertPlacement | None = None
+    # Committed with every checkpoint, next to the expert placement.
+    checkpoint_metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
+        if EXPERT_PLACEMENT_METADATA_KEY in self.checkpoint_metadata:
+            raise ValueError(f"checkpoint_metadata cannot set {EXPERT_PLACEMENT_METADATA_KEY!r}")
         if self.special_tokens is not None and self.master_param_mode != MasterParamMode.DEVICE:
             raise ValueError("special-token reseeding supports only MasterParamMode.DEVICE")
 
@@ -1436,7 +1441,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     expert_placement = config.trainer.expert_placement
     checkpointer = (
         trainer.checkpointer.create(
-            run_id, metadata=None if expert_placement is None else expert_placement.checkpoint_metadata()
+            run_id,
+            metadata={
+                **config.trainer.checkpoint_metadata,
+                **({} if expert_placement is None else expert_placement.checkpoint_metadata()),
+            }
+            or None,
         )
         if config.trainer.save_checkpoints
         else None

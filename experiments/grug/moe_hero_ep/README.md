@@ -689,7 +689,7 @@ the seven chat special-token columns of the LM head from single-token anchors.
 | `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
 | `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
 | `--expert-placement` | Expert placement JSON that renumbers the start checkpoint's routed experts |
-| `--handoff-checkpoint`, `--handoff-dp-racks` | Continue another run of this epoch from its permanent checkpoint, and that run's rack count (see [Handoff to another rack count](#handoff-to-another-rack-count)) |
+| `--handoff-checkpoint`, `--handoff-dp-racks` | Continue another run of this epoch from its permanent checkpoint; the rack count is needed only when the checkpoint records no mixture position (see [Handoff to another rack count](#handoff-to-another-rack-count)) |
 
 Every option above except `--router-bias`, `--capacity-factor` and the last five is required. `GrugTrainerConfig`
 gains `router_bias_mode`, `special_tokens` (`SpecialTokenInit`), and `expert_placement` (`ExpertPlacement`);
@@ -760,15 +760,18 @@ the parent's mixture plan and reads the rest of the parent's data stream at its 
 sequence (handoff step - start step) x parent batch. The learning-rate decay covers the same final sequences as
 the parent's, and fewer than one batch of sequences at the end of the epoch stays unread. The handoff checkpoint
 records the expert placement, so the run does not place experts again, and it reseeds the special tokens only
-at the epoch's start step. A handoff must come before the decay starts.
+at the epoch's start step. A handoff must come before the decay starts. Each SFT checkpoint records its run's
+mixture position, so a handed-off run can be handed off again; `--handoff-dp-racks` is needed only for a
+checkpoint without that record.
 
 1. Request a permanent checkpoint from the parent's `training-control` endpoint with the
    `request-permanent-checkpoint` header value (see [Train an LM](../../../docs/tutorials/train-an-lm.md)).
    Wait for its `metadata.json` under the parent's `checkpoints/`, then cancel the parent coordinator.
 2. Create the W&B child once, forked from the parent's row with `global_step=N-1` for handoff `step-N`, as in
    [Hero cutovers](#hero-cutovers-and-wb-lineage).
-3. Launch with the parent's options, a new `--run-id`, the new `--dp-racks`, `--handoff-checkpoint` set to
-   `step-N`, and `--handoff-dp-racks` set to the parent's rack count. To keep the learning rate per sequence,
+3. Launch with the parent's options, a new `--run-id`, the new `--dp-racks`, and `--handoff-checkpoint` set to
+   `step-N`. For a parent whose checkpoints record no mixture position, also pass its rack count as
+   `--handoff-dp-racks`. To keep the learning rate per sequence,
    scale `--muon-lr` and `--adam-lr` by the new batch over the old: 11 to 9 racks gives 0.818x.
 
 ## Result Record
