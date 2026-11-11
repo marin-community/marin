@@ -179,10 +179,7 @@ class TinyTrainingExp(BasePPOExp):
             num_workers=1,
         )
 
-    def get_eval_dataset(self, data_files: list[str] | None = None):
-        data_files = self.cfg.data.val_data if data_files is None else data_files
-        if self.cfg.trainer.eval_interval <= 0 or not data_files:
-            return None
+    def _build_eval_dataset(self, data_files):
         return SourceTaskDataset(
             datasets=data_files,
             environment_configs=OmegaConf.to_container(self.cfg.environment.task_sessions, resolve=True),
