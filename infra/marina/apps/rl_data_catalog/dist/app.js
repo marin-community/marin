@@ -1,7 +1,7 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 const number = new Intl.NumberFormat('en-US');
 const labels = {good: 'Good', some_issues: 'Some issues', bad: 'Bad', unknown: 'Unknown', unassessed: 'Not assessed'};
-const daytonaLabels = {safe: 'Safe', unsafe: 'Unsafe', unassessed: '—'};
+const daytonaLabels = {safe: 'Safe', unsafe: 'Unsafe'};
 const useLabels = {train: 'Training', eval: 'Evaluation', unprocessed: 'Not processed'};
 const columns = [['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['independent', 'Independent QC'], ['daytona', 'Daytona safe'], ['area', 'Top curriculum area']];
 const state = {sources: [], sort: 'examples', direction: -1, daytonaSnapshotLimit: null};
@@ -112,7 +112,7 @@ function details(row) {
     ['Catalog', row.origin], ['Converted examples', row.coverage?.example_count],
     ['Use', useLabels[row.coverage?.intended_use]], ['Quality', labels[grade(row)]],
     ['Independent QC', row.independent_qc ? `${labels[row.independent_qc.verdict]}: ${row.independent_qc.admitted === null ? `${row.independent_qc.reviewed} reviewed` : `${row.independent_qc.admitted} of ${row.independent_qc.reviewed} reviewed`} — ${row.independent_qc.method}` : null],
-    ['Daytona safe', daytonaLabels[row.daytona_safety] === '—' || !row.daytona_safety ? null : daytonaLabels[row.daytona_safety]],
+    ['Daytona safe', daytonaLabels[row.daytona_safety]],
     ['Top curriculum area', row.coverage?.top_area?.name],
     ['Input rows', row.task_count], ['Source ID', row.id], ['Dataset revision', row.dataset_revision],
     ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
