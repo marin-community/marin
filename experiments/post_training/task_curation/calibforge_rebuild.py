@@ -559,9 +559,9 @@ def main() -> None:
         "snapshot_identity_count": None,
         "base_refs": sorted(set(base_refs)),
         "digest_pinned": True,
+        # The cohort ships no oracle solutions; these record the outcome of
+        # no_oracle_qualification over the lowered specs. Rebuild alone knows neither.
         "admission": "not_run",
-        # The cohort ships no oracle solutions, so execution is uncertified until
-        # no_oracle_qualification runs; that report supplies the real value.
         "oracle_validation": "skipped",
         "tasks": evidence,
     }
