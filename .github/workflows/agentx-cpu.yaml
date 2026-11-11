@@ -1,0 +1,28 @@
+name: Marin - AgentX CPU compatibility
+
+on:
+  pull_request:
+    paths:
+      - experiments/evaluation/agentx/**
+      - .github/workflows/agentx-*.yaml
+      - lib/marin/src/marin/inference/vllm_release.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --frozen --package marin-core --extra cpu --group test --no-default-groups
+      - name: Prepare, restore, replay, pack and process with the pinned tools
+        run: >-
+          uv run --no-sync pytest -n 0 -m integration
+          experiments/evaluation/agentx/test_workload.py::test_pinned_tools_prepare_restore_replay_and_normalize_physical_gpus

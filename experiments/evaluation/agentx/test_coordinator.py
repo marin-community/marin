@@ -1,0 +1,608 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Control-plane interruption regressions; these tests allocate no hardware."""
+
+import contextlib
+import dataclasses
+import hashlib
+import io
+import json
+import os
+import sys
+import tarfile
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import zstandard
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from iris.client.workload import JobStatus, ResourceRequest
+from iris.client.workload_codec import task_status_from_proto
+from iris.cluster.runtime.output_capture import ResolvedOutputDestination, TaskOutputLimits, capture_task_outputs
+from iris.cluster.types import JobName
+from iris.resources.state import FederationState, JobState, TaskState
+from iris.rpc import job_pb2
+from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture
+from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
+from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Deadline, Timestamp
+
+from experiments.evaluation.agentx import control
+from experiments.evaluation.agentx.artifacts import (
+    pack_server_metrics,
+    read_record,
+    restore_server_metrics,
+    retain_artifacts,
+    unpack,
+    write_record,
+)
+from experiments.evaluation.agentx.collect import collect_terminal, validate_gang, validate_window
+from experiments.evaluation.agentx.control import coordinator_plan, materialize, pending_result
+from experiments.evaluation.agentx.coordinator import recover_results, resolve_plan, run_points
+from experiments.evaluation.agentx.processes import logged_process
+from experiments.evaluation.agentx.recipe import load_series
+from experiments.evaluation.agentx.runtime import gpu_release, resolve_release
+
+
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+def test_submission_freezes_one_release_across_queueing_points_and_retries(monkeypatch, architecture, tmp_path):
+    monkeypatch.setattr("platform.machine", lambda: architecture)
+    release = resolve_release()
+    submission = coordinator_plan(
+        {"run_id": 7, "run_attempt": 1, "head_sha": "1" * 40},
+        "h100",
+        "cw-rno2a",
+        "interactive",
+        str(tmp_path),
+        None,
+        release=release,
+    )
+    # A later adoption must not change any point waiting in this submitted grid.
+    monkeypatch.setattr(
+        "experiments.evaluation.agentx.runtime.VLLM_GPU_RELEASE",
+        dataclasses.replace(
+            VLLM_GPU_RELEASE,
+            release_tag="later-release",
+            source_commit="2" * 40,
+        ),
+    )
+    plan = resolve_plan(json.loads(json.dumps(submission)), {"key": "prepared"})
+    commands = []
+    for point in plan["points"]:
+        frozen = gpu_release(point["manifest"]["vllm_release"])
+        launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK, release=frozen)
+        commands.append(launcher.command())
+        assert dataclasses.asdict(frozen) == dataclasses.asdict(gpu_release(release))
+        wheel = vllm_gpu_wheel_for_architecture(frozen, architecture)
+        assert launcher.command()[launcher.command().index("--from") + 1] == f"vllm @ {wheel.url}#sha256={wheel.sha256}"
+    assert all(command == commands[0] for command in commands)
+    assert resolve_release()["source_commit"] != release["source_commit"]
+
+
+def job_status(job_id: JobName, state: JobState) -> JobStatus:
+    return JobStatus(
+        job_id=job_id,
+        state=state,
+        exit_code=0,
+        error_message="",
+        submitted_at=Timestamp.from_seconds(1000),
+        started_at=None,
+        finished_at=None,
+        ports={},
+        status_message="",
+        build_metrics=None,
+        failure_count=0,
+        preemption_count=0,
+        tasks=(),
+        name=job_id.name,
+        resources=ResourceRequest(cpu_millicores=32000, memory_bytes=0, disk_bytes=0),
+        task_state_counts={},
+        task_count=1,
+        completed_count=int(state == JobState.SUCCEEDED),
+        pending_reason="",
+        has_children=False,
+        parent_job_id=None,
+        backend_id="fixture",
+        execution_cluster_id="fixture",
+        federation_state=FederationState.LOCAL,
+        submitting_user="fixture",
+    )
+
+
+class FakeController:
+    """Iris RPC boundary with terminal scheduling failures and hierarchical ownership."""
+
+    def __init__(self, plan):
+        self.plan = plan
+        self.jobs = {plan["job_id"]: job_status(JobName.from_string(plan["job_id"]), JobState.RUNNING)}
+        self.waited = []
+        self.stop_after = None
+
+    def job_status(self, job_id):
+        if str(job_id) not in self.jobs:
+            raise ConnectError(code=Code.NOT_FOUND, message="No such fixture job")
+        return self.jobs[str(job_id)]
+
+    def submit(self, **request):
+        if self.stop_after is not None and len(self.waited) >= self.stop_after:
+            raise InterruptedError("Coordinator lost before the next submission")
+        job_id = JobName.from_string(self.plan["job_id"]).child(request["name"])
+        retained = read_record(str(Path(self.plan["retention_uri"]) / "plan.json"))
+        assert retained["points"] == self.plan["points"]
+        # Sequential ownership: the previous child is terminal before submission.
+        assert all(status.state != JobState.PENDING for status in self.jobs.values())
+        self.jobs[str(job_id)] = job_status(job_id, JobState.PENDING)
+
+        def wait(**_kwargs):
+            self.jobs[str(job_id)] = dataclasses.replace(self.jobs[str(job_id)], state=JobState.FAILED)
+            self.waited.append(str(job_id))
+            return self.jobs[str(job_id)]
+
+        return SimpleNamespace(job_id=job_id, wait=wait)
+
+    def list_tasks(self, job_id):
+        return self.jobs[str(job_id)].tasks
+
+
+@pytest.fixture
+def saved_batch(tmp_path):
+    source = {
+        "kind": "github-actions",
+        "run_id": 123,
+        "run_attempt": 2,
+        "repository": "fixture/fixture",
+        "head_sha": "1" * 40,
+    }
+    submission = coordinator_plan(source, "h100", "cw-rno2a", "batch", str(tmp_path / "retained"), None)
+    # Exercise loss between two explicit fixture points independently of weekly calibration choices.
+    submission["concurrencies"] = [8, 32]
+    plan = resolve_plan(submission, {"key": "fixture", "archive_sha256": "a" * 64})
+    return plan, str(tmp_path / "submission.json")
+
+
+def test_coordinator_retains_each_terminal_outcome_and_runs_points_serially(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    controller = FakeController(plan)
+    with pytest.raises(RuntimeError, match="points failed"):
+        run_points(controller, plan, tmp_path)
+    result = read_record(pending_result(plan["root"]))
+    assert result["source"] == plan["source"]
+    assert len(controller.waited) == 2
+    # The one-point result was deliverable before the second point completed.
+    completed = list((tmp_path / "retained" / "completed").glob("*.json"))
+    assert sorted(len(json.loads(path.read_text())["points"]) for path in completed) == [1, 2]
+    assert all(point["receipt"]["status"] == "failed" for point in result["points"])
+
+
+def test_calibration_load_outside_weekly_grid_runs_and_retains_one_point(saved_batch, tmp_path):
+    original, _ = saved_batch
+    plan = resolve_plan(
+        coordinator_plan(original["source"], "h100", "cw-rno2a", "batch", str(tmp_path / "calibration"), 17),
+        original["points"][0]["manifest"]["workload"],
+    )
+    controller = FakeController(plan)
+    with pytest.raises(RuntimeError, match="points failed"):
+        run_points(controller, plan, tmp_path)
+    result = read_record(pending_result(plan["root"]))
+    assert [point["manifest"]["concurrency"] for point in result["points"]] == [17]
+    assert result["points"][0]["job_id"].endswith("/c17")
+    assert len(controller.waited) == 1
+
+
+def test_coordinator_loss_keeps_completed_results_and_manual_recovery_never_submits(saved_batch, tmp_path):
+    plan, descriptor = saved_batch
+    write_record(descriptor, plan)
+    controller = FakeController(plan)
+    controller.stop_after = 1
+    with pytest.raises(InterruptedError):
+        run_points(controller, plan, tmp_path)
+    completed_uri = pending_result(plan["root"])
+    first_result = read_record(completed_uri)
+    controller.jobs[plan["job_id"]] = dataclasses.replace(controller.jobs[plan["job_id"]], state=JobState.FAILED)
+    recovered_uri = recover_results(controller, read_record(descriptor), tmp_path)
+    assert read_record(recovered_uri) == first_result
+    assert len(controller.jobs) == 2  # Failed parent and its only submitted child.
+    assert len(controller.waited) == 1
+
+
+def test_recovery_refuses_a_live_coordinator(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    controller = FakeController(plan)
+    with pytest.raises(ValueError, match="still live"):
+        recover_results(controller, plan, tmp_path)
+    assert len(controller.jobs) == 1
+
+
+@pytest.mark.parametrize("profile", ["h100", "gb200"])
+def test_default_cancel_reaches_the_existing_single_profile(saved_batch, monkeypatch, profile):
+    plan, _ = saved_batch
+    plan = plan | {"profile": profile, "job_id": f"/fixture/agentx-{profile}"}
+    write_record(control.submission_uri(plan["root"], 123, 2, profile), plan)
+    cancelled = set()
+    client = SimpleNamespace(job=lambda job_id: SimpleNamespace(cancel=lambda: cancelled.add(str(job_id))))
+    endpoint = SimpleNamespace(url="http://fixture", credentials=None)
+    # These are the controller-discovery and RPC connection boundaries. Descriptor
+    # lookup and the default CLI profile selection run unchanged.
+    monkeypatch.setattr(control, "connect_controller", lambda **_kwargs: contextlib.nullcontext(endpoint))
+    monkeypatch.setattr(control.IrisClient, "remote", lambda *_args, **_kwargs: contextlib.nullcontext(client))
+    monkeypatch.setattr(
+        sys, "argv", ["control", "cancel", "--root", plan["root"], "--run-id", "123", "--run-attempt", "2"]
+    )
+    control.main()
+    assert cancelled == {plan["job_id"]}
+
+
+def test_recovery_after_preparation_loss_publishes_no_measurements(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    controller = FakeController(plan)
+    controller.jobs[plan["job_id"]] = dataclasses.replace(controller.jobs[plan["job_id"]], state=JobState.FAILED)
+    result = read_record(recover_results(controller, plan, tmp_path))
+    assert result["points"] == []
+    assert result["source"] == plan["source"]
+    assert list(controller.jobs) == [plan["job_id"]]
+
+
+def test_overlapping_sources_retain_independent_completed_results(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    second = resolve_plan(
+        coordinator_plan(plan["source"] | {"run_id": 124}, "h100", "cw-rno2a", "batch", plan["root"], 8),
+        plan["points"][0]["manifest"]["workload"],
+    )
+    for submission in (plan, second):
+        with pytest.raises(RuntimeError):
+            run_points(FakeController(submission), submission, tmp_path)
+    sources = {
+        json.loads(path.read_text())["source"]["run_id"] for path in (tmp_path / "retained" / "completed").glob("*.json")
+    }
+    assert sources == {123, 124}
+
+
+def test_delivery_acknowledgement_does_not_change_results_or_create_execution_state(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    with pytest.raises(RuntimeError):
+        run_points(FakeController(plan), plan, tmp_path)
+    uri = pending_result(plan["root"])
+    original = read_record(uri)
+    result = materialize(uri, tmp_path / "import")
+    assert result == read_record(str(tmp_path / "import" / "agentx-source.json")) == original
+    write_record(str(tmp_path / "retained" / "exported" / Path(uri).name), {"artifact_url": "github/artifact"})
+    assert pending_result(plan["root"]) != uri
+    assert read_record(uri) == original
+    # Explicit delivery retry recreates the same original source identity.
+    assert materialize(uri, tmp_path / "retry") == result
+
+
+def test_reprocessing_preserves_bundles_referenced_by_earlier_completed_results(tmp_path):
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    aggregate = artifacts / "agg.json"
+    completed = []
+    for value in [1, 2]:
+        aggregate.write_text(json.dumps({"value": value}))
+        uri, digest = retain_artifacts(
+            artifacts, tmp_path / "working.tar.zst", str(tmp_path / "retained"), name="inferencex"
+        )
+        result_uri = str(tmp_path / f"result-{value}.json")
+        write_record(
+            result_uri,
+            {
+                "source": {"kind": "fixture", "head_sha": "1" * 40},
+                "points": [
+                    {
+                        "manifest": {"profile": "h100", "concurrency": 16},
+                        "receipt": {"status": "valid", "artifacts_uri": uri, "artifacts_sha256": digest},
+                    }
+                ],
+            },
+        )
+        completed.append(result_uri)
+    # Recovery can regenerate a point after its previous descriptor was delivered.
+    for value, result_uri in enumerate(completed, 1):
+        output = tmp_path / f"delivery-{value}"
+        materialize(result_uri, output)
+        assert json.loads((output / "agg.json").read_text()) == {"value": value}
+        changelog = read_record(str(output / "changelog-metadata" / "agentx.json"))
+        assert changelog["head_ref"] == "1" * 40
+        assert len(changelog["entries"]) == 1
+        assert changelog["entries"][0]["append-only"] is True
+
+
+@pytest.fixture
+def exported_window(tmp_path, saved_batch):
+    batch, _ = saved_batch
+    manifest = batch["points"][0]["manifest"]
+    (tmp_path / "attempt.json").write_text(
+        json.dumps(
+            manifest
+            | {
+                "status": "succeeded",
+                "iris_attempt_uid": "winner",
+                "worker_metrics_url": "http://worker/metrics",
+                "gpu_uuids": [f"GPU-{index}" for index in range(8)],
+            }
+        )
+    )
+    artifacts = tmp_path / "aiperf_artifacts"
+    artifacts.mkdir()
+    (artifacts / "server_metrics_export.json").write_text(
+        json.dumps(
+            {
+                "summary": {"endpoints_successful": ["http://worker/metrics"]},
+                "metrics": {"vllm:num_requests_running": {}},
+            }
+        )
+    )
+    duration = load_series()["duration"]
+    export = {
+        "metadata": {
+            "submission_valid": True,
+            "metric_duration_coverage": [
+                {
+                    "phase_name": "profiling",
+                    "expected_duration_seconds": duration,
+                    "required_ratio": 0.95,
+                    "ttft_ratio": 0.99,
+                    "inter_token_latency_ratio": 0.98,
+                }
+            ],
+        },
+        "was_cancelled": False,
+        "start_time": "2026-01-01T00:00:00Z",
+        "end_time": "2026-01-01T00:15:00Z",
+        "benchmark_duration": {"avg": 895.0},
+    }
+    (artifacts / "profile_export_aiperf.json").write_text(json.dumps(export))
+    requests = [
+        {"metadata": {"benchmark_phase": "warmup"}, "error": {"type": "empty-one-token-response"}},
+        {"metadata": {"benchmark_phase": "profiling"}, "error": None},
+    ]
+    (artifacts / "profile_export.jsonl").write_text("".join(json.dumps(row) + "\n" for row in requests))
+    return tmp_path, manifest, export
+
+
+def test_complete_window_uses_phase_coverage_and_excludes_warmup_errors(exported_window):
+    directory, manifest, export = exported_window
+    result = validate_window(directory, manifest, "winner")
+    assert result["profiling_requests"] == 1
+    assert result["coverage"] == export["metadata"]["metric_duration_coverage"][0]
+    assert result["submission_valid"] is True
+
+
+@pytest.mark.parametrize("missing_worker_metrics", [False, True])
+def test_valid_agentx_window_rejects_router_only_metrics_or_wrong_physical_devices(
+    exported_window, missing_worker_metrics
+):
+    directory, manifest, _ = exported_window
+    if missing_worker_metrics:
+        write_record(
+            str(directory / "aiperf_artifacts/server_metrics_export.json"),
+            {
+                "summary": {"endpoints_successful": ["http://router/metrics"]},
+                "metrics": {"router:requests": {}},
+            },
+        )
+        expected = "vLLM worker metrics"
+    else:
+        record = read_record(str(directory / "attempt.json"))
+        record["gpu_uuids"] = ["one-device"]
+        write_record(str(directory / "attempt.json"), record)
+        expected = "Physical GPU identities"
+    with pytest.raises(ValueError, match=expected):
+        validate_window(directory, manifest, "winner")
+
+
+@pytest.mark.parametrize("replaced_follower", [False, True])
+def test_multihost_window_requires_its_original_sixteen_gpu_gang(saved_batch, tmp_path, replaced_follower):
+    original, _ = saved_batch
+    placement = {"nodes": [f"host-{index}" for index in range(4)], "nvlink_domain": "fixture"}
+    plan = resolve_plan(
+        coordinator_plan(original["source"], "gb200", "cw-rno2a", "batch", str(tmp_path / "hero"), 16, placement),
+        original["points"][0]["manifest"]["workload"],
+    )
+    manifest = plan["points"][0]["manifest"]
+    identities = {f"{plan['job_id']}/c16/{index}": f"native-{index}" for index in range(4)}
+    tasks = []
+    leader = tmp_path / "raw" / "point"
+    for index, (task_id, uid) in enumerate(identities.items()):
+        if index == 2 and replaced_follower:
+            uid = "new-native-2"
+        point = leader if index == 0 else tmp_path / f"fixture-{index}" / "point"
+        point.mkdir(parents=True)
+        record = manifest | {
+            "status": "succeeded",
+            "iris_attempt_uid": uid,
+            "iris_node_name": f"host-{index}",
+            "gpu_uuids": [f"gpu-{index}-{gpu}" for gpu in range(4)],
+        }
+        if index == 0:
+            record["gang_attempts"] = identities
+        write_record(str(point / "attempt.json"), record)
+        wire = io.BytesIO()
+        with tarfile.open(fileobj=wire, mode="w") as archive:
+            archive.add(point, arcname="point")
+        data = zstandard.compress(wire.getvalue())
+        archive_path = tmp_path / ("outputs.tar.zst" if index == 0 else f"native-{index}.tar.zst")
+        archive_path.write_bytes(data)
+        task = job_pb2.TaskStatus(task_id=task_id, state=job_pb2.TASK_STATE_SUCCEEDED, current_attempt_id=0)
+        attempt = task.attempts.add(attempt_id=0, attempt_uid=uid, state=job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+        attempt.output_archive.state = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+        attempt.output_archive.uri = str(archive_path)
+        attempt.output_archive.sha256 = hashlib.sha256(data).hexdigest()
+        tasks.append(task_status_from_proto(task))
+    if replaced_follower:
+        with pytest.raises(ValueError, match="measured window's gang"):
+            validate_gang(tasks, leader, manifest, tmp_path)
+        assert not (leader / "gang.json").exists()
+    else:
+        archives = validate_gang(tasks, leader, manifest, tmp_path)
+        retained = read_record(str(leader / "gang.json"))
+        assert retained["attempts"] == identities
+        assert len({gpu for row in retained["tasks"] for gpu in row["gpu_uuids"]}) == 16
+        assert {item["attempt_uid"] for item in archives} == set(identities.values())
+
+
+@pytest.mark.parametrize("cancelled,valid", [(True, True), (False, False)])
+def test_interrupted_or_scenario_invalid_window_is_not_publishable(exported_window, cancelled, valid):
+    directory, manifest, export = exported_window
+    export["was_cancelled"] = cancelled
+    export["metadata"]["submission_valid"] = valid
+    (directory / "aiperf_artifacts" / "profile_export_aiperf.json").write_text(json.dumps(export))
+    with pytest.raises(ValueError, match="complete window"):
+        validate_window(directory, manifest, "winner")
+
+
+def test_child_failure_reaches_iris_exit_status_and_both_log_destinations(tmp_path, capfd):
+    output = tmp_path / "attempt.log"
+    with logged_process(
+        [sys.executable, "-c", 'print("attempt diagnostic", flush=True); raise SystemExit(17)'], dict(os.environ), output
+    ) as process:
+        assert process.wait(timeout=10) == 17
+    assert output.read_text() == "attempt diagnostic\n"
+    assert "attempt diagnostic" in capfd.readouterr().out
+
+
+def test_scheduling_failure_retains_diagnostics_without_waiting_for_a_nonexistent_archive(saved_batch, tmp_path):
+    batch, _ = saved_batch
+    point = batch["points"][0]
+    status = job_status(JobName.from_string(batch["job_id"] + "/" + point["name"]), JobState.FAILED)
+    receipt = collect_terminal(status, point["manifest"], str(tmp_path / "retained"), tmp_path, 1001)
+    assert receipt["status"] == "failed"
+    assert receipt["attempt_uid"] is None
+    assert receipt["native_state"] == "failed"
+    assert [path.name for path in (tmp_path / "retained").rglob("*") if path.is_file()] == ["receipt.json"]
+
+
+def test_error_ratio_is_checked_separately_from_agentx_scenario_validity(exported_window):
+    directory, manifest, _ = exported_window
+    records = directory / "aiperf_artifacts" / "profile_export.jsonl"
+    success = {"metadata": {"benchmark_phase": "profiling"}, "error": None}
+    failure = success | {"error": {"type": "InvalidInferenceResultError"}}
+    records.write_text("".join(json.dumps(row) + "\n" for row in [success] * 99 + [failure]))
+    result = validate_window(directory, manifest, "winner")
+    assert result["profiling_errors"] == 1
+    assert result["profiling_error_ratio"] == 0.01
+    with records.open("a") as stream:
+        stream.write(json.dumps(failure) + "\n")
+    with pytest.raises(ValueError, match="error ratio"):
+        validate_window(directory, manifest, "winner")
+
+
+def test_iris_archive_can_be_read_without_host_zstd_or_tar(tmp_path, monkeypatch):
+    # Iris task images provide the Python codec, not the zstd CLI used by Actions.
+    content = b'{"iris_attempt_uid":"original-attempt","status":"failed"}\n'
+    wire = io.BytesIO()
+    with tarfile.open(fileobj=wire, mode="w") as archive:
+        entry = tarfile.TarInfo("point/attempt.json")
+        entry.size = len(content)
+        archive.addfile(entry, io.BytesIO(content))
+    incoming = tmp_path / "outputs.tar.zst"
+    incoming.write_bytes(zstandard.compress(wire.getvalue()))
+    monkeypatch.setenv("PATH", str(tmp_path / "no-external-tools"))
+    unpack(incoming, tmp_path / "retained")
+    assert (tmp_path / "retained" / "point" / "attempt.json").read_bytes() == content
+
+
+def task_with_attempts(batch):
+    task = job_pb2.TaskStatus(
+        task_id=batch["job_id"] + "/c8/0",
+        state=job_pb2.TASK_STATE_FAILED,
+        current_attempt_id=1,
+    )
+    for number, state in enumerate((job_pb2.TASK_STATE_PREEMPTED, job_pb2.TASK_STATE_FAILED)):
+        attempt = task.attempts.add(
+            attempt_id=number, attempt_uid=f"attempt-{number}", state=state, error="fixture failure"
+        )
+        # These URI targets are intentionally absent. Failed attempt collection
+        # must leave their full archives under Iris retention.
+        attempt.output_archive.state = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+        attempt.output_archive.uri = f"/native-iris-retention/attempt-{number}.tar.zst"
+    return task_status_from_proto(task)
+
+
+@pytest.mark.parametrize("logs_available", [True, False])
+def test_final_failure_keeps_only_its_record_and_bounded_tail(saved_batch, tmp_path, logs_available):
+    batch, _ = saved_batch
+    task = task_with_attempts(batch)
+    status = dataclasses.replace(
+        job_status(JobName.from_string(batch["job_id"]).child("c8"), JobState.FAILED), tasks=(task,)
+    )
+    lines = [f"diagnostic {index}" for index in range(120)]
+
+    def attempt(number):
+        assert number == 1
+
+        def logs(*, max_lines, tail):
+            if not logs_available:
+                raise ConnectError(Code.UNAVAILABLE, "Fixture log store is unavailable")
+            assert tail
+            return [SimpleNamespace(data=line) for line in lines[-max_lines:]]
+
+        return SimpleNamespace(logs=logs)
+
+    client = SimpleNamespace(task=lambda _task_id: SimpleNamespace(attempt=attempt))
+    receipt = collect_terminal(
+        status, batch["points"][0]["manifest"], str(tmp_path / "retained"), tmp_path, 1000, client=client
+    )
+    assert receipt["status"] == "failed"
+    assert receipt["reason"] == "fixture failure"
+    assert receipt["attempt_uid"] == "attempt-1"
+    assert receipt["configuration"]["workload_key"] == "fixture"
+    if logs_available:
+        assert receipt["log_tail"] == lines[-100:]
+    else:
+        assert "log_tail" not in receipt
+    files = [path for path in (tmp_path / "retained").rglob("*") if path.is_file()]
+    assert len(files) == 1
+    assert read_record(str(files[0])) == receipt
+
+
+def test_successful_attempt_waits_for_capture_then_retains_a_missing_output_failure(saved_batch, tmp_path):
+    batch, _ = saved_batch
+    task = task_with_attempts(batch)
+    final = dataclasses.replace(
+        task.attempts[-1],
+        state=TaskState.SUCCEEDED,
+        exit_code=0,
+        output_archive=None,
+        finished_at=Timestamp.from_seconds(1000),
+    )
+    task = dataclasses.replace(task, state=TaskState.SUCCEEDED, attempts=(*task.attempts[:-1], final))
+    status = dataclasses.replace(
+        job_status(JobName.from_string(batch["job_id"]).child("c8"), JobState.SUCCEEDED), tasks=(task,)
+    )
+    args = (status, batch["points"][0]["manifest"], str(tmp_path / "retained"), tmp_path)
+    assert collect_terminal(*args, 1050) is None
+    assert not (tmp_path / "retained").exists()
+    receipt = collect_terminal(*args, 1601)
+    assert receipt["status"] == "failed"
+    assert receipt["attempt_uid"] == "attempt-1"
+    assert "artifacts_uri" not in receipt
+
+
+def test_server_metrics_survive_native_output_limit_and_restore_exact_bytes(tmp_path):
+    point = tmp_path / "outputs/point"
+    source = point / "aiperf_artifacts/server_metrics_export.json"
+    source.parent.mkdir(parents=True)
+    original = b'{ "metrics": [' + b'{"rank":0,"tokens":123},' * 1000 + b"{}] }\n"
+    source.write_bytes(original)
+    destination = ResolvedOutputDestination(
+        StoragePath("file://" + str(tmp_path / "captured.tar.zst")),
+        job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER,
+    )
+    limits = TaskOutputLimits(max_bytes=2048, max_entries=100)
+    before = capture_task_outputs(point.parent, destination, limits, Deadline.from_seconds(30), threading.Event())
+    assert before.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED
+    pack_server_metrics(point)
+    after = capture_task_outputs(point.parent, destination, limits, Deadline.from_seconds(30), threading.Event())
+    assert after.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+    unpack(tmp_path / "captured.tar.zst", tmp_path / "retained")
+    restored_point = tmp_path / "retained/point"
+    restore_server_metrics(restored_point)
+    assert (restored_point / "aiperf_artifacts/server_metrics_export.json").read_bytes() == original
+    (restored_point / "aiperf_artifacts/server_metrics_export.json").write_bytes(original + b" ")
+    with pytest.raises(ValueError, match="Restored server metrics checksum"):
+        restore_server_metrics(restored_point)

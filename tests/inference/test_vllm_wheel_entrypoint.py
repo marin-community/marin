@@ -261,7 +261,10 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path, wh
         for sentinel, _, payload in (line.partition("="),)
     }
     assert records["MARIN_VLLM_WHEEL_SELECTED"] == _provenance(wheel)
-    assert records["MARIN_VLLM_WHEEL_VERIFIED"] == {
+    verified = records["MARIN_VLLM_WHEEL_VERIFIED"]
+    dependencies = verified.pop("dependencies")
+    assert dependencies["vllm"] == VERSION
+    assert verified == {
         **_provenance(wheel),
         "compute_capability": f"{compute_capability[0]}.{compute_capability[1]}",
         "extension_path": str(tmp_path / "install" / "vllm" / "_C_stable_libtorch.py"),

@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
+import contextlib
 import dataclasses
 import functools
 import json
@@ -36,13 +38,17 @@ from marin.external_dependencies import (
     TPU_INFERENCE_FORK_REQUIREMENT,
     VLLM_FORK_REQUIREMENT,
     VLLM_GPU_RELEASE,
+    VllmGpuRelease,
 )
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import (
     STANDARD_VLLM_METRIC_FAMILIES,
+    VLLM_DATA_PARALLEL_SIZE_FLAGS,
     VLLM_METRIC_PREFIX,
     WORKER_PYTHON_VERSION,
     InferenceModelConfig,
     VllmCompilationCacheMode,
+    VllmRouterConfig,
 )
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
@@ -50,6 +56,7 @@ from marin.inference.vllm_release import (
     vllm_gpu_wheel_provenance,
     vllm_gpu_wheel_requirement,
 )
+from marin.inference.vllm_router import RunningVllmRouter, vllm_router
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -221,6 +228,8 @@ class IsolatedCudaVllm:
     """Pinned vLLM plugins installed into the same isolated CUDA environment."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
+    release: VllmGpuRelease = VLLM_GPU_RELEASE
+    """Verified Marin fork release; callers may pin a profile without changing shared defaults."""
 
     def __post_init__(self) -> None:
         if self.source is VllmType.UPSTREAM and not self.version:
@@ -228,17 +237,15 @@ class IsolatedCudaVllm:
 
     def _install(self) -> _CudaVllmInstall:
         if self.source is VllmType.MARIN_FORK:
-            wheel = current_vllm_gpu_wheel(VLLM_GPU_RELEASE)
-            provenance = json.dumps(
-                dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel)), sort_keys=True
-            )
+            wheel = current_vllm_gpu_wheel(self.release)
+            provenance = json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(self.release, wheel)), sort_keys=True)
             return _CudaVllmInstall(
                 requirement=vllm_gpu_wheel_requirement(wheel),
-                torch_backend=VLLM_GPU_RELEASE.torch_backend,
-                toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend],
+                torch_backend=self.release.torch_backend,
+                toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[self.release.torch_backend],
                 torch_install_args=(
                     "--index",
-                    f"{_PYTORCH_WHEEL_INDEX_BASE}/{VLLM_GPU_RELEASE.torch_backend}",
+                    f"{_PYTORCH_WHEEL_INDEX_BASE}/{self.release.torch_backend}",
                     "--index",
                     f"{_PYTORCH_WHEEL_INDEX_BASE}/cpu",
                     "--index-strategy",
@@ -271,7 +278,7 @@ class IsolatedCudaVllm:
         ]
         if self.source is VllmType.MARIN_FORK:
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
-            command.extend(("--with", f"torch=={VLLM_GPU_RELEASE.torch_version}"))
+            command.extend(("--with", f"torch=={self.release.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
@@ -301,7 +308,7 @@ class IsolatedCudaVllm:
     def cache_identity(self) -> str:
         install = self._install()
         toolchain_version = install.toolchain_version
-        torch_identity = VLLM_GPU_RELEASE.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
+        torch_identity = self.release.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
         identity = f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
         if self.extra_requirements:
             return f"{identity}:{self.extra_requirements}"
@@ -769,6 +776,18 @@ def _get_first_model_id(server_url: str) -> str:
     return str(model_id)
 
 
+def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
+    """Read the native ranks reachable behind vLLM's global internal DP frontend."""
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument(*VLLM_DATA_PARALLEL_SIZE_FLAGS, type=int, default=1)
+    parser.add_argument("--data-parallel-hybrid-lb", action="store_true")
+    parser.add_argument("--data-parallel-external-lb", action="store_true")
+    topology, _ = parser.parse_known_args(extra_cli_args)
+    if topology.data_parallel_hybrid_lb or topology.data_parallel_external_lb:
+        raise ValueError("session routing requires vLLM's global internal DP load balancer")
+    return topology.data_parallel_size
+
+
 class VllmEnvironment:
     """Manage vLLM server lifecycle and eval-client configuration."""
 
@@ -783,6 +802,10 @@ class VllmEnvironment:
         launcher: VllmLauncher | None = None,
         compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
         extra_metric_families: frozenset[str] = frozenset(),
+        collect_metrics: bool = True,
+        collect_nccl: bool = True,
+        router: VllmRouterConfig | None = None,
+        router_port: int | None = None,
         wait_for_ready: bool = True,
     ) -> None:
         validate_vllm_mode_env()
@@ -791,11 +814,18 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        self._router_data_parallel_size = _router_data_parallel_size(self.extra_cli_args) if router is not None else 1
         # Default to the preinstalled vLLM on PATH (GPU task-image serving); TPU and
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
         self.extra_metric_families = extra_metric_families
+        self.collect_metrics = collect_metrics
+        self.collect_nccl = collect_nccl
+        self.router_config = router
+        self.router_port = router_port
+        self.router: RunningVllmRouter | None = None
+        self._router_context = contextlib.ExitStack()
         self._ready_on_enter = wait_for_ready
 
         self.vllm_server: VllmServerHandle | None = None
@@ -825,9 +855,13 @@ class VllmEnvironment:
         self.close()
 
     def close(self) -> None:
-        if self.vllm_server is not None:
-            self.vllm_server.stop()
-            self.vllm_server = None
+        try:
+            self._router_context.close()
+        finally:
+            self.router = None
+            if self.vllm_server is not None:
+                self.vllm_server.stop()
+                self.vllm_server = None
         self.model_id = None
         self._command = None
 
@@ -858,8 +892,22 @@ class VllmEnvironment:
                 host=self.host,
                 launcher=self.launcher,
                 extra_metric_families=self.extra_metric_families,
+                collect_metrics=self.collect_metrics,
+                collect_nccl=self.collect_nccl,
             )
             self.model_id = _get_first_model_id(self.vllm_server.server_url)
+            if self.router_config is not None:
+                self.router = self._router_context.enter_context(
+                    vllm_router(
+                        self.router_config,
+                        (self.worker_server_url.removesuffix(OPENAI_API_SUFFIX),),
+                        data_parallel_size=self._router_data_parallel_size,
+                        host=self.host,
+                        port=self.router_port,
+                        startup_timeout_seconds=self.timeout_seconds,
+                        check_dependencies=self.check_alive,
+                    )
+                )
         except Exception:
             self._report_failure_and_close("Failed to make vLLM environment ready")
             raise
@@ -898,7 +946,21 @@ class VllmEnvironment:
             logger.warning("vLLM teardown failed after a startup failure", exc_info=True)
 
     @property
+    def command(self) -> tuple[str, ...]:
+        """Return the effective argv of the running server."""
+        if self._command is None:
+            raise RuntimeError("vLLM server is not running in this environment.")
+        return tuple(self._command)
+
+    @property
     def server_url(self) -> str:
+        if self.router is not None:
+            return self.router.server_url
+        return self.worker_server_url
+
+    @property
+    def worker_server_url(self) -> str:
+        """Direct worker URL; worker metrics remain here when routing is enabled."""
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return self.vllm_server.server_url
@@ -926,6 +988,8 @@ class VllmEnvironment:
     def check_alive(self) -> None:
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
+        if self.router is not None:
+            self.router.check_alive()
         return_code = self.vllm_server.process.poll()
         if return_code is None:
             return
@@ -1176,6 +1240,7 @@ def _start_vllm_native_process(
         port=port,
         extra_cli_args=extra_cli_args,
     )
+    logger.info("vLLM runtime: %s; command: %s", launcher.cache_identity(), command)
     log_dir = tempfile.mkdtemp(prefix=log_prefix)
     cache, native_env = _prepare_vllm_compilation_cache(
         model_name_or_path=model_name_or_path,
@@ -1188,7 +1253,7 @@ def _start_vllm_native_process(
             _launch_vllm_process(
                 command=command,
                 environment=native_env,
-                server_url=f"http://{host}:{port}/v1",
+                server_url=f"http://{host}:{port}{OPENAI_API_SUFFIX}",
                 port=port,
                 log_dir=log_dir,
                 compilation_cache=cache,
@@ -1253,8 +1318,12 @@ def _configure_vllm_telemetry(
     host: str,
     launcher: VllmLauncher,
     extra_metric_families: frozenset[str],
+    collect_metrics: bool = True,
+    collect_nccl: bool = True,
 ) -> VllmServerHandle:
     """Attach telemetry collectors after a native vLLM server is ready."""
+    if not collect_metrics and not collect_nccl:
+        return handle
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
     runtime_telemetry.configure(
@@ -1263,22 +1332,24 @@ def _configure_vllm_telemetry(
     )
     if not telemetry.runtime_status().configured:
         return handle
-    metrics_url = f"http://{host}:{handle.port}/metrics"
-    metrics_collector = PrometheusCollector(
-        metric_source=_VLLM_METRICS_SERVICE,
-        scraper=PrometheusScraper(metrics_url),
-        processor=functools.partial(
-            _vllm_metric_snapshots,
-            family_names=STANDARD_VLLM_METRIC_FAMILIES | extra_metric_families,
-        ),
-        publisher=_VllmMetricSnapshotPublisher(
-            max_records=_VLLM_METRIC_SAMPLE_LIMIT,
-            attributes={"metric_source": _VLLM_METRICS_SERVICE},
-        ),
-    )
-    metrics_collector.start()
-    logger.info("Forwarding vLLM metrics from %s to Finelog telemetry", metrics_url)
-    nccl_probe = nccl.start() if _starts_nccl_ras_probe(launcher) else None
+    metrics_collector = None
+    if collect_metrics:
+        metrics_url = f"http://{host}:{handle.port}/metrics"
+        metrics_collector = PrometheusCollector(
+            metric_source=_VLLM_METRICS_SERVICE,
+            scraper=PrometheusScraper(metrics_url),
+            processor=functools.partial(
+                _vllm_metric_snapshots,
+                family_names=STANDARD_VLLM_METRIC_FAMILIES | extra_metric_families,
+            ),
+            publisher=_VllmMetricSnapshotPublisher(
+                max_records=_VLLM_METRIC_SAMPLE_LIMIT,
+                attributes={"metric_source": _VLLM_METRICS_SERVICE},
+            ),
+        )
+        metrics_collector.start()
+        logger.info("Forwarding vLLM metrics from %s to Finelog telemetry", metrics_url)
+    nccl_probe = nccl.start() if collect_nccl and _starts_nccl_ras_probe(launcher) else None
     return dataclasses.replace(
         handle,
         metrics_collector=metrics_collector,

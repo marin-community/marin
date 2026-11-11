@@ -67,6 +67,10 @@ class LevanterServedModel:
     chat_template_content: str | None
     uvicorn: BackgroundServer
 
+    @property
+    def metrics_url(self) -> None:
+        return None
+
     def check_alive(self) -> None:
         if not self.uvicorn.is_alive():
             raise RuntimeError("The Levanter inference server stopped serving.")

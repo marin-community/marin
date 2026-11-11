@@ -160,6 +160,7 @@ def main() -> None:
 
     provenance = {
         **expected.record(),
+        "dependencies": {package.metadata["Name"]: package.version for package in importlib.metadata.distributions()},
         "compute_capability": compute_capability,
         "extension_path": str(resolved_extension_path),
     }
