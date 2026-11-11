@@ -781,7 +781,7 @@ with Tracking("tests-project", "history", "records", history_config("rewind", ro
 with Tracking("tests-project", "history", "records", history_config("rewind-middle", root / "exports")) as rewind:
     rewind.start(resumed_step=2,
         checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=2))
-    rewind.log({"loss": 9.3}, step=3)
+    rewind.log({"loss": 9.3}, step=4)
 with Tracking("tests-project", "history", "records", history_config("stage", root / "exports")) as stage:
     stage.start(resumed_step=0,
         checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
@@ -911,7 +911,7 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     rewind = read_attempt_metrics(export_root, "rewind")
     assert list(rewind) == [0, 1, 2] and rewind[2]["loss"] == 2.5
     middle_rewind = read_attempt_metrics(export_root, "rewind-middle")
-    assert list(middle_rewind) == [0, 1, 2, 3] and middle_rewind[3]["loss"] == 9.3
+    assert list(middle_rewind) == [0, 1, 2, 4] and middle_rewind[4]["loss"] == 9.3
     stage = read_attempt_metrics(export_root, "stage")
     assert list(stage) == [0, 1] and [row["loss"] for row in stage.values()] == [9, 8]
     assert read_attempt(export_root, "stage").parent.step == 5
