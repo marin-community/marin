@@ -808,6 +808,8 @@ def _pinned_cache_entries(config: RemoteInferenceConfig) -> tuple[RemoteInferenc
 
 
 def _coordinator_matches_serving_placement(resources: ResourceConfig) -> bool:
+    if resources.target_cluster is not None:
+        return False
     info = get_job_info()
     if info is None or info.worker_region is None:
         return False
@@ -819,9 +821,7 @@ def _coordinator_matches_serving_placement(resources: ResourceConfig) -> bool:
         expected = region_constraint([info.worker_region])
         if any(c.key == WellKnownAttribute.REGION and c != expected for c in info.constraints):
             return False
-    if resources.target_cluster is None:
-        return True
-    return iris_ctx().client.task_status(info.task_id).execution_cluster_id == resources.target_cluster
+    return True
 
 
 def _populate_model_cache(entries: list[str], iris: IrisConfig) -> None:
