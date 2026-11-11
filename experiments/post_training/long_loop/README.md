@@ -109,3 +109,24 @@ native timing evidence. Missing native timing coverage or strict W&B history
 verification produces an explicitly partial archive and prevents checkpoint
 cleanup. Model exports go to public Hugging Face repositories; native optimizer
 payloads remain location/TTL references.
+
+### CPU runtime qualification before RL allocation
+
+Strict composition checks literal source-route keys survive translation. Before
+submitting an RL admission run, also run the actual CPU dataset and rollout-context
+setup on its generated `compiled.yaml`:
+
+```bash
+vendor/skyrl/.venv/bin/python -m experiments.post_training.long_loop.cpu_runtime_probe \
+  --compiled /path/to/compiled.yaml --data-root /path/to/pinned/parquets \
+  --output /path/to/cpu-runtime.json
+```
+
+Stage the exact export tokenizer at the compiled model's local tokenizer path;
+model weights are not needed. Supply the ordinary configured secrets without
+printing them. The probe loads and lowers all training rows, applies the runtime
+token-length filter, constructs `TrainingContext`, collates every source type,
+and exercises the real quota planner with scripted GS8 rewards. Its receipt
+binds compiled config and local data hashes. Check those data hashes against the
+run's pinned manifests before submission. This proves CPU setup and quota
+accounting, not GPU learning, live grading, or natural-long CP qualification.

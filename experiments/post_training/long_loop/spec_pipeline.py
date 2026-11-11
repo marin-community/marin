@@ -152,17 +152,38 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 context_limit=tokenizer["context_limit"],
             )
         )
-    endpoint = timed(
-        apply(
-            f"{name}/endpoint",
-            probe,
-            version=version,
-            output=OUT,
-            model_root=exported,
-            tokenizer_revision=tokenizer["revision"],
-            settings=resolved["endpoint"],
+    endpoint_pin = resolved.get("adopted_endpoint")
+    if endpoint_pin is not None:
+        if (
+            handoff is None
+            or endpoint_pin["model_uri"] != prefix_join(handoff["uri"], "hf")
+            or endpoint_pin["tokenizer_revision"] != tokenizer["revision"]
+            or endpoint_pin["settings"] != resolved["endpoint"]
+        ):
+            raise ValueError("Adopted endpoint must bind the identical export, tokenizer and serving settings")
+        endpoint = ArtifactStep.adopt(f"{name}/endpoint", version, endpoint_pin["uri"], config=endpoint_pin)
+        checked_endpoint = timed(
+            apply(
+                f"{name}/verify-endpoint",
+                remote(verify_inputs, resources=resources["inputs"]),
+                version=version,
+                output=OUT,
+                manifests={"endpoint": endpoint_pin},
+            )
         )
-    )
+        endpoint = replace(endpoint, deps=(*endpoint.deps, exported, checked_endpoint))
+    else:
+        endpoint = timed(
+            apply(
+                f"{name}/endpoint",
+                probe,
+                version=version,
+                output=OUT,
+                model_root=exported,
+                tokenizer_revision=tokenizer["revision"],
+                settings=resolved["endpoint"],
+            )
+        )
     adopted = {
         key: ArtifactStep.adopt(f"{name}/data-{key}", version, datasets[key]["uri"], config=datasets[key])
         for key in ("agentic", "nonagentic", "heldout")

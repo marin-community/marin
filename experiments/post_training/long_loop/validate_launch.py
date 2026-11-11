@@ -25,6 +25,13 @@ def main(source: Path, destination: Path) -> None:
         validate_generator_cfg(config.skyrl)
     else:
         validate_cfg(config.skyrl)
+    submitted = OmegaConf.load(source)
+    expected_routes = OmegaConf.select(submitted, "skyrl.trainer.rollout_buffer.source_routes", default={})
+    actual_routes = OmegaConf.select(config, "skyrl.trainer.rollout_buffer.source_routes", default={})
+    if OmegaConf.to_container(OmegaConf.create(expected_routes)) != OmegaConf.to_container(
+        OmegaConf.create(actual_routes)
+    ):
+        raise ValueError("Strict composition changed literal consumed-route source identifiers")
     compiled = OmegaConf.to_yaml(config, resolve=True)
     destination.write_text(compiled)
     print(

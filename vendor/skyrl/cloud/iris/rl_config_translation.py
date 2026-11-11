@@ -826,6 +826,14 @@ def _skyrl_config_sections(
 
 
 _OPEN_CONFIG_ROOTS = frozenset({"teachers", "teacher_routing", RESOLVED_HARBOR_CONFIG_KEY})
+# These maps contain user-defined identifiers, not dotted configuration paths.
+_LITERAL_KEY_MAPS = frozenset({
+    "trainer.rollout_buffer.source_routes",
+    "trainer.rollout_buffer.consumed_route_quotas",
+    "data.sampling.domain_weights",
+    "generator.chat_template_kwargs",
+    "generator.engine_init_kwargs",
+})
 _FTPO_CONFIG_PATHS = frozenset(f"trainer.algorithm.ftpo.{item.name}" for item in fields(FTPOConfig))
 
 
@@ -845,6 +853,9 @@ def _merge_config_mapping(config: DictConfig, values: Mapping[str, Any], prefix:
         current = OmegaConf.select(config, path, default=...)
         key_exists = current is not ...
         if isinstance(value, Mapping):
+            if path in _LITERAL_KEY_MAPS:
+                OmegaConf.update(config, path, copy.deepcopy(dict(value)), merge=False, force_add=True)
+                continue
             if not isinstance(current, DictConfig):
                 if key_exists and current is not None and not _path_allows_new_keys(path):
                     raise ValueError(f"SkyRL config key {path!r} is not a mapping in ppo_base_config")

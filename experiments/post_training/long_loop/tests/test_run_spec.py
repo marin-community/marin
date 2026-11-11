@@ -104,6 +104,13 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
         "source_checkpoint": "s3://test/committed-sft/checkpoints/step-746",
         "files": [],
     }
+    resolved["adopted_endpoint"] = {
+        "uri": "s3://test/verified-endpoint",
+        "model_uri": "s3://test/verified-handoff/hf",
+        "tokenizer_revision": resolved["tokenizer"]["revision"],
+        "settings": resolved["endpoint"],
+        "files": [],
+    }
     terminal = build_spec_graph(resolved, "2026.11.10.1", through="archive")
     names = [step.name for step in graph_handles([terminal])]
     validate_graph(terminal, tmp_path / "full-graph", "s3://marin-us-east-02a/marin/")
@@ -112,8 +119,24 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)
     handoff = next(step for step in graph_handles([terminal]) if step.name.endswith("/sft-handoff"))
     assert handoff.adopt_source == "s3://test/verified-handoff"
+    endpoint = next(step for step in graph_handles([terminal]) if step.name.endswith("/endpoint"))
+    assert endpoint.adopt_source == "s3://test/verified-endpoint"
+    assert any(step.name.endswith("/verify-endpoint") for step in endpoint.deps)
     assert any(step.name.endswith("/verify-handoff") for step in handoff.deps)
     resolved["rl"]["config"]["trainer"]["use_sample_packing"] = False
     invalid = build_spec_graph(resolved, "2026.11.10.2", through="rl")
     with pytest.raises(ValueError, match="context parallel is only supported with sample packing"):
         validate_graph(invalid, tmp_path / "invalid", "s3://marin-us-east-02a/marin/")
+
+
+def test_endpoint_reuse_rejects_different_export():
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = {"version": "v", "uri": "s3://test/sft", "step": 746}
+    resolved["adopted_handoff"] = {
+        "uri": "s3://test/hf",
+        "source_checkpoint": "s3://test/sft/checkpoints/step-746",
+        "files": [],
+    }
+    resolved["adopted_endpoint"] = {"model_uri": "s3://test/other/hf"}
+    with pytest.raises(ValueError, match="identical export"):
+        build_spec_graph(resolved, "2026.11.10.3", through="rl")
