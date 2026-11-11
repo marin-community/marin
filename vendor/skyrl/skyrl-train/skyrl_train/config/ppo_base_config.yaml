@@ -394,11 +394,12 @@ generator:
   # "expert_block": each MoE expert matrix is broadcast from a Megatron rank that holds it to the vLLM
   # workers that serve it. Needs engines that are not colocated with training, a Grug MoE on the megatron
   # strategy at TP=1 and ETP=1, local vLLM engines at TP=1 with EP=DP>=1, the NCCL weight-sync backend and
-  # vLLM's TRITON MoE backend.
+  # vLLM's TRITON MoE backend. Supports BF16 weights and online per-tensor FP8: the receiver
+  # stages BF16 checkpoint shards per layer, quantizes them, and updates serving weights and scales in place.
   weight_sync_transport: "broadcast"
   expert_block_sync:
     timeout_seconds: 600  # For creating the sync groups and for the broadcasts of each sync.
-    verify: false  # If set, replay synchronization and verify it against the trainer values.
+    verify: false  # Replay trainer values; FP8 compares freshly quantized weights and scales.
   fuse_weights: false
   r3_transport: "decentral"
   r3_dispatch_put_timeout_seconds: 600

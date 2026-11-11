@@ -1,11 +1,12 @@
 """Run the broadcasts of one sync on one participant.
 
 Every participant walks the same schedule and runs only the broadcasts of groups it belongs
-to, so all members of a group issue them in the same order. A broadcast writes directly into
-the live parameter. The router weight is the exception: it is BF16 on the wire and FP32 in
-vLLM, so it is received into scratch and copied.
+to, so all members of a group issue them in the same order. BF16 receivers write directly
+into live parameters except for the FP32 router, which receives BF16 into scratch. Online
+FP8 receivers stage checkpoint weights before quantizing and copying them into serving buffers.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import time
 
@@ -20,6 +21,12 @@ from skyrl_train.weight_sync.expert_block.source_views import (
     dense_source_view,
     expert_slot_view,
     expert_source_view,
+)
+
+from skyrl_train.weight_sync.expert_block.verify_weights import (
+    REPLAY_COMPARE_CHUNK_BYTES,
+    ReplayReport,
+    mismatched_bytes,
 )
 
 
@@ -120,6 +127,42 @@ class Stream:
         with torch.no_grad():
             return self._run(version)
 
+    def verify(self, version: int, *, chunk_bytes: int = REPLAY_COMPARE_CHUNK_BYTES) -> ReplayReport:
+        """Replay transfers and compare each received tensor with serving weights."""
+        if chunk_bytes <= 0:
+            raise ValueError("Replay comparison chunks must contain at least one byte")
+        with torch.no_grad():
+            return self._verify(version, chunk_bytes)
+
+    def _verify(self, version: int, chunk_bytes: int) -> ReplayReport:
+        landings = [(item, landing) for item, landing in self.transfers() if landing is not None]
+        scratch = torch.empty(
+            max([landing.nbytes for _, landing in landings] + [0]), dtype=torch.uint8, device=self.device
+        )
+        mismatched = torch.zeros((), dtype=torch.int64, device=self.device)
+        compared = 0
+        for item, landing in self.transfers():
+            if landing is None:
+                self.send(item)
+                continue
+            wire = scratch.narrow(0, 0, landing.nbytes).view(landing.wire_dtype).view(landing.installed.shape)
+            self.receive(item, wire)
+            # The router weight is stored as FP32; compare it in its wire dtype.
+            installed = landing.installed.to(landing.wire_dtype)
+            mismatched.add_(mismatched_bytes(wire, installed, chunk_bytes))
+            compared += landing.nbytes
+        parameter_bytes = 0
+        if not self.trainer:
+            # Count parameter bytes in the wire dtype, so the FP32 router weight counts as BF16.
+            parameter_bytes = sum(value.numel() * value.element_size() for value in self.parameters.values())
+            for _, landing in landings:
+                parameter_bytes -= landing.installed.numel() * (
+                    landing.installed.element_size() - landing.nbytes // landing.installed.numel()
+                )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        return ReplayReport(self.participant, version, compared, parameter_bytes, int(mismatched.item()))
+
     def _sync_device(self) -> None:
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
@@ -159,6 +202,15 @@ class Stream:
         dist.broadcast(tensor, src=members.index(origin), group=self.groups[local_name])
         return item.source.nbytes
 
+    def prepare(self, item: ExpertBroadcast | DenseBroadcast, landing: Landing) -> Landing:
+        """Resolve the destination for an update after startup view validation."""
+        return landing
+
+    def install(self, item, landing: Landing, tensor: torch.Tensor) -> None:
+        """Install a received matrix or slice, converting the BF16 router to FP32."""
+        if not landing.direct:
+            landing.installed.copy_(tensor)
+
     def _run(self, version: int) -> InstallReport:
         self._sync_device()
         started = time.perf_counter()
@@ -171,10 +223,10 @@ class Stream:
             if landing is None:
                 wire_bytes += self.send(item)
             else:
+                landing = self.prepare(item, landing)
                 tensor = self.wire_tensor(landing)
                 wire_bytes += self.receive(item, tensor)
-                if not landing.direct:
-                    landing.installed.copy_(tensor)
+                self.install(item, landing, tensor)
             if isinstance(item, ExpertBroadcast):
                 matrices += 1
         self._sync_device()
@@ -198,17 +250,31 @@ class Stream:
         return None
 
 
-def bind(participant: int, plan: Schedule, rendezvous: Rendezvous, device: torch.device, **tensors) -> tuple:
+@dataclass(frozen=True)
+class BoundStream:
+    groups: dict[str, dist.ProcessGroup]
+    stream: Stream
+    warmup_seconds: dict[str, float]
+
+
+def bind(
+    participant: int,
+    plan: Schedule,
+    rendezvous: Rendezvous,
+    device: torch.device,
+    *,
+    make_stream: Callable[[dict[str, dist.ProcessGroup]], Stream],
+) -> BoundStream:
     """Create and warm this participant's groups and build its ``Stream``.
 
-    ``tensors`` are this side's ``Stream`` keyword arguments. If anything fails, the groups already
-    created are destroyed. Returns ``(groups, stream, warm-up seconds)``.
+    ``make_stream`` binds the created groups to the prepared tensors. Construction
+    failures destroy the groups. The result owns the groups until explicit shutdown.
     """
     groups = create_groups(participant, plan.groups, rendezvous)
     try:
         warm = warm_groups(participant, plan.groups, groups, device)
-        stream = Stream(participant, plan, groups, device=device, **tensors)
+        stream = make_stream(groups)
     except BaseException:
         destroy_groups(groups)
         raise
-    return groups, stream, warm
+    return BoundStream(groups, stream, warm)
