@@ -162,10 +162,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "retained non-Python sources keep their parser with exit-code credit disabled."
                     ),
                     daytona_safety=DaytonaSafety.UNSAFE,
-                    daytona_snapshot_count=14,
+                    daytona_snapshot_count=17706,
                     daytona_count_basis=(
-                        "production snapshot_identity over every converted task of the pinned input; "
-                        "the converter preserves 14 distinct build contexts"
+                        "pinned release per-task build-context inventory from the conversion ledger, "
+                        "resources defaulted; production-named recount runs with the conversion program"
                     ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
@@ -189,11 +189,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "Trusted repository pytest tests with unresolved Docker build contexts; "
                         "original config patches remain oracle-only."
                     ),
-                    daytona_safety=DaytonaSafety.SAFE,
-                    daytona_snapshot_count=5,
+                    daytona_safety=DaytonaSafety.UNSAFE,
+                    daytona_snapshot_count=12932,
                     daytona_count_basis=(
-                        "production snapshot_identity over every converted task of the pinned input; "
-                        "the converter preserves 5 distinct build contexts"
+                        "pinned release per-task build-context inventory from the conversion ledger, "
+                        "resources defaulted; production-named recount runs with the conversion program"
                     ),
                     task_format=TaskFormat.TASKCOMPENDIUM,
                 )
