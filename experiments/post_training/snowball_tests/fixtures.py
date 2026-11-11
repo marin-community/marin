@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 import subprocess
 from contextlib import contextmanager
 from copy import deepcopy
@@ -12,6 +13,17 @@ from types import SimpleNamespace
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.run_records import (
+    AttemptRecord,
+    LaunchReceipt,
+    MetricRow,
+    read_attempt,
+    read_attempts,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+)
+from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
@@ -39,6 +51,37 @@ def write_json(path: Path, value) -> None:
 def write_receipt(root: Path, receipt: dict) -> None:
     write_json(root / "terminal.json", receipt)
     write_json(root / "resolved-launch.yaml", {"config": receipt["config"]})
+    config = receipt["config"]
+    export_root = config["artifacts"]["export_root"]
+    attempt_id = config["run"]["attempt_id"]
+    record = read_attempt(export_root, attempt_id) or AttemptRecord(
+        run_id=config["run"]["id"],
+        attempt_id=attempt_id,
+        started_at=receipt["result"]["started_at"],
+        vllm_version="fixture-vllm",
+        metrics_started_at=receipt["result"]["started_at"],
+    )
+    with DataStore.open(run_records_root(export_root)) as store:
+        write_attempt(
+            register_run_tables(store).attempts,
+            record.model_copy(update={"launch": LaunchReceipt.model_validate(receipt)}),
+        )
+
+
+def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
+    export_root = str(root / "exports")
+    records = read_attempts(export_root)
+    shutil.rmtree(run_records_root(export_root), ignore_errors=True)
+    with DataStore.open(run_records_root(export_root)) as store:
+        tables = register_run_tables(store)
+        for record in records.values():
+            write_attempt(tables.attempts, record)
+        tables.metrics.extend(
+            MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
+            for step, values in metrics.items()
+            for name, value in values.items()
+            if name not in ("step", "attempt_id", "metric_attempt_ids")
+        )
 
 
 def selection(tmp_path, monkeypatch):
@@ -160,6 +203,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         inputs=None,
         fingerprint="",
         legacy=False,
+        missing_steps=(),
         attempt_id="recorded-attempt",
     ):
         preset = presets.PRESETS[preset_name]
@@ -168,8 +212,14 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         native = deepcopy(NATIVE_RECORD["receipt"])
         launch, result = native["config"], native["result"]
         attempt = attempt_id
-        launch["run"].update(id=f"{name}-{presets.PRESET_REVISION}", attempt_id=attempt)
+        launch["run"].update(
+            id=f"{name}-{presets.PRESET_REVISION}",
+            attempt_id=attempt,
+            mode="generate" if preset.recipe.layout.role_plan.generate_only else "train",
+        )
         launch["artifacts"].update(export_root=str(root / "exports"), attempts_root=str(root / "attempts"))
+        launch["iris"]["max_retries"] = 0
+        launch["skyrl"]["trainer"]["logger"] = ["console", "records", "wandb"]
         launch["iris"]["allocation"].update(num_nodes=preset.recipe.layout.role_plan.num_nodes, gpus_per_node=8)
         launch["skyrl"]["trainer"].update(max_steps=preset.updates, seed=presets.SEED, callbacks=[])
         launch["inputs"]["validation_data"] = []
@@ -209,6 +259,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         )
         (root / ".executor_status").write_text("SUCCESS")
         generating = preset.recipe.layout.role_plan.generate_only
+        stored_metrics = {}
         for step in (0,) if generating else range(1, preset.updates + 1):
             row = deepcopy(NATIVE_RECORD["metrics"])
             row = {key: value for key, value in row.items() if not key.startswith("timing/step_wall/")}
@@ -248,7 +299,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     if not key.startswith(("generate/outcome/", "loss/", "policy/", "timing/step_wall/"))
                 }
                 row.update({"generate/wall_seconds": 1.0, "generate/tokens_per_second_per_gpu": speed})
-            write_json(root / f"exports/metrics/step-{step:06d}.json", row)
+            stored_metrics[step] = row
         default = presets.default_selection()
         selected = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
         for index, evaluation in enumerate(preset.evaluations):
@@ -312,8 +363,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 path = export / "dumped_evals" / session / "panel.jsonl"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-                metric_path = root / f"exports/metrics/step-{max(step, 0):06d}.json"
-                values = json.loads(metric_path.read_text()) if metric_path.exists() else {"step": max(step, 0)}
+                values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
                 prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
                 values.update(
                     {
@@ -325,22 +375,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     values.update(
                         {"generate/outcome/" + value: values[prefix + value] for value in (*Outcome, "rollout_failure")}
                     )
-                write_json(metric_path, values)
-        for path in (root / "exports/metrics").glob("step-*.json"):
-            values = json.loads(path.read_text())
+        for values in stored_metrics.values():
             values.update(metrics or {})
-            write_json(path, values)
-        write_json(
-            root / f"exports/attempts/{attempt}/tracking.json",
-            {
-                "run_id": launch["run"]["id"],
-                "attempt_id": attempt,
-                "iris_job_id": "/tests/native-run",
-                "coordinator_iris_job_id": "/tests/coordinator",
-                "started_at": result["started_at"],
-                "engine": {"vllm_version": "fixture-vllm"},
-            },
-        )
+            values["attempt_id"] = attempt
+        write_metrics(root, {step: values for step, values in stored_metrics.items() if step not in missing_steps})
         write_receipt(root, native)
         return root
 

@@ -38,7 +38,6 @@ from marinskyrl.distillation import validate_generation_logprobs
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.task_sources import data_source
 
-
 DEFAULT_DRAFT_MODEL_CACHE_TTL_DAYS = 14
 
 
@@ -336,6 +335,9 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if raw["iris"]["timeout"] < 0:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
+    backends = raw["skyrl"].get("trainer", {}).get("logger", ())
+    if "records" in backends and raw["iris"]["max_retries"] != 0:
+        raise ValueError("The records backend requires iris.max_retries=0 and a fresh attempt_id per execution")
     _validate_evaluation_data(config)
     ray = raw["ray"]
     if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:

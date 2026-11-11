@@ -21,6 +21,14 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
+from finestore.rl.run_records import (
+    EXPORTS_SUBDIRECTORY,
+    RESOLVED_LAUNCH_FILENAME,
+    TERMINAL_RECEIPT_FILENAME,
+    AttemptRecord,
+    LaunchReceipt,
+    LaunchResult,
+)
 from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName, is_job_finished
@@ -33,14 +41,7 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.rl.skyrl_records import (
-    EXPORTS_SUBDIRECTORY,
-    RESOLVED_LAUNCH_FILENAME,
-    TERMINAL_RECEIPT_FILENAME,
-    SkyRLLaunchReceipt,
-    SkyRLLaunchResponse,
-    _stored_skyrl_receipt,
-)
+from marin.rl.skyrl_records import read_skyrl_launch_config, read_stored_skyrl_receipt
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
@@ -96,7 +97,7 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
 
 @dataclass(frozen=True)
 class SkyRLRolePlan:
-    """Explicit policy, rollout, and reference settings that bear experiment identity.
+    """Training role geometry; generate_only allocates the inference engines' nodes.
 
     The reference role reuses the policy's GPUs-per-node width: the vendored
     launcher requires a single GPUs-per-node value across all Iris bundles, so a
@@ -124,6 +125,7 @@ class SkyRLRolePlan:
 
     @property
     def num_nodes(self) -> int:
+        """Count inference nodes, adding trainer and reference nodes for training."""
         if self.colocate_all and not self.generate_only:
             return self.policy_num_nodes
         engine_gpus = (
@@ -134,10 +136,10 @@ class SkyRLRolePlan:
         engines_per_node = self.policy_num_gpus_per_node // engine_gpus
         if not engines_per_node:
             raise ValueError("each SkyRL inference engine must fit on one node")
-        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+        inference_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
         if self.generate_only:
-            return rollout_nodes
-        return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
+            return inference_nodes
+        return self.policy_num_nodes + (self.reference_num_nodes or 0) + inference_nodes
 
 
 @dataclass(frozen=True)
@@ -189,7 +191,7 @@ class SkyRLTopology:
             if self.num_nodes != plan.num_nodes:
                 raise ValueError("SkyRL generation topology must allocate exactly the inference engine nodes")
             if plan.policy_num_gpus_per_node != self.gpus_per_node:
-                raise ValueError("SkyRL policy_num_gpus_per_node must match the whole-node topology width")
+                raise ValueError("SkyRL inference node width must match the whole-node topology width")
             return
         for field_name in (
             "policy_num_nodes",
@@ -375,6 +377,25 @@ class ArtifactHfModel:
         )
 
 
+def resolve_skyrl_policy(ctx: StepContext, source: ArtifactStep[SkyRLRun]) -> ResolvedModelLocator:
+    """Resolve a terminal policy and tokenizer, using stable fingerprint placeholders."""
+    identity = artifact_identity(source)
+    if ctx.is_fingerprint:
+        uri, tokenizer, revision = f"{identity}/policy", "<skyrl-tokenizer>", "<skyrl-tokenizer-revision>"
+    else:
+        result = ctx.resolved(source)
+        if result.hf_model_uri is None:
+            raise ValueError("A completed SkyRL policy requires export_hf=True")
+        uri, tokenizer, revision = result.hf_model_uri, result.tokenizer_uri, result.tokenizer_revision
+    return ResolvedModelLocator(
+        uri=uri,
+        identity=identity,
+        local_path=_artifact_local_path("models", source),
+        tokenizer_uri=tokenizer,
+        tokenizer_revision=revision,
+    )
+
+
 @dataclass(frozen=True)
 class SkyRLPolicyModel:
     """The terminal HF policy export and tokenizer of a completed SkyRL run."""
@@ -385,21 +406,7 @@ class SkyRLPolicyModel:
         return (self.step,)
 
     def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
-        identity = artifact_identity(self.step)
-        if ctx.is_fingerprint:
-            uri, tokenizer, revision = f"{identity}/policy", "<skyrl-tokenizer>", "<skyrl-tokenizer-revision>"
-        else:
-            result = ctx.resolved(self.step)
-            if result.hf_model_uri is None:
-                raise ValueError("SkyRLPolicyModel requires a source run with export_hf=True")
-            uri, tokenizer, revision = result.hf_model_uri, result.tokenizer_uri, result.tokenizer_revision
-        return ResolvedModelLocator(
-            uri=uri,
-            identity=identity,
-            local_path=_artifact_local_path("models", self.step),
-            tokenizer_uri=tokenizer,
-            tokenizer_revision=revision,
-        )
+        return resolve_skyrl_policy(ctx, self.step)
 
 
 type SkyRLModelSource = ArtifactHfModel | SkyRLPolicyModel
@@ -793,7 +800,7 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
     """Run the nested SkyRL executable and return its validated result."""
-    response: SkyRLLaunchResponse | None = None
+    response: LaunchResult | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
@@ -804,7 +811,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
                 f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
             )
-        response = SkyRLLaunchResponse.model_validate_json(completed.stdout)
+        response = LaunchResult.model_validate_json(completed.stdout)
         if completed.returncode != 0 or response.state != "succeeded":
             failure = response.failure or f"launcher exited {completed.returncode}"
             raise RuntimeError(f"MarinSkyRL attempt {config.attempt_id} failed: {failure}\n{completed.stderr.strip()}")
@@ -831,7 +838,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
     return result
 
 
-def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: SkyRLLaunchResponse | None) -> None:
+def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: LaunchResult | None) -> None:
     output = config.output
     record_rollout_run(
         rollout_run_record(
@@ -1046,17 +1053,22 @@ class SkyRLReceiptLookupError(ValueError):
     """The recorded Iris job cannot be identified uniquely."""
 
 
-def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
+def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
     """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
 
     Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
     controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
     """
-    receipt, config = _stored_skyrl_receipt(run_output)
-    if receipt is not None:
-        return receipt
-    if config is None:
-        return None
+    record = read_stored_skyrl_receipt(run_output)
+    if record is not None and record.native.result.state in {"succeeded", "failed"}:
+        return record
+    if record is not None:
+        config = record.native.config
+    else:
+        try:
+            config = read_skyrl_launch_config(run_output)
+        except FileNotFoundError:
+            return None
     name = config["iris"]["job_name"]
     info = get_job_info()
     with ExitStack() as stack:
@@ -1083,7 +1095,7 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
     state = "submitted"
     if is_job_finished(job.state):
         state = "succeeded" if job.state == job_pb2.JOB_STATE_SUCCEEDED else "failed"
-    return SkyRLLaunchReceipt.model_validate(
+    receipt = LaunchReceipt.model_validate(
         {
             "config": config,
             "result": {
@@ -1093,3 +1105,6 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
             },
         }
     )
+    if record is not None:
+        return record.model_copy(update={"launch": receipt})
+    return AttemptRecord(run_id=config["run"]["id"], attempt_id=config["run"]["attempt_id"], launch=receipt)

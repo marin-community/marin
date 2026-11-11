@@ -16,6 +16,7 @@ from jaxtyping import Float
 from pathlib import Path
 import ray
 from ray import ObjectRef
+from finestore.rl.run_records import CheckpointReference
 import torch
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
@@ -411,6 +412,7 @@ class RayPPOTrainer:
         self._restored_rollout_state: TrainingContextState | None = None
         self.global_step = 0
         self.loaded_checkpoint_path: str | None = None
+        self._resume_checkpoint: CheckpointReference | None = None
         self._last_saved_step: int | None = None
         self._last_evaluated_step: int | None = None
         self._inference_policy_step: int | None = None
@@ -1333,7 +1335,10 @@ class RayPPOTrainer:
                 self._restored_rollout_state = None
                 restored_data = True
 
-        self.tracker.start(resumed_step=self.global_step if self.loaded_checkpoint_path is not None else None)
+        self.tracker.start(
+            resumed_step=self.global_step if self.loaded_checkpoint_path is not None else None,
+            checkpoint=self._resume_checkpoint,
+        )
         await self._start_draft_trainer()
         await self._sync_policy_for_rollouts(reason="initial")
 
@@ -3345,6 +3350,12 @@ class RayPPOTrainer:
         with io.open_file(trainer_state_path, "rb") as f:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
+        saved_config = trainer_state["config"]
+        saved_attempt = saved_config.get("runtime", {}).get("attempt_id")
+        if saved_attempt is not None:
+            self._resume_checkpoint = CheckpointReference(
+                export_root=str(saved_config["trainer"]["export_path"]), attempt_id=str(saved_attempt), step=global_step
+            )
         self._ftpo_stopped = bool(trainer_state.get("ftpo_stopped", False))
         if self.cfg.trainer.get("reset_distillation_token_count_on_resume", False):
             self.distillation_scored_tokens_total = 0

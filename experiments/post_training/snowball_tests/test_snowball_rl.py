@@ -235,11 +235,11 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
     expected = {
         "2026.11.11.1": {
-            "speed-short": ("bb0dec39", "a346692f"),
-            "data-short": ("a97f2928", "2a8e96b7"),
-            "speed-medium": ("badc116f", "925fbdb1"),
-            "learning-medium": ("b055454b", "383846e8"),
-            "speed-long": ("757304f8", "9a0ffd83"),
+            "speed-short": ("b89085a7", "6fee9e38"),
+            "data-short": ("5de6ea64", "deb49a2a"),
+            "speed-medium": ("98e2f8dd", "8fe22250"),
+            "learning-medium": ("cd894082", "39624cc1"),
+            "speed-long": ("970a1522", "dc09e061"),
         }
     }[presets.PRESET_REVISION]
     paths = []

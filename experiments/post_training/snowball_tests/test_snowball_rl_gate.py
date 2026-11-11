@@ -25,6 +25,7 @@ from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
 from marin.execution.lazy import ArtifactStep, StepContext, run
+from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from scipy.stats import t
@@ -33,7 +34,7 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
-from experiments.post_training.snowball_tests.fixtures import SELECTION_IDENTITY, write_receipt
+from experiments.post_training.snowball_tests.fixtures import SELECTION_IDENTITY, write_receipt, write_metrics
 from experiments.post_training.snowball_tests.fixtures import answer as _answer
 from experiments.post_training.snowball_tests.fixtures import write_json as _json
 
@@ -73,10 +74,10 @@ def comparisons(report, role=None):
 
 
 def edit_metrics(root, edit):
-    for path in (root / "exports/metrics").glob("step-*.json"):
-        values = json.loads(path.read_text())
+    metrics = read_skyrl_metrics(str(root))
+    for values in metrics.values():
         edit(values)
-        _json(path, values)
+    write_metrics(root, metrics)
 
 
 def test_calibrate_pools_deviations_within_pins():
@@ -89,8 +90,9 @@ def test_calibrate_pools_deviations_within_pins():
 
 def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, monkeypatch, capsys):
     roots = controls(recorded_runs, "speed-medium")
-    path = roots[0] / "exports/metrics/step-000002.json"
-    _json(path, json.loads(path.read_text()) | {"timing/step_wall/group_admission": 1100})
+    values = read_skyrl_metrics(str(roots[0]))
+    values[2]["timing/step_wall/group_admission"] = 1100
+    write_metrics(roots[0], values)
     before = {
         path: hashlib.sha256(path.read_bytes()).digest() for root in roots for path in root.rglob("*") if path.is_file()
     }
@@ -293,10 +295,10 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, p
 @pytest.mark.parametrize("fault", ["updates", "loss", "policy-loss", "union", "missing-counter"])
 def test_failed_training_invariants_do_not_supply_a_directional_label(recorded_runs, fault):
     controls(recorded_runs, "speed-medium")
-    root = recorded_runs("speed-medium", "users/test/invariant", speed=101)
-    if fault == "updates":
-        (root / "exports/metrics/step-000001.json").unlink()
-    else:
+    root = recorded_runs(
+        "speed-medium", "users/test/invariant", speed=101, missing_steps=(1,) if fault == "updates" else ()
+    )
+    if fault != "updates":
 
         def edit(row):
             if fault == "loss":
@@ -344,8 +346,8 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         for row in rows:
             row["task_id"] = "candidate-" + row["task_id"]
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    values = json.loads((root / "exports/metrics/step-000000.json").read_text())
-    assert "generate/outcome/graded" not in values and "attempt_id" not in values
+    values = read_skyrl_metrics(str(root))[0]
+    assert "generate/outcome/graded" not in values and values["attempt_id"] == "recorded-attempt"
     report = rescore(preset, "--candidate", "users/test/current-generation")
     assert (report["verdict"], report["label"]) == ("pass", "no change"), report
     if preset == "speed-short":
@@ -353,7 +355,7 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         assert coverage and all(row["comparator"] == ">=" for row in coverage)
         values["eval/eval_lite/all/outcome/graded"] = 1480
         values["eval/eval_lite/all/outcome/unavailable"] = 20
-        _json(root / "exports/metrics/step-000000.json", values)
+        write_metrics(root, {0: values})
         alias = root.parent.parent / "current-bad-counter" / root.name
         shutil.copytree(root, alias)
         report = rescore(preset, "--candidate", "users/test/current-bad-counter")
@@ -401,11 +403,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     if case == "invalid":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
-        _json(source / "terminal.json", receipt)
+        write_receipt(source, receipt)
     if case == "native-failed":
         receipt = json.loads((source / "terminal.json").read_text())
         receipt["result"]["state"] = "failed"
-        _json(source / "attempts/recorded-attempt.json", receipt)
+        write_receipt(source, receipt)
         (source / "terminal.json").unlink()
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
 
@@ -676,7 +678,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, s
     if case == "invalid-no-login":
         receipt = json.loads((sources[0] / "terminal.json").read_text())
         receipt["result"]["provenance"] = None
-        _json(sources[0] / "terminal.json", receipt)
+        write_receipt(sources[0], receipt)
     pending = {}
     for root in sources:
         for filename in ("terminal.json", "resolved-launch.yaml"):
@@ -701,7 +703,7 @@ def test_wait_publishes_stored_attempts_and_keeps_the_exit_code(recorded_runs, s
                 (sources[0] / "terminal.json").unlink()
                 return SimpleNamespace(state=JobState.FAILED)
             receipt["config"]["run"]["attempt_id"] = "native-retry"
-            _json(sources[0] / "terminal.json", receipt)
+            write_receipt(sources[0], receipt)
             _json(sources[0] / "attempts/native-retry.json", receipt)
             _json(sources[0] / "resolved-launch.yaml", {"config": receipt["config"]})
             for path in (sources[0] / "exports/metrics").glob("*.json"):

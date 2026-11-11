@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from multiprocessing.context import ForkServerContext
 
+from finestore.rl.run_records import read_attempts
 import fsspec
 import pytest
 import skyrl_gym
@@ -257,9 +258,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     ]
     sampled_rows = [
         json.loads(line)
-        for line in (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl")
-        .read_text()
-        .splitlines()
+        for line in (
+            (Path(evaluation_dump_dir(str(root / "exports/sampled"), 0)) / "train.jsonl").read_text().splitlines()
+        )
     ]
     assert len(sampled_rows) == 8 * len(greedy_rows)
     for prefix, rows in (("eval/train", greedy_rows), ("eval/sampled/train", sampled_rows)):
@@ -310,23 +311,14 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
     tmp_path, cat_count_policy, cat_count_session, forkserver_context, step_wise
 ):
     root = tmp_path / "rloo-n"
-    directory = root / "exports/metrics"
-    directory.mkdir(parents=True)
-    for step in (0, 8):
-        (directory / f"step-{step:06d}.json").write_text(
-            json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
-        )
     preserved = None
+    generated_attempt_id = None
     for steps, resume in ((2, False), (4, True)):
         interval = 3 if resume else 2
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
-        OmegaConf.update(
-            cfg,
-            "runtime",
-            {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}", "iris_job_id": "/tests/native-tracking"},
-            force_add=True,
-        )
-        cfg.trainer.logger = ["files"]
+        if resume:
+            OmegaConf.update(cfg, "runtime", {"run_id": "cpu-rloo-n", "attempt_id": f"attempt-{steps}"}, force_add=True)
+        cfg.trainer.logger = ["records"]
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
         cfg.trainer.step_wise_training = step_wise
         cfg.trainer.algorithm.group_advantage_min_size = 2
@@ -375,6 +367,15 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             {"type": "checkpoint", "save_steps": steps},
         ]
         records = run_process(forkserver_context, root, cfg, runner=run_cat_count)
+        attempts = read_attempts(str(root / "exports"))
+        if not resume:
+            (generated_attempt_id,) = attempts
+            saved = torch.load(root / "ckpts/global_step_2/trainer_state.pt", map_location="cpu", weights_only=False)
+            assert saved["config"].runtime.attempt_id == generated_attempt_id
+        else:
+            continuation = attempts["attempt-4"]
+            assert continuation.parent is not None and continuation.parent.attempt_id == generated_attempt_id
+            assert continuation.parent.step == continuation.resumed_step == 2
         final_metrics = [row for row in records if "eval/full_panel/all/num_attempted" in row]
         expected_final = [2, 4] if resume else [2]
         assert [row["step"] for row in final_metrics] == expected_final
@@ -392,9 +393,8 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         )
         assert observed == Counter({str(step): 1 for step in expected_final})
         assert [row["step"] for row in records] == list(range(steps + 1))
-        assert all("prior_attempt_only" not in row for row in records)
         if preserved is not None:
-            assert (directory / "step-000001.json").read_bytes() == preserved
+            assert records[1] == preserved
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
@@ -413,11 +413,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                 assert row[f"{prefix}timing/grading/mean"] > 0
                 assert row[f"{prefix}timing/setup/max"] == 0
         if not resume:
-            preserved = (directory / "step-000001.json").read_bytes()
-            for step in (3, 8):
-                (directory / f"step-{step:06d}.json").write_text(
-                    json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
-                )
+            preserved = records[1]
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
