@@ -7,8 +7,7 @@
    at an immutable version with the required evaluation exclusions.
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
-4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
-   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
+4. Read the [verdict](#compare-with-controls) for a gated run.
 
 ## Run a preset
 
@@ -151,10 +150,11 @@ against the control commit, or gives the reason a local git comparison is unavai
 
 ## Tasks and evaluation
 
-The frozen full test panel has 1,500 tasks and a stratified 100-task subset. Its manifest records
-TaskSpec IDs, family, AAII category, agentic flag, grader kind, source and license. The panel is
-disjoint from the frozen training and development selections. Native callbacks bind its tasks,
-sampling and schedule. Named panels request one greedy answer per task, with natural replies
+The [test panel](../references/task-curation.md#snowball-test-panel) is the held-out set that
+`speed-short`, the learning and data presets and `train-long` evaluate: 1,500 public benchmark
+tasks graded on the training machines, and a 100-task fast subset. It shows whether a change moves
+scores on tasks the model never trains on, measured against controls on the same panel; it is not a
+headline benchmark. To change it, follow that link; a new panel version needs new controls. Named panels request one greedy answer per task, with natural replies
 up to `EVAL_REPLY_TOKENS`. Engine defaults are FLASH_ATTN, prefix caching on and batch invariance off.
 
 Evaluation identity compares the stored TaskSpec strings and the request: merged sampling,
