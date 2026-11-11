@@ -682,7 +682,7 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
             "model_num_attention_heads: 8\n" + spec.config_yaml
         ),
     )
-    step = skyrl_step(spec, _execution(), export_hf=True)
+    step = skyrl_step(spec, dataclasses.replace(_execution(), max_retries=0), export_hf=True)
     config = step.build_config(
         StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     )
@@ -721,6 +721,16 @@ from finestore.rl.run_records import CheckpointReference
 
 path = Path(sys.argv[1])
 root = path.parent
+invalid = OmegaConf.load(path)
+invalid.iris.max_retries = 1
+invalid_path = root / "retry-enabled.yaml"
+invalid_path.write_text(OmegaConf.to_yaml(invalid))
+try:
+    load_launch_config(invalid_path)
+except ValueError as error:
+    assert "records backend requires iris.max_retries=0" in str(error), error
+else:
+    raise AssertionError("retry-enabled records launch was accepted")
 import cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records
 for module in (cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records):
     assert Path(module.__file__).resolve().is_relative_to(Path.cwd()), module.__file__
