@@ -10,6 +10,7 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
+import skyrl_train.models.grug_moe  # noqa: F401 - register the rollout model architecture
 from skyrl_train.inference_engines.vllm.utils import pop_vllm_wrapper_kwargs
 from vllm.config import ModelConfig, VllmConfig
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
