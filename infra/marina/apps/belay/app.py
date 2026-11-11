@@ -674,44 +674,32 @@ def record_intake_comment(conn: Connection, c: IntakeComment) -> None:
 
 # Ideas with no approval: their decided_at, if any, is not an approval time.
 UNDECIDED_STATES = (IdeaState.PENDING, IdeaState.DISMISSED)
-# Ideas a maintainer may decline: not yet planned or running, and not already closed (or a stalled plan).
-DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.APPROVED)
-# How long a planned idea must sit with no run before it counts as stalled: two watcher passes, so a run a session
-# submitted just before escalating has been reported by then.
-STALL_PROOF = datetime.timedelta(minutes=20)
-
-
-def require_stalled_plan(conn: Connection, idea: dict[str, Any]) -> None:
-    """Refuse (409) unless ``idea`` is a plan a session escalated before launching anything: planned, escalated, no
-    Belay run under its registry id (its ladder rungs included), and quiet for ``STALL_PROOF``."""
-    if not (idea["note"] or "").startswith(ESCALATED):
-        raise HTTPException(409, f"idea {idea['id']} is planned and may have runs launching; it was not escalated")
-    if _now() - idea["updated_at"] < STALL_PROOF:
-        raise HTTPException(409, f"idea {idea['id']} was escalated moments ago; retry once the watcher has synced runs")
-    rid = idea["registry_id"]
-    if rid and _rows(
-        conn, "SELECT 1 FROM runs WHERE registry_id = :r OR registry_id LIKE :p LIMIT 1", r=rid, p=f"{rid}d%"
-    ):
-        raise HTTPException(409, f"idea {idea['id']} has Belay runs; it is not a stalled plan")
+# Ideas a maintainer may decline: not yet running and not already closed. A planned idea is the maintainer's call:
+# the admin page shows its runs.
+DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.APPROVED, IdeaState.PLANNED)
+# Ideas a maintainer may re-queue for another session.
+REQUEUEABLE_STATES = (IdeaState.APPROVED, IdeaState.PLANNED, IdeaState.RECORDED)
 
 
 def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
     """Close an idea without running it, dropping its unclaimed approval event; refuses (writing nothing) an unknown
-    idea or one already planned, running or closed."""
+    idea or one already running or closed."""
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
     if not rows:
         raise HTTPException(404, f"no idea {idea_id}")
-    if rows[0]["state"] == IdeaState.PLANNED:
-        require_stalled_plan(conn, rows[0])
-    elif rows[0]["state"] not in DECLINABLE_STATES:
-        raise HTTPException(409, f"idea {idea_id} is {rows[0]['state']}; only a waiting idea can be declined")
+    if rows[0]["state"] not in DECLINABLE_STATES:
+        raise HTTPException(
+            409, f"idea {idea_id} is {rows[0]['state']}; only a pending, approved or planned idea can be declined"
+        )
     conn.execute(
         text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
         {"n": f"Declined by {login}: {note or 'no reason given'}", "id": idea_id},
     )
-    # An approved idea's queued approval must not reach a session after the decline.
+    # No queued approval or work offer (one a failed session handed back included) may reach a session after the
+    # decline.
     conn.execute(
-        text("DELETE FROM events WHERE kind = 'approved' AND ref = :ref AND session_id IS NULL"), {"ref": str(idea_id)}
+        text("DELETE FROM events WHERE kind IN ('approved', 'work_pending') AND ref = :ref AND session_id IS NULL"),
+        {"ref": str(idea_id)},
     )
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
     return {"state": IdeaState.DECLINED.value}
@@ -889,13 +877,10 @@ def requeue_idea(
     priority: PriorityBand | None = None,
 ) -> dict[str, str]:
     """Keep the maintainer's note (and any node grant) for the session and offer the idea to the next session. A
-    retried re-queue whose event is still unclaimed queues nothing more. Takes an approved or recorded idea, or a
-    stalled plan (``stalled_plan``)."""
+    retried re-queue whose event is still unclaimed queues nothing more. Takes an approved, planned or recorded idea."""
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
-    if rows and rows[0]["state"] == IdeaState.PLANNED:
-        require_stalled_plan(conn, rows[0])
-    elif not rows or rows[0]["state"] not in (IdeaState.APPROVED, IdeaState.RECORDED):
-        raise HTTPException(409, f"idea {idea_id} is neither approved nor recorded")
+    if not rows or rows[0]["state"] not in REQUEUEABLE_STATES:
+        raise HTTPException(409, f"idea {idea_id} is not approved, planned or recorded")
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', note = :n, "
