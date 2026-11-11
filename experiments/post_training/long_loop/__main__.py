@@ -26,7 +26,7 @@ from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blo
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 
-def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str) -> None:
+def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str, task_image: str | None = None) -> None:
     rows = []
     for step in graph_handles([terminal]):
         if step.adopt_source:
@@ -47,6 +47,8 @@ def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str
                 "status": "strictly composed; future checkpoint identity unresolved",
                 **validate_launch(launch.launch_config_yaml, directory / digest),
             }
+        if task_image is not None and "task_image" in row and row["task_image"] != task_image:
+            raise ValueError("Sandbox preflight image differs from SkyRL task image")
         rows.append(row)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "graph.json").write_text(json.dumps(rows, indent=2))
@@ -77,7 +79,9 @@ def main(spec: Path, smoke: bool, through: str, validation_output: Path) -> Arti
     require_secret("HF_TOKEN")
     version = resolve_version(resolved["name"], None)
     terminal = build_spec_graph(resolved, version, through=through)
-    validate_graph(terminal, validation_output / version, os.environ["MARIN_PREFIX"])
+    validate_graph(
+        terminal, validation_output / version, os.environ["MARIN_PREFIX"], resolved["execution"]["sandbox"]["image"]
+    )
     return terminal
 
 

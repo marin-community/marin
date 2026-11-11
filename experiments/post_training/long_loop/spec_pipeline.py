@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import draccus
 from fray.types import DeviceConfig, GpuConfig, ResourceConfig
+from iris.rpc import job_pb2
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
@@ -23,6 +24,7 @@ from experiments.post_training.long_loop.evaluation import configured_evaluation
 from experiments.post_training.long_loop.rl import configured_rl_step
 from experiments.post_training.long_loop.run_spec import stage_blockers
 from experiments.post_training.long_loop.runtime_timing import report_step, timed
+from experiments.post_training.long_loop.sandbox_preflight import sandbox_preflight
 from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config, sft_run
 
 
@@ -194,6 +196,32 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     if len(routes) != sum(len(datasets[route]["source_names"]) for route in ("agentic", "nonagentic")):
         raise ValueError("Agentic and nonagentic source names overlap")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
+    rl_execution = runtime_execution(rl["execution"])
+    if "local" in rl["config"]["environment"]["task_sessions"]:
+        if (
+            coordinator.container_profile != job_pb2.CONTAINER_PROFILE_PRIVILEGED
+            or rl_execution.container_profile != job_pb2.CONTAINER_PROFILE_PRIVILEGED
+        ):
+            raise ValueError("Local sandbox requires privileged coordinator and RL child profiles")
+    rl_execution = replace(
+        rl_execution,
+        coordinator_name=coordinator.coordinator_name,
+        coordinator_gpu=coordinator.coordinator_gpu,
+        coordinator_timeout_hours=coordinator.coordinator_timeout_hours,
+    )
+    sandbox_resources = resources["sandbox"]
+    if sandbox_resources.container_profile != job_pb2.ContainerProfile.Name(rl_execution.container_profile):
+        raise ValueError("Sandbox preflight and RL must use the same container profile")
+    sandbox = timed(
+        apply(
+            f"{name}/sandbox-preflight",
+            remote(sandbox_preflight, resources=sandbox_resources),
+            version=version,
+            output=OUT,
+            image=sandbox_resources.image,
+            container_profile=sandbox_resources.container_profile,
+        )
+    )
     learned = configured_rl_step(
         version=version,
         name=rl["name"],
@@ -209,13 +237,13 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         validation_data=(ArtifactDataSource(adopted["heldout"], relative_path=datasets["heldout"]["data_file"]),),
         config=rl_config,
         plan=draccus.decode(SkyRLRolePlan, rl["role_plan"]),
-        execution=runtime_execution(rl["execution"]),
+        execution=rl_execution,
         retained=rl["retained"],
         seed=rl["seed"],
     )
-    learned = timed(replace(learned, deps=(*learned.deps, endpoint)))
+    learned = timed(replace(learned, deps=(*learned.deps, endpoint, sandbox)))
     if through == "rl":
-        return replace(learned, runtime_args={**learned.runtime_args, "skyrl_execution": coordinator})
+        return learned
     evaluation = resolved["evaluation"]
     data = datasets["evaluation"]
     eval_inputs = timed(

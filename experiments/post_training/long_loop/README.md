@@ -130,3 +130,9 @@ and exercises the real quota planner with scripted GS8 rewards. Its receipt
 binds compiled config and local data hashes. Check those data hashes against the
 run's pinned manifests before submission. This proves CPU setup and quota
 accounting, not GPU learning, live grading, or natural-long CP qualification.
+
+The graph also runs a one-GPU Linux sandbox preflight before the RL gang. It uses
+SkyRL's identical immutable task image and container profile, beneath the same
+privileged coordinator. It constructs `LocalMachineFactory`, creates the persistent
+namespace keeper, executes a shell command and closes the sandbox. Failed startup
+blocks RL. CPU dataset validation does not substitute for this host capability check.

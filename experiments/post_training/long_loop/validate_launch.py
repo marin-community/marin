@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
+from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
 from omegaconf import OmegaConf
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
@@ -37,6 +38,7 @@ def main(source: Path, destination: Path) -> None:
     print(
         json.dumps(
             {
+                "task_image": IRIS_TASK_IMAGE,
                 "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "compiled_sha256": hashlib.sha256(compiled.encode()).hexdigest(),
                 "validator": "load_launch_config + skyrl_train.utils.utils.validate_cfg",

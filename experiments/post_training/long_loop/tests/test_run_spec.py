@@ -140,3 +140,17 @@ def test_endpoint_reuse_rejects_different_export():
     resolved["adopted_endpoint"] = {"model_uri": "s3://test/other/hf"}
     with pytest.raises(ValueError, match="identical export"):
         build_spec_graph(resolved, "2026.11.10.3", through="rl")
+
+
+def test_rl_keeps_child_execution_profile_and_waits_for_sandbox():
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["adopted_sft"] = {"version": "2026.11.09.12", "uri": "s3://test/sft", "step": 746}
+    terminal = build_spec_graph(resolved, "2026.11.10.4", through="rl")
+    execution = terminal.runtime_args["skyrl_execution"]
+    assert execution.container_profile == resolved["rl"]["execution"]["container_profile"] == 4
+    assert execution.memory == resolved["rl"]["execution"]["memory"]
+    assert execution.memory != resolved["execution"]["coordinator"]["memory"]
+    assert any(step.name.endswith("/sandbox-preflight") for step in terminal.deps)
+    resolved["execution"]["coordinator"]["container_profile"] = None
+    with pytest.raises(ValueError, match="privileged coordinator"):
+        build_spec_graph(resolved, "2026.11.10.4", through="rl")

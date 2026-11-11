@@ -84,4 +84,20 @@ coordinator:
   - DAYTONA_EVAL_API_KEY
   - DAYTONA_TARGET
   - TOGETHER_API_KEY
-  container_profile: null
+  container_profile: 4
+sandbox:
+  cpu: 4
+  ram: 32GB
+  disk: 128GB
+  device:
+    variant: H100
+    kind: gpu
+    count: 1
+  preemptible: true
+  regions: null
+  zone: null
+  target_cluster: null
+  replicas: 1
+  device_alternatives: null
+  image: ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8
+  container_profile: CONTAINER_PROFILE_PRIVILEGED
