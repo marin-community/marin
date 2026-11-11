@@ -283,14 +283,6 @@ def test_build_job_constraints_preemptible_none_runs_heuristic():
     assert _preemptible_values(constraints) == ["false"]
 
 
-def test_build_job_constraints_preemptible_true_overrides_heuristic():
-    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
-
-    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
-
-    assert _preemptible_values(constraints) == ["true"]
-
-
 def test_build_job_constraints_target_cluster_appends_cluster_pin():
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 

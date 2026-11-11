@@ -120,7 +120,7 @@ class ScopedCounters:
         if worker is None:
             return {}
         snap = worker.get_counter_snapshot()
-        return {k: e.value for k, e in snap.counters.items() if e.stage == self._stage}
+        return {key.name: entry.value for key, entry in snap.counters.items() if key.stage == self._stage}
 
 
 pipeline: ScopedCounters = ScopedCounters(stage=None)

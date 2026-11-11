@@ -67,14 +67,16 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     pp = geometry.pipeline_model_parallel_size
     cp = geometry.context_parallel_size
     ep = geometry.expert_model_parallel_size
-    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
-    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
+    etp = geometry.expert_tensor_parallel_size
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}, ETP={etp}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep, etp)):
         raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
-    model_parallel = tp * pp * cp
-    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
+    # Megatron builds separate dense (TP, CP, DP, PP) and expert
+    # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
+    if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
 
 
@@ -606,6 +608,9 @@ def _validate_skyrl_recipe(
         for dimension in fields(MegatronGeometry):
             value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
             dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+        etp = _declared_config_value(config, f"trainer.{role}.megatron_config.expert_tensor_parallel_size")
+        if etp is _MISSING_CONFIG_VALUE or etp is None:
+            dimensions["expert_tensor_parallel_size"] = dimensions["tensor_model_parallel_size"]
         validate_megatron_geometry(
             MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
         )

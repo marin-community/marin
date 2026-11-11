@@ -25,5 +25,18 @@ from verifyit.reasoning_markup import ReasoningViolation, reasoning_span_violati
         ("<think>A</thinking>B", "length", ReasoningViolation.STRAY_END),
     ],
 )
-def test_reasoning_span_violation(text, stop_reason, violation):
-    assert reasoning_span_violation(text, stop_reason) == violation
+def test_reasoning_span_violation_after_a_prompt_opened_span(text, stop_reason, violation):
+    assert reasoning_span_violation(text, stop_reason, prompt_opens_span=True) == violation
+
+
+@pytest.mark.parametrize(
+    "text,violation",
+    [
+        ("The answer is 4.", None),
+        ("<|start_think|>Add.<|end_think|>4", None),
+        ("Add.<|end_think|>4", ReasoningViolation.STRAY_END),
+        ("A<|end_think|>B<|start_think|>C<|end_think|>4", ReasoningViolation.STRAY_END),
+    ],
+)
+def test_a_leading_closer_is_stray_when_the_prompt_opens_no_span(text, violation):
+    assert reasoning_span_violation(text, "stop", prompt_opens_span=False) == violation

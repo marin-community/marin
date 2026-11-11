@@ -22,6 +22,84 @@ deleteRules:
 
 groups:
   - orgId: 1
+    name: node-filesystems
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: node-runtime-filesystem-full
+        title: NodeRuntimeFilesystemAlmostFull
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.node }} filesystem {{ $labels.mountpoint }} has less than 5% free space"
+          description: >-
+            A full root or temporary filesystem prevents container runtime execs even
+            when the task-cache disk has space. Inspect filesystem usage and /var/log/runsc.
+            This rule requires the node-agent filesystem gauges; absent or stale samples
+            do not establish disk pressure. Finelog fleet and relay alerts cover query outages.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#coreweave-root-filesystem-full
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT cluster, node_name,
+                               json_get(attributes_json, 'node_uid') AS node_uid,
+                               json_get(attributes_json, 'mountpoint') AS mountpoint,
+                               name, value,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY cluster, node_name,
+                                              json_get(attributes_json, 'node_uid'),
+                                              json_get(attributes_json, 'mountpoint'), name
+                                 ORDER BY timestamp_ms DESC, seq DESC
+                               ) AS rank
+                        FROM "telemetry_v1.node_agent"
+                        WHERE service = 'iris-node-agent'
+                          AND name IN ('node_filesystem_available_bytes', 'node_filesystem_total_bytes')
+                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT)
+                          AND json_get(attributes_json, 'mountpoint') IN ('/', '/tmp')
+                      )
+                      SELECT cluster, node_name AS node, node_uid, mountpoint,
+                             MAX(CASE WHEN name = 'node_filesystem_available_bytes' THEN value END)
+                               / NULLIF(MAX(CASE WHEN name = 'node_filesystem_total_bytes' THEN value END), 0) AS value
+                      FROM ranked
+                      WHERE rank = 1
+                      GROUP BY cluster, node_name, node_uid, mountpoint
+                      HAVING COUNT(*) = 2
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: node_uid, text: node_uid, type: string }
+                - { selector: mountpoint, text: mountpoint, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [0.05] }
+
+  - orgId: 1
     name: k8s-control-plane
     folder: Alerts
     interval: 1m
