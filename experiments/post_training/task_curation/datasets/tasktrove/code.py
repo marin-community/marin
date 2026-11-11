@@ -8,8 +8,8 @@ The remaining sources use the campaign executable image and compiler grader pack
 an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
 """
 
-
 import json
+from dataclasses import replace
 
 from finestore.rl.curation import DaytonaSafety
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
@@ -54,7 +54,7 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
@@ -203,7 +203,7 @@ def stdio_source(
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
-        info=info,
+        info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
         config=CurationRecipe(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
@@ -226,15 +226,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             CODE_CONTESTS_RUBRIC,
             version="2",
             grader=None,
-            info=SourceInfo(
-                id="Task Trove:DCAgent__code-contests-noblock",
-                title="DCAgent/code-contests-noblock",
-                origin="Task Trove",
-                family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
-                count=8728,
-                notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:DCAgent__code-contests-noblock",
+                    title="DCAgent/code-contests-noblock",
+                    origin="Task Trove",
+                    family="competitive-programming",
+                    tags=("agentic", "multi-turn", "language:python"),
+                    count=8728,
+                    notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
         ),
         stdio_source(
@@ -242,18 +245,21 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__codeforces-v3",
             convert_codeforces_task,
             CODEFORCES_RUBRIC,
-            info=SourceInfo(
-                id="Task Trove:laion__codeforces-v3",
-                title="laion/codeforces-v3",
-                origin="Task Trove",
-                family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
-                count=10000,
-                notes=(
-                    "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
-                    "credit for not crashing)."
-                ),
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:laion__codeforces-v3",
+                    title="laion/codeforces-v3",
+                    origin="Task Trove",
+                    family="competitive-programming",
+                    tags=("agentic", "multi-turn", "language:python"),
+                    count=10000,
+                    notes=(
+                        "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
+                        "credit for not crashing)."
+                    ),
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
         ),
         stdio_source(
@@ -261,15 +267,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
-            info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
-                title="laion/nemotron-gym-competitive-coding-v2",
-                origin="Task Trove",
-                family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
-                count=15713,
-                notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
+                    title="laion/nemotron-gym-competitive-coding-v2",
+                    origin="Task Trove",
+                    family="competitive-programming",
+                    tags=("agentic", "multi-turn", "language:python"),
+                    count=15713,
+                    notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
         ),
         stdio_source(
@@ -279,18 +288,21 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             TACO_RUBRIC,
             version="2",
             grader=None,
-            info=SourceInfo(
-                id="Task Trove:laion__exp_rpt_taco-v2",
-                title="laion/exp_rpt_taco-v2",
-                origin="Task Trove",
-                family="stdin-stdout",
-                tags=("agentic", "multi-turn", "language:python"),
-                count=10000,
-                notes=(
-                    "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
-                    "aware compare where the prompt promises one."
-                ),
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:laion__exp_rpt_taco-v2",
+                    title="laion/exp_rpt_taco-v2",
+                    origin="Task Trove",
+                    family="stdin-stdout",
+                    tags=("agentic", "multi-turn", "language:python"),
+                    count=10000,
+                    notes=(
+                        "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
+                        "aware compare where the prompt promises one."
+                    ),
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
         ),
     ]

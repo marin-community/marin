@@ -9,6 +9,7 @@ recorded output as an order-insensitive multiset of normalized lines. The oracle
 source's ``solution/solve.sh``.
 """
 
+from dataclasses import replace
 
 from finestore.rl.curation import DaytonaSafety
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -24,7 +25,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 AGENT_IMAGE = Environment(
     image="ghcr.io/marin-community/iris-task@sha256:66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
@@ -62,15 +63,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=SourceInfo(
-                id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-                title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
-                origin="Task Trove",
-                family="shell-cmd",
-                tags=("agentic", "multi-turn", "language:bash"),
-                count=1498,
-                notes="Semantic output comparison against an oracle command run in the same sandbox.",
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+                    title="DCAgent2/nl2bash-tasks-cleaned-oracle-v2",
+                    origin="Task Trove",
+                    family="shell-cmd",
+                    tags=("agentic", "multi-turn", "language:bash"),
+                    count=1498,
+                    notes="Semantic output comparison against an oracle command run in the same sandbox.",
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
             config=CurationRecipe(
                 name="tasktrove-nl2bash",

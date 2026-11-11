@@ -27,12 +27,12 @@ def test_an_agentic_verdict_requires_a_measured_count_to_survive_the_projection(
     assert measured.declaration.daytona_snapshot_threshold == DAYTONA_SAFE_SNAPSHOT_LIMIT
 
 
-def test_deprecated_tag_marks_the_status_over_available():
+def test_status_prefers_deprecated_then_excluded_then_inventory():
     deprecated = RlDataSource(info=SourceInfo(id="trove:old", title="Old", origin="fixture", tags=("deprecated",)))
     excluded = RlDataSource(
         info=SourceInfo(id="trove:gone", title="Gone", origin="fixture", tags=("deprecated", "excluded"))
     )
-    available = RlDataSource(info=SourceInfo(id="trove:new", title="New", origin="fixture", tags=("rlvr",)))
+    pointer = RlDataSource(info=SourceInfo(id="trove:new", title="New", origin="fixture", tags=("rlvr",)))
     assert deprecated.declaration.status == "Deprecated"
     assert excluded.declaration.status == "Deprecated"
-    assert available.declaration.status == "Available"
+    assert pointer.declaration.status == "Inventory"  # no pipeline: visible, never admitted

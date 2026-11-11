@@ -7,7 +7,7 @@
 from finestore.rl.curation import DaytonaSafety
 
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference, TaskFormat
 
 TASKTROVE_INPUT = SourceReference(
     TASKTROVE_REPO,
@@ -39,6 +39,7 @@ def sources() -> list[RlDataSource]:
                     "every sampled task, so the cohort is not treated as safe, and a full per-task count "
                     "is pending."
                 ),
+                task_format=TaskFormat.HARBOR,
                 dataset=SourceReference(
                     "skill2env/skill2env",
                     "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",

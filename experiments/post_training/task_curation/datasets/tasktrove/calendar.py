@@ -12,6 +12,7 @@ golden control; an archive whose witness is not a nonempty JSON list of events i
 """
 
 import json
+from dataclasses import replace
 from typing import Any
 
 from finestore.rl.curation import DaytonaSafety
@@ -47,7 +48,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_script_grader,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 WITNESS_PATH = "solution/answer.json"
 GRADER_FILES = ("tests/verifier.py", VERIFIER_DATA)
@@ -197,7 +198,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     )
     return [
         RlDataSource(
-            info=info,
+            info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
             pipeline=process_rows,
             config=CurationRecipe(
                 name=name,

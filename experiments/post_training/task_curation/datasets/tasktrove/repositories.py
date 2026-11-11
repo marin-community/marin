@@ -8,6 +8,7 @@ private copies of the repository with restored trusted tests.
 """
 
 import json
+from dataclasses import replace
 
 from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import unsupported
@@ -36,7 +37,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 )
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -109,7 +110,7 @@ def repository_source(
 ) -> RlDataSource[CurationRecipe]:
     return RlDataSource(
         pipeline=process_rows,
-        info=info,
+        info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
         config=CurationRecipe(
             name=f"tasktrove-{name}",
             source=tasktrove_source(config),
@@ -129,42 +130,45 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             SWE_REBENCH_RUBRIC,
             convert=convert_swe_rebench_task,
             version="3",
-            info=SourceInfo(
-                id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
-                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                origin="Task Trove",
-                family="swe-repo",
-                tags=(
-                    "agentic",
-                    "multi-turn",
-                    "language:python",
-                    "language:go",
-                    "language:rust",
-                    "language:java",
-                    "language:julia",
-                    "language:kotlin",
-                    "language:swift",
-                    "language:dart",
-                    "language:c",
-                    "language:scala",
-                    "language:php",
-                    "language:csharp",
-                    "language:elixir",
-                    "language:lua",
-                    "language:cpp",
-                    "language:ocaml",
-                ),
-                count=18319,
-                notes=(
-                    "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
-                    "retained non-Python sources keep their parser with exit-code credit disabled."
-                ),
-                daytona_safety=DaytonaSafety.UNSAFE,
-                daytona_snapshot_count=17706,
-                daytona_count_basis=(
-                    "pinned release per-task build-context inventory from the conversion ledger, "
-                    "resources defaulted; production-named recount runs with the conversion program"
-                ),
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+                    title="DCAgent/swe_rebench_v2_patched_oracle-v2",
+                    origin="Task Trove",
+                    family="swe-repo",
+                    tags=(
+                        "agentic",
+                        "multi-turn",
+                        "language:python",
+                        "language:go",
+                        "language:rust",
+                        "language:java",
+                        "language:julia",
+                        "language:kotlin",
+                        "language:swift",
+                        "language:dart",
+                        "language:c",
+                        "language:scala",
+                        "language:php",
+                        "language:csharp",
+                        "language:elixir",
+                        "language:lua",
+                        "language:cpp",
+                        "language:ocaml",
+                    ),
+                    count=18319,
+                    notes=(
+                        "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
+                        "retained non-Python sources keep their parser with exit-code credit disabled."
+                    ),
+                    daytona_safety=DaytonaSafety.UNSAFE,
+                    daytona_snapshot_count=17706,
+                    daytona_count_basis=(
+                        "pinned release per-task build-context inventory from the conversion ledger, "
+                        "resources defaulted; production-named recount runs with the conversion program"
+                    ),
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
         ),
         repository_source(
@@ -173,23 +177,26 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             SWESMITH_RUBRIC,
             convert=convert_swesmith_task,
             version="4",
-            info=SourceInfo(
-                id="Task Trove:laion__swesmith-oracle-filtered-v2",
-                title="laion/swesmith-oracle-filtered-v2",
-                origin="Task Trove",
-                family="swe-repo",
-                tags=("agentic", "multi-turn", "language:python"),
-                count=12927,
-                notes=(
-                    "Trusted repository pytest tests with unresolved Docker build contexts; "
-                    "original config patches remain oracle-only."
-                ),
-                daytona_safety=DaytonaSafety.UNSAFE,
-                daytona_snapshot_count=12932,
-                daytona_count_basis=(
-                    "pinned release per-task build-context inventory from the conversion ledger, "
-                    "resources defaulted; production-named recount runs with the conversion program"
-                ),
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:laion__swesmith-oracle-filtered-v2",
+                    title="laion/swesmith-oracle-filtered-v2",
+                    origin="Task Trove",
+                    family="swe-repo",
+                    tags=("agentic", "multi-turn", "language:python"),
+                    count=12927,
+                    notes=(
+                        "Trusted repository pytest tests with unresolved Docker build contexts; "
+                        "original config patches remain oracle-only."
+                    ),
+                    daytona_safety=DaytonaSafety.UNSAFE,
+                    daytona_snapshot_count=12932,
+                    daytona_count_basis=(
+                        "pinned release per-task build-context inventory from the conversion ledger, "
+                        "resources defaulted; production-named recount runs with the conversion program"
+                    ),
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
         ),
     ]

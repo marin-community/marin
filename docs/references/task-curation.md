@@ -292,7 +292,17 @@ An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. The `deprecated` tag marks a
 source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
-the deprecation reason. `independent_qc` records
+the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
+visible in the Atlas with its evidence, but it is never admitted to selection and
+carries `unassessed` snapshot and oracle status rather than a verdict.
+
+Every runnable agentic source declares its ingested `task_format`. New agentic
+sources must ingest TaskCompendium or Harbor task directories; selection rejects
+an agentic source that declares no format, and rejects MarinSkyRL's internal
+blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
+frozen list of Nemotron Ultra components admitted before the requirement. A new
+internal-format source therefore fails at selection instead of shipping.
+`independent_qc` records
 quality control a pinned release performed outside curation, so inventory-only
 pointers surface that evidence in the Atlas. `daytona_safety` records whether
 running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMIT`,
@@ -312,7 +322,9 @@ built through Harbor's own task-config mapping
 Daytona factory uses to name and create snapshots. A task the production
 validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
 build) counts as a failure and is reported, not treated as safe. No Daytona API
-calls are made. A
+calls are made. `oracle_validation` separately records how execution was
+qualified; see [Sources without oracle solutions](#sources-without-oracle-solutions).
+A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
@@ -561,6 +573,66 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 `/tmp` is mounted with `noexec`. Hosts without the `/cache` mount use `/tmp`.
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
+
+## Sources without oracle solutions
+
+Some sources ship no oracle solution: every row has `has_solution` false, or its
+`solution_binary` is an empty archive. The controls above cannot run there, so
+execution is qualified by two checks that need no oracle. Apply them whenever a
+source is admitted without one, including every rebuilt cohort that inherits a
+native source's missing oracles.
+
+**Payload preservation (offline).** For each rebuilt task, every file the native
+recipe `COPY`s into the workspace must appear in the rebuilt setup payload with
+identical bytes and mode. This catches a rebuild that drops directory sources,
+rewrites fixture data or changes an executable bit. `ADD` recipes have no
+preservation contract and must be deferred by the converter.
+
+**Verifier liveness (sandbox).** The task's own verifier runs in the task's
+graded environment against the untouched workspace. The verifier "actually ran"
+only when it executed and returned a well-formed negative verdict: exit code 0
+with a trailing numeric reward below 1. A crash, a nonzero exit, a timeout, an
+empty or unparsable report, or a positive reward on an unsolved workspace is an
+infrastructure error or a defect, never a pass. A solved submission is not
+needed; the rebuild changed the environment, not the grading contract.
+
+**Pass criteria.** A source reaches `verifier_executed` only when both phases
+ran and every sampled task passed (`minimum_rate` 1.0). Sampling is stratified
+per base reference, twenty tasks per base by default, and the report lists the
+pass rate per base and overall. A single infrastructure error blocks the status
+until it is explained, because the check's purpose is to prove the environment
+runs, not to estimate a rate.
+
+**Recording.** The qualification writes a JSON report with
+`preservation_rate`, `verifier_rate`, `by_base` and `verifier_failures`. Its
+verdict sets `oracle_validation` on the declaration:
+
+- `executed` — shipped oracle solutions ran and scored their expected reward;
+- `verifier_executed` — no oracle exists; both checks above passed;
+- `skipped` — neither ran, so execution is not certified.
+
+`skipped` is the default for a source without oracles, and absence of oracles is
+not evidence that execution works. The Atlas shows the value beside the catalog,
+and catalog publication carries it forward with the rest of the declaration.
+
+**Commands.** Run the offline phase over a rebuild output:
+
+```bash
+uv run python -m experiments.post_training.task_curation.no_oracle_qualification \
+    --cohort /path/to/native-tasks.parquet \
+    --rebuild-out /path/to/rebuild-output \
+    --output /path/to/qc-report.json
+```
+
+The report's `summary` prints the rates and `oracle_validation`. Run the sandbox
+phase through Harbor's trial path (`harbor run --config`, see
+[harbor-integration](../harbor-integration.md)) over a packaged sample of the
+rebuilt tasks, with the task's own verifier as the final step:
+`no_oracle_qualification.classify_verifier_run` turns each trial's verifier exit
+code and trailing reward into the outcome the report records. The phase needs a
+Daytona credential, creates one sandbox per sampled task, and has no cleanup
+code path in this repository: hand the created snapshot names to an operator, as
+`.agents/ops/daytona.md` describes.
 
 ## Conversion modes
 

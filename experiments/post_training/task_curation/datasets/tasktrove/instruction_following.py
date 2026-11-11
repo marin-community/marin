@@ -10,6 +10,7 @@ vacuous or contradictory schemas and conflicting public language requirements.
 
 import json
 import re
+from dataclasses import replace
 
 from finestore.rl.curation import DaytonaSafety
 from jsonschema.exceptions import SchemaError
@@ -27,7 +28,7 @@ from verifyit.spec import Constraint, SchemaFormat
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.json_schemas import is_trivial
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 IFEVAL_CONFIG = "laion__nemotron-gym-instruction-following-v3"
 STRUCTURED_CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
@@ -216,18 +217,21 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=SourceInfo(
-                id=f"Task Trove:{IFEVAL_CONFIG}",
-                title="laion/nemotron-gym-instruction-following-v3",
-                origin="Task Trove",
-                family="instruction-following",
-                tags=("agentic", "multi-turn"),
-                count=46391,
-                notes=(
-                    "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
-                    "(vacuous pass) at conversion."
-                ),
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id=f"Task Trove:{IFEVAL_CONFIG}",
+                    title="laion/nemotron-gym-instruction-following-v3",
+                    origin="Task Trove",
+                    family="instruction-following",
+                    tags=("agentic", "multi-turn"),
+                    count=46391,
+                    notes=(
+                        "IFEval-style deterministic checkers. Filter rows with empty constraint lists "
+                        "(vacuous pass) at conversion."
+                    ),
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
             config=CurationRecipe(
                 name="tasktrove-ifeval",
@@ -240,15 +244,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         ),
         RlDataSource(
             pipeline=process_rows,
-            info=SourceInfo(
-                id=f"Task Trove:{STRUCTURED_CONFIG}",
-                title="laion/nemotron-gym-instruction-following-structured-v3",
-                origin="Task Trove",
-                family="instruction-following",
-                tags=("agentic", "multi-turn"),
-                count=9437,
-                notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id=f"Task Trove:{STRUCTURED_CONFIG}",
+                    title="laion/nemotron-gym-instruction-following-structured-v3",
+                    origin="Task Trove",
+                    family="instruction-following",
+                    tags=("agentic", "multi-turn"),
+                    count=9437,
+                    notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
             config=CurationRecipe(
                 name="tasktrove-structured",

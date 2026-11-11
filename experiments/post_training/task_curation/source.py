@@ -4,6 +4,7 @@
 """Source declarations and their curation pipeline interfaces."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from finestore.rl.curation import (
@@ -46,6 +47,54 @@ class CatalogConfig(Protocol):
 
     @property
     def files(self) -> tuple[str, ...]: ...
+
+
+class TaskFormat(StrEnum):
+    """The ingested task layout of a source's pinned payload.
+
+    Only task-directory layouts are accepted for agentic sources: a task is a
+    directory with ``task.toml``, its environment and its verifier, in either
+    TaskCompendium's or Harbor's variant. ``MARINSKYRL`` marks a Marin-internal
+    blend whose rows are not task directories; it is accepted only for the
+    sources listed in ``GRANDFATHERED_MARINSKYRL_SOURCES``.
+    """
+
+    TASKCOMPENDIUM = "taskcompendium"
+    HARBOR = "harbor"
+    MARINSKYRL = "marinskyrl"
+
+
+GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
+    {
+        # Nemotron Ultra mix components: JSONL rows produced by Marin's own RL
+        # pipeline, predating the task-directory format.
+        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train",
+        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_math_tir",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot",
+        "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema",
+        "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+    }
+)
+"""Marin-internal blend sources admitted before the task-directory requirement."""
 
 
 @dataclass(frozen=True)
@@ -93,6 +142,14 @@ class SourceInfo:
 
     daytona_count_basis: str | None = None
     """Identity rule and payload source behind ``daytona_snapshot_count``."""
+
+    task_format: TaskFormat | None = None
+    """The ingested task layout of this source's pinned payload.
+
+    Required for every runnable agentic source. ``MARINSKYRL`` is accepted only for
+    the sources in ``GRANDFATHERED_MARINSKYRL_SOURCES``; a new agentic source must
+    ingest TaskCompendium or Harbor task directories.
+    """
 
 
 @dataclass(frozen=True)
@@ -177,7 +234,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
-                "Available",
+                "Inventory" if pipeline is None else "Available",
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,

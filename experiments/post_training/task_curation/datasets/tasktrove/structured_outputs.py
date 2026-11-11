@@ -4,6 +4,7 @@
 """TaskTrove structured extraction, graded for format and grounding in its source document."""
 
 import json
+from dataclasses import replace
 
 from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect
@@ -31,7 +32,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -114,15 +115,18 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             pipeline=process_rows,
-            info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
-                title="laion/nemotron-gym-structured-outputs-v4",
-                origin="Task Trove",
-                family="instruction-following",
-                tags=("agentic", "multi-turn"),
-                count=53870,
-                notes="All formats require both a format check and a source-grounding judge.",
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id="Task Trove:laion__nemotron-gym-structured-outputs-v4",
+                    title="laion/nemotron-gym-structured-outputs-v4",
+                    origin="Task Trove",
+                    family="instruction-following",
+                    tags=("agentic", "multi-turn"),
+                    count=53870,
+                    notes="All formats require both a format check and a source-grounding judge.",
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
             config=CurationRecipe(
                 name="tasktrove-structured_outputs",

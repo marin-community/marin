@@ -10,6 +10,7 @@ multiple-choice source grades the option letter in process.
 """
 
 import re
+from dataclasses import replace
 
 from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import mcq_task, source_defect, unsupported
@@ -26,7 +27,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
 
@@ -270,7 +271,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         *(
             RlDataSource(
                 pipeline=process_rows,
-                info=info,
+                info=replace(info, task_format=TaskFormat.TASKCOMPENDIUM),
                 config=CurationRecipe(
                     name=name,
                     source=tasktrove_source(config),
@@ -285,18 +286,21 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         ),
         RlDataSource(
             pipeline=process_rows,
-            info=SourceInfo(
-                id=f"Task Trove:{MCQA_CONFIG}",
-                title="laion/nemotron-gym-knowledge-mcqa-v2",
-                origin="Task Trove",
-                family="qa-short-answer",
-                tags=("agentic", "multi-turn"),
-                count=616888,
-                notes=(
-                    "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
-                    "and subsample hard: 617k rows is a third of the corpus."
-                ),
-                daytona_safety=DaytonaSafety.SAFE,
+            info=replace(
+                SourceInfo(
+                    id=f"Task Trove:{MCQA_CONFIG}",
+                    title="laion/nemotron-gym-knowledge-mcqa-v2",
+                    origin="Task Trove",
+                    family="qa-short-answer",
+                    tags=("agentic", "multi-turn"),
+                    count=616888,
+                    notes=(
+                        "Held-out MCQA with regex extraction. Drop the trailing-letter fallback at conversion "
+                        "and subsample hard: 617k rows is a third of the corpus."
+                    ),
+                    daytona_safety=DaytonaSafety.SAFE,
+                    task_format=TaskFormat.TASKCOMPENDIUM,
+                )
             ),
             config=CurationRecipe(
                 name="tasktrove-knowledge_mcqa",
