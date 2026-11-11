@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Response-token expert-load overlap between B's math and terminal probes."""
 
 import argparse
@@ -80,9 +83,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
-    r_counts, r_layers, r_meta = load_counts(
-        args.capture_root / "P_R", args.math_source, args.model_id, args.experts
-    )
+    r_counts, r_layers, r_meta = load_counts(args.capture_root / "P_R", args.math_source, args.model_id, args.experts)
     j_counts, j_layers, j_meta = load_counts(
         args.capture_root / "P_J", args.terminal_source, args.model_id, args.experts
     )
@@ -97,7 +98,10 @@ def main() -> None:
             {"layer": int(layer), "histogram_intersection": intersection, "one_minus_jsd_bits": one_minus_jsd}
         )
     result = {
-        "definition": "For each MoE layer, normalize selected-expert counts on B response tokens; O_l=sum_e min(p_l^R(e),p_l^J(e)); report the unweighted layer mean.",
+        "definition": (
+            "For each MoE layer, normalize selected-expert counts on B response tokens; "
+            "O_l=sum_e min(p_l^R(e),p_l^J(e)); report the unweighted layer mean."
+        ),
         "jsd_definition": "Jensen-Shannon divergence in base-2 bits, so 1-JSD is in [0,1].",
         "model_id": args.model_id,
         "capture_root": str(args.capture_root),
