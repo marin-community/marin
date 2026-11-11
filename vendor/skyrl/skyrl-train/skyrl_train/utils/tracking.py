@@ -17,23 +17,29 @@
 
 import dataclasses
 import json
-import re
 from enum import Enum
 from functools import partial
-from pathlib import Path
+from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
 from uuid import uuid4
 from loguru import logger
 from rigging.secrets import require_secret
 from rigging.provenance import launch_provenance
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-from marinskyrl.resource_locator import join_resource_path
-from skyrl_train.io import io
-
+from finestore.rl.run_records import (
+    AttemptRecord,
+    CheckpointReference,
+    MetricRow,
+    read_attempt,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+)
+from finestore.store import DataStore
 
 _WANDB_STEP_METRIC = "trainer/global_step"
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
@@ -73,7 +79,7 @@ class WandbNodeLogger:
 
 # TODO(tgriggs): Test all backends.
 class Tracking:
-    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "files"]
+    supported_backends = ["wandb", "mlflow", "swanlab", "tensorboard", "console", "records"]
 
     def __init__(self, project_name, experiment_name, backends: Union[str, List[str]] = "console", config=None):
         if isinstance(backends, str):
@@ -93,8 +99,16 @@ class Tracking:
             coordinator_iris_job_id=runtime.get("coordinator_iris_job_id"),
         )
 
-        if "files" in backends:
-            self.logger["files"] = _FilesAdapter(str(config.trainer.export_path))
+        if "records" in backends:
+            with open_dict(config):
+                config.runtime = {
+                    **runtime,
+                    "run_id": tracking_config["run_id"],
+                    "attempt_id": tracking_config["attempt_id"],
+                }
+            self.logger["records"] = _RecordsAdapter(
+                str(config.trainer.export_path), tracking_config["run_id"], tracking_config["attempt_id"]
+            )
 
         if "wandb" in backends:
             import wandb
@@ -207,10 +221,10 @@ class Tracking:
         else:
             logger.warning("Ray is not initialized, skipping distributed wandb logging")
 
-    def start(self, *, resumed_step: int | None) -> None:
-        """Keep step files belonging to the checkpoint selected for this attempt."""
-        if "files" in self.logger:
-            self.logger["files"].start(resumed_step=resumed_step)
+    def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None = None) -> None:
+        """Record the checkpoint boundary for this execution's metric history."""
+        if "records" in self.logger:
+            self.logger["records"].start(resumed_step=resumed_step, checkpoint=checkpoint)
 
     def log(self, data, step, commit=True):
         for logger_name, logger_instance in self.logger.items():
@@ -247,31 +261,56 @@ class Tracking:
                 logger.warning("Tracker backend {} shutdown failed: {}", name, error)
 
 
-class _FilesAdapter:
-    def __init__(self, export_path: str):
-        self.directory = join_resource_path(export_path, "metrics")
-        self.step: int | None = None
-        self.metrics: dict[str, Any] = {}
-        io.makedirs(self.directory, exist_ok=True)
+class _RecordsAdapter:
+    def __init__(self, export_root: str, run_id: str, attempt_id: str):
+        self.export_root = export_root
+        self.run_id = run_id
+        self.attempt_id = attempt_id
+        self.store = DataStore.open(run_records_root(export_root))
+        self.tables = register_run_tables(self.store)
+        self.started = False
 
-    def start(self, *, resumed_step: int | None) -> None:
-        if not io.exists(self.directory):
-            return
-        for path in io.list_dir(self.directory):
-            match = re.fullmatch(r"step-(\d+)\.json", Path(path).name)
-            if match and (resumed_step is None or int(match[1]) > resumed_step):
-                io.remove(join_resource_path(self.directory, Path(path).name))
+    def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None) -> None:
+        record = read_attempt(self.export_root, self.attempt_id)
+        if record is not None and record.metrics_started_at is not None:
+            raise ValueError(f"Records execution requires a fresh attempt_id: {self.attempt_id}")
+        if (
+            checkpoint is not None
+            and checkpoint.attempt_id == self.attempt_id
+            and checkpoint.export_root.rstrip("/") == self.export_root.rstrip("/")
+        ):
+            raise ValueError(f"Records execution cannot resume its own attempt_id: {self.attempt_id}")
+        if record is None:
+            record = AttemptRecord(
+                run_id=self.run_id, attempt_id=self.attempt_id, started_at=datetime.now(timezone.utc).isoformat()
+            )
+        record = record.model_copy(
+            update={
+                "metrics_started_at": datetime.now(timezone.utc).isoformat(),
+                "resumed_step": resumed_step,
+                "parent": checkpoint,
+            }
+        )
+        write_attempt(self.tables.attempts, record)
+        self.store.flush()
+        self.started = True
 
     def log(self, data: dict[str, Any], step: int) -> None:
-        path = join_resource_path(self.directory, f"step-{step:06d}.json")
-        if step != self.step:
-            self.metrics = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
-            self.step = step
-        self.metrics.update(data)
-        io.write_bytes_atomic(path, (json.dumps(self.metrics, default=float, sort_keys=True) + "\n").encode())
+        if not self.started:
+            raise RuntimeError("Start the records execution before logging metrics")
+        rows = []
+        for name, value in data.items():
+            if name in ("step", "attempt_id"):
+                expected = step if name == "step" else self.attempt_id
+                if value != expected:
+                    raise ValueError(f"Metric metadata {name} differs from the active execution")
+                continue
+            rows.append(MetricRow(attempt_id=self.attempt_id, step=step, name=name, value=float(value)).model_dump())
+        self.tables.metrics.extend(rows)
+        self.store.flush()
 
     def finish(self) -> None:
-        pass
+        self.store.close()
 
 
 class ConsoleLogger:

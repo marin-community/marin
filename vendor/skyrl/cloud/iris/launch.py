@@ -9,30 +9,34 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from finestore.rl.run_records import (
+    AttemptRecord,
+    ExportedPolicy,
+    LaunchReceipt,
+    LaunchResult,
+    LaunchState,
+    read_attempt,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+)
+from finestore.store import DataStore
 from iris.client.client import JobFailedError
 from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
-from marinskyrl.checkpoint_paths import attempt_receipt_path, policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance, launch_provenance
-
-
-class LaunchState(StrEnum):
-    PREPARED = "prepared"
-    SUBMITTED = "submitted"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
+from rigging.provenance import launch_provenance
 
 
 @dataclass(frozen=True)
@@ -42,31 +46,6 @@ class LaunchOutcome:
     job_id: str
     job_state: str
     exit_code: int
-    started_at: str | None = None
-    finished_at: str | None = None
-
-
-@dataclass(frozen=True)
-class ExportedPolicy:
-    policy_export_uri: str
-    global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
-    checkpoint_root: str
-    terminal_manifest_uri: str
-
-
-@dataclass(frozen=True)
-class LaunchResult:
-    run_id: str
-    attempt_id: str
-    state: LaunchState
-    iris_job_id: str | None
-    iris_job_state: str | None
-    provenance: Provenance
-    runtime_profile: str
-    model: ExportedPolicy | None
-    failure: str | None
     started_at: str | None = None
     finished_at: str | None = None
 
@@ -145,7 +124,7 @@ def _result(
         state=state,
         iris_job_id=outcome.job_id if outcome else None,
         iris_job_state=outcome.job_state if outcome else None,
-        provenance=launch_provenance(),
+        provenance=asdict(launch_provenance()),
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
@@ -157,7 +136,7 @@ def _result(
 def _receipt(config: DictConfig, result: LaunchResult) -> dict[str, Any]:
     return {
         "config": OmegaConf.to_container(config, resolve=True),
-        "result": asdict(result),
+        "result": result.model_dump(mode="json"),
     }
 
 
@@ -172,11 +151,17 @@ def _record_failure(
 
 
 def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> None:
-    if config.run.mode == RunMode.CHECKPOINT_EXPORT:
-        uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
+    export_root = str(config.artifacts.export_root)
+    record = read_attempt(export_root, str(config.run.attempt_id))
+    receipt = LaunchReceipt.model_validate(_receipt(config, result))
+    if record is None:
+        record = AttemptRecord(run_id=str(config.run.id), attempt_id=str(config.run.attempt_id), launch=receipt)
     else:
-        uri = attempt_receipt_path(str(config.artifacts.export_root), str(config.run.attempt_id))
-    write_json(uri, _receipt(config, result))
+        record = record.model_copy(update={"launch": receipt})
+    with DataStore.open(run_records_root(export_root)) as store:
+        tables = register_run_tables(store)
+        write_attempt(tables.attempts, record)
+        store.flush()
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
@@ -256,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
     with contextlib.redirect_stdout(sys.stderr):
         result = execute_launch(args.config)
-    json.dump(asdict(result), sys.stdout, sort_keys=True)
+    json.dump(result.model_dump(mode="json"), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result.state in {LaunchState.PREPARED, LaunchState.SUBMITTED, LaunchState.SUCCEEDED} else 1
 

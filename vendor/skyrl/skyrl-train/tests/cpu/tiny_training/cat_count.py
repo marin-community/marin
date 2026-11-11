@@ -88,7 +88,7 @@ def cat_count_config(
                 "resume_mode": "latest" if resume else "none",
                 "ckpt_path": str(root / "ckpts"),
                 "export_path": str(root / "exports"),
-                "logger": "files",
+                "logger": "records",
                 "training_metrics": True,
                 "policy_train_spans": True,
                 "rollout_spans": True,
