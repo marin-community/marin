@@ -1,7 +1,7 @@
 # Task data curation
 
-New contributor to RL data? Start with
-[Getting started with TaskTrove](GETTING_STARTED.md).
+To add a dataset to the RL Data Atlas, start with
+[Adding a dataset to the RL Data Atlas](GETTING_STARTED.md).
 
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the

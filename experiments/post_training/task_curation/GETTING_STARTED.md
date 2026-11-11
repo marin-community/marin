@@ -1,12 +1,10 @@
-# Getting started with TaskTrove
+# Adding a dataset to the RL Data Atlas
 
-TaskTrove is the Marin program for reinforcement learning (RL) task data. It has three parts:
+This guide is for a first-time contributor who wants to add an RL task dataset to the [RL Data Atlas](../../../docs/references/rl-data-atlas.md). The Atlas is a Marina app that shows each RL source with its quality grades, example counts and curriculum areas. A dataset gets to the Atlas through the [task-curation pipeline](README.md). The pipeline converts each source to RL tasks, admits the tasks that pass its checks and publishes the results.
 
-- The upstream input: [`open-thoughts/TaskTrove`](https://huggingface.co/datasets/open-thoughts/TaskTrove), a public Hugging Face dataset of archived [Harbor](https://github.com/marin-community/harbor) tasks.
-- The [RL data curation pipeline](README.md), which converts these tasks and admits the tasks that pass its checks.
-- The curated cohorts that Marin publishes back as releases in [`open-athena/task-trove`](https://huggingface.co/datasets/open-athena/task-trove).
+Many sources come from [`open-thoughts/TaskTrove`](https://huggingface.co/datasets/open-thoughts/TaskTrove), a public Hugging Face dataset of archived [Harbor](https://github.com/marin-community/harbor) tasks. Marin publishes its curated cohorts as releases in [`open-athena/task-trove`](https://huggingface.co/datasets/open-athena/task-trove). The glossary defines both names.
 
-This guide is for a first-time contributor. It tells you what each stage makes, where each stage writes its data, and how to add your first source. When you complete it, you have a declared source, a passing conversion test, a QUICK output and a SAMPLE report. Training use needs a separate change to a selection recipe.
+The guide tells you what each stage makes, where each stage writes its data, and how to add your first source. When you complete it, you have a declared source, a passing conversion test, a QUICK output and a SAMPLE report. Training use needs a separate change to a selection recipe.
 
 For field-level detail, read the [curation reference](../../../docs/references/task-curation.md). For declaration mechanics, read the [datasets guide](datasets/README.md). The [Glossary](#glossary) at the end defines the terms that this guide uses.
 
@@ -15,7 +13,7 @@ For field-level detail, read the [curation reference](../../../docs/references/t
 Each stage needs more access than the stage before it. Get the access for the stages that you will run.
 
 1. **For all stages:** install Python 3.12 or higher, `uv` and Git. Clone the repository and run `uv sync --all-packages`. Follow the [installation guide](../../../docs/tutorials/installation.md).
-2. **For QUICK:** you need only a local computer. `open-thoughts/TaskTrove` is public, so QUICK needs no Hugging Face token.
+2. **For QUICK:** you need only a local computer. Public sources, such as `open-thoughts/TaskTrove`, need no Hugging Face token.
 3. **For SAMPLE with review:** you need a review model, an endpoint for it and an API key.
     - Marin's review model is [`glm-5.3`](../glm.py). Marin's `GLM_BULK_TOKEN` and its relay job [`/muchanem/glm53-relay`](../glm.py) are for Marin team members only.
     - External contributors must arrange their own access to a GLM-compatible review model on an OpenAI-compatible endpoint.
@@ -142,7 +140,7 @@ Declaring, converting or assessing a source does **not** approve it for training
 
 Read this section only if your tasks need a live container environment.
 
-Some TaskTrove cohorts are not simple row conversions. SWE-Smith staged tasks and CalibForge fixtures need live environments and hidden-test separation. They also need positive and negative controls before you can trust a task. The pull request `[data] Add CalibForge fixture and staged SWE-Smith preparation` ([#10330](https://github.com/marin-community/marin/pull/10330)) added the entrypoints below. These entrypoints are campaign authoring tools, not launchers. They do not register a cohort as training-approved. Each one writes all its results under the `--output` directory that you choose.
+Some cohorts are not simple row conversions. SWE-Smith staged tasks and CalibForge fixtures need live environments and hidden-test separation. They also need positive and negative controls before you can trust a task. The pull request `[data] Add CalibForge fixture and staged SWE-Smith preparation` ([#10330](https://github.com/marin-community/marin/pull/10330)) added the entrypoints below. These entrypoints are campaign authoring tools, not launchers. They do not register a cohort as training-approved. Each one writes all its results under the `--output` directory that you choose.
 
 **Example: pilot one staged SWE-Smith parent.** This procedure uses [`swesmith_staged`](swesmith_staged.py). It needs a local Docker daemon. The data directory of the original campaign was approximately 137 MB before the runtime logs.
 
@@ -201,7 +199,7 @@ The Docker images that these tools commit are host-local. Exports record the ima
 
 | Stage | Location | Notes |
 | --- | --- | --- |
-| Pinned source bytes | `open-thoughts/TaskTrove` at the declared revision | Downloads go to a cache under `~/.cache/marin`. To change the cache location, use `--cache-dir`. On CoreWeave, disable Xet downloads. In a shell, use `export HF_HUB_DISABLE_XET=1`. In an Iris job, add `-e HF_HUB_DISABLE_XET 1` before `--`. |
+| Pinned source bytes | `open-thoughts/TaskTrove` at the declared revision: an example of a pinned source repository | Downloads go to a cache under `~/.cache/marin`. To change the cache location, use `--cache-dir`. On CoreWeave, disable Xet downloads. In a shell, use `export HF_HUB_DISABLE_XET=1`. In an Iris job, add `-e HF_HUB_DISABLE_XET 1` before `--`. |
 | Local QUICK outputs | The directory that you give in `--output-root` | Each source writes `normalize/*.parquet` and `manifest.json`. The run writes `campaign.json`. It writes `corpus.json` only with `--embed` or a remote output root. QUICK publishes nothing. |
 | Production campaign artifacts | `s3://marin-us-east-02a/marin/rl-data/campaigns/<date>-<n>`, under the default `--artifact-root` ([`s3://marin-us-east-02a/marin`](driver.py)) | Keep each retained campaign in a new versioned directory. Artifact reuse follows explicit versions. |
 | Published catalog | `.../rl-data/catalog/production`, written by `--publish-catalog` | Read it through [`finestore.rl.curation.CurationCatalog`](../../../lib/finestore/src/finestore/rl/curation.py). A failed FULL campaign also publishes a snapshot. Because of this, read the campaign report before you load the Atlas. |
@@ -288,6 +286,7 @@ Each failure above occurred after the data was already correct and public. None 
 
 | Term | Meaning |
 | --- | --- |
+| TaskTrove | Three related names. [`open-thoughts/TaskTrove`](https://huggingface.co/datasets/open-thoughts/TaskTrove) is the upstream Hugging Face dataset of archived Harbor tasks. [`open-athena/task-trove`](https://huggingface.co/datasets/open-athena/task-trove) is the Hugging Face repository where Marin publishes its curated releases. [`datasets/tasktrove/`](datasets/tasktrove) is the source family whose modules convert TaskTrove rows. |
 | RL source | One population of RL tasks, declared as one [`RlDataSource`](source.py) with a stable ID. [`all_sources()`](sources.py) collects all sources. |
 | Stable ID | The `SourceInfo.id` of a source, for example `MarinSkyRL:eurus2_code`. It links the Atlas history of the source. |
 | Invocation name | The `config.name` of a runnable source, for example `eurus2_code`. `--source` takes this name. |
