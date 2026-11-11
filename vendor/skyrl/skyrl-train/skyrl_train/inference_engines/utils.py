@@ -45,7 +45,7 @@ def get_sglang_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
     # `stop` are not supported when `skip_tokenizer_init` is True, which we need for token-in-token-out.
     # See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087
     sglang_sampling_params = {
-        "skip_special_tokens": True,
+        "skip_special_tokens": sampling_params.get("skip_special_tokens", True),
         "no_stop_trim": True,  # equivalent to include_stop_str_in_output=True
         "max_new_tokens": sampling_params.max_generate_length,
         "temperature": sampling_params.temperature,
