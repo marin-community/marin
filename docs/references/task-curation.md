@@ -616,7 +616,7 @@ uv run python -m experiments.post_training.task_curation.no_oracle_qualification
 
 The report's `summary` prints the rates and `oracle_validation`. Run the sandbox
 phase through Harbor's trial path (`harbor run --config`, see
-[harbor-integration](harbor-integration.md)) over a packaged sample of the
+[harbor-integration](../harbor-integration.md)) over a packaged sample of the
 rebuilt tasks, with the task's own verifier as the final step:
 `no_oracle_qualification.classify_verifier_run` turns each trial's verifier exit
 code and trailing reward into the outcome the report records. The phase needs a
