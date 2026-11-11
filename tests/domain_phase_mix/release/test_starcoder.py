@@ -34,7 +34,7 @@ TRANSITION = paths.RO / "starcoder_wsd80_transition_transient_20261006"
 # The heteroskedasticity analysis's per-mixture summary of the repeat-noise panel, which the paper's table reports.
 NOISE_SUMMARY = paths.RO / "starcoder_heteroskedasticity_mechanisms_20260617/anchor_metric_noise_features.csv"
 # The paper builder's record of Figure 1's surrogate panel, with the share at which it places each design-grid weight.
-FIGURE1_RECORD = paths.DRIVE / "figure1_real_data_drafts/v42/sources/response_subset.json"
+FIGURE1_RECORD = paths.DRIVE / "figure1_real_data_drafts/v43/sources/response_subset.json"
 
 
 @pytest.fixture(scope="module")
