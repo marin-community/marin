@@ -1202,7 +1202,7 @@ def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
     roundtripped = model.GrugModelConfig.from_hf_config(hf_config)
 
     assert hf_config.to_dict()["latent_dim"] == 16
-    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 2
+    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
     assert roundtripped.latent_dim == 16
 
 

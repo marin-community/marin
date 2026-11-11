@@ -314,11 +314,16 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
+        # response_ids keep the stop token. The grader scores this text, and a stop token after a closing fence
+        # leaves the fence open.
         text = output["responses"][0]
-        message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        response_ids = output["response_ids"][0]
+        if _ends_turn(self._client.tokenizer, response_ids, output["stop_reasons"][0]):
+            text = text.removesuffix(self._client.tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
+        message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
-            output["response_ids"][0],
+            response_ids,
             None if output.get("response_logprobs") is None else output["response_logprobs"][0],
             None if output.get("student_topk_indices") is None else output["student_topk_indices"][0],
             None if output.get("behavior_topk_logprobs") is None else output["behavior_topk_logprobs"][0],

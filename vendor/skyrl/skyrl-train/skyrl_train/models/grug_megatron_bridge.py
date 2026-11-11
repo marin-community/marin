@@ -44,6 +44,9 @@ class GrugModelProvider(GPTModelProvider):
 
     grug_qk_mult: float = 1.0
     grug_qk_mult_long_scale: float = 1.0
+    grug_log_scaling_n_floor: int | None = None
+    grug_log_scaling_alpha: float | None = None
+    grug_log_scaling_power: float | None = None
     grug_global_every: int = GRUG_DEFAULT_GLOBAL_EVERY
     grug_local_kv_heads: int = 1
     grug_global_kv_heads: int = 1
@@ -163,7 +166,7 @@ def _routed_expert_mappings(schema_version: int) -> list[AutoMapping | GatedMLPM
     """Map individually saved or stacked HF experts to Megatron's per-expert weights."""
     megatron = "decoder.layers.*.mlp.experts"
     hf = "model.layers.*.mlp.experts"
-    if schema_version == GRUG_SPLIT_EXPERT_SCHEMA_VERSION:
+    if schema_version >= GRUG_SPLIT_EXPERT_SCHEMA_VERSION:
         hf += ".*"
         gate_up_mapping = GatedMLPMapping
         down_mapping = AutoMapping
@@ -241,6 +244,9 @@ class GrugMoeBridge(MegatronModelBridge):
             provider.cp_comm_type = grug_cp_communication(long_flags)
         provider.grug_qk_mult = config.qk_mult
         provider.grug_qk_mult_long_scale = config.qk_mult_long_scale
+        provider.grug_log_scaling_n_floor = config.log_scaling_n_floor
+        provider.grug_log_scaling_alpha = config.log_scaling_alpha
+        provider.grug_log_scaling_power = config.log_scaling_power
 
         provider.num_moe_experts = config.num_local_experts
         provider.ffn_hidden_size = config.intermediate_size
