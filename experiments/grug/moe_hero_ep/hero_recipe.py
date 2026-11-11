@@ -44,6 +44,8 @@ HERO_RACK_GPUS = HERO_EP_NODES * HERO_GPUS_PER_NODE
 # The hero's context-parallel degree. Each rack splits into HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE expert
 # shards of HERO_CONTEXT_AXIS_SIZE sequence shards each (see `hero_expert_axis_size`).
 HERO_CONTEXT_AXIS_SIZE = 4
+# The hero's pretraining schedule length; its optimizer hyperparameters are scaled from it.
+HERO_SCHEDULE_STEPS = 390_251
 # Steps the hero trains past the end of its schedule, and the learning rate over them. None stops at the
 # schedule's end. A deploy PR sets this; the schedule length, and everything it sizes, stays as it is.
 HERO_SCHEDULE_EXTENSION: ScheduleExtension | None = ScheduleExtension(steps=3240, final_lr_ratio=0.01)
