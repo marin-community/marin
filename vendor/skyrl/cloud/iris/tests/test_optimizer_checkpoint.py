@@ -1,6 +1,5 @@
 from pathlib import Path
 import time
-import weakref
 
 import pytest
 import torch
@@ -8,28 +7,9 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from skyrl_train.distributed.megatron.optimizer_checkpoint import (
-    rebind_master_parameters,
     restore_hybrid_adam_bucket_steps,
     restore_in_host_order,
 )
-
-
-def test_restored_master_follows_the_live_parameter_and_releases_obsolete_storage() -> None:
-    master = torch.nn.Parameter(torch.tensor([0.3, -0.8, 1.2]))
-    optimizer = torch.optim.AdamW([master], lr=0.01, weight_decay=0)
-    old_master = master.detach().clone()
-    old_reference = weakref.ref(old_master)
-    parameter = object()
-    state = {parameter: {"master_param": old_master}}
-    del old_master
-
-    rebind_master_parameters(state, {parameter: master})
-
-    assert old_reference() is None
-    master.grad = torch.tensor([0.1, -0.2, 0.4])
-    optimizer.step()
-    torch.testing.assert_close(state[parameter]["master_param"], master, rtol=0, atol=0)
-    assert state[parameter]["master_param"].data_ptr() == master.data_ptr()
 
 
 def checkpoint_state(steps: list[int | None]) -> dict:
@@ -89,3 +69,26 @@ def restore_worker(rank: int, root: str) -> None:
 def test_offloaded_restore_runs_one_rank_per_host_at_a_time(tmp_path: Path) -> None:
     mp.spawn(restore_worker, args=(str(tmp_path),), nprocs=2, join=True)
     assert [p.read_text() for p in sorted(tmp_path.glob("restored-*"))] == ["complete", "complete"]
+
+
+def failed_restore_worker(rank: int, root: str) -> None:
+    path = Path(root)
+    dist.init_process_group("gloo", init_method=f"file://{path / 'rendezvous'}", rank=rank, world_size=2)
+    try:
+
+        def restore():
+            raise ValueError("invalid optimizer state")
+
+        with pytest.raises(RuntimeError, match="rank 0: ValueError: invalid optimizer state"):
+            restore_in_host_order(restore)
+        (path / f"failure-reported-{rank}").write_text("failed promptly")
+    finally:
+        dist.destroy_process_group()
+
+
+def test_restore_failure_reaches_all_ranks_without_waiting_at_the_next_barrier(tmp_path: Path) -> None:
+    mp.spawn(failed_restore_worker, args=(str(tmp_path),), nprocs=2, join=True)
+    assert [p.read_text() for p in sorted(tmp_path.glob("failure-reported-*"))] == [
+        "failed promptly",
+        "failed promptly",
+    ]

@@ -8,12 +8,6 @@ import torch
 import torch.distributed as dist
 
 
-def rebind_master_parameters(state: dict, masters: dict) -> None:
-    """Keep optimizer state attached to the master's current storage."""
-    for parameter, values in state.items():
-        values["master_param"] = masters[parameter]
-
-
 def restore_hybrid_adam_bucket_steps(state: dict) -> None:
     """Recover omitted bucket steps from the saved optimizer group metadata."""
     children = [state] if "param_state" in state else state.values()
@@ -50,6 +44,13 @@ def restore_in_host_order(restore: Callable[[], None]) -> None:
     local_ranks = [rank for rank, name in enumerate(hosts) if name == host]
     local_turn = local_ranks.index(dist.get_rank())
     for turn in range(max(Counter(hosts).values())):
+        failure = None
         if local_turn == turn:
-            restore()
-        dist.barrier()
+            try:
+                restore()
+            except Exception as exc:
+                failure = f"rank {dist.get_rank()}: {type(exc).__name__}: {exc}"
+        failures = [None] * dist.get_world_size()
+        dist.all_gather_object(failures, failure)
+        if any(failures):
+            raise RuntimeError("Offloaded optimizer restore failed: " + "; ".join(x for x in failures if x))
