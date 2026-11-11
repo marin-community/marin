@@ -9,7 +9,6 @@ both launched with the Track's baseline command. Runs are named ``belay-<id>-<ru
 """
 
 import dataclasses
-import getpass
 import itertools
 import re
 import shlex
@@ -21,6 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import yaml
+from iris.cluster.client.job_info import resolve_job_user
 
 from experiments.belay.config import CONFIG, PRIORITY_BANDS, TRACKS, Track
 from experiments.grug.fast_track.launch import _parse_as
@@ -248,7 +248,7 @@ def new_spec_text(
 
 def iris_jobs() -> list[IrisJob]:
     """Every Iris job under this user's ``belay-`` prefix."""
-    prefix = f"/{getpass.getuser()}/{RUN_PREFIX}"
+    prefix = f"/{resolve_job_user()}/{RUN_PREFIX}"
     out = subprocess.run(
         ["uv", "run", "iris", "--cluster", "marin", "job", "list", "--prefix", prefix, "--limit", "500"],
         check=True,

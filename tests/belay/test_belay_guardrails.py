@@ -85,6 +85,7 @@ from experiments.belay.submit import (
     IrisJob,
     check_launch,
     experiment_id,
+    iris_jobs,
     launch_band,
     launch_command,
     new_spec_text,
@@ -859,3 +860,17 @@ def test_a_post_shows_who_granted_the_priority() -> None:
 def test_storage_leaves_out_data_belay_runs() -> None:
     assert is_belay_file("runs/belay-X0221-seed0/checkpoints/step-100/metadata.json")
     assert not is_belay_file("runs/dbelay-d1024-open-web-math-p20-3802f0-s2/checkpoints/step-100/metadata.json")
+
+
+def test_iris_jobs_lists_under_the_iris_user_not_the_os_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Loom sets IRIS_USER=loom while the container's OS user is app; Iris names Belay's jobs /loom/belay-...
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setenv("IRIS_USER", "loom")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert iris_jobs() == []
+    assert calls[0][calls[0].index("--prefix") + 1] == "/loom/belay-"
