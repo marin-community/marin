@@ -317,6 +317,8 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             json.dumps({"step": step, "attempt_id": "old", "prior_attempt_only": 1})
         )
     preserved = None
+    final_attempts = "eval/full_panel/all/num_attempted"
+    group = "eval/reporting/mean_attempted"
     for steps, resume in ((2, False), (4, True)):
         interval = 3 if resume else 2
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
@@ -371,14 +373,19 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                         "sampling_params": {"temperature": 0.0, "seed": 42},
                     }
                 },
+                "metric_groups": {group: ["eval/all/num_attempted", final_attempts]},
+                "stop_when": {final_attempts: {"minimum": 2}, group: {"min_improvement": 0.1}},
             },
             {"type": "checkpoint", "save_steps": steps},
         ]
         records = run_process(forkserver_context, root, cfg, runner=run_cat_count)
-        final_metrics = [row for row in records if "eval/full_panel/all/num_attempted" in row]
+        final_metrics = [row for row in records if final_attempts in row]
         expected_final = [2, 4] if resume else [2]
         assert [row["step"] for row in final_metrics] == expected_final
-        assert all(row["eval/full_panel/all/num_attempted"] == 1 for row in final_metrics)
+        assert all(row[final_attempts] == 1 for row in final_metrics)
+        assert [(row["step"], row[group], row[f"{group}_improvement"]) for row in records if group in row] == [
+            (step, 10.5, 0) for step in expected_final
+        ]
         dumped = Path(evaluation_dump_dir(str(root / "exports/full_panel"), steps))
         full_rows = [json.loads(line) for path in dumped.glob("*.jsonl") for line in path.read_text().splitlines()]
         assert [row["task_id"] for row in full_rows if "task_id" in row] == ["full-panel-only"]
@@ -388,7 +395,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             row["attributes"]["step"]
             for row in cat_count_session
             if row["name"] == "training_metric_value"
-            and row["attributes"].get("metric") == "eval/full_panel/all/num_attempted"
+            and row["attributes"].get("metric") == final_attempts
         )
         assert observed == Counter({str(step): 1 for step in expected_final})
         assert [row["step"] for row in records] == list(range(steps + 1))
