@@ -349,7 +349,7 @@ function columnHeader(column) {
   return el(
     'span',
     { role: 'columnheader', 'aria-sort': sorted ? (checklistView.descending ? 'descending' : 'ascending') : 'none' },
-    el('button', { type: 'button', class: `ck-sort${sorted ? ' on' : ''}`, onclick: () => sortBy(column.key) }, column.label, arrow),
+    el('button', { type: 'button', class: `ck-sort${sorted ? ' on' : ''}`, dataset: { sort: column.key }, onclick: () => sortBy(column.key) }, column.label, arrow),
   )
 }
 
@@ -363,7 +363,10 @@ function renderChecklist() {
   document.getElementById('checklist-n').textContent = String(rows.length)
   const registryUrl = (x) => `${REGISTRY_BLOB}/registry/${x.xid}-${x.id}.yaml`
   const head = el('div', { class: 'ck-row ck-head', role: 'row' }, COLUMNS.map(columnHeader))
+  // Rebuilding the header drops a keyboard user's focus on its sort button (on a sort and on each refresh): restore it.
+  const focused = document.activeElement?.dataset?.sort
   setChildren('checklist', head, rows.map((r) => checklistRow(r, registryUrl)))
+  if (focused) head.querySelector(`[data-sort="${focused}"]`).focus({ preventScroll: true })
 }
 
 // The analysis reports of the idea's Track trials (one per trial, on the registry branch).
