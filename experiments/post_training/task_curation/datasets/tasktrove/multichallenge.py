@@ -13,6 +13,7 @@ source has no controls and its kept rows are admitted without them.
 
 import tomllib
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -100,6 +101,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Multi-turn with four factual or formatting criteria per task. The converter "
                     "preserves the source's explicit positive or negated pass condition."
                 ),
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-multichallenge",

@@ -70,10 +70,15 @@ assessment page shows the curation associated with its selected grade.
 
 **By source** lists individual sources with their catalog, converted example
 count, training/evaluation use, current sampled quality, any independent QC the
-pinned release performed, and the curriculum domain
+pinned release performed, whether the source is Daytona safe, and the curriculum domain
 with the most mapped examples. Search names, datasets or tags; filter by catalog,
 use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
+
+**Daytona safe** marks sources whose execution needs at most ten unique Daytona
+snapshots. Every non-agentic source is safe because it never provisions a
+sandbox; an agentic source shows a dash until its unique snapshot count is
+assessed against that budget.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
