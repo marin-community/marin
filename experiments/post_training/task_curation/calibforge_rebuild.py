@@ -274,11 +274,11 @@ def compile_recipe(
             is_directory = any(name != source_name and name.startswith(prefix) for name in matches)
             if is_directory:
                 directory_source = source_name.rstrip("/")
-                copied_files.update(
-                    str(PurePosixPath(target) / name[len(prefix) :])
-                    for name in matches
-                    if files[name] or name.endswith("/")
-                )
+                for name in matches:
+                    # Every file under a directory source must reach the setup payload;
+                    # the script copies the staged directory, not the build context.
+                    resources[name] = files[name]
+                    copied_files.add(str(PurePosixPath(target) / name[len(prefix) :]))
                 commands.append("mkdir -p " + shlex.quote(target))
                 commands.append(
                     "cp -a " + f'"$stage"/{shlex.quote(directory_source)}' + "/. " + shlex.quote(target + "/")

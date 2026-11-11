@@ -11,11 +11,13 @@ from experiments.post_training.task_curation.source import (
     SourceInfo,
     TaskFormat,
 )
-from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format
+from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "fixture:agentic") -> RlDataSource:
-    return RlDataSource(info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format))
+    return RlDataSource(
+        info=SourceInfo(id=source_id, title=source_id, origin="fixture", tags=("agentic",), task_format=task_format)
+    )
 
 
 def test_every_runnable_agentic_source_ingests_a_task_directory_format():
@@ -29,8 +31,7 @@ def test_every_runnable_agentic_source_ingests_a_task_directory_format():
     internal = {source.info.id for source in runnable if source.info.task_format is TaskFormat.MARINSKYRL}
     assert internal == set(GRANDFATHERED_MARINSKYRL_SOURCES)
     assert all(
-        source.info.task_format in accepted or source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES
-        for source in runnable
+        source.info.task_format in accepted or source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES for source in runnable
     )
 
 
@@ -64,10 +65,6 @@ def test_task_directory_formats_pass_and_non_agentic_sources_need_none(task_form
 
 def test_pipeline_less_pointers_are_inventory_never_admitted():
     """A pointer stays visible in the Atlas, labelled Inventory and unselectable."""
-    from finestore.rl.curation import DaytonaSafety
-
-    from experiments.post_training.task_curation.sources import runnable_sources
-
     sources = all_sources()
     runnable = set(runnable_sources())
     pointers = [source for source in sources.values() if source.pipeline is None]

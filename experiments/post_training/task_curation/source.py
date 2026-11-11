@@ -11,6 +11,7 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     DaytonaSafety,
     IndependentQC,
+    OracleValidation,
     PipelineReference,
     SourceDeclaration,
 )
@@ -151,6 +152,14 @@ class SourceInfo:
     ingest TaskCompendium or Harbor task directories.
     """
 
+    oracle_validation: OracleValidation | None = None
+    """How execution was qualified when the source ships no oracle solutions.
+
+    ``executed`` runs the shipped oracle solutions; ``verifier_executed`` runs the
+    grader against a solved and an empty submission when no oracle exists; ``skipped``
+    certifies nothing. The Atlas shows the value beside the catalog.
+    """
+
 
 @dataclass(frozen=True)
 class RlDataSource[ConfigT: CatalogConfig]:
@@ -241,6 +250,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             daytona_safety=DaytonaSafety.SAFE if "agentic" not in tags else safety,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
+            oracle_validation=info.oracle_validation,
             daytona_snapshot_threshold=(
                 DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
             ),

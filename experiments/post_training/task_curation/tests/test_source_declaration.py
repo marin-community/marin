@@ -5,9 +5,10 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaSafety
+from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaSafety, OracleValidation
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.sources import all_sources
 
 MEASURED = {"daytona_snapshot_count": 5, "daytona_count_basis": "shellbox-identity over pinned payloads"}
 
@@ -36,3 +37,20 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
     assert deprecated.declaration.status == "Deprecated"
     assert excluded.declaration.status == "Deprecated"
     assert pointer.declaration.status == "Inventory"  # no pipeline: visible, never admitted
+    assert available.declaration.status == "Available"
+
+
+def test_oracle_validation_projects_into_the_declaration():
+    info = SourceInfo(
+        id="trove:no-oracle",
+        title="No oracle",
+        origin="fixture",
+        tags=("agentic",),
+        oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+    )
+    assert RlDataSource(info=info).declaration.oracle_validation is OracleValidation.VERIFIER_EXECUTED
+
+
+def test_a_source_without_oracles_reports_skipped_until_qualified():
+    declaration = all_sources()["Campaign Release:smartie-calibforge-admitted"].declaration
+    assert declaration.oracle_validation is OracleValidation.SKIPPED

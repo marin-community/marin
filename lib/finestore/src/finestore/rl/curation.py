@@ -97,6 +97,20 @@ DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
 
 
+class OracleValidation(StrEnum):
+    """How an admitted source was qualified when it ships no oracle solutions."""
+
+    EXECUTED = "executed"
+    """Every sampled task's oracle solution ran and scored its expected reward."""
+
+    VERIFIER_EXECUTED = "verifier_executed"
+    """No oracle solutions exist; the grader was executed against a solved and an empty
+    submission instead, and both behaved as the task's contract requires."""
+
+    SKIPPED = "skipped"
+    """Neither qualification ran; the source's execution is not certified."""
+
+
 class SourceDeclaration(CatalogRecord):
     id: str
     name: str
@@ -124,6 +138,8 @@ class SourceDeclaration(CatalogRecord):
     daytona_snapshot_count: int | None = None
     daytona_snapshot_threshold: int | None = None
     daytona_count_basis: str | None = None
+    # How execution was qualified when the source ships no oracle solutions.
+    oracle_validation: OracleValidation | None = None
 
 
 class AdmissionCounts(CatalogRecord):

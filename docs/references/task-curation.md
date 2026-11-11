@@ -633,6 +633,10 @@ code and trailing reward into the outcome the report records. The phase needs a
 Daytona credential, creates one sandbox per sampled task, and has no cleanup
 code path in this repository: hand the created snapshot names to an operator, as
 `.agents/ops/daytona.md` describes.
+The report's `summary` prints the rates and `oracle_validation`. The sandbox
+phase needs a Daytona credential, creates one sandbox per sampled task, and has
+no cleanup code path in this repository: hand the created snapshot names to an
+operator, as `.agents/ops/daytona.md` describes.
 
 ## Conversion modes
 
