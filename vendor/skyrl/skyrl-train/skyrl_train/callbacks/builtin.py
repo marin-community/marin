@@ -270,7 +270,9 @@ class BestCheckpointCallback(TrainerCallback):
         minimum_scored_tasks: int,
         ema_window: int = 1,
         evaluation_interval: int = 1,
+        selection_metric: str = "eval/all/avg_verifier_score",
         save_after_fraction: float = 0.0,
+        preservation_max_drop: dict[str, float] | None = None,
     ):
         if ema_window < 1 or evaluation_interval < 1:
             raise ValueError("Validation EMA window must be positive")
@@ -281,7 +283,12 @@ class BestCheckpointCallback(TrainerCallback):
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
+        self.selection_metric = selection_metric
         self.save_after_fraction = save_after_fraction
+        self.preservation_max_drop = dict(preservation_max_drop or {})
+        if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
+            raise ValueError("Preservation drops must be finite and nonnegative")
+        self.preservation_baseline: dict[str, float] = {}
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         if state.global_step % self.evaluation_interval:
@@ -291,18 +298,35 @@ class BestCheckpointCallback(TrainerCallback):
         if self.best_score is None and io.exists(best_path):
             with io.open_file(best_path, "r") as stream:
                 previous = json.load(stream)
-            if previous.get("ema_window", 1) != self.ema_window:
-                raise ValueError("Checkpoint selection window changed on resume")
+            if (previous.get("ema_window", 1) != self.ema_window
+                or previous.get("evaluation_interval", 1) != self.evaluation_interval):
+                raise ValueError("Checkpoint selection window or cadence changed on resume")
             self.best_score = previous["accuracy"]
+            self.preservation_baseline = previous.get("preservation_baseline", {})
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
-        if (
+        ineligible = (
             attempted != self.expected_tasks
             or scored < self.minimum_scored_tasks
             or not metrics.get("eval/selection_eligible", 1.0)
-        ):
+        )
+        if state.global_step == 0 and self.preservation_max_drop and ineligible:
+            raise ValueError("Preservation-gated selection requires an eligible step-zero evaluation")
+        if ineligible:
             return control
-        score = metrics["eval/all/avg_verifier_score"]
+        if state.global_step == 0:
+            self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}
+            if any(not math.isfinite(value) for value in self.preservation_baseline.values()):
+                raise ValueError("Preservation baseline must be finite")
+        if set(self.preservation_baseline) != set(self.preservation_max_drop):
+            raise ValueError("Preservation-gated selection requires step-zero evaluation or restored baseline")
+        for key, maximum_drop in self.preservation_max_drop.items():
+            value = metrics[key]
+            if not math.isfinite(value):
+                raise ValueError(f"Nonfinite preservation metric: {key}")
+            if value < self.preservation_baseline[key] - maximum_drop:
+                return control
+        score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
         raw_score = score
@@ -347,7 +371,11 @@ class BestCheckpointCallback(TrainerCallback):
             "ema_window": self.ema_window,
             "evaluation_interval": self.evaluation_interval,
             "ema_alpha": 2 / (self.ema_window + 1),
-            "selection": "Highest valid score; adjusted trailing-step EMA when window>1; earliest on ties",
+            "selection": "Highest eligible selected metric; adjusted validation EMA; earliest checkpoint on ties",
+            "selection_metric": self.selection_metric,
+            "preservation_baseline": self.preservation_baseline,
+            "preservation_max_drop": self.preservation_max_drop,
+            "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
         io.write_bytes_atomic(best_path, json.dumps(payload).encode())

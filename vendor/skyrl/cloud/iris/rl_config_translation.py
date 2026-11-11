@@ -42,6 +42,7 @@ TRAINER_NON_PATH_KEYS = frozenset(
     {
         "policy.model.path",
         "callbacks.metric_groups",
+        "callbacks.selection_metric",
         "callbacks.additional_evaluations",
         # Harbor resolves task paths against the pinned dataset repository, not the launcher installation.
         "callbacks.cohorts.job.tasks.path",
