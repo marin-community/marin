@@ -43,10 +43,11 @@ _OPENCODE_PARTITIONS = (
     "agent_skills",
     "agent_skills_question_tool",
 )
-# Conversion fixes made after TRANSFORM_VERSION are versioned per partition, so every other partition keeps its cache.
+# A conversion fix made after TRANSFORM_VERSION adds a repair version to the step hash of the partitions it changes,
+# so every other partition keeps its cache.
 _UNQUOTED_PROMPT_VERSION = "2026.11.11.unquoted-prompt"
 _NO_EMPTY_SYSTEM_VERSION = "2026.11.11.no-empty-system"
-_PARTITION_TRANSFORM_VERSIONS = MappingProxyType(
+_PARTITION_REPAIR_VERSIONS = MappingProxyType(
     {
         **{(_OPENCODE_FAMILY, partition): _UNQUOTED_PROMPT_VERSION for partition in _OPENCODE_PARTITIONS},
         ("agentic_v1", "tool_calling"): _NO_EMPTY_SYSTEM_VERSION,
@@ -470,17 +471,16 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
+    hash_attrs = {"family": family, "partition": partition_name, "version": TRANSFORM_VERSION}
+    if repair_version := _PARTITION_REPAIR_VERSIONS.get((family, partition_name)):
+        hash_attrs["repair_version"] = repair_version
     return StepSpec(
         name=f"processed-chat/nemotron_sft_v3/{family}/{partition_name}",
         deps=[download],
         fn=lambda output_path: _transform_chat(
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
-        hash_attrs={
-            "family": family,
-            "partition": partition_name,
-            "version": _PARTITION_TRANSFORM_VERSIONS.get((family, partition_name), TRANSFORM_VERSION),
-        },
+        hash_attrs=hash_attrs,
     )
 
 
