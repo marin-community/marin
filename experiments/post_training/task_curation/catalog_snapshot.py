@@ -228,6 +228,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 "daytona_snapshot_count": declaration.daytona_snapshot_count,
                                 "daytona_count_basis": declaration.daytona_count_basis,
                                 "daytona_snapshot_threshold": declaration.daytona_snapshot_threshold,
+                                "oracle_validation": declaration.oracle_validation,
                             }
                         )
                     rows.append(prior.model_copy(update=update))

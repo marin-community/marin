@@ -562,6 +562,61 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
 
+## Sources without oracle solutions
+
+Some sources ship no oracle solution: every row has `has_solution` false, or its
+`solution_binary` is an empty archive. The controls above cannot run there, so
+execution is qualified by two checks that need no oracle. Apply them whenever a
+source is admitted without one, including every rebuilt cohort that inherits a
+native source's missing oracles.
+
+**Payload preservation (offline).** For each rebuilt task, every file the native
+recipe `COPY`s into the workspace must appear in the rebuilt setup payload with
+identical bytes and mode. This catches a rebuild that drops directory sources,
+rewrites fixture data or changes an executable bit. `ADD` recipes have no
+preservation contract and must be deferred by the converter.
+
+**Verifier liveness (sandbox).** The task's own verifier runs in the task's
+graded environment against the untouched workspace. The verifier "actually ran"
+only when it executed and returned a well-formed negative verdict: exit code 0
+with a trailing numeric reward below 1. A crash, a nonzero exit, a timeout, an
+empty or unparsable report, or a positive reward on an unsolved workspace is an
+infrastructure error or a defect, never a pass. A solved submission is not
+needed; the rebuild changed the environment, not the grading contract.
+
+**Pass criteria.** A source reaches `verifier_executed` only when both phases
+ran and every sampled task passed (`minimum_rate` 1.0). Sampling is stratified
+per base reference, twenty tasks per base by default, and the report lists the
+pass rate per base and overall. A single infrastructure error blocks the status
+until it is explained, because the check's purpose is to prove the environment
+runs, not to estimate a rate.
+
+**Recording.** The qualification writes a JSON report with
+`preservation_rate`, `verifier_rate`, `by_base` and `verifier_failures`. Its
+verdict sets `oracle_validation` on the declaration:
+
+- `executed` — shipped oracle solutions ran and scored their expected reward;
+- `verifier_executed` — no oracle exists; both checks above passed;
+- `skipped` — neither ran, so execution is not certified.
+
+`skipped` is the default for a source without oracles, and absence of oracles is
+not evidence that execution works. The Atlas shows the value beside the catalog,
+and catalog publication carries it forward with the rest of the declaration.
+
+**Commands.** Run the offline phase over a rebuild output:
+
+```bash
+uv run python -m experiments.post_training.task_curation.no_oracle_qualification \
+    --cohort /path/to/native-tasks.parquet \
+    --rebuild-out /path/to/rebuild-output \
+    --output /path/to/qc-report.json
+```
+
+The report's `summary` prints the rates and `oracle_validation`. The sandbox
+phase needs a Daytona credential, creates one sandbox per sampled task, and has
+no cleanup code path in this repository: hand the created snapshot names to an
+operator, as `.agents/ops/daytona.md` describes.
+
 ## Conversion modes
 
 Each dataset's callable receives `PipelineOptions` with an explicit mode. The

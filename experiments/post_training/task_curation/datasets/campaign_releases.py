@@ -15,7 +15,7 @@ bytes or verifier material, so no machine can execute these tasks from the publi
 release alone. Treat every entry as a data pointer, not a runnable pipeline.
 """
 
-from finestore.rl.curation import DaytonaSafety, IndependentQC, Verdict
+from finestore.rl.curation import DaytonaSafety, IndependentQC, OracleValidation, Verdict
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -86,6 +86,7 @@ def sources() -> list[RlDataSource]:
                     evidence_url=_pinned_blob(calibforge, "manifest.json"),
                 ),
                 daytona_safety=DaytonaSafety.UNSAFE,
+                oracle_validation=OracleValidation.SKIPPED,
             )
         ),
         RlDataSource(
