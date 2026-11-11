@@ -862,15 +862,19 @@ def test_storage_leaves_out_data_belay_runs() -> None:
     assert not is_belay_file("runs/dbelay-d1024-open-web-math-p20-3802f0-s2/checkpoints/step-100/metadata.json")
 
 
-def test_iris_jobs_lists_under_the_iris_user_not_the_os_user(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Loom sets IRIS_USER=loom while the container's OS user is app; Iris names Belay's jobs /loom/belay-...
-    calls = []
+def test_iris_jobs_lists_belays_iris_user_whoever_runs_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Sessions submit as Loom's IRIS_USER (loom); the watcher may run as someone else and must still see those runs.
+    prefixes = []
 
     def fake_run(command, **kwargs):
-        calls.append(command)
+        prefixes.append(command[command.index("--prefix") + 1])
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setenv("IRIS_USER", "loom")
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("IRIS_USER", "maintainer")
     assert iris_jobs() == []
-    assert calls[0][calls[0].index("--prefix") + 1] == "/loom/belay-"
+    assert prefixes == [f"/{CONFIG.iris_user}/belay-", "/maintainer/belay-"]
+    prefixes.clear()
+    monkeypatch.setenv("IRIS_USER", CONFIG.iris_user)
+    iris_jobs()
+    assert prefixes == [f"/{CONFIG.iris_user}/belay-"]
