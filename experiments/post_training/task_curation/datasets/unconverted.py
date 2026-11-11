@@ -34,16 +34,16 @@ def sources() -> list[RlDataSource]:
                 notes=(
                     "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
                     "The paper's private S2EBench is a separate evaluation set. "
-                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms."
+                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms. "
+                    "Snapshot requirement is unassessed: a registry sample found a distinct environment for "
+                    "every sampled task, so the cohort is not treated as safe, and a full per-task count "
+                    "is pending."
                 ),
                 dataset=SourceReference(
                     "skill2env/skill2env",
                     "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
                     "https://hub.harborframework.com/datasets/skill2env/skill2env",
                 ),
-                daytona_safety=DaytonaSafety.UNSAFE,
-                daytona_snapshot_count=11,
-                daytona_count_basis="Harbor Hub 11-task probe, 11/11 distinct Dockerfiles",
             )
         ),
         RlDataSource(

@@ -161,7 +161,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=17706,
-                daytona_count_basis="staged actor + grader Docker build contexts (shellbox identity)",
+                daytona_count_basis=(
+                    "pinned release per-task build-context inventory from the conversion ledger, "
+                    "resources defaulted; production-named recount runs with the conversion program"
+                ),
             ),
         ),
         repository_source(
@@ -183,7 +186,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 ),
                 daytona_safety=DaytonaSafety.UNSAFE,
                 daytona_snapshot_count=12932,
-                daytona_count_basis="staged actor + grader Docker build contexts (shellbox identity)",
+                daytona_count_basis=(
+                    "pinned release per-task build-context inventory from the conversion ledger, "
+                    "resources defaulted; production-named recount runs with the conversion program"
+                ),
             ),
         ),
     ]
