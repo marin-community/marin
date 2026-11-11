@@ -100,7 +100,7 @@
     <ol class="logs howto">
       <li><b>Suggest</b>: post one idea per comment on <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>. Specify a <code>Track:</code> (the baseline it builds on and is compared to); default <code>speedrun</code>.
         <ul class="track-list">
-          <li><code>speedrun</code> (default): the 8-minute d512 run of the current recipe, for fast iteration and to check that an idea is compatible with the recipe. It is a filter, not a score to optimize.</li>
+          <li><code>speedrun</code> (default): the 8-minute d512 run of the current recipe, for fast iteration and to check that an idea is compatible with the recipe.</li>
           <li><code>hero-mfu</code>: step time on one GB200 rack at hero scale, for an idea expected to change MFU a lot; skip it otherwise. A maintainer runs it.</li>
           <li><code>ladder</code>: all four <code>competitive-*</code> rungs, launched together, at the baseline's step count; after a <code>hero-mfu</code> result, each rung's steps are adjusted for the MFU change (better MFU means more steps). A ladder run without <code>hero-mfu</code> gives a provisional verdict: the idea needs a <code>hero-mfu</code> result before it joins the recipe.</li>
           <li><code>competitive-d512</code> … <code>competitive-d1280</code>: one rung of the ladder, against the current recipe's finished run at that size.</li>
