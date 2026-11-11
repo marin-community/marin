@@ -27,7 +27,7 @@ from skyrl_train.entrypoints.main_base import config_dir
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.utils.torch_utils import logprobs_from_logits
 from skyrl_train.training_batch import TrainingInputBatch
-from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
 from skyrl_train.objective.losses import POLICY_CLIP_METRIC_KEYS
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.softmax_reference import assert_softmax_numerics, numerical_rows

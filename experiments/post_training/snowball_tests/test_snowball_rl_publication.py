@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from importlib import reload
+from pathlib import Path
 
 import click
 import pytest
@@ -17,12 +18,11 @@ from finestore.rl.run_records import (
     CheckpointReference,
     LaunchReceipt,
     read_attempts,
-    register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
-from marin.execution.artifact import RECORD_FILENAME
+from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.rl.skyrl import SkyRLRun
 from marin.rl.skyrl_records import read_skyrl_metrics
@@ -46,10 +46,13 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
         "invariant-failed",
         "checkpoint-lineage",
         "lineage-missing-window",
+        "lineage-unknown-parent",
+        "lineage-unknown-grandparent",
         "canonical-only",
         "historical-retry",
         "unrelated-attempt",
         "missing-startup",
+        "untracked-native",
         "train-long",
     ],
 )
@@ -58,11 +61,33 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
     name = "train-long" if case == "train-long" else "learning-medium"
     preset = replace(presets.PRESETS[name], updates=2, measured=range(1, 3))
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {name: preset})
+    weights = Path(presets.artifact_prefix(preset.recipe.layout.cluster)) / "weights" / "2026.11.10"
+    initializer = SkyRLRun(
+        path=str(weights),
+        hf_model_uri=str(weights / "policy"),
+        global_step=1,
+        tokenizer_uri=preset.model.tokenizer_uri,
+        tokenizer_revision=preset.model.tokenizer_revision,
+        checkpoint_root=str(weights / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(weights / "terminal.json"),
+        iris_job_id="/tests/initializer",
+    )
+    write_json(
+        weights / RECORD_FILENAME,
+        ArtifactRecord(
+            name="weights",
+            version="2026.11.10",
+            fingerprint="fixture-initializer",
+            result_type=result_type_name(SkyRLRun),
+            result=initializer.result_payload(),
+        ).model_dump(mode="json"),
+    )
     inputs = gate.GateInputs(
         preset_name=name,
-        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.ref.optimizer_config.lr=0.01"),
+        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01"),
         tasks=f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}",
-        init="weights@pinned",
+        init="weights@2026.11.10",
     )
     source = recorded_runs(
         name,
@@ -96,10 +121,12 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
         )
     if case in {"native-failed", "historical-retry"}:
         receipt["result"].update(state="failed", model=None)
+    if case == "untracked-native":
+        receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     write_receipt(source, receipt)
     metrics = read_skyrl_metrics(str(source))
     records = read_attempts(str(source / "exports"))
-    if case in {"checkpoint-lineage", "lineage-missing-window", "unrelated-attempt"}:
+    if case in {"checkpoint-lineage", "lineage-missing-window", "lineage-unknown-grandparent", "unrelated-attempt"}:
         ancestor = deepcopy(receipt)
         ancestor["config"]["run"]["attempt_id"] = "ancestor"
         ancestor["result"].update(
@@ -107,11 +134,23 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             started_at="2026-11-06T16:40:00+00:00",
             finished_at=None if case == "lineage-missing-window" else "2026-11-06T17:40:00+00:00",
         )
+        native_ancestor = LaunchReceipt.model_validate(ancestor)
         records["ancestor"] = AttemptRecord(
             run_id=receipt["config"]["run"]["id"],
             attempt_id="ancestor",
-            launch=LaunchReceipt.model_validate(ancestor),
+            config=native_ancestor.config,
+            result=native_ancestor.result,
+            metrics_started_at=native_ancestor.result.started_at,
         )
+        if case == "lineage-unknown-grandparent":
+            records["ancestor"] = records["ancestor"].model_copy(
+                update={
+                    "resumed_step": 1,
+                    "parent": CheckpointReference(
+                        export_root=str(source / "unknown-exports"), attempt_id="unknown", step=1
+                    ),
+                }
+            )
         if case != "unrelated-attempt":
             records["native-attempt"] = records["native-attempt"].model_copy(
                 update={
@@ -120,8 +159,18 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
                 }
             )
             metrics[1]["attempt_id"] = "ancestor"
+    if case == "lineage-unknown-parent":
+        records["native-attempt"] = records["native-attempt"].model_copy(
+            update={
+                "resumed_step": 1,
+                "parent": CheckpointReference(export_root=str(source / "unknown-exports"), attempt_id="unknown", step=1),
+            }
+        )
     if case == "native-failed":
         metrics = {}
+    if case == "untracked-native":
+        metrics = {}
+        records["native-attempt"] = records["native-attempt"].model_copy(update={"metrics_started_at": None})
     if case == "invariant-failed":
         metrics[1]["policy/raw_grad_norm"] = float("nan")
     if case == "missing-startup":
@@ -136,17 +185,18 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
             started_at="2026-11-06T20:00:00+00:00",
             finished_at="2026-11-06T20:05:00+00:00",
         )
+        native_retry = LaunchReceipt.model_validate(retry)
         records["retry"] = AttemptRecord(
             run_id=retry["config"]["run"]["id"],
             attempt_id="retry",
-            launch=LaunchReceipt.model_validate(retry),
+            config=native_retry.config,
+            result=native_retry.result,
             started_at=retry["result"]["started_at"],
         )
         write_json(source / "resolved-launch.yaml", {"config": retry["config"]})
     with DataStore.open(run_records_root(str(source / "exports"))) as store:
-        table = register_run_tables(store).attempts
         for record in records.values():
-            write_attempt(table, record)
+            update_attempt(store, record)
     write_metrics(source, metrics)
     if case in {"native-failed", "historical-retry"}:
         (source / "terminal.json").unlink()
@@ -182,15 +232,29 @@ print("null")
     assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
     assert (
-        row["label"] == f"{name} trainer.policy.optimizer_config.lr=2e-06 trainer.ref.optimizer_config.lr=0.01 "
-        f"tasks={inputs.tasks} init=weights@pinned"
+        row["label"]
+        == f"{name} trainer.policy.optimizer_config.lr=2e-06 trainer.policy.optimizer_config.weight_decay=0.01 "
+        f"tasks={inputs.tasks} init=weights@2026.11.10"
     )
     assert row["issue"] is None and row["verdict"] is None and row["gate_result"] is None
     assert row["evaluation"] is None and row["baseline"] is None and row["final"] is None
     expected_time = (
-        None if case in {"canonical-only", "lineage-missing-window"} else 7200 if case == "checkpoint-lineage" else 3600
+        None
+        if case
+        in {
+            "canonical-only",
+            "lineage-missing-window",
+            "lineage-unknown-parent",
+            "lineage-unknown-grandparent",
+            "untracked-native",
+        }
+        else 7200 if case == "checkpoint-lineage" else 3600
     )
-    expected_updates = None if case == "canonical-only" else 0 if case == "native-failed" else 2
+    expected_updates = (
+        None
+        if case in {"canonical-only", "lineage-unknown-parent", "lineage-unknown-grandparent", "untracked-native"}
+        else 0 if case == "native-failed" else 2
+    )
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     if case in {"native-failed", "historical-retry", "invariant-failed"}:
@@ -210,7 +274,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     reload(publication)
     client, request = rl_progress_client
     preset = presets.PRESETS["learning-medium"]
-    pin = gate.control_pins(preset.name)[0]
+    pin = gate.control_pins(preset)[0]
     controls = [
         recorded_runs(
             preset.name,
@@ -228,7 +292,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", presets.PRESET_REVISION, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-{i}", preset.revision, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -291,9 +355,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     payload = client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert repeated.urls[str(sources[0])].endswith(
-        f"#run=tests%2Fpublication-0-{presets.PRESET_REVISION}&attempt=native-0"
-    )
+    assert repeated.urls[str(sources[0])].endswith(f"#run=tests%2Fpublication-0-{preset.revision}&attempt=native-0")
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -500,3 +562,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )
+    before_ids = {
+        (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]
+    }
+    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: replace(preset, revision="2026.11.12.1")})
+    reload(publication)
+    with pytest.raises(click.UsageError, match="current control pins"):
+        publication.publish_controls(preset.name, service_url="http://localhost")
+    after_ids = {
+        (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publisher.APPLET_ID}/api/runs").json()["runs"]
+    }
+    assert after_ids == before_ids

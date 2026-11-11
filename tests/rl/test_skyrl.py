@@ -19,15 +19,14 @@ from typing import IO
 
 import pytest
 import yaml
+from finestore.reader import ReadView
 from finestore.rl.run_records import (
     AttemptRecord,
     LaunchState,
-    attempt_tracking,
     read_attempt,
     read_attempt_metrics,
-    register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
 from iris.rpc import controller_pb2, job_pb2
@@ -57,6 +56,7 @@ from marin.rl.skyrl import (
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.rl.skyrl_records import (
+    attempt_tracking,
     read_skyrl_metrics,
     read_stored_skyrl_attempts,
     read_stored_skyrl_receipt,
@@ -732,7 +732,11 @@ from marinskyrl.checkpoint_paths import policy_export_path
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from skyrl_train.hf_export_schema import HFExportRequest
 from skyrl_train.utils.tracking import Tracking
-from finestore.rl.run_records import CheckpointReference, read_attempt, read_attempt_metrics
+from finestore.rl.run_records import (
+    AttemptRecord, CheckpointReference, LaunchResult, LaunchState,
+    read_attempt, read_attempt_metrics, run_records_root, update_attempt,
+)
+from finestore.store import DataStore
 
 path = Path(sys.argv[1])
 root = path.parent
@@ -759,6 +763,7 @@ original = Tracking("tests-project", "history", "records", history_config("origi
 original.start(resumed_step=None)
 for step in (0, 1, 2, 3, 8):
     original.log({"loss": step / 10}, step=step)
+original.log({"ancestor_only": 77}, step=0)
 assert read_attempt_metrics(str(ancestor_root), "original")[8]["loss"] == 0.8
 parent = CheckpointReference(export_root=str(ancestor_root), attempt_id="original", step=3)
 with Tracking("tests-project", "history", "records", history_config("middle", root / "exports")) as middle:
@@ -792,6 +797,59 @@ with Tracking("tests-project", "history", "records", history_config("missing-par
     missing.start(resumed_step=2,
         checkpoint=CheckpointReference(export_root=str(ancestor_root), attempt_id="unrecorded", step=2))
     missing.log({"loss": 3}, step=3)
+with Tracking("tests-project", "history", "records", history_config("main-resume", root / "exports")) as main:
+    main.start(resumed_step=8)
+    assert read_attempt(str(root / "exports"), "main-resume").metrics_started_at is not None
+    for invalid in ({"step": 8}, {"attempt_id": "foreign"}, {"metric_attempt_ids": {}}, {"label": "text"}):
+        try:
+            main.log(invalid, step=9)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Invalid numeric metric was accepted: {invalid}")
+    main.log({"loss": 0.9}, step=9)
+unknown = CheckpointReference(export_root=str(root / "absent-exports"), attempt_id="unknown", step=2)
+with Tracking("tests-project", "history", "records", history_config("missing-store", root / "exports")) as child:
+    child.start(resumed_step=2, checkpoint=unknown)
+    child.log({"loss": 0.3}, step=3)
+with Tracking("tests-project", "history", "records", history_config("grandchild", root / "exports")) as child:
+    child.start(resumed_step=3,
+        checkpoint=CheckpointReference(export_root=str(root / "exports") + "/", attempt_id="missing-store", step=3))
+    child.log({"loss": 0.4}, step=4)
+for first in ("metrics", "result"):
+    race_root = str(root / ("race-" + first))
+    attempt_id = "race-" + first
+    with DataStore.open(run_records_root(race_root)) as seed:
+        update_attempt(seed, AttemptRecord(run_id="history", attempt_id=attempt_id,
+            started_at="2026-11-11T01:00:00+00:00", vllm_version="first"))
+    with DataStore.open(run_records_root(race_root)) as left, DataStore.open(run_records_root(race_root)) as right:
+        metrics = AttemptRecord(run_id="history", attempt_id=attempt_id,
+            metrics_started_at="2026-11-11T01:01:00+00:00", resumed_step=3, parent=parent)
+        result = AttemptRecord(run_id="history", attempt_id=attempt_id,
+            result=LaunchResult(state=LaunchState.FAILED, failure="interleaved terminal"))
+        updates = ((left, metrics), (right, result))
+        for store, update in updates if first == "metrics" else reversed(updates):
+            update_attempt(store, update)
+    stored = read_attempt(race_root, attempt_id)
+    assert stored.started_at == "2026-11-11T01:00:00+00:00" and stored.vllm_version == "first"
+    assert stored.parent == parent and stored.resumed_step == 3
+    assert stored.metrics_started_at == "2026-11-11T01:01:00+00:00"
+    assert stored.result.state == LaunchState.FAILED and stored.result.failure == "interleaved terminal"
+    with DataStore.open(run_records_root(race_root)) as clear:
+        update_attempt(clear, AttemptRecord(run_id="history", attempt_id=attempt_id, vllm_version=None))
+    cleared = read_attempt(race_root, attempt_id)
+    assert cleared.vllm_version is None and cleared.parent == parent and cleared.result == stored.result
+cycle_root = str(root / "cycle-exports")
+with DataStore.open(run_records_root(cycle_root)) as cyclic:
+    for attempt_id, parent_id in (("left", "right"), ("right", "left")):
+        update_attempt(cyclic, AttemptRecord(run_id="history", attempt_id=attempt_id, resumed_step=1,
+            parent=CheckpointReference(export_root=cycle_root + "/", attempt_id=parent_id, step=1)))
+try:
+    read_attempt_metrics(cycle_root, "left")
+except ValueError as error:
+    assert "cycle" in str(error), error
+else:
+    raise AssertionError("Checkpoint alias cycle was accepted")
 try:
     with Tracking("tests-project", "history", "records", history_config("failed-direct", root / "exports")) as failed:
         failed.start(resumed_step=None)
@@ -817,12 +875,27 @@ class LocalBackend:
                     "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
             with patch("cloud.iris.skyrl_entrypoint.version", return_value="fixture-vllm"):
                 _start_attempt_record(config)
+                interrupted = OmegaConf.create(OmegaConf.to_container(config, resolve=True))
+                interrupted.run.attempt_id = "interrupted-attempt"
+                interrupted.skyrl.runtime.attempt_id = "interrupted-attempt"
+                interrupted.skyrl.runtime.iris_job_id = "/local/interrupted"
+                interrupted.run.coordinator_iris_job_id = "/local/interrupted-coordinator"
+                interrupted.skyrl.runtime.coordinator_iris_job_id = "/local/interrupted-coordinator"
+                _start_attempt_record(interrupted)
+                foreign = OmegaConf.to_container(interrupted, resolve=True)
+                foreign["run"]["id"] = "unrelated-native-run"
+                foreign["run"]["attempt_id"] = "foreign-native"
+                with DataStore.open(run_records_root(str(config.artifacts.export_root))) as store:
+                    update_attempt(store, AttemptRecord(run_id="unrelated-native-run", attempt_id="foreign-native",
+                        config=foreign, started_at="2026-11-11T01:00:00+00:00"))
             startup = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
             assert startup is not None and startup.vllm_version == "fixture-vllm"
             (root / "startup-observation.json").write_text(startup.model_dump_json())
             with Tracking("tests-project", "record-boundary", "records", config.skyrl) as tracker:
                 tracker.start(resumed_step=5,
                     checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
+                immediate = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
+                assert immediate.metrics_started_at is not None and immediate.parent.attempt_id == "middle"
                 tracker.log({"startup/resume": 0.05, "eval/all/avg_score": 0.6}, step=5)
                 tracker.log({"loss": 1.25}, step=6)
                 tracker.log({"loss": 0.25, "entropy": 0.75}, step=6)
@@ -881,8 +954,23 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
     current_id, attempts = read_stored_skyrl_attempts(str(tmp_path))
     assert current_id == config.attempt_id
-    assert set(attempts) == {config.attempt_id, "earlier-failed-attempt"}
+    assert set(attempts) == {config.attempt_id, "earlier-failed-attempt", "interrupted-attempt"}
     assert attempts["earlier-failed-attempt"].native.result.failure == "Iris job reached failed"
+    interrupted = attempts["interrupted-attempt"]
+    assert interrupted.native.result.state == LaunchState.SUBMITTED
+    assert interrupted.native.result.iris_job_id == "/local/interrupted"
+    assert interrupted.native.config["run"]["coordinator_iris_job_id"] == "/local/interrupted-coordinator"
+    assert interrupted.native.config["skyrl"]["runtime"]["iris_job_id"] == "/local/interrupted"
+    assert interrupted.metrics_started_at is None and interrupted.started_at is not None
+    with DataStore.open(run_records_root(str(tmp_path / "exports"))) as store:
+        update_attempt(store, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, result=None))
+    assert read_attempt(str(tmp_path / "exports"), receipt.attempt_id).result is None
+    fallback = read_stored_skyrl_receipt(str(tmp_path))
+    assert fallback.native.result.state == LaunchState.SUCCEEDED
+    assert fallback.started_at == receipt.started_at and fallback.vllm_version == receipt.vllm_version
+    assert fallback.native.config["skyrl"]["runtime"]["iris_job_id"] == "/local/training"
+    with DataStore.open(run_records_root(str(tmp_path / "exports"))) as store:
+        update_attempt(store, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, result=receipt.result))
     tracking = attempt_tracking(receipt)
     assert tracking["attempt_id"] == config.attempt_id
     assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
@@ -915,23 +1003,37 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert list(middle_rewind) == [0, 1, 2, 4] and middle_rewind[4]["loss"] == 9.3
     stage = read_attempt_metrics(export_root, "stage")
     assert list(stage) == [0, 1] and [row["loss"] for row in stage.values()] == [9, 8]
+    assert "ancestor_only" not in stage[0]
     assert read_attempt(export_root, "stage").parent.step == 5
     assert read_attempt_metrics(export_root, "failed-direct")[1]["loss"] == 0.9
-    with pytest.raises(FileNotFoundError, match="unrecorded"):
-        read_attempt_metrics(export_root, "missing-parent")
+    assert read_attempt_metrics(export_root, "missing-parent")[3]["loss"] == 3
+    assert read_attempt_metrics(export_root, "main-resume")[9]["loss"] == 0.9
+    assert read_attempt(export_root, "main-resume").resumed_step == 8
+    assert read_attempt(export_root, "main-resume").parent is None
+    assert read_attempt_metrics(export_root, "missing-store")[3]["loss"] == 0.3
+    grandchild = read_attempt_metrics(export_root, "grandchild")
+    assert list(grandchild) == [3, 4] and grandchild[3]["loss"] == 0.3 and grandchild[4]["loss"] == 0.4
+    damaged_root = str(tmp_path / "absent-exports")
+    with DataStore.open(run_records_root(damaged_root)) as store:
+        update_attempt(store, AttemptRecord(run_id="history", attempt_id="unknown"))
+    manifest = Path(ReadView(run_records_root(damaged_root)).token.manifest_path)
+    contents = manifest.read_bytes()
+    manifest.unlink()
+    try:
+        with pytest.raises(FileNotFoundError):
+            read_attempt_metrics(export_root, "missing-store")
+    finally:
+        manifest.write_bytes(contents)
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
     assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
-    pending = receipt.model_copy(
-        update={
-            "launch": receipt.native.model_copy(
-                update={"result": receipt.native.result.model_copy(update={"state": LaunchState.SUBMITTED})}
-            )
-        }
+    pending = AttemptRecord(
+        run_id=receipt.run_id,
+        attempt_id=receipt.attempt_id,
+        result=receipt.native.result.model_copy(update={"state": LaunchState.SUBMITTED}),
     )
     with DataStore.open(run_records_root(export_root)) as store:
-        write_attempt(register_run_tables(store).attempts, pending)
-        store.flush()
+        update_attempt(store, pending)
 
     @contextmanager
     def controller(**_kwargs):
@@ -951,13 +1053,20 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     assert refreshed is not None and refreshed.native.result.state == "failed"
     assert refreshed.started_at == startup.started_at and refreshed.vllm_version == "fixture-vllm"
     with DataStore.open(run_records_root(export_root)) as store:
-        write_attempt(register_run_tables(store).attempts, receipt)
-        store.flush()
+        update_attempt(store, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, result=receipt.result))
     (tmp_path / "resolved-launch.yaml").write_text(
         yaml.safe_dump({"config": attempts["earlier-failed-attempt"].native.config})
     )
+    (tmp_path / "terminal.json").write_text(receipt.native.model_dump_json())
     assert read_stored_skyrl_receipt(str(tmp_path)) == attempts["earlier-failed-attempt"]
     (tmp_path / "resolved-launch.yaml").unlink()
+    legacy = receipt.native.model_dump(mode="json")
+    legacy["config"]["artifacts"]["export_root"] = str(tmp_path / "legacy-exports")
+    (tmp_path / "terminal.json").write_text(json.dumps(legacy))
+    terminal_only = read_stored_skyrl_receipt(str(tmp_path))
+    assert terminal_only.native.model_dump(mode="json") == legacy
+    assert terminal_only.started_at is None and terminal_only.vllm_version is None
+    (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
     assert read_skyrl_launch_receipt(str(tmp_path)) is None
 

@@ -18,7 +18,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from finestore.rl.run_records import attempt_tracking, read_attempt, read_attempt_metrics
+from finestore.rl.run_records import read_attempt, read_attempt_metrics
 from cloud.iris.tests.launch_test_support import raw_config
 from cloud.iris import launch, skyrl_entrypoint, task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
@@ -310,6 +310,8 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
     monkeypatch.setattr(skyrl_entrypoint, "get_job_info", lambda: SimpleNamespace(job_id="/tests/bootstrap-trainer"))
 
     def installed_version(name):
+        if not fail:
+            return "fixture-vllm-v2"
         if entrypoint == "generate":
             return "fixture-vllm"
         raise skyrl_entrypoint.PackageNotFoundError(name)
@@ -321,15 +323,15 @@ def test_forwarded_launch_metadata_reaches_attempt_startup_record(tmp_path: Path
         skyrl_entrypoint.run_config(destination)
     attempt = read_attempt(export_root, "attempt-1")
     assert attempt is not None
-    record = attempt_tracking(attempt)
-    assert {key: record[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
+    runtime = attempt.native.config["skyrl"]["runtime"]
+    assert {key: runtime[key] for key in ("run_id", "attempt_id", "iris_job_id", "coordinator_iris_job_id")} == {
         "run_id": "smoke",
         "attempt_id": "attempt-1",
         "iris_job_id": "/tests/bootstrap-trainer",
         "coordinator_iris_job_id": "/tests/coordinator",
     }
-    assert first_start <= datetime.fromisoformat(record["started_at"]) <= datetime.now(timezone.utc)
-    assert record["engine"]["vllm_version"] == ("fixture-vllm" if entrypoint == "generate" else None)
+    assert first_start <= datetime.fromisoformat(attempt.started_at) <= datetime.now(timezone.utc)
+    assert attempt.vllm_version == ("fixture-vllm" if entrypoint == "generate" else None)
     fail = False
     skyrl_entrypoint.run_config(destination)
     final = read_attempt(export_root, "attempt-1")
@@ -372,12 +374,47 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
     create_default_callbacks(config)
 
 
-def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "case,patch,error",
+    [
+        ("inherit", {}, None),
+        ("explicit", {"n_samples_per_prompt": 3}, None),
+        ("duplicate", {}, "duplicate evaluation profile: sampled"),
+        ("field", {"answer_count": 2}, "unknown fields.*answer_count"),
+        ("sampling", {"sampling_params": {"temprature": 0.1}}, "unknown sampling keys.*temprature"),
+        ("zero-answers", {"n_samples_per_prompt": 0}, "n_samples_per_prompt must be a positive integer"),
+        ("empty-files", {"data_files": []}, "data_files must be nonempty"),
+        ("missing-profile", {}, "evaluation data has no additional evaluation profile: sampled"),
+        ("two-inputs", {"data_files": ["another.parquet"]}, "both data_files and evaluation_data"),
+        ("null-profile", None, "evaluation profile sampled must be a mapping"),
+        ("scalar-profile", 7, "evaluation profile sampled must be a mapping"),
+        ("scalar-sampling", {"sampling_params": 7}, "profile sampled: sampling_params must be a mapping"),
+        ("list-sampling", {"sampling_params": []}, "profile sampled: sampling_params must be a mapping"),
+        ("list-profiles", {}, "additional_evaluations must be a mapping"),
+        ("mixed-field-keys", {1: 0, "typo": 0}, "profile sampled has unknown fields"),
+        ("mixed-sampling-keys", {"sampling_params": {1: 0, "typo": 0}}, "profile sampled has unknown sampling keys"),
+        ("scalar-files", {"data_files": 7}, "profile sampled: data_files must be nonempty"),
+        ("string-files", {"data_files": "panel.parquet"}, "profile sampled: data_files must be nonempty"),
+        ("nonstring-files", {"data_files": [7]}, "profile sampled: data_files must be nonempty"),
+        ("null-callback", {}, r"trainer.callbacks\[0\] must be a mapping"),
+    ],
+)
+def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch, case, patch, error) -> None:
     path = tmp_path / "evaluation.yaml"
     document = raw_config()
     document["run"]["export_hf"] = False
     document["skyrl"]["entrypoint"] = "generate"
-    document["skyrl"]["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"sampled": {}}}]
+    generator = document["skyrl"].setdefault("generator", {})
+    generator["eval_sampling_params"] = {"temperature": 0.5, "stop": ["base-stop"]}
+    generator["eval_n_samples_per_prompt"] = 2
+    profile = {
+        "sampling_params": {"temperature": 0.0, "stop": None, "seed": 42, "frequency_penalty": 0.5, "stop_token_ids": [7]},
+        "n_samples_per_prompt": None,
+    }
+    profile = {**profile, **patch} if isinstance(patch, dict) else patch
+    document["skyrl"]["trainer"]["callbacks"] = [
+        {"type": "evaluation", "additional_evaluations": {"sampled": profile}}
+    ]
     sources = []
     for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
         directory = tmp_path / name
@@ -394,8 +431,24 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         )
     document["inputs"]["validation_data"] = sources[:1]
     document["inputs"]["evaluation_data"] = {"sampled": sources[1:]}
+    if case == "duplicate":
+        document["skyrl"]["trainer"]["callbacks"].append(
+            {"type": "evaluation", "additional_evaluations": {"sampled": profile}}
+        )
+    elif case == "missing-profile":
+        document["skyrl"]["trainer"]["callbacks"] = []
+    elif case == "list-profiles":
+        document["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"] = []
+    elif case == "null-callback":
+        document["skyrl"]["trainer"]["callbacks"] = [None]
     path.write_text(yaml.safe_dump(document))
+    if error is not None:
+        with pytest.raises(ValueError, match=error):
+            load_launch_config(path)
+        return
     prepared = launch._prepare_config(load_launch_config(path))
+    OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.seed", 91, force_add=True)
+    OmegaConf.update(prepared, "skyrl.generator.eval_sampling_params.presence_penalty", 0.25, force_add=True)
     task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)
     runner = training_driver.LocalRLRunner(
         training_driver.LocalRLConfig(
@@ -414,14 +467,28 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         profile = config.skyrl.trainer.callbacks[0].additional_evaluations.sampled
         observed["primary"] = pq.read_table(config.skyrl.data.val_data[0])["task_id"].to_pylist()
         observed["profile"] = pq.read_table(profile.data_files[0])["task_id"].to_pylist()
+        observed["request"] = OmegaConf.to_container(profile.sampling_params, resolve=True)
+        observed["count"] = profile.n_samples_per_prompt
+        assert config.skyrl.generator.eval_sampling_params.stop == ["base-stop"]
+        assert config.skyrl.generator.eval_sampling_params.seed == 91
+        assert config.skyrl.generator.eval_sampling_params.presence_penalty == 0.25
         return 0
 
     monkeypatch.setattr(runner, "_setup_environment", lambda: None)
     monkeypatch.setattr(runner, "_run_skyrl", read_datasets)
     assert runner.run() == 0
-    assert observed == {"primary": ["throughput-only"], "profile": ["panel-only"]}
+    assert observed["primary"] == ["throughput-only"]
+    assert observed["profile"] == ["panel-only"]
+    assert observed["count"] == (3 if case == "explicit" else 2)
+    assert observed["request"] | {
+        "temperature": 0.0, "stop": None, "seed": 42,
+        "presence_penalty": 0.25, "frequency_penalty": 0.5, "stop_token_ids": [7],
+    } == observed["request"]
     record = json.loads((tmp_path / "resolved.json").read_text())
     assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "panel"
+    stored = record["config"]["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["sampled"]
+    assert stored["n_samples_per_prompt"] == observed["count"]
+    assert stored["sampling_params"] == observed["request"]
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:

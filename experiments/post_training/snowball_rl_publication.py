@@ -10,11 +10,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 import click
-from finestore.rl.run_records import AttemptRecord, attempt_lineage, attempt_tracking
+from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import RECORD_FILENAME, read_record
 from marin.rl import skyrl_records
 from marin.rl.rl_progress import RunSummary
-from marin.rl.skyrl_records import read_stored_skyrl_attempts
+from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -52,10 +52,7 @@ CONTROL_PRESETS = tuple(
         name
         for name, preset in presets.PRESETS.items()
         if publishes(preset)
-        and any(
-            pin.revision == presets.PRESET_REVISION
-            for pin in gate.CONTROLS.get(gate.SHARED_CONTROLS.get(name, name), ())
-        )
+        and any(pin.revision == preset.revision for pin in gate.CONTROLS.get(gate.SHARED_CONTROLS.get(name, name), ()))
     )
 )
 
@@ -100,22 +97,31 @@ def build_record(
     tracking = attempt_tracking(receipt)
     started, finished = result.started_at, result.finished_at
     history = attempt_lineage(launch["artifacts"]["export_root"], attempt_id)
+    complete_history = (
+        bool(history)
+        and all(entry.record.metrics_started_at is not None for entry in history)
+        and history[-1].record.resumed_step in (None, 0)
+    )
     metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
-    invariants = gate.training_invariants(preset, metrics) if history else ()
+    invariants = gate.training_invariants(preset, metrics) if receipt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
-    optimizer_steps = next((int(fact.value) for fact in invariants if fact.name == "planned_updates"), None)
+    optimizer_steps = (
+        next((int(fact.value) for fact in invariants if fact.name == "planned_updates"), None)
+        if complete_history
+        else None
+    )
     windows = [
         (
             (entry.record.native.result.started_at, entry.record.native.result.finished_at)
-            if entry.record.launch is not None
+            if entry.record.config is not None
             else (None, None)
         )
         for entry in history
     ]
     elapsed = None
-    if history and all(start is not None and finish is not None for start, finish in windows):
+    if complete_history and all(start is not None and finish is not None for start, finish in windows):
         durations = [presets.utc_millis(finish) - presets.utc_millis(start) for start, finish in windows]
         if any(value < 0 for value in durations):
             raise ValueError("Native completion precedes its recorded start")
@@ -271,7 +277,7 @@ def publish_controls(preset_name: str, *, service_url: str | None = None) -> Pub
         raise click.UsageError("Progress publication requires a trained-panel preset with current control pins")
     preset = presets.PRESETS[preset_name]
     result = PublicationOutcome()
-    for pin in gate.control_pins(preset_name):
+    for pin in gate.control_pins(preset):
         outcome = publish_runs(
             [gate.control_path(preset, pin, index) for index in range(pin.runs)],
             presets.PRESETS[pin.preset],

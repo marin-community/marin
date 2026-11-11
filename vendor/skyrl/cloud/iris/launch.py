@@ -19,9 +19,8 @@ from finestore.rl.run_records import (
     LaunchResult,
     LaunchState,
     read_attempt,
-    register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
 from iris.client.client import JobFailedError
@@ -145,16 +144,9 @@ def _record_failure(
 
 def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchReceipt:
     export_root = str(config.artifacts.export_root)
-    record = read_attempt(export_root, str(config.run.attempt_id))
     receipt = LaunchReceipt(config=OmegaConf.to_container(config, resolve=True), result=result)
-    if record is None:
-        record = AttemptRecord(run_id=str(config.run.id), attempt_id=str(config.run.attempt_id), launch=receipt)
-    else:
-        record = record.model_copy(update={"launch": receipt})
     with DataStore.open(run_records_root(export_root)) as store:
-        tables = register_run_tables(store)
-        write_attempt(tables.attempts, record)
-        store.flush()
+        update_attempt(store, AttemptRecord(run_id=str(config.run.id), attempt_id=str(config.run.attempt_id), result=result))
     return receipt
 
 
@@ -179,6 +171,17 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         if config.run.submission == SubmissionMode.PREPARE:
             active_backend.validate(resolved_path)
             return _result(config, LaunchState.PREPARED)
+        record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
+        if record is None or record.config is None:
+            with DataStore.open(run_records_root(str(config.artifacts.export_root))) as store:
+                update_attempt(
+                    store,
+                    AttemptRecord(
+                        run_id=str(config.run.id),
+                        attempt_id=str(config.run.attempt_id),
+                        config=OmegaConf.to_container(config, resolve=True),
+                    ),
+                )
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:

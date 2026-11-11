@@ -25,7 +25,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    ```
 
    Check inputs, allocation, objective/constraint names, budget estimate and output paths.
-   `--version dev` satisfies the launcher; step versions are fixed by `PRESET_REVISION`.
+   `--version dev` satisfies the launcher; step versions use each preset's `revision`.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Use their
    experiment issue or prepare one through `file-issue`. Submit train-long or multiple 40-H100
    replicates only when the person asked. Set `WANDB_API_KEY`; `WANDB_ENTITY` chooses the team,
@@ -79,6 +79,10 @@ uv run python -m experiments.post_training.snowball_rl_gate \
   --preset learning-medium --candidate RUN_NAME --require 'eval_lite/aaii_category/coding/mean>=control'
 ```
 
+Promoting a measured setting follows the recipe's
+[Change a preset's default](../../../docs/recipes/snowball-rl.md#change-a-presets-default)
+procedure.
+
 ## Inspect saved answers
 
 Read existing answers before launching another run. Controls are named by preset, `commit`
@@ -115,7 +119,7 @@ posting text as required by their publication rules.
 ## Never
 
 - Stop or restart an Iris cluster, or cancel/resubmit a job without authorization.
-- Collect controls or edit pins, `PRESET_REVISION` or `GATE_REVISION` unless asked in the current thread.
+- Collect controls or edit pins, a preset revision or `GATE_REVISION` unless asked in the current thread.
 - Edit a preset, guard or tolerance to make a candidate pass.
 - Set `generator.enforce_eager=true` without a request; CUDA graphs affect speed measurement.
 - Claim a speed gain from speed-short alone, or a learning gain from a speed preset.

@@ -21,13 +21,13 @@ from finestore.rl.run_records import (
     read_attempts,
     register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import artifact_identity
+from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -38,6 +38,7 @@ from verifyit.spec import ExactSpec
 
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_recipe as recipe
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
@@ -54,17 +55,22 @@ def write_receipt(root: Path, receipt: dict) -> None:
     config = receipt["config"]
     export_root = config["artifacts"]["export_root"]
     attempt_id = config["run"]["attempt_id"]
-    record = read_attempt(export_root, attempt_id) or AttemptRecord(
-        run_id=config["run"]["id"],
-        attempt_id=attempt_id,
-        started_at=receipt["result"]["started_at"],
-        vllm_version="fixture-vllm",
-        metrics_started_at=receipt["result"]["started_at"],
+    facts = (
+        {
+            "started_at": receipt["result"]["started_at"],
+            "vllm_version": "fixture-vllm",
+            "metrics_started_at": receipt["result"]["started_at"],
+        }
+        if read_attempt(export_root, attempt_id) is None
+        else {}
     )
+    native = LaunchReceipt.model_validate(receipt)
     with DataStore.open(run_records_root(export_root)) as store:
-        write_attempt(
-            register_run_tables(store).attempts,
-            record.model_copy(update={"run_id": config["run"]["id"], "launch": LaunchReceipt.model_validate(receipt)}),
+        update_attempt(
+            store,
+            AttemptRecord(
+                run_id=config["run"]["id"], attempt_id=attempt_id, config=native.config, result=native.result, **facts
+            ),
         )
 
 
@@ -75,7 +81,7 @@ def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
     with DataStore.open(run_records_root(export_root)) as store:
         tables = register_run_tables(store)
         for record in records.values():
-            write_attempt(tables.attempts, record)
+            update_attempt(store, record)
         tables.metrics.extend(
             MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
             for step, values in metrics.items()
@@ -99,15 +105,15 @@ def selection(tmp_path, monkeypatch):
         gate,
         "CONTROLS",
         {
-            name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
+            name: tuple(replace(pin, revision=presets.PRESETS[name].revision) for pin in pins)
             for name, pins in gate.CONTROLS.items()
         },
     )
     monkeypatch.setattr(gate, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
-    root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
-    panel = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / presets.DEFAULT_EVAL_LITE_VERSION
+    training = {preset.tasks for preset in presets.PRESETS.values()}
+    panels = {preset.eval_lite for preset in presets.PRESETS.values()}
     summary = {
         "recipe": {"heldout": [{"version": "2026.10.23.1", "rows": 910}]},
         "training_rows": 100000,
@@ -115,22 +121,26 @@ def selection(tmp_path, monkeypatch):
         "full_validation_rows": 910,
         "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
     }
-    write_json(root / "summary.json", summary)
+    for binding in training:
+        write_json(Path(presets.selection_artifact(binding).path()) / "summary.json", summary)
     candidate = presets.selection_artifact(SELECTION_IDENTITY)
     candidate_summary = deepcopy(summary)
     candidate_summary["recipe"]["exclusions"] = [
-        {"uri": str(panel / presets.FULL_VALIDATION_FILENAME), "version": panel.name}
+        {"uri": str(Path(panel.path()) / presets.FULL_VALIDATION_FILENAME), "version": panel.version}
+        for binding in sorted(panels)
+        for panel in (presets.selection_artifact(binding),)
     ]
     write_json(Path(candidate.path()) / "summary.json", candidate_summary)
-    write_json(
-        panel / "summary.json",
-        {
-            "recipe": {},
-            "validation_rows": 100,
-            "full_validation_rows": 1500,
-            "grader_kind_counts": {"validation": {}, "full_validation": {}},
-        },
-    )
+    for binding in panels:
+        write_json(
+            Path(presets.selection_artifact(binding).path()) / "summary.json",
+            {
+                "recipe": {},
+                "validation_rows": 100,
+                "full_validation_rows": 1500,
+                "grader_kind_counts": {"validation": {}, "full_validation": {}},
+            },
+        )
     return candidate
 
 
@@ -166,25 +176,26 @@ def answer(task, score, *, tokens=1, error=None, low=0, high=1, status="verified
     return row
 
 
-def recorded_runs(selection, tmp_path, monkeypatch, request):
+def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    panel = Path(presets.selection_artifact(presets.EVALUATIONS["eval_lite"].source).path())
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {
-                    "task_id": f"task-{i}",
-                    "family": "small" if i == 0 else "large",
-                    "aaii_category": "format" if i == 0 else "coding",
-                    "agentic": False,
-                }
-                for i in range(1500)
-            ]
-        ),
-        panel / presets.TASK_MANIFEST_FILENAME,
-    )
+    for binding in {preset.eval_lite for preset in presets.PRESETS.values()}:
+        panel = Path(presets.selection_artifact(binding).path())
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "task_id": f"task-{i}",
+                        "family": "small" if i == 0 else "large",
+                        "aaii_category": "format" if i == 0 else "coding",
+                        "agentic": False,
+                    }
+                    for i in range(1500)
+                ]
+            ),
+            panel / presets.TASK_MANIFEST_FILENAME,
+        )
 
     @contextmanager
     def endpoint(**kwargs):
@@ -202,6 +213,35 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         spec=ExactSpec(("cat",)),
     )
 
+    templates = {}
+
+    def composed(preset, inputs):
+        key = (repr(preset), inputs.model_dump_json())
+        if key not in templates:
+            source_root = tmp_path / "composed" / str(len(templates))
+            source_root.mkdir(parents=True)
+            spec = recipe.run_spec(
+                preset,
+                name="fixture",
+                tasks=presets.selection_artifact(inputs.tasks) if inputs.tasks else None,
+                init=presets.published_artifact(inputs.init, revision=preset.revision) if inputs.init else None,
+                settings=tuple(map(presets.parse_setting, inputs.settings)),
+            )
+            step = recipe.run_step(preset, spec)
+            context = StepContext.for_run(
+                str(source_root), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+            )
+            document = source_root / "launch.yaml"
+            document.write_text(step.build_config(context).launch_config_yaml)
+            config = native_json(
+                "import json,sys\nfrom cloud.iris.launch_config import load_launch_config\n"
+                "from omegaconf import OmegaConf\n"
+                "print(json.dumps(OmegaConf.to_container(load_launch_config(sys.argv[1]), resolve=True)))\n",
+                [str(document)],
+            )
+            templates[key] = (source_root, config)
+        return templates[key]
+
     def write(
         preset_name: str,
         name,
@@ -217,24 +257,26 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         attempt_id="recorded-attempt",
     ):
         preset = presets.PRESETS[preset_name]
-        root = tmp_path / name / presets.PRESET_REVISION
+        root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
-        native = deepcopy(NATIVE_RECORD["receipt"])
-        launch, result = native["config"], native["result"]
+        inputs = inputs or gate.GateInputs(preset_name=preset.name)
+        source_root, config = composed(preset, inputs)
+        old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
-        launch["run"].update(
-            id=f"{name}-{presets.PRESET_REVISION}",
-            attempt_id=attempt,
-            mode="generate" if preset.recipe.layout.role_plan.generate_only else "train",
-        )
-        launch["artifacts"].update(export_root=str(root / "exports"), attempts_root=str(root / "attempts"))
-        launch["iris"]["max_retries"] = 0
-        launch["skyrl"]["trainer"]["logger"] = ["console", "records", "wandb"]
-        launch["iris"]["allocation"].update(num_nodes=preset.recipe.layout.role_plan.num_nodes, gpus_per_node=8)
-        launch["skyrl"]["trainer"].update(max_steps=preset.updates, seed=presets.SEED, callbacks=[])
-        launch["inputs"]["validation_data"] = []
-        launch["inputs"]["evaluation_data"] = {}
-        pin = gate.control_pins(preset.name)[0] if presets.gated(preset) else None
+        run_id = f"{name}-{preset.revision}"
+
+        def relocate(value):
+            if isinstance(value, dict):
+                return {key: relocate(child) for key, child in value.items()}
+            if isinstance(value, list):
+                return [relocate(child) for child in value]
+            if isinstance(value, str):
+                return value.replace(str(source_root), str(root)).replace(old_id, run_id).replace(old_attempt, attempt)
+            return value
+
+        native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
+        launch, result = native["config"], native["result"]
+        pin = gate.control_pins(preset)[0] if presets.gated(preset) else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
@@ -245,13 +287,12 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             dirty=False,
             command_line=["unrelated-command", "--preset", "train-long"],
         )
-        inputs = inputs or gate.GateInputs(preset_name=preset.name)
         write_json(root / gate.GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_json(
             root / RECORD_FILENAME,
             ArtifactRecord(
                 name=name,
-                version=presets.PRESET_REVISION,
+                version=preset.revision,
                 fingerprint=fingerprint,
                 result_type=result_type_name(SkyRLRun),
                 result=SkyRLRun(
@@ -307,50 +348,26 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 }
                 row.update({"generate/wall_seconds": 1.0, "generate/tokens_per_second_per_gpu": speed})
             stored_metrics[step] = row
-        default = presets.default_selection()
+        default = presets.default_selection(preset)
         selected = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
         for index, evaluation in enumerate(preset.evaluations):
-            source = evaluation.tasks(selected, default)
-            directory = Path(source.path())
+            source = evaluation.tasks(selected, default, preset.eval_lite)
+            sources = (
+                launch["inputs"]["validation_data"]
+                if index == 0
+                else launch["inputs"]["evaluation_data"][evaluation.name]
+            )
+            assert len(sources) == 1
+            descriptor = sources[0]
+            directory = Path(descriptor["uri"])
+            directory.mkdir(parents=True, exist_ok=True)
             count = evaluation.sample or presets.selection_summary(source)[f"{evaluation.file}_rows"]
             ids = [f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" for i in range(count)]
-            path = directory / f"{evaluation.file}.parquet"
+            path = directory / descriptor["relative_path"]
             if not path.exists():
                 pq.write_table(
                     pa.table({"task_spec": [task.model_copy(update={"id": item}).model_dump_json() for item in ids]}),
                     path,
-                )
-            binding = (
-                presets.sampled_tasks_step(source, evaluation.file, evaluation.sample, presets.SEED)
-                if evaluation.sample
-                else source
-            )
-            descriptor = deepcopy(NATIVE_RECORD["receipt"]["config"]["inputs"]["validation_data"][0])
-            descriptor.update(
-                uri=str(directory),
-                relative_path=path.name,
-                local_path=str(directory),
-                identity=artifact_identity(binding),
-            )
-            sampling = {
-                **launch["skyrl"]["generator"]["eval_sampling_params"],
-                "temperature": 0.0,
-                "max_generate_length": 8192,
-            }
-            if index:
-                launch["inputs"]["evaluation_data"][evaluation.name] = [descriptor]
-                launch["skyrl"]["trainer"]["callbacks"].append(
-                    {
-                        "type": "evaluation",
-                        "additional_evaluations": {
-                            evaluation.name: {"sampling_params": sampling, "n_samples_per_prompt": evaluation.answers}
-                        },
-                    }
-                )
-            else:
-                launch["inputs"]["validation_data"] = [descriptor]
-                launch["skyrl"]["generator"].update(
-                    eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling
                 )
             sessions = [(-1 if generating else preset.updates, score)]
             if evaluation.at_start:
