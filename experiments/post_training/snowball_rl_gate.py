@@ -46,7 +46,7 @@ from marin.rl.skyrl import (
     set_config_value,
     skyrl_cpu_command,
 )
-from marin.rl.skyrl_records import attempt_tracking, read_skyrl_metrics
+from marin.rl.skyrl_records import attempt_tracking, read_skyrl_metrics, read_stored_skyrl_receipt
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -129,7 +129,7 @@ def parse_requirement(text: str) -> Requirement:
     return Requirement(key, operator == ">=", bound)
 
 
-def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
+def validate_requirements(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
     """Validate a candidate's control pin and user requirements before GPU submission."""
     gated = presets.gated(preset)
     if requirements and (control or not gated):
@@ -142,6 +142,20 @@ def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, c
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
+
+
+def validate_candidate(preset: presets.Preset) -> None:
+    """Refuse stale pinned control configurations before submitting a candidate."""
+    pins = control_pins(preset)
+    defaults, _ = _current_configs(preset, GateInputs(preset_name=preset.name))
+    current = comparison_config(defaults)
+    for pin in pins:
+        for index in range(pin.runs):
+            path = control_path(preset, pin, index)
+            receipt = read_stored_skyrl_receipt(path)
+            if receipt is None:
+                raise InvalidComparison(f"control receipt is unavailable: {path}")
+            _check_control_config(receipt.native.config, current)
 
 
 def gate_inputs(
@@ -953,7 +967,7 @@ def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> s
     }
 
 
-def _config_exceptions(preset: presets.Preset, inputs: GateInputs, keys: set[str]) -> set[str]:
+def _setting_keys(inputs: GateInputs, keys: set[str]) -> set[str]:
     prefixes = []
     for text in inputs.settings:
         for setting in presets.setting_leaves(presets.parse_setting(text)):
@@ -962,28 +976,13 @@ def _config_exceptions(preset: presets.Preset, inputs: GateInputs, keys: set[str
                 prefix = "runtime.task_env." + setting.key.removeprefix("extra_env.")
             prefixes.append(prefix)
     allowed = {key for key in keys if any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)}
-    if inputs.init:
-        allowed.update({"inputs.model.uri", "inputs.model.identity"})
-    if inputs.tasks:
-        bindings = ["inputs.train_data", "skyrl.data.train_data"]
-        for index, evaluation in enumerate(preset.evaluations):
-            if evaluation.source != "tasks":
-                continue
-            if index == 0:
-                bindings.extend(("inputs.validation_data", "skyrl.data.val_data"))
-            else:
-                bindings.append(f"inputs.evaluation_data.{evaluation.name}")
-                bindings.extend(
-                    key.rsplit(".data_files.", 1)[0] + ".data_files"
-                    for key in keys
-                    if f".additional_evaluations.{evaluation.name}.data_files." in key
-                )
-        allowed.update(
-            key
-            for key in keys
-            if key.endswith((".uri", ".identity")) and any(key.startswith(prefix + ".") for prefix in bindings)
-        )
     return allowed
+
+
+def _check_control_config(config: dict, current: dict[str, object]) -> None:
+    differences = _changed_config_keys(comparison_config(config), current)
+    if differences:
+        raise InvalidComparison(f"control config differs from current preset defaults: {', '.join(sorted(differences))}")
 
 
 def _write_gate(
@@ -1049,7 +1048,7 @@ def _write_gate(
         current_config, expected_config = _current_configs(preset, inputs)
         current, expected = comparison_config(current_config), comparison_config(expected_config)
         changed = _changed_config_keys(current, expected)
-        explicit = _config_exceptions(preset, inputs, set(current) | set(expected))
+        explicit = _setting_keys(inputs, set(current) | set(expected))
         metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
         for candidate in runs:
             differences = _changed_config_keys(comparison_config(candidate.config), expected)
@@ -1058,13 +1057,7 @@ def _write_gate(
                     f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
                 )
         for candidate in controls:
-            recorded = comparison_config(candidate.config)
-            allowed = changed | _config_exceptions(preset, inputs, set(current) | set(recorded))
-            differences = _changed_config_keys(recorded, current) - allowed
-            if differences:
-                raise InvalidComparison(
-                    f"control config differs from current preset defaults: {', '.join(sorted(differences))}"
-                )
+            _check_control_config(candidate.config, current)
         comparisons = _compare(preset, runs, grouped, inputs.requirements)
         verdict, label = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -1141,17 +1134,6 @@ def _gate_artifact(
         for pin in pins
     )
     name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
-    attempts = []
-    for identity, path in zip(candidates, run_paths, strict=True):
-        try:
-            receipt = read_skyrl_launch_receipt(path)
-        except (FileNotFoundError, SkyRLReceiptLookupError):
-            state, attempt = "unresolved", None
-        else:
-            state = receipt.native.result.state if receipt else None
-            attempt = receipt.native.config["run"]["attempt_id"] if receipt else None
-        attempts.append({"run": identity, "native_state": state, "attempt_id": attempt})
-    name += "-evidence-" + fingerprint_hash(canonical_json(attempts))
     step = apply(
         name,
         _write_gate,
@@ -1171,16 +1153,36 @@ def _gate_artifact(
             config.update(ctx.runtime_arg("paths"))
         return config
 
-    return replace(
-        step,
-        build_config=build_config,
-        runtime_args={
-            "paths": {
-                "run_paths": run_paths,
-                "control_paths": tuple(tuple(path for _, path in group) for group in controls),
-            }
-        },
+    return _gate_with_evidence(
+        replace(
+            step,
+            build_config=build_config,
+            runtime_args={
+                "name": name,
+                "paths": {
+                    "run_paths": run_paths,
+                    "control_paths": tuple(tuple(path for _, path in group) for group in controls),
+                },
+            },
+        )
     )
+
+
+def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateReport]:
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    candidates = config["run_paths"]
+    run_paths = step.runtime_args["paths"]["run_paths"]
+    attempts = []
+    for identity, path in zip(candidates, run_paths, strict=True):
+        try:
+            receipt = read_skyrl_launch_receipt(path)
+        except (FileNotFoundError, SkyRLReceiptLookupError):
+            state, attempt = "unresolved", None
+        else:
+            state = receipt.native.result.state if receipt else None
+            attempt = receipt.native.config["run"]["attempt_id"] if receipt else None
+        attempts.append({"run": identity, "native_state": state, "attempt_id": attempt})
+    return replace(step, name=step.runtime_args["name"] + "-evidence-" + fingerprint_hash(canonical_json(attempts)))
 
 
 def gate_step(
@@ -1289,14 +1291,9 @@ def main(
     raise click.exceptions.Exit(EXIT_CODES[report.verdict])
 
 
-def completed_gate(
-    preset: presets.Preset, runs: Sequence[ArtifactStep], gate: ArtifactStep | None
-) -> ArtifactStep | None:
-    """Bind a gate to the current receipts of its completed native runs."""
-    if gate is None:
-        return None
-    config = gate.build_config(StepContext.for_fingerprint(gate.runtime_args, gate.deps))
-    return gate_step(preset, runs, inputs=config["inputs"])
+def completed_gate(gate: ArtifactStep[GateReport] | None) -> ArtifactStep[GateReport] | None:
+    """Bind current native attempt evidence to the gate identity fixed at submission."""
+    return _gate_with_evidence(gate) if gate is not None else None
 
 
 if __name__ == "__main__":

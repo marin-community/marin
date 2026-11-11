@@ -101,9 +101,10 @@ Re-scoring reads that file rather than interpreting a command line.
 The gate selects exact control names in `snowball_rl_gate.CONTROLS` at the selected preset's
 revision. Pins record the collection source and replicate count. Multiple pins pool deviations
 from each pin's own mean. A missing pin refuses submission with exit 4 and a collection command.
-Current default configurations are composed on CPU. Controls must match those defaults outside
-settings or input bindings the candidate explicitly changed; every candidate must match its
-recorded inputs. Config differences make the comparison INVALID and identify the differing keys.
+Current default configurations are composed on CPU. Every control must match those defaults in
+all compared keys; every candidate must match its recorded inputs. Submission checks every pinned
+control before starting a GPU job and refuses stale configurations with exit 4 and the differing
+keys. Config differences found during scoring make the comparison INVALID.
 `run.config_changes` lists requested settings, input bindings and derived configuration changes in JSON,
 Markdown and status.
 
@@ -156,15 +157,33 @@ against the control commit, or gives the reason a local git comparison is unavai
 
 ## Change a preset's default
 
-1. Edit the preset in `snowball_rl_presets.py`: `tasks`, `model`, `eval_lite` or `settings`.
-   Promote a winning `--set KEY=VALUE` by putting the same string in `settings`.
-2. Bump that preset's `revision`. Data-medium inherits learning-medium's setting and revision.
-3. Update that preset's native and envelope golden hashes in
-   `snowball_tests/test_snowball_rl.py` and verify its composed configuration.
-4. Collect the preset's controls from a clean checkout of the final source, then pin their
-   source, revision and count in `snowball_rl_gate.CONTROLS`.
-5. Run the leave-one-out check for every replicate, publish the control records, and update
-   the control table.
+1. Edit that preset's `tasks`, `model`, `eval_lite` or `settings` in `snowball_rl_presets.py`.
+   Each field starts with a shared default. To promote a winning setting for one preset, give
+   that preset `settings=(*_DEFAULT_SETTINGS, "trainer.policy.optimizer_config.lr=2.0e-6")`;
+   editing `_DEFAULT_SETTINGS` changes every preset that uses it.
+2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
+3. From the repository root, print the actual native/allocation and full-envelope hashes:
+
+   ```bash
+   uv run pytest -s -q -n 0 experiments/post_training/snowball_tests/test_snowball_rl.py::test_gated_presets_match_revisioned_native_configs
+   ```
+
+   A new revision intentionally fails until its printed pair is added under that preset in
+   the test's `revisions` table. Inspect the composed settings before accepting the pair.
+   The full-envelope hash includes actual execution memory and priority.
+4. Collect controls from a clean checkout of the final source. For example, replace `REVISION`
+   with learning-medium's revision and run:
+
+   ```bash
+   uv run python -m experiments.post_training.snowball_rl --preset learning-medium --version REVISION --control --replicates 4 --run --wait
+   ```
+
+   Pin that preset's source, revision and count in `snowball_rl_gate.CONTROLS`, preserving the
+   other entries. Use the exact short `base_commit` recorded in the controls' result provenance
+   (the collection checkout's `git rev-parse --short HEAD`), not a later pin-edit commit.
+   Its entry has the form `"learning-medium": (ControlPin("learning-medium", "BASE_COMMIT", "REVISION", 4),)`.
+5. Run `uv run python -m experiments.post_training.snowball_rl_gate --preset learning-medium --leave-out r0`
+   for each replicate (`r0` through `r3` in this example). Every leave-one-out verdict must PASS.
 
 ## Tasks and evaluation
 

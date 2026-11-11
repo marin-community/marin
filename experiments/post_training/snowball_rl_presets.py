@@ -268,7 +268,7 @@ def parse_setting(text: str) -> Setting:
 
 
 def setting_leaves(setting: Setting) -> tuple[Setting, ...]:
-    if isinstance(setting.value, Mapping):
+    if isinstance(setting.value, Mapping) and setting.value:
         return tuple(
             leaf
             for key, value in setting.value.items()

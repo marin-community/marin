@@ -420,11 +420,22 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
 
 
 @pytest.mark.parametrize(
-    "case,expected", [("pass", 0), ("fail", 1), ("invalid", 2), ("missing", 3), ("native-failed", 2), ("child", 0)]
+    "case,expected",
+    [
+        ("pass", 0),
+        ("fail", 1),
+        ("invalid", 2),
+        ("missing", 3),
+        ("native-failed", 2),
+        ("child", 0),
+        ("changed-source", 0),
+        ("stale-control", 4),
+        ("stale-control-no-wait", 4),
+    ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
-    controls(recorded_runs, "speed-medium")
+    roots = controls(recorded_runs, "speed-medium")
     preset = presets.PRESETS["speed-medium"]
     built = snowball.build_run(preset)
     source = recorded_runs(
@@ -439,16 +450,28 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         receipt["result"]["state"] = "failed"
         write_receipt(source, receipt)
         (source / "terminal.json").unlink()
+    if case.startswith("stale-control"):
+        receipt = json.loads((roots[-1] / "terminal.json").read_text())
+        receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
+        write_receipt(roots[-1], receipt)
     job = JobName.from_wire("/atqamar/coordinator-id-returned-by-iris")
 
     def finish(*args, **kwargs):
         if case not in ("missing", "native-failed"):
-            run(gate.completed_gate(preset, built.runs, built.gate))
+            run(gate.completed_gate(built.gate))
+            if case == "changed-source":
+                monkeypatch.setattr(
+                    Provenance,
+                    "capture",
+                    lambda *args, **kwargs: Provenance("tree-edited-after-submit", "commit-one", True, "branch", "test"),
+                )
         return SimpleNamespace(state=JobState.FAILED if case == "native-failed" else JobState.SUCCEEDED)
 
     jobs = {job: SimpleNamespace(wait=finish)}
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
+    if case.startswith("stale-control"):
+        client.submit.side_effect = AssertionError("stale controls reached the coordinator RPC")
     client.job.side_effect = lambda name: jobs[name]
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kwargs: nullcontext(client))
     monkeypatch.setattr(snowball, "open_iris_client", lambda **kwargs: nullcontext(client))
@@ -459,13 +482,22 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     try:
         result = CliRunner().invoke(
             snowball.main,
-            ["--preset", "speed-medium", "--version", presets.PRESETS["speed-medium"].revision, "--run", "--wait"],
+            [
+                "--preset",
+                "speed-medium",
+                "--version",
+                preset.revision,
+                "--run",
+                *(() if case == "stale-control-no-wait" else ("--wait",)),
+            ],
         )
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
+    if case.startswith("stale-control"):
+        assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if case == "child":
-        report = gate.completed_gate(preset, built.runs, built.gate)
+        report = gate.completed_gate(built.gate)
         assert Path(report.path(), gate.GATE_REPORT_FILENAME).exists()
         assert gate.GateReport.raw_load(report.path()).verdict == "pass"
 
@@ -557,6 +589,12 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         "initializer",
         "stale-default",
         "explicit-equal",
+        "control-setting",
+        "control-default-setting",
+        "control-initializer",
+        "control-tasks",
+        "control-revision",
+        "all-revisions",
         "untouched-sibling",
         "unbound-model",
         "unbound-data",
@@ -577,8 +615,9 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
 )
 def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recorded_runs, tmp_path, monkeypatch, case):
     short = {"staged-profile", "wrong-profile-control", "home-alias", "alias-sibling", "unbound-gsm8k"}
-    preset = presets.PRESETS["speed-short" if case in short else "learning-medium"]
-    control_roots = controls(recorded_runs, preset.name)
+    preset = presets.PRESETS[
+        "data-medium" if case == "control-tasks" else "speed-short" if case in short else "learning-medium"
+    ]
     setting = "trainer.policy.optimizer_config.lr=2.0e-6"
     inputs = gate.GateInputs(preset_name=preset.name, settings=(setting,))
     if case in short:
@@ -597,7 +636,11 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         )
     if case in ("cached-default", "cached-execution", "cached-source"):
         inputs = gate.GateInputs(preset_name=preset.name)
-    if case in ("initializer", "unbound-model"):
+    if case == "control-default-setting":
+        inputs = gate.GateInputs(preset_name=preset.name, settings=("trainer.policy.optimizer_config.lr=1.0e-6",))
+    if case == "control-tasks":
+        inputs = gate.GateInputs(preset_name=preset.name, tasks="fixture-selection@2026.11.10")
+    if case in ("initializer", "unbound-model", "control-initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         source = tmp_path / name / version
         initializer = SkyRLRun(
@@ -623,14 +666,36 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         )
         inputs = gate.GateInputs(preset_name=preset.name, init=f"{name}@{version}")
     if case in ("stale-default", "explicit-equal", "untouched-sibling"):
+        control_roots = controls(recorded_runs, preset.name)
         promoted = replace(preset, settings=(*preset.settings, setting))
         monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: promoted})
         if case == "stale-default":
             inputs = gate.GateInputs(preset_name=preset.name)
+    control_inputs = inputs if case in ("control-setting", "control-initializer", "control-tasks") else None
+    if case not in ("stale-default", "explicit-equal", "untouched-sibling"):
+        control_roots = controls(recorded_runs, preset.name, **({"inputs": control_inputs} if control_inputs else {}))
     name = f"users/test/native-{case}"
     candidate = recorded_runs(preset.name, name, inputs=inputs)
     fault_key = None
-    if case == "untouched-sibling":
+    if case in ("control-revision", "all-revisions"):
+        for root in ([control_roots[0]] if case == "control-revision" else [*control_roots, candidate]):
+            path = root / RECORD_FILENAME
+            record = json.loads(path.read_text())
+            record["version"] = "2026.11.10.1"
+            path.write_text(json.dumps(record))
+        fault_key = "preset revisions differ" if case == "control-revision" else "preset revision differs"
+    elif case == "control-default-setting":
+        document = json.loads((control_roots[0] / "terminal.json").read_text())
+        document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] = 5e-6
+        write_receipt(control_roots[0], document)
+        fault_key = "skyrl.trainer.policy.optimizer_config.lr"
+    elif case in ("control-setting", "control-initializer", "control-tasks"):
+        fault_key = {
+            "control-setting": "skyrl.trainer.policy.optimizer_config.lr",
+            "control-initializer": "inputs.model.uri",
+            "control-tasks": "inputs.train_data",
+        }[case]
+    elif case == "untouched-sibling":
         document = json.loads((control_roots[0] / "terminal.json").read_text())
         document["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["weight_decay"] = 0.1
         write_receipt(control_roots[0], document)
@@ -716,12 +781,12 @@ def test_gate_compares_natively_composed_optimizer_and_initializer_changes(recor
         assert updated["verdict"] == "invalid", updated
         assert changed_key in updated["reason"]
         assert updated["report"] != report["report"]
-    elif fault_key is not None or case == "stale-default":
+    elif fault_key is not None or case in ("stale-default", "explicit-equal"):
         assert report["verdict"] == "invalid", report
         assert (fault_key or "skyrl.trainer.policy.optimizer_config.lr") in report["reason"]
     else:
         assert (report["verdict"], report["label"]) == ("pass", "no change"), report
-        if case in ("initializer", "optimizer", "explicit-equal", "batch"):
+        if case in ("initializer", "optimizer", "batch"):
             expected_key = {
                 "initializer": "inputs.model.uri",
                 "batch": "skyrl.trainer.train_batch_size",
