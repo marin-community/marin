@@ -30,6 +30,13 @@ from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
 from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
 from shellbox.image import RegistryImage
+from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
+    CommandSemantics,
+    MachineSpec,
+    NetworkPolicy,
+    check_execution_requirements,
+)
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
@@ -50,6 +57,9 @@ class SnapshotIdentityCount:
     distinct: int
     sizes: dict[str, int] = field(default_factory=dict)
     failures: list[tuple[str, str]] = field(default_factory=list)
+    # Tasks whose declared execution requirements the Daytona backend refuses, so a
+    # snapshot count alone must not call them safe.
+    execution_failures: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _machine_resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> Resources:
@@ -143,6 +153,41 @@ def _verifier_files(spec: Mapping) -> Iterator[tuple[str, bytes, int]]:
             )
 
 
+@dataclass(frozen=True)
+class _DeclaredRequirements:
+    """The slice of a lowered spec's environment that execution checks read."""
+
+    capabilities: tuple[str, ...]
+    command_semantics: str | None
+    docker_image: str | None
+
+
+def daytona_execution_failure(requirements: Mapping) -> str | None:
+    """Why the Daytona backend would refuse this task's declared requirements, if it would.
+
+    A converted task that only names an image and ordinary capabilities passes; one that
+    declares an unsupported capability (a container runtime, for instance) or needs the
+    account to build its archived Dockerfile does not, whatever its snapshot count is.
+    """
+    declared = _DeclaredRequirements(
+        capabilities=tuple(requirements.get("capabilities") or ()),
+        command_semantics=requirements.get("command_semantics"),
+        docker_image=requirements.get("docker_image"),
+    )
+    spec = MachineSpec(source=RegistryImage(declared.docker_image), env={}, network=NetworkPolicy.ALLOW)
+    try:
+        check_execution_requirements(
+            declared,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=declared.docker_image,
+        )
+    except UnsupportedMachineSpec as error:
+        return str(error)
+    return None
+
+
 def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
     """Count snapshot identities for lowered Harbor task specs.
 
@@ -153,6 +198,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
+    execution_failures: list[tuple[str, str]] = []
     for task_id, spec in tasks:
         task = spec.get("task") or {}
         runtime = spec.get("runtime") or {}
@@ -194,6 +240,9 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                     memory_mb=task_machine_spec.get("memory_mb"),
                     storage_mb=task_machine_spec.get("storage_mb"),
                 )
+                failure = daytona_execution_failure(requirements)
+                if failure is not None:
+                    execution_failures.append((task_id, failure))
                 # Identities are derived while the context exists: the production hash
                 # reads the Dockerfile and every file of the staged tree.
                 for machine in (verifier, task_machine):
@@ -204,7 +253,9 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                     sizes[name] += 1
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
-    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
+    return SnapshotIdentityCount(
+        distinct=len(sizes), sizes=dict(sizes), failures=failures, execution_failures=execution_failures
+    )
 
 
 def count_registry_identities(references: Iterable[str]) -> SnapshotIdentityCount:
