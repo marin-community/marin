@@ -331,7 +331,7 @@ function renderPipeline(pipeline, ideas) {
               { class: 'pipe-idea' },
               el('span', { class: 'mono muted' }, `#${i.id}`),
               i.registry_id ? el('a', { class: 'xid mono', href: `#status/${i.registry_id}` }, i.registry_id) : null,
-              el('span', { class: 'nm' }, i.title ?? i.body.trim().split('\n')[0]),
+              el('span', { class: 'nm' }, i.title),
               i.url ? link(i.url, 'GitHub ↗') : null,
             ),
           )
