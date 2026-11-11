@@ -11,6 +11,8 @@ from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     IndependentQC,
     OracleValidation,
+    OversightEvidence,
+    OversightLevel,
     PipelineReference,
     SourceDeclaration,
     daytona_verdict,
@@ -154,6 +156,10 @@ class SourceInfo:
     """A campaign run that executed this source on the Daytona RL org, when one exists."""
 
     oracle_validation: OracleValidation | None = None
+
+    oversight: OversightEvidence | None = None
+    """The review this source's admission rests on, with its evidence pointers."""
+
     """How execution was qualified when the source ships no oracle solutions.
 
     ``executed`` runs the shipped oracle solutions; ``verifier_executed`` runs the
@@ -253,6 +259,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
             oracle_validation=info.oracle_validation,
+            oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
+            oversight_evidence=info.oversight,
             daytona_snapshot_threshold=(
                 DAYTONA_SAFE_SNAPSHOT_LIMIT if info.daytona_snapshot_count is not None else None
             ),

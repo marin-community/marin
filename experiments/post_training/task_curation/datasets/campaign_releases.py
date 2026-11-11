@@ -15,7 +15,13 @@ bytes or verifier material, so no machine can execute these tasks from the publi
 release alone. Treat every entry as a data pointer, not a runnable pipeline.
 """
 
-from finestore.rl.curation import IndependentQC, OracleValidation, Verdict
+from finestore.rl.curation import (
+    IndependentQC,
+    OracleValidation,
+    OversightEvidence,
+    OversightLevel,
+    Verdict,
+)
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -103,6 +109,18 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=0,
                 oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="Snowball Smartie RL",
+                    recipe_revision="calibforge_rebuild.py @ 817f7dbd00",
+                    verification=(
+                        "setup fidelity executed on all 1,357 tasks (1,357 pass) and verifier liveness on "
+                        "76 sampled tasks drawn across all seven bases (76 negative verdicts, reward 0.0, "
+                        "no infrastructure errors)"
+                    ),
+                    reviewed=1357,
+                    admitted=1357,
+                    level=OversightLevel.SAMPLE,
+                ),
                 notes=(
                     "1,357 CalibForge V1 tasks rebuilt onto seven digest-pinned base images, with fixtures "
                     "staged through task resources and environment_requirements.setup_commands. Upstream: "

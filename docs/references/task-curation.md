@@ -894,3 +894,20 @@ The catalog inherits its output directory's retention policy. A seven-day
 temporary prefix must be promoted or imported before expiry for permanent
 Atlas history. Repeated writes cannot keep old immutable FineStore shards
 alive under object-age lifecycle deletion.
+
+## Curation modes and oversight levels
+
+`CurationSummary.mode` is a `CurationMode`, and it says how much of a source a pass
+examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample executed
+end to end, verifiers included) or `FULL` (every task executed end to end). Only
+`SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
+(`CurationSummary` rejects it) and its corpus is not selectable for training.
+
+Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
+`OversightEvidence` that points at the campaign, the recipe revision and the
+verification summary behind it. `none` means inventory only: the source is listed but
+not admitted. The level is the weakest review the admission rests on, so a cohort whose
+setup fidelity ran on every task but whose verifier liveness ran on a sample is
+`sample`, not `full`. `independent_qc` stays separate evidence about the upstream
+release and does not raise the level.
+

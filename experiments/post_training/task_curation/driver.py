@@ -256,7 +256,7 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
 
 def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_dir: Path | None, do_run: bool) -> None:
     if corpus.population != "admitted":
-        raise click.UsageError("Task selection requires an admitted corpus from FULL curation")
+        raise click.UsageError("Task selection requires an admitted corpus from SAMPLE or FULL curation")
     curated = {
         source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
         for index, (source_id, root) in enumerate(sorted(corpus.roots.items()))

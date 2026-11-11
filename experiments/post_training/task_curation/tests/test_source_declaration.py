@@ -5,7 +5,18 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT, DaytonaSafety, OracleValidation
+import pytest
+from finestore.rl.curation import (
+    DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    AdmissionCounts,
+    CurationMode,
+    CurationSummary,
+    DaytonaSafety,
+    OracleValidation,
+    OversightEvidence,
+    OversightLevel,
+    mode_admits_training,
+)
 
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.sources import all_sources
@@ -67,3 +78,40 @@ def test_oracle_validation_projects_into_the_declaration():
 def test_a_source_without_oracles_reports_skipped_until_qualified():
     declaration = all_sources()["Campaign Release:smartie-calibforge-admitted"].declaration
     assert declaration.oracle_validation is OracleValidation.SKIPPED
+
+
+def test_oversight_level_projects_with_its_evidence():
+    info = SourceInfo(
+        id="trove:reviewed",
+        title="Reviewed",
+        origin="fixture",
+        tags=("agentic",),
+        oversight=OversightEvidence(campaign="campaign", verification="1,357 of 1,357", level=OversightLevel.SAMPLE),
+    )
+    declaration = RlDataSource(info=info).declaration
+    assert declaration.oversight is OversightLevel.SAMPLE
+    assert declaration.oversight_evidence.campaign == "campaign"
+    assert RlDataSource(info=SourceInfo(id="trove:inv", title="Inv", origin="fixture")).declaration.oversight is (
+        OversightLevel.NONE
+    )
+
+
+def test_only_sample_or_full_curation_admits_and_selects():
+    assert not mode_admits_training(CurationMode.QUICK)
+    assert mode_admits_training(CurationMode.SAMPLE)
+    assert mode_admits_training(CurationMode.FULL)
+    summary = {
+        "status": "complete",
+        "source_revision": None,
+        "recipe_revision": None,
+        "raw_population_count": None,
+        "raw_sample_count": None,
+        "processed_rows": None,
+        "unprocessed_rows": None,
+        "verification": None,
+    }
+    with pytest.raises(ValueError, match="QUICK curation cannot carry admitted tasks"):
+        CurationSummary(mode=CurationMode.QUICK, admission_counts=AdmissionCounts(admitted=1), **summary)
+    assert CurationSummary(mode=CurationMode.SAMPLE, admission_counts=AdmissionCounts(admitted=1), **summary).mode is (
+        CurationMode.SAMPLE
+    )

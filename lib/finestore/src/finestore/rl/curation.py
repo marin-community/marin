@@ -116,6 +116,48 @@ def daytona_verdict(*, snapshot_count: int | None, execution_failures: int | Non
     return DaytonaSafety.SAFE
 
 
+class CurationMode(StrEnum):
+    """How much of a source a curation pass examined."""
+
+    QUICK = "quick"
+    """Inventory or a spot check. Never admits tasks and never selects for training."""
+
+    SAMPLE = "sample"
+    """A documented sample was executed end to end, including its verifiers."""
+
+    FULL = "full"
+    """Every task was executed end to end, including its verifier."""
+
+
+class OversightLevel(StrEnum):
+    """The weakest form of review a source's admission rests on."""
+
+    NONE = "none"
+    """Inventory only: no execution evidence, so the source is not selectable."""
+
+    SAMPLE = "sample"
+    """Execution was verified on a documented sample of tasks."""
+
+    FULL = "full"
+    """Execution was verified on every task."""
+
+
+class OversightEvidence(CatalogRecord):
+    """The pointers an oversight level rests on, so a reader can check it."""
+
+    campaign: str | None = None
+    recipe_revision: str | None = None
+    verification: str
+    level: OversightLevel = OversightLevel.NONE
+    reviewed: int | None = None
+    admitted: int | None = None
+
+
+def mode_admits_training(mode: "CurationMode") -> bool:
+    """Whether a curation pass may admit tasks and be selected for training."""
+    return mode is not CurationMode.QUICK
+
+
 class OracleValidation(StrEnum):
     """How an admitted source was qualified when it ships no oracle solutions."""
 
@@ -159,6 +201,9 @@ class SourceDeclaration(CatalogRecord):
     daytona_count_basis: str | None = None
     # How execution was qualified when the source ships no oracle solutions.
     oracle_validation: OracleValidation | None = None
+    # The weakest review behind the admission, with the pointers that establish it.
+    oversight: OversightLevel = OversightLevel.NONE
+    oversight_evidence: OversightEvidence | None = None
 
 
 class AdmissionCounts(CatalogRecord):
@@ -188,7 +233,7 @@ class ControlSummary(CatalogRecord):
 
 class CurationSummary(CatalogRecord):
     status: str
-    mode: str
+    mode: CurationMode
     source_revision: str | None
     recipe_revision: str | None
     raw_population_count: int | None
@@ -197,6 +242,13 @@ class CurationSummary(CatalogRecord):
     unprocessed_rows: int | None
     admission_counts: AdmissionCounts
     verification: ControlSummary | None
+
+    @model_validator(mode="after")
+    def _quick_curation_admits_nothing(self) -> "CurationSummary":
+        """A spot check has no admitted tasks to report."""
+        if self.mode is CurationMode.QUICK and self.admission_counts.admitted:
+            raise ValueError("QUICK curation cannot carry admitted tasks")
+        return self
 
 
 class ModelReference(CatalogRecord):
