@@ -369,6 +369,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install local sandbox tools
         run: |
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
@@ -393,6 +394,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install local sandbox tools
         run: |
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
