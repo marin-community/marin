@@ -4,6 +4,7 @@
 """Exercise the Daytona adapter against a local process and filesystem fake."""
 
 import asyncio
+import math
 import os
 import shlex
 import shutil
@@ -12,6 +13,7 @@ import stat
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +30,7 @@ from daytona import (
     DaytonaNotFoundError,
 )
 from daytona_api_client_async import SnapshotState
+from shellbox.backends.daytona.environment import DaytonaTaskEnvironment
 from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
@@ -35,9 +38,23 @@ from shellbox.backends.daytona.machine import (
     DaytonaNetworkPolicy,
     _create_sandbox,
 )
+from shellbox.backends.daytona.snapshot import (
+    list_snapshots,
+    purge_stale_snapshots,
+    snapshot_name,
+    snapshot_resources,
+    task_snapshot_source,
+)
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    DockerImage,
+    ExitReason,
+    MachineSpec,
+    NetworkPolicy,
+    UnsupportedMachineSpec,
+)
 
 
 @pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
@@ -980,3 +997,152 @@ def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> Non
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert client.params is None
     assert client.closed
+
+
+def _account_snapshot(name: str, *, last_used_at, general: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        general=general,
+        last_used_at=last_used_at,
+        state=SnapshotState.ACTIVE,
+        cpu=2,
+        mem=4,
+        disk=10,
+        gpu=0,
+        organization_id="fixture",
+        error_reason=None,
+    )
+
+
+class SnapshotAccount:
+    """Paginated, mutable snapshot inventory for operational tests."""
+
+    def __init__(self, snapshots=()):
+        self.snapshots = {snapshot.name: snapshot for snapshot in snapshots}
+        self.used_on_get = None
+
+    async def get(self, name):
+        if name not in self.snapshots:
+            raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+        snapshot = self.snapshots[name]
+        if self.used_on_get is not None:
+            snapshot.last_used_at = self.used_on_get
+        return snapshot
+
+    async def list(self, page=None, limit=None):
+        size = limit or 100
+        current = page or 1
+        ordered = list(self.snapshots.values())
+        return SimpleNamespace(
+            items=ordered[(current - 1) * size : current * size],
+            total=len(ordered),
+            page=current,
+            total_pages=max(1, math.ceil(len(ordered) / size)),
+        )
+
+    async def delete(self, snapshot):
+        del self.snapshots[snapshot.name]
+
+
+def test_snapshot_identity_tracks_rounded_resources_and_image_source() -> None:
+    image = RegistryImage("fixture@sha256:" + "a" * 64)
+    rounded = snapshot_resources(cpus=2, memory_mb=2049, storage_mb=1025, gpus=0)
+    assert (rounded.cpu, rounded.memory, rounded.disk, rounded.gpu) == (2, 3, 2, None)
+
+    name = snapshot_name(image, rounded)
+    assert name.startswith("shellbox-")
+    assert len(name) == len("shellbox-") + 40
+    assert name == snapshot_name(
+        RegistryImage(image.reference),
+        snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2048, gpus=0),
+    )
+    assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3073, storage_mb=2048, gpus=0))
+    assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2049, gpus=0))
+    assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2048, gpus=1))
+
+
+def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
+    assert task_snapshot_source("fixture:tag", tmp_path) == RegistryImage("fixture:tag")
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\n")
+    assert task_snapshot_source(None, tmp_path) == DockerfileSource(tmp_path.resolve(), dockerfile.resolve())
+
+    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt\n")
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        task_snapshot_source(None, tmp_path)
+
+    with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
+        task_snapshot_source(None, tmp_path / "absent")
+
+
+def test_task_environment_builds_the_machine_spec_and_snapshot_request(tmp_path) -> None:
+    environment = DaytonaTaskEnvironment(
+        environment_dir=tmp_path,
+        docker_image="fixture:tag",
+        workdir="/workspace",
+        env={"TASK_VALUE": "daytona"},
+        allow_internet=False,
+        cpus=2,
+        memory_mb=2049,
+        storage_mb=1025,
+    )
+
+    spec = environment.machine_spec()
+    request = environment.snapshot_request()
+    assert (spec.workdir, spec.env) == ("/workspace", {"TASK_VALUE": "daytona"})
+    assert spec.network is NetworkPolicy.DENY
+    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (2, 2049, 1025)
+    assert request.source == spec.source
+    assert request.name == snapshot_name(request.source, request.resources)
+    assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (2, 3, 2)
+
+
+def test_list_snapshots_reads_every_page(monkeypatch) -> None:
+    monkeypatch.setattr("shellbox.backends.daytona.snapshot.SNAPSHOT_PAGE_SIZE", 2)
+    account = SnapshotAccount([_account_snapshot(f"snapshot-{index}", last_used_at=None) for index in range(5)])
+
+    names = [snapshot.name for snapshot in asyncio.run(list_snapshots(SimpleNamespace(snapshot=account)))]
+
+    assert names == [f"snapshot-{index}" for index in range(5)]
+
+
+def test_purge_stale_snapshots_deletes_only_stale_account_entries() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount(
+        [
+            _account_snapshot("stale", last_used_at=now - timedelta(hours=2)),
+            _account_snapshot("boundary", last_used_at=now - timedelta(hours=1)),
+            _account_snapshot("fresh", last_used_at=now - timedelta(minutes=10)),
+            _account_snapshot("general", last_used_at=now - timedelta(hours=5), general=True),
+            _account_snapshot("unknown", last_used_at=None),
+        ]
+    )
+
+    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account), now=now))
+
+    assert report.deleted == ("stale",)
+    assert report.unclassified == ("unknown",)
+    assert report.remaining == ()
+    assert set(account.snapshots) == {"boundary", "fresh", "general", "unknown"}
+
+
+def test_purge_revalidates_last_use_before_deleting() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount([_account_snapshot("candidate", last_used_at=now - timedelta(hours=2))])
+    account.used_on_get = now
+
+    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account), now=now))
+
+    assert report.deleted == ()
+    assert report.skipped == ("candidate",)
+    assert "candidate" in account.snapshots
+
+
+def test_daytona_network_policy_parses_declarative_fields() -> None:
+    assert DaytonaNetworkPolicy.from_config({"mode": "block_all"}).parameters() == {"network_block_all": True}
+    assert DaytonaNetworkPolicy.from_config({"mode": "domain_allow_list", "value": "example.org"}).parameters() == {
+        "domain_allow_list": "example.org"
+    }
+    with pytest.raises(ValueError, match="Unknown Daytona network policy fields"):
+        DaytonaNetworkPolicy.from_config({"mode": "block_all", "extra": "value"})

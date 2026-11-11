@@ -71,43 +71,110 @@ requirement. See the source Jupiter runbook below for that workflow.
 
 ## Snapshot preflight and reclamation
 
-Read the account's current quota and the pinned launcher's snapshot naming and
-cleanup behavior before submission. Snapshot quota and live sandbox capacity
-are separate limits. A successful GPU allocation proves neither is available.
+Snapshots are identified by Shellbox, not by individual launchers. One snapshot
+covers one image source (a registry image, or a Docker build context with its
+Dockerfile contents) and one CPU, memory, disk and GPU request. Memory and disk
+round up to whole GiB. The name is `shellbox-` plus the first 40 hex characters
+of `sha256(image_source_key(source) + json(resources))`, so a changed image,
+context or resource request selects a different snapshot. Harbor passes its task
+image and resource values to Shellbox and does not name, round or build
+snapshots itself.
 
-1. Inventory snapshots in the intended account, including every result page.
-   Record exact names/IDs, state, image provenance, and available usage metadata.
-   In the Daytona Python SDK, use `client.snapshot.list(page=..., limit=...)`
-   through `total_pages`, then `client.snapshot.get(name)` before deletion.
-   `organization_id` identifies ownership; `general=True` marks provider-owned
-   general snapshots, which are outside account cleanup scope. Resolve the RL
-   account through the configured RL credential and compare ownership metadata;
-   never substitute another account's key to overcome a quota limit.
+Use `shellbox-daytona-snapshots` from a checkout instead of ad-hoc SDK scripts.
+It reads credentials from an explicit environment variable and never falls back
+to the SDK's ambient account selection:
+
+```bash
+# RL account used by training.
+: "${DAYTONA_RL_API_KEY:?Load the dedicated RL key through the configured secret provider}"
+export DAYTONA_TARGET="<the configured target>"
+
+uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+  --api-key-env DAYTONA_RL_API_KEY inventory
+```
+
+Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inspect the eval account used for
+declarative image builds. `--target` overrides `DAYTONA_TARGET`. `--api-url`
+overrides `DAYTONA_API_URL`.
+
+Read the account's current quota and inventory before submission. Snapshot quota
+and live sandbox capacity are separate limits. A successful GPU allocation proves
+neither is available.
+
+1. Inventory snapshots in the intended account, including every result page:
+
+   ```bash
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+     --api-key-env DAYTONA_RL_API_KEY inventory --json
+   ```
+
+   The command paginates through the inventory and reports state, organization
+   ownership, resources, last use and whether each snapshot is stale, fresh,
+   unclassified or provider-owned (`general`). `general=true` snapshots are
+   outside account cleanup scope. Never substitute another account's key to
+   overcome a quota limit.
 2. Determine the snapshots required by the dataset and pinned backend. Count
    distinct environment contents, including fixtures, rather than assuming one
-   snapshot per task or counting Dockerfiles alone. Check whether required
-   snapshots already exist and are usable.
+   snapshot per task or counting Dockerfiles alone. Give the command the task
+   environments and it derives exactly the names above:
+
+   ```bash
+   cat > /tmp/required-snapshots.json <<'JSON'
+   [
+     {"docker_image": "ghcr.io/marin-community/task@sha256:...", "cpus": 4, "memory_mb": 8192, "storage_mb": 20480},
+     {"environment_dir": "experiments/data/tasks/example/environment", "cpus": 2}
+   ]
+   JSON
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+     --api-key-env DAYTONA_RL_API_KEY plan --specs /tmp/required-snapshots.json
+   ```
+
+   `plan` reports each required name as `missing` or its current state. Use
+   `--specs -` to read the JSON from stdin. Creating missing snapshots is the
+   preflight itself:
+
+   ```bash
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+     --api-key-env DAYTONA_EVAL_API_KEY ensure --specs /tmp/required-snapshots.json
+   ```
+
+   `ensure` waits for every snapshot to become active. Dockerfile sources use
+   the Daytona declarative-build path, so the selected account must allow builds.
 3. On every snapshot check, classify a snapshot as stale when its last use was
    more than one hour ago (`now_utc - last_used_utc > 3600 seconds`). Use actual
    last-use evidence, not creation time, snapshot state, or an unfamiliar name.
    Exactly one hour does not exceed the threshold. If last-use evidence is
    missing or ambiguous, report that snapshot as unclassified; do not invent a
-   timestamp or silently treat it as fresh.
-   The SDK exposes the provider timestamp as `Snapshot.last_used_at`; require a
-   timezone-aware value and compare it in UTC.
+   timestamp or silently treat it as fresh. The command uses the provider's
+   timezone-aware `last_used_at` value and compares it in UTC.
 4. Purge **all stale snapshots** in the authorized account on every check,
    whether or not quota is exhausted. Do not stop after freeing the slots needed
-   for the next launch. Enumerate exact targets and revalidate last use before
-   deletion so a snapshot used since the inventory is not deleted from stale
-   evidence. Record the last-use evidence and deletion result for every target.
-   `client.snapshot.delete(snapshot)` can return while state is `REMOVING`.
-   Confirm disappearance in a subsequent inventory before reporting deletion
-   complete; do not repeat the deletion merely because removal is asynchronous.
+   for the next launch:
+
+   ```bash
+   # Preview exact targets first.
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+     --api-key-env DAYTONA_RL_API_KEY purge
+   # Delete them. Every target is revalidated immediately before deletion.
+   uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshots \
+     --api-key-env DAYTONA_RL_API_KEY purge --apply
+   ```
+
+   `purge` re-reads each target's last use so a snapshot used since the inventory
+   is kept. Provider deletion is asynchronous: `removal pending <name>` means the
+   delete was accepted but a follow-up inventory still observes it. Do not repeat
+   the deletion merely because removal is asynchronous.
 5. Re-inventory after cleanup. Report remaining stale targets and deletion
    failures rather than claiming cleanup succeeded. Recheck quota, create any
-   required snapshots that are now missing, and verify their usable state before
-   launching trials. A reference in a future launch configuration alone does not
-   exempt an unused snapshot from the one-hour purge rule.
+   required snapshots that are now missing with `ensure`, and verify their active
+   state before launching trials. A reference in a future launch configuration
+   alone does not exempt an unused snapshot from the one-hour purge rule.
+
+`--min-idle-seconds` changes the idle threshold for a deliberate one-off check;
+the default is 3600 and matches the policy. The same operations are available as
+Python entrypoints from `shellbox.backends.daytona.snapshot` (`list_snapshots`,
+`stale_snapshots`, `purge_stale_snapshots`, `snapshot_name`) when a launcher must
+embed them.
 
 Existing authorization to remove stale snapshots need not be requested again.
 The default one-hour rule and full stale-set purge were explicitly supplied by
@@ -125,9 +192,10 @@ Daytona SDK is unavailable. That implementation does not satisfy the newer
 one-hour, all-stale-account-snapshots policy. Run the account-wide check above
 with an installed SDK until the selected launcher implements the current rule.
 
-Use the pinned provider SDK or its supported management interface for remote
+Use the pinned provider SDK through these Shellbox entrypoints for remote
 snapshot operations. Harbor's `cache clean` command cleans local Docker images
 and the local Harbor cache; it is not a Daytona snapshot-quota remedy.
+
 
 Quota exhaustion can fail every trial before scoring. Inspect an actual trial
 exception and preserve it separately from model errors. After any backend or

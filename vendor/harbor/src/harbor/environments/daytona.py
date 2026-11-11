@@ -6,10 +6,9 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from functools import partial
 from pathlib import Path
 
-from daytona import AsyncDaytona, DaytonaConfig
+from daytona import AsyncDaytona
 
 from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
@@ -33,15 +32,15 @@ from harbor.environments.model_relay import (
 )
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
+from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.environment import DaytonaTaskEnvironment
 from shellbox.backends.daytona.machine import (
     DEFAULT_SANDBOX_TTL_MINUTES,
     DaytonaMachine,
     DaytonaMachineFactory,
-    DaytonaNetworkMode,
     DaytonaNetworkPolicy,
 )
-from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import MachineSpec, NetworkPolicy
+from shellbox.backends.daytona.snapshot import task_snapshot_source
 from shellbox.process_session import (
     acquire_owned,
     await_cleanup,
@@ -74,31 +73,19 @@ class DaytonaEnvironment(BaseEnvironment):
             )
         policy = None
         if network_policy is not None:
-            if network_policy.keys() - {"mode", "value"}:
-                raise ValueError("Unknown Daytona network policy fields")
-            policy = DaytonaNetworkPolicy(
-                DaytonaNetworkMode(network_policy["mode"]), network_policy.get("value")
-            )
+            policy = DaytonaNetworkPolicy.from_config(network_policy)
         if client_factory is None:
             capabilities: HostCapabilities = kwargs.get(
                 "host_capabilities", HostCapabilities()
             )
             connection = capabilities.daytona
-            if (
-                connection is None
-                or not connection.api_key
-                or not connection.api_url
-                or not connection.target
-            ):
+            if connection is None:
                 raise ValueError("Daytona requires an explicit host connection")
-            client_factory = partial(
-                AsyncDaytona,
-                DaytonaConfig(
-                    api_key=connection.api_key,
-                    api_url=connection.api_url,
-                    target=connection.target,
-                ),
-            )
+            client_factory = DaytonaConnection(
+                api_key=connection.api_key or "",
+                api_url=connection.api_url,
+                target=connection.target or "",
+            ).client_factory()
         self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,
@@ -134,11 +121,9 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox Daytona supports single-container tasks; use local for Compose service groups"
             )
-        if (
-            not self.task_env_config.docker_image
-            and not (self.environment_dir / "Dockerfile").is_file()
-        ):
-            raise ValueError("Daytona task requires a registry image or Dockerfile")
+        task_snapshot_source(
+            self.task_env_config.docker_image, self.environment_dir
+        )
         paths = EnvironmentPaths()
         allowed = {
             str(path)
@@ -151,6 +136,19 @@ class DaytonaEnvironment(BaseEnvironment):
         if any(str(mount["target"]) not in allowed for mount in self._mounts):
             raise ValueError("Shellbox Daytona does not support custom host mounts")
 
+    def _task_environment(self) -> DaytonaTaskEnvironment:
+        return DaytonaTaskEnvironment(
+            environment_dir=self.environment_dir,
+            docker_image=self.task_env_config.docker_image,
+            workdir=self.task_env_config.workdir or "",
+            env=self._merge_env(None) or {},
+            allow_internet=self.task_env_config.allow_internet,
+            cpus=self._effective_cpus,
+            memory_mb=self._effective_memory_mb,
+            storage_mb=self._effective_storage_mb,
+            gpus=self._effective_gpus,
+        )
+
     async def start(
         self, force_build: bool, *, service_tasks: asyncio.TaskGroup
     ) -> None:
@@ -158,26 +156,7 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox snapshots are immutable; change the prepared image or build inputs"
             )
-        source = (
-            RegistryImage(self.task_env_config.docker_image)
-            if self.task_env_config.docker_image
-            else DockerfileSource(
-                self.environment_dir, self.environment_dir / "Dockerfile"
-            )
-        )
-        spec = MachineSpec(
-            source=source,
-            workdir=self.task_env_config.workdir or "",
-            env=self._merge_env(None) or {},
-            network=(
-                NetworkPolicy.ALLOW
-                if self.task_env_config.allow_internet
-                else NetworkPolicy.DENY
-            ),
-            cpus=self._effective_cpus,
-            memory_mb=self._effective_memory_mb,
-            storage_mb=self._effective_storage_mb,
-        )
+        environment = self._task_environment()
         judge, candidate = task_model_relays(
             model_endpoint=self.model_endpoint,
             model_name=self.model_name,
@@ -185,12 +164,14 @@ class DaytonaEnvironment(BaseEnvironment):
             candidate_model_name=self.candidate_model_name,
             authentication=self.host_capabilities.model_authentication,
             judge_access=self.judge_access,
-            environments=(spec.env,),
+            environments=(dict(environment.env),),
         )
         self._judge = judge
         self._stopping = None
         self.machine = await acquire_owned(
-            asyncio.create_task(self.factory.create(spec))
+            asyncio.create_task(
+                self.factory.create(environment.machine_spec())
+            )
         )
         try:
             await start_model_relays(

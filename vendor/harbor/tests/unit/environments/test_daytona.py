@@ -40,7 +40,8 @@ from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
-from shellbox.machine import Command, MachineSpec, PackageSpec
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -654,3 +655,48 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
             await client.close()
 
     asyncio.run(run())
+
+
+def test_daytona_adapter_delegates_snapshot_source_and_resources_to_shellbox(tmp_path):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    captured = []
+
+    class RecordingMachine:
+        async def close(self):
+            pass
+
+    adapter = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(
+            docker_image="test/image@sha256:" + "a" * 64,
+            allow_internet=False,
+            workdir="/workspace",
+            cpus=2,
+            memory_mb=2049,
+            storage_mb=1025,
+        ),
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
+
+    async def create(spec):
+        captured.append(spec)
+        return RecordingMachine()
+
+    async def run():
+        async with asyncio.TaskGroup() as service_tasks:
+            adapter.factory = SimpleNamespace(create=create)
+            await adapter.start(False, service_tasks=service_tasks)
+            await adapter.stop(True)
+
+    asyncio.run(run())
+
+    (spec,) = captured
+    assert isinstance(spec.source, RegistryImage)
+    assert spec.source.reference == "test/image@sha256:" + "a" * 64
+    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (2, 2049, 1025)
+    assert spec.workdir == "/workspace"
+    assert spec.network is NetworkPolicy.DENY
