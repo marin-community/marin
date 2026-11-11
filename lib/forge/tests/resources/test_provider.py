@@ -66,6 +66,33 @@ async def test_busy_provider_stops_at_window_not_attempt_count(caplog: pytest.Lo
     assert len(backend.calls) == 3
 
 
+class StreamThenFail:
+    """Each call streams for ``duration`` seconds, then fails as a reclaimed replica would."""
+
+    model = "glm-5.3"
+
+    def __init__(self, time: Time, duration: float, failures: int) -> None:
+        self.time, self.duration, self.failures, self.calls = time, duration, failures, 0
+
+    async def complete(self, *_: object) -> object:
+        self.calls += 1
+        self.time.now += self.duration
+        if self.calls <= self.failures:
+            raise ModelUnavailable(
+                "reclaimed", (Attempt(0, AttemptOutcome.STALLED, 0, 0, self.duration, None, "cut", ('{"x":1}',)),)
+            )
+        return provider_completion()
+
+
+async def test_failure_after_streaming_restarts_the_window() -> None:
+    time = Time()
+    backend = StreamThenFail(time, 2000, failures=3)
+    waiting = WaitingBackend(backend, 3600, 1, 60, 2, role="solver", clock=time.clock, sleep=time.sleep)  # type: ignore[arg-type]
+    result = await waiting.complete((), LLMPolicy())
+    assert result.content == "answer" and backend.calls == 4
+    assert time.waits == [1, 1, 1]
+
+
 async def test_provider_400_is_not_waited_or_retried() -> None:
     rejection = ModelRequestRejected(400, "maximum context length", ())
     backend = Backend((rejection,))

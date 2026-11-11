@@ -53,10 +53,15 @@ class WaitingBackend(CompletionBackend):
         attempts: list[Attempt] = []
         while (remaining := deadline - self.clock()) > 0:
             try:
-                # The deadline bounds unavailable retries, not a healthy streaming response.
+                # The window bounds time unavailable: neither a healthy stream nor one that failed after streaming.
                 result = await self.client.complete(messages, policy, request_fields)
             except ModelUnavailable as error:
                 attempts.extend(error.attempts)
+                if any(attempt.events for attempt in error.attempts):
+                    # The provider streamed before failing (e.g. a replica reclaimed mid-stream), so it was
+                    # available: restart the window rather than charging healthy streaming time to it.
+                    deadline = self.clock() + self.unavailable_wait
+                    delay = min(self.initial, self.maximum)
                 remaining = deadline - self.clock()
                 if remaining <= 0:
                     raise ModelUnavailable(
