@@ -49,7 +49,7 @@ def differentiable_approx_kl(
         kld = 0.5 * (log_probs - log_probs_base).square()
     else:
         log_ratio = (log_probs_base - log_probs).clamp(-LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP)
-        k3 = (log_ratio.exp() - log_ratio - 1).contiguous().clamp(-10, 10)
+        k3 = (torch.expm1(log_ratio) - log_ratio).contiguous().clamp(-10, 10)
         if estimator is KLEstimator.K3_UNBIASED_GRADIENT:
             k2 = 0.5 * log_ratio.square()
             kld = k3.detach() + (k2 - k2.detach())
