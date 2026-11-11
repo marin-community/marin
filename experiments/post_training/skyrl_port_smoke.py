@@ -101,12 +101,11 @@ def build_smoke(version: str) -> Smoke:
             if callback["type"] == "evaluation":
                 callback["additional_evaluations"] = {}
                 callback["metric_groups"] = {}
-        recipe = SkyRLRecipe.from_document(config)
         return skyrl_step(
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),
                 version=version,
-                config_yaml=yaml.safe_dump(recipe.to_skyrl()),
+                config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config).to_skyrl()),
                 model=ArtifactHfModel(
                     step=qwen2_5_0_5b_instruct,
                     relative_path="",

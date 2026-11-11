@@ -157,12 +157,11 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
     identity_config = {**config, "trainer": {**config["trainer"], "seed": SEED, "max_ckpts_to_keep": 1}}
     recipe_fingerprint = fingerprint_hash(canonical_json({"config": identity_config, "data": data_identity}))
-    recipe = SkyRLRecipe.from_document(config)
     run = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
-            config_yaml=yaml.safe_dump(recipe.to_skyrl(), sort_keys=False),
+            config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config).to_skyrl(), sort_keys=False),
             model=ArtifactHfModel(
                 step=adopted_model,
                 relative_path="",

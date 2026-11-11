@@ -96,10 +96,9 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
     "setting",
     (
         "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
-        "trainer.seed=23",
         'context_budget={"max_turns":2}',
+        'generator.eval_sampling_params={"temperature":0.7}',
         "generator.engine_init_kwargs.user_option=1",
-        "trainer.max_ckpts_to_keep=2",
         "generator.chat_template={source: name, name_or_path: other}",
     ),
 )
@@ -118,6 +117,8 @@ def test_model_pins_and_distinct_artifact_identities(monkeypatch):
     sync_run = build_run(version="2026.09.26", preset="dry", lane="sync")
     changed_run = build_run(version="2026.09.26", preset="dry", settings=("trainer.policy.optimizer_config.lr=5e-6",))
     assert len({async_run.name, sync_run.name, changed_run.name}) == 3
+    config = training_config(settings=("generator.eval_sampling_params.temperature=0.7",))
+    assert config["generator"]["eval_sampling_params"]["temperature"] == 0.7
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "another-user")
     other_user = build_run(version="2026.09.26", preset="dry", lane="async")
     assert other_user.path() != async_run.path()

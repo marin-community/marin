@@ -215,7 +215,14 @@ CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
 ROLE_PLAN_SETTINGS = frozenset(_role_plan_config_values(SNOWBALL_RECIPE.role_plan))
-EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval"})
+FIXED_SETTINGS = ROLE_PLAN_SETTINGS | {
+    "entrypoint",
+    "trainer.eval_before_train",
+    "trainer.ckpt_interval",
+    "trainer.resume_mode",
+    "generator.run_engines_locally",
+    "data",
+}
 
 
 def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
@@ -353,22 +360,9 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
     for setting in settings:
         key = setting.partition("=")[0]
-        if (
-            # Role counts and evaluation limits come from the launch inputs.
-            key in ROLE_PLAN_SETTINGS | EVAL_DERIVED_SETTINGS
-            or key
-            in {
-                # This producer runs the local asynchronous entrypoint.
-                "entrypoint",
-                # The reference shares the policy placement.
-                "trainer.placement.colocate_policy_ref",
-                # Retried launches resume the latest checkpoint.
-                "trainer.resume_mode",
-                "generator.run_engines_locally",
-            }
-            # Data paths and format come from the pool inputs.
-            or key.startswith("data.")
-        ):
+        if key == "trainer.seed":
+            raise click.BadParameter("use --seed to set trainer.seed")
+        if any(key == fixed or key.startswith(f"{fixed}.") or fixed.startswith(f"{key}.") for fixed in FIXED_SETTINGS):
             raise click.BadParameter(f"{key!r} is fixed by this launcher's run inputs")
     try:
         config = RecipePatch.from_document(config).with_settings(settings).to_skyrl()
@@ -400,7 +394,7 @@ def build_run(
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     # A --set run gets its own address: the name carries a hash of its settings.
-    identity_settings = settings if seed == SEED else (*settings, f"seed={seed}")
+    identity_settings = settings if seed == SEED else (*settings, f"trainer.seed={seed}")
     changes = "\n".join(identity_settings)
     suffix = f"-set-{fingerprint_hash(changes)}" if identity_settings else ""
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}"
