@@ -26,7 +26,7 @@ from megatron.bridge.utils.common_utils import extract_expert_number_from_param
 from megatron.core.pipeline_parallel.utils import is_pp_first_stage, is_pp_last_stage
 from megatron.core.utils import get_pg_rank
 
-from skyrl_train.grug_expert_layout import split_routed_experts
+from skyrl_train.grug_expert_layout import has_split_routed_experts
 from skyrl_train.models.grug_megatron import GrugGPTModel, grug_block_spec
 from skyrl_train.models.grug_moe import (
     GRUG_DEFAULT_GLOBAL_EVERY,
@@ -306,7 +306,7 @@ class GrugMoeBridge(MegatronModelBridge):
         hf_pretrained = getattr(self, "hf_pretrained", None)
         state = getattr(hf_pretrained, "state", None)
         if state is not None:
-            split = split_routed_experts(set(state.source.get_all_keys()))
+            split = has_split_routed_experts(set(state.source.get_all_keys()))
             schema_version = GRUG_SPLIT_EXPERT_SCHEMA_VERSION if split else GRUG_STACKED_EXPERT_SCHEMA_VERSION
         mappings.extend(_routed_expert_mappings(schema_version))
         if config.latent_dim is not None:
