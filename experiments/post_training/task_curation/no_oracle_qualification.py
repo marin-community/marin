@@ -40,6 +40,7 @@ snapshot names to an operator for cleanup.
 """
 
 import argparse
+import base64
 import gzip
 import hashlib
 import io
@@ -51,6 +52,7 @@ import tarfile
 import tempfile
 import tomllib
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -392,6 +394,68 @@ def execute_setup_in_docker(
     )
 
 
+def execute_lowered_setup(
+    spec: Mapping,
+    expectations: tuple[FileExpectation, ...],
+    *,
+    timeout: int = DOCKER_SETUP_TIMEOUT,
+    dns: tuple[str, ...] = (),
+) -> SetupExecution:
+    """Run a lowered spec's setup commands in its image and compare the written files.
+
+    The spec is the artifact a rollout consumes: resources carry the fixtures and
+    ``environment_requirements.setup_commands`` stage them. This executes exactly
+    those commands, so a spec that declares a hook nothing runs cannot pass.
+    """
+    task = spec["task"]
+    requirements = task["environment_requirements"]
+    commands = tuple(requirements.get("setup_commands") or ())
+    if not commands:
+        return SetupExecution(task_id=task["id"], outcome="no_setup_commands")
+    workdir = requirements.get("working_directory") or "/app"
+    expected = Counter((item.sha256, item.mode) for item in expectations)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for resource in task["resources"].get("all") or ():
+            target = root / "setup_files" / Path(resource["path"]).name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(base64.b64decode(resource["source"]["content_base64"], validate=True))
+            mode = resource.get("mode")
+            if mode is not None:
+                target.chmod(int(mode, 8))
+        scan = " ".join(f"$( [ -e {shlex.quote(item)} ] && printf '%s ' {shlex.quote(item)} )" for item in (workdir,))
+        command = (
+            " && ".join(commands)
+            + f" && for root in {scan}; do (cd \"$root\" && find . -type f -printf '%m %p\\n'"
+            + " && find . -type f -exec sha256sum {} +); done"
+        )
+        resolvers = tuple(part for server in dns for part in ("--dns", server))
+        created = _docker("create", *resolvers, requirements["docker_image"], "sh", "-c", command)
+        if created.returncode:
+            return SetupExecution(task_id=task["id"], outcome="docker_error", detail=created.stderr[-500:])
+        container = created.stdout.strip()
+        try:
+            copied = _docker("cp", str(root / "setup_files"), f"{container}:{SETUP_ROOT}")
+            if copied.returncode:
+                return SetupExecution(task_id=task["id"], outcome="docker_error", detail=copied.stderr[-500:])
+            started = _docker("start", "-a", container, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return SetupExecution(task_id=task["id"], outcome="timeout", detail=f"{timeout}s")
+        finally:
+            _docker("rm", "-f", container)
+    if started.returncode:
+        return SetupExecution(task_id=task["id"], outcome="script_error", detail=started.stderr[-500:])
+    observed = Counter((digest, mode) for digest, mode, _path in _manifest(started.stdout))
+    missing = expected - observed
+    return SetupExecution(
+        task_id=task["id"],
+        outcome="executed",
+        written=sum(observed.values()),
+        missing=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted(missing.elements())),
+        extra=tuple(f"{digest[:12]}:{mode:04o}" for digest, mode in sorted((observed - expected).elements())),
+    )
+
+
 def classify_verifier_run(*, exit_code: int | None, timed_out: bool, stdout: str) -> str:
     """Classify one verifier execution against an untouched workspace.
 
@@ -499,6 +563,17 @@ def _execute_setups(
         return list(pool.map(run, sorted(native)))
 
 
+def _execute_lowered(
+    lowered: dict[str, Mapping], native: dict[str, bytes], workers: int, *, dns: tuple[str, ...] = ()
+) -> list[SetupExecution]:
+    def run(task_id: str) -> SetupExecution:
+        expectations = preservation_expectations(native[task_id])
+        return execute_lowered_setup(lowered[task_id], expectations, dns=dns)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(run, sorted(lowered)))
+
+
 def main() -> None:
     """Run the offline preservation phase and write the qualification report."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -510,6 +585,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4, help="concurrent setup executions")
     parser.add_argument("--docker-dns", action="append", default=[], help="resolver for container DNS")
     parser.add_argument("--retry-failed", type=Path, help="re-run the tasks a previous report failed")
+    parser.add_argument("--lowered", action="store_true", help="execute the lowered specs instead of the tar setups")
     parser.add_argument("--task", action="append", default=[], help="limit to these task ids")
     parser.add_argument("--sandbox", action="store_true", help="also run verifier liveness (needs Daytona)")
     parser.add_argument("--sample-per-base", type=int, default=20, help="verifier samples per base reference")
@@ -539,7 +615,16 @@ def main() -> None:
     for task_id, native_payload in native.items():
         report.preservation.append(check_preservation(task_id, native_payload, rebuilt[task_id]))
 
-    if args.docker:
+    if args.docker and args.lowered:
+        lowered = {}
+        lowered_path = args.rebuild_out / "lowered-tasks.parquet"
+        for batch in pq.ParquetFile(lowered_path).iter_batches(batch_size=32, columns=["path", "lowered_task_spec"]):
+            columns = batch.to_pydict()
+            for task_id, spec in zip(columns["path"], columns["lowered_task_spec"], strict=True):
+                if task_id in native:
+                    lowered[task_id] = json.loads(spec)
+        report.execution = _execute_lowered(lowered, native, args.workers, dns=tuple(args.docker_dns))
+    elif args.docker:
         report.execution = _execute_setups(
             native, rebuilt, args.workers, stub_apt=args.stub_apt, dns=tuple(args.docker_dns)
         )
