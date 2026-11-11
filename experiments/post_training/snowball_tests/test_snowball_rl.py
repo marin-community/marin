@@ -428,6 +428,9 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     ) == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002", "trainer.policy.optimizer_config.weight_decay=0.1"
     )
+    assert name(learning, "trainer.policy.optimizer_config.lr=2e-6") == name(
+        learning, "trainer.policy.optimizer_config.lr=0.000002"
+    )
     original = run(long)
     run(long, "trainer.policy.optimizer_config.weight_decay=0.2")
     assert run(long).fingerprint() == original.fingerprint()

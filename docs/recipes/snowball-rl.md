@@ -76,6 +76,8 @@ candidates. Durable exports live under `exports/global_step_<N>/policy`.
 Train-long keeps checkpoints and exports weights by default. Repeating its command resumes
 its latest checkpoint under the same run identity. Temporary checkpoints expire after 14 days;
 see [checkpoint handling](../references/rl-launching.md).
+Records jobs use zero preemption retries. After a preemption, repeat the train-long command
+to start a fresh attempt from its latest saved checkpoint.
 
 `--replicates N` makes 1–5 copies of a gated preset with one seed. `--control --replicates N`
 collects the preset's defaults from a clean checkout. Controls have their collection commit

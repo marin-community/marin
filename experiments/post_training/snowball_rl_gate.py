@@ -32,7 +32,6 @@ from pathlib import Path
 import click
 import pyarrow as pa
 import pyarrow.compute as pc
-from finestore.rl.run_records import attempt_tracking
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
@@ -47,7 +46,7 @@ from marin.rl.skyrl import (
     set_config_value,
     skyrl_cpu_command,
 )
-from marin.rl.skyrl_records import read_skyrl_metrics
+from marin.rl.skyrl_records import attempt_tracking, read_skyrl_metrics
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3

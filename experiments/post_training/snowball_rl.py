@@ -39,7 +39,7 @@ from pathlib import Path
 
 import click
 import yaml
-from finestore.rl.run_records import AttemptRecord, attempt_tracking
+from finestore.rl.run_records import AttemptRecord
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -62,6 +62,7 @@ from marin.rl.skyrl import (
     run_skyrl,
 )
 from marin.rl.skyrl_records import (
+    attempt_tracking,
     read_skyrl_metrics,
     read_stored_skyrl_receipt,
 )

@@ -21,7 +21,7 @@ from finestore.rl.run_records import (
     read_attempts,
     register_run_tables,
     run_records_root,
-    write_attempt,
+    update_attempt,
 )
 from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
@@ -54,17 +54,22 @@ def write_receipt(root: Path, receipt: dict) -> None:
     config = receipt["config"]
     export_root = config["artifacts"]["export_root"]
     attempt_id = config["run"]["attempt_id"]
-    record = read_attempt(export_root, attempt_id) or AttemptRecord(
-        run_id=config["run"]["id"],
-        attempt_id=attempt_id,
-        started_at=receipt["result"]["started_at"],
-        vllm_version="fixture-vllm",
-        metrics_started_at=receipt["result"]["started_at"],
+    facts = (
+        {
+            "started_at": receipt["result"]["started_at"],
+            "vllm_version": "fixture-vllm",
+            "metrics_started_at": receipt["result"]["started_at"],
+        }
+        if read_attempt(export_root, attempt_id) is None
+        else {}
     )
+    native = LaunchReceipt.model_validate(receipt)
     with DataStore.open(run_records_root(export_root)) as store:
-        write_attempt(
-            register_run_tables(store).attempts,
-            record.model_copy(update={"launch": LaunchReceipt.model_validate(receipt)}),
+        update_attempt(
+            store,
+            AttemptRecord(
+                run_id=config["run"]["id"], attempt_id=attempt_id, config=native.config, result=native.result, **facts
+            ),
         )
 
 
@@ -75,7 +80,7 @@ def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
     with DataStore.open(run_records_root(export_root)) as store:
         tables = register_run_tables(store)
         for record in records.values():
-            write_attempt(tables.attempts, record)
+            update_attempt(store, record)
         tables.metrics.extend(
             MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
             for step, values in metrics.items()
