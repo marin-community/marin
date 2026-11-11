@@ -11,6 +11,7 @@ source's ``solution/solve.sh``.
 
 from dataclasses import replace
 
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -22,14 +23,33 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
     tasktrove_archive_task,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
-from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
+from experiments.post_training.task_curation.environment_fidelity import (
+    PINNED_BASES,
+    dockerfile_of,
+    lower_environment,
+)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
-AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
-)
-"""The nl2bash image the agent's shell runs in."""
+
+def nl2bash_environment(files: dict) -> EnvironmentRequirements:
+    """The task's own environment: its archived recipe on a pinned base.
+
+    Every task in this family ships a Dockerfile that installs the shell tooling it
+    needs. Lowering it keeps the task in that environment instead of substituting a
+    shared image, and the recipe refuses any step a command cannot reproduce.
+    """
+    dockerfile = dockerfile_of(files)
+    if dockerfile is None:
+        raise ValueError("nl2bash task has no environment/Dockerfile")
+    lowered = lower_environment(dockerfile, PINNED_BASES)
+    return EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=lowered.base_ref,
+        working_directory=lowered.working_directory,
+        setup_commands=lowered.setup_commands,
+    )
+
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 
@@ -52,7 +72,7 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_nl2bash,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=nl2bash_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=(OUTPUT_PATH,),
     )

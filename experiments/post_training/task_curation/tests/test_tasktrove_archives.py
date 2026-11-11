@@ -11,7 +11,7 @@ from dataclasses import replace
 import pytest
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source
 from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 from verifyit.grade import Status
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec
@@ -191,8 +191,8 @@ def test_python_archive_does_not_infer_unstated_module_names():
     assert "app.calculator" not in converted.spec.candidate_modules
 
 
-def test_a_conversion_that_replaces_the_archive_environment_is_rejected():
-    """A task must run in the environment its archive specifies, not a substituted image."""
+def test_a_conversion_lowers_the_archive_environment():
+    """The task runs in its own archived recipe on a pinned base, not a shared image."""
     data = archive_data(verifier_data({"expected_output": "7\n"}))
     row = RawRow(id="row", source=Source(dataset="d", revision="r", row="row", importer_revision="1"), data=data)
     context = ConversionContext(
@@ -201,7 +201,11 @@ def test_a_conversion_that_replaces_the_archive_environment_is_rejected():
             command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="file:///lock"
         ),
     )
-    rejection = convert_nl2bash_task(row, context)
-    assert isinstance(rejection, ImportRejection)
-    assert rejection.reason == "environment_substituted"
-    assert "does not use the archive's base image" in rejection.detail
+    converted = convert_nl2bash_task(row, context)
+    assert isinstance(converted, NormalizedTask)
+    requirements = converted.task.environment_requirements
+    assert requirements.docker_image.startswith("python:3.12-slim@sha256:")
+    assert requirements.working_directory == "/"  # the fixture recipe declares no WORKDIR
+    # The fixture installs nothing; a recipe's RUN steps become setup commands, covered
+    # by the lowering tests in test_environment_fidelity.
+    assert requirements.setup_commands == ()
