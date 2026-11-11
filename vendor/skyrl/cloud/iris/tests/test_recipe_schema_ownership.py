@@ -77,17 +77,16 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
         "export_hf_artifact": True,
     }
     monkeypatch.setattr(task_runtime.tempfile, "tempdir", str(tmp_path))
-    suffix, number = "B", 4
     seeded = copy.deepcopy(full)
     for parts, value in leaves(full):
-        sentinel = {bool: not value, int: 31, float: 3.125, list: [f"/author/{suffix}"]}.get(
-            type(value), f"author-{suffix}"
+        sentinel = {bool: not value, int: 31, float: 3.125, list: ["/author/B"]}.get(
+            type(value), "author-B"
         )
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
-        set_path(seeded, path, False if path == "trainer.export_hf_artifact" else f"author-{suffix}")
+        set_path(seeded, path, False if path == "trainer.export_hf_artifact" else "author-B")
     for path in FILL_WHEN_UNSET | LAUNCH_INPUT_CHANGES["clamp"]:
-        set_path(seeded, path, f"author-{suffix}" if path == "trainer.run_name" else number)
+        set_path(seeded, path, "author-B" if path == "trainer.run_name" else 4)
     section_values = {
         name: seeded[name]
         for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
@@ -105,7 +104,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_laun
     )
     launch = OmegaConf.create(
         {
-            "run": {"id": f"ownership-{suffix}", "attempt_id": "1"},
+            "run": {"id": "ownership-B", "attempt_id": "1"},
             "inputs": {"model": {"uri": "/launch/model"}},
             "skyrl": staged,
         }

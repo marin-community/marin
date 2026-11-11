@@ -124,7 +124,7 @@ class ReferenceLikelihoodCallback(Section):
     type: Literal["reference_likelihood"]
     reference_paths: tuple[str, ...]
     output_path: str
-    batch_size: PositiveInt = 8
+    batch_size: PositiveInt = unset_field()
 
 
 class HarborEvaluationCallback(Section):
