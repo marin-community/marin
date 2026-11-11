@@ -54,7 +54,7 @@ class MochiSmoke:
     thirty_two_k: ArtifactStep[SkyRLRun]
 
 
-def build_smoke(version: str) -> MochiSmoke:
+def build_smoke(version: str, *, four_k_version: str | None = None) -> MochiSmoke:
     trial_root = StoragePath(TRIAL_ROOT)
     hf_root = str(trial_root / "hf-sft")
     model = ArtifactHfModel(
@@ -85,7 +85,7 @@ def build_smoke(version: str) -> MochiSmoke:
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
     )
 
-    def training_step(stage: str, cap: int, max_steps: int) -> ArtifactStep[SkyRLRun]:
+    def training_step(stage: str, cap: int, max_steps: int, stage_version: str) -> ArtifactStep[SkyRLRun]:
         recipe = yaml.safe_load(Path(__file__).with_name("recipe.yaml").read_text())
         recipe["context_budget"] = {
             "request_window_tokens": cap,
@@ -105,7 +105,7 @@ def build_smoke(version: str) -> MochiSmoke:
         step = skyrl_step(
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/mochi-one-rack/{stage}"),
-                version=version,
+                version=stage_version,
                 config_yaml=yaml.safe_dump(recipe, sort_keys=False),
                 model=model,
                 train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
@@ -135,8 +135,8 @@ def build_smoke(version: str) -> MochiSmoke:
 
         return replace(step, build_config=bind_traces)
 
-    four_k = training_step("4k", 4096, 5)
-    thirty_two_k = training_step("32k", 32768, 10)
+    four_k = training_step("4k", 4096, 5, four_k_version or version)
+    thirty_two_k = training_step("32k", 32768, 10, version)
     build_resume = thirty_two_k.build_config
 
     def resume_config(ctx: StepContext) -> SkyRLRunConfig:
@@ -156,9 +156,10 @@ def build_smoke(version: str) -> MochiSmoke:
 
 @click.command(help=__doc__)
 @click.option("--stage", type=click.Choice(("4k", "32k")), default="32k")
+@click.option("--four-k-version", default=None, help="Reuse a completed 4K artifact when retrying the continuation.")
 @rl_build_options
-def main(stage: str) -> ArtifactStep:
-    run = build_smoke(resolve_version("mochi-one-rack", None))
+def main(stage: str, four_k_version: str | None) -> ArtifactStep:
+    run = build_smoke(resolve_version("mochi-one-rack", None), four_k_version=four_k_version)
     return run.four_k if stage == "4k" else run.thirty_two_k
 
 

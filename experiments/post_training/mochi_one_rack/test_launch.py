@@ -14,12 +14,12 @@ from experiments.post_training.mochi_one_rack.launch import build_smoke
 def test_resumed_stage_loads_exact_step_five_and_saves_to_its_own_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    smoke = build_smoke("2026.11.11.9273")
+    smoke = build_smoke("2026.11.11.9273", four_k_version="2026.11.11.9272")
     prefix = str(tmp_path)
     completed = SkyRLRun(
         path=smoke.four_k.path(prefix),
         hf_model_uri=None,
-        global_step=5,
+        global_step=None,
         tokenizer_uri="s3://test/tokenizer",
         tokenizer_revision="test-revision",
         checkpoint_root="s3://retained-four-k/checkpoints",
