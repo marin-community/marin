@@ -33,6 +33,11 @@ def main(source: Path, destination: Path) -> None:
         OmegaConf.create(actual_routes)
     ):
         raise ValueError("Strict composition changed literal consumed-route source identifiers")
+    harnesses = OmegaConf.select(config, "skyrl.environment.task_sessions.task_spec.harness_by_dataset", default={})
+    if "harbor_trial" in harnesses.values():
+        engine = config.skyrl.generator.engine_init_kwargs
+        if not engine.get("enable_auto_tool_choice") or not engine.get("tool_call_parser"):
+            raise ValueError("Installed-agent tool requests require automatic tool choice and a tool parser")
     compiled = OmegaConf.to_yaml(config, resolve=True)
     destination.write_text(compiled)
     print(

@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 from marin.rl.skyrl import skyrl_cpu_command
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.serving import serving_release
 
@@ -93,3 +93,38 @@ def validate_selected_context(document: str) -> dict:
     receipt["model_uri"] = model["uri"]
     receipt["model_identity"] = model["identity"]
     return receipt
+
+
+def tool_preflight(*, output: str, model_uri: str, tokenizer: dict, generator: dict, window: int, request: dict) -> None:
+    with tempfile.TemporaryDirectory(prefix="long-loop-tools-") as temporary:
+        root = Path(temporary)
+        fs, key = filesystem_for(prefix_join(model_uri, "config.json"))
+        (root / "config.json").write_bytes(fs.cat_file(key))
+        inputs = {
+            "model_config_directory": str(root),
+            "tokenizer": tokenizer,
+            "engine_kwargs": generator["engine_init_kwargs"],
+            "window": window,
+            "release": {"source_commit": serving_release().source_commit, "version": serving_release().version},
+            "request": request,
+            "chat_template_kwargs": generator.get("chat_template_kwargs", {}),
+        }
+        (root / "inputs.json").write_text(json.dumps(inputs))
+        command = skyrl_cpu_command(
+            "python",
+            "-m",
+            "experiments.post_training.long_loop.tool_request_probe",
+            str(root / "inputs.json"),
+            str(root / "receipt.json"),
+        )
+        command[command.index("--extra") + 1] = "vllm"
+        environment = dict(os.environ)
+        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VLLM_ALLOW_LONG_MAX_MODEL_LEN"):
+            environment.pop(name, None)
+        environment["UV_PROJECT_ENVIRONMENT"] = f"/tmp/long-loop-context-{serving_release().source_commit}"
+        result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=1800)
+        (StoragePath(output) / "probe.log").write_text(result.stdout + result.stderr)
+        if (root / "receipt.json").exists():
+            (StoragePath(output) / "receipt.json").write_text((root / "receipt.json").read_text())
+        if result.returncode:
+            raise RuntimeError(f"Serving tool request preflight failed; see {output}/probe.log")

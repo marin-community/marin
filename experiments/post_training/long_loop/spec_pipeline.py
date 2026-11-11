@@ -220,6 +220,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             output=OUT,
             image=sandbox_resources.image,
             container_profile=sandbox_resources.container_profile,
+            model_root=exported,
+            tokenizer=tokenizer,
+            generator=rl_config["generator"],
+            window=rl_config["context_budget"]["request_window_tokens"],
         )
     )
     learned = configured_rl_step(

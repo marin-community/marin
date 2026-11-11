@@ -90,7 +90,7 @@ config:
     n_samples_per_prompt: 1
     trajectory_retention:
       enabled: true
-      output_path: s3://marin-us-east-02a/marin/long-loop/traces/2026.11.09/eval
+      output_path: s3://marin-us-east-08a/marin/long-loop/traces/2026.11.09/eval
       run_id: 2026.11.09
       phases:
       - eval
@@ -187,6 +187,7 @@ execution:
   - DAYTONA_TARGET
   - TOGETHER_API_KEY
   - MARIN_PREFIX
+  - MARIN_TEMP_PREFIX
   container_profile: 4
 judge:
   name: minimax-m3-mxfp8-olympiadbench-judge-131k

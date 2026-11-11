@@ -31,6 +31,12 @@ class DatasetPins:
 
 
 @dataclass(frozen=True)
+class StorageConfig:
+    output_prefix: str
+    temporary_prefix: str
+
+
+@dataclass(frozen=True)
 class RunSpec:
     name: str
     marin_revision: str
@@ -44,6 +50,7 @@ class RunSpec:
     tokenizer: FilePin
     execution: FilePin
     smoke_overrides: dict[str, int]
+    storage: StorageConfig
     adopted_sft: FilePin | None = None
     adopted_handoff: FilePin | None = None
     adopted_endpoint: FilePin | None = None
@@ -72,8 +79,12 @@ def resolve_spec(path: Path, *, smoke: bool) -> dict:
     spec = draccus.decode(RunSpec, yaml.safe_load(path.read_text()))
     if len(spec.marin_revision) != 40 or any(c not in "0123456789abcdef" for c in spec.marin_revision):
         raise ValueError("marin_revision must be a full Git commit")
+    for prefix in (spec.storage.output_prefix, spec.storage.temporary_prefix):
+        if not prefix.startswith("s3://marin-us-east-08a/"):
+            raise ValueError("New long-loop outputs must use s3://marin-us-east-08a/")
     directory = path.resolve().parent
     result = {
+        "storage": vars(spec.storage),
         "name": spec.name,
         "marin_revision": spec.marin_revision,
         "spec_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),

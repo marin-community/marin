@@ -169,6 +169,8 @@ config:
     enable_http_endpoint: false
     chat_template: null
     engine_init_kwargs:
+      enable_auto_tool_choice: true
+      tool_call_parser: hermes
       moe_backend: triton
       hf_overrides:
         max_position_embeddings: 262144
@@ -289,6 +291,7 @@ execution:
   - DAYTONA_TARGET
   - TOGETHER_API_KEY
   - MARIN_PREFIX
+  - MARIN_TEMP_PREFIX
   container_profile: 4
 runtime_qualification_pending:
 - Observe natural-long CP4 backward/optimizer/save-restore and full-turn masks on

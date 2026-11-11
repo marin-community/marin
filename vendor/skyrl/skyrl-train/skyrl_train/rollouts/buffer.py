@@ -430,6 +430,7 @@ class RolloutBuffer:
         self.config = config
         self._policy = async_rollout_policy(config)
         self._policy_step = 0
+        self._route_order = collections.deque(config.consumed_route_quotas)
         self._leases: dict[str, RolloutLease] = {}
         # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
         self._ready: list[ReadyRollout] = []
@@ -462,9 +463,16 @@ class RolloutBuffer:
                 occupied = collections.Counter(lease.route for lease in self._leases.values() if lease.batch_id == batch_id)
                 occupied.update(rollout.prompt["group_route"] for rollout in self._ready if rollout.batch_id == batch_id)
                 occupied.update(rollout.prompt["group_route"] for rollout in self._admitted[batch_id])
-                route = next((name for name, count in self.config.consumed_route_quotas.items() if occupied[name] < count), None)
+                # Rotate even when a route repeatedly fails, so it cannot monopolize leases.
+                route = next(
+                    (name for name in self._route_order if occupied[name] < self.config.consumed_route_quotas[name]),
+                    None,
+                )
                 if route is None:
                     raise RuntimeError("No route slot remains in an unfilled batch")
+                while self._route_order[0] != route:
+                    self._route_order.rotate(-1)
+                self._route_order.rotate(-1)
             lease = RolloutLease(uuid.uuid4().hex, self._policy_step, batch_id, route)
             self._leases[lease.lease_id] = lease
             return lease

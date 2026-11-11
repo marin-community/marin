@@ -290,7 +290,10 @@ def _failed_rollout(
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
-        diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
+        diagnostics.update(
+            error_category=error.category, request_id=error.request_id, status_code=error.status_code,
+            message=error.message,
+        )
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.

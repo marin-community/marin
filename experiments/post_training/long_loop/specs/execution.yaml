@@ -79,6 +79,7 @@ coordinator:
   job_timeout_seconds: 129600
   required_env_vars:
   - MARIN_PREFIX
+  - MARIN_TEMP_PREFIX
   - HF_TOKEN
   - DAYTONA_RL_API_KEY
   - DAYTONA_EVAL_API_KEY

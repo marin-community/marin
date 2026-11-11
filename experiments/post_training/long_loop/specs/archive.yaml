@@ -6,7 +6,7 @@ hf_upload:
   license_file: s3://marin-us-east-08a/marin/long-loop/archive-inputs/2026.11.09.10-hf1/LICENSE
   workers: 8
 evaldash:
-  records_prefix: s3://marin-us-east-02a/marin/evals
+  records_prefix: s3://marin-us-east-08a/marin/evals
   run_prefix: long-loop-round1
   user: benfeuer
   model_name: Snowball long-loop selected checkpoint

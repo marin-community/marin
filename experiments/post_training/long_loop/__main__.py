@@ -62,6 +62,8 @@ def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str
 @rl_build_options
 def main(spec: Path, smoke: bool, through: str, validation_output: Path) -> ArtifactStep:
     resolved = resolve_spec(spec, smoke=smoke)
+    os.environ["MARIN_PREFIX"] = resolved["storage"]["output_prefix"]
+    os.environ["MARIN_TEMP_PREFIX"] = resolved["storage"]["temporary_prefix"]
     resolved["through"] = through
     resolved["active_stage_blockers"] = stage_blockers(resolved, through)
     # Iris ships the validated workspace bundle without Git metadata.

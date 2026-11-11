@@ -33,18 +33,22 @@ endpoint:
   sha256: 8368803744d250e8c2f86ca0c959214ef386876a18a8d4a598827da2f61d276d
 execution:
   path: execution.yaml
-  sha256: 3db413b6cfba48298f32cefd323b1c924dc603716142b56a73e0e03f64cf1fae
+  sha256: e2cc71ec3598de2f5fb52eff81f90e1e7a34bb56ce72b307bce9741f3c361899
 archive:
   path: archive.yaml
-  sha256: 5f5a2b845ab569465c03c1c6454cbfa4a76f83694d3017a0a029ff8402c7e18f
+  sha256: fbf7b18a38b9619cfe5196f8a66f1ac35c8cf1668ddb34dfe292abe86a87a142
 rl:
   path: rl.yaml
-  sha256: 9612c6b11a88be2866e9e1172433693ab2684dc3d1697ff924cc63ce7d68b84d
+  sha256: 5bd1153f17616da5b44847dd3ef24ec7d635d627b8257e7cbe8a32ec99d71672
 evaluation:
   path: evaluation.yaml
-  sha256: cb7d2d2e340fe3608cab7fe642da16b585a857a033f236255c744e0926ddaf78
+  sha256: e1fccf76640875787cb5ed6a5cd19bc879fc402ab4a0a3c970ad4c4b433f5011
 smoke_overrides:
   sft_steps: 2
   rl_steps: 5
   eval_tasks_per_benchmark: 1
   eval_replicas: 1
+
+storage:
+  output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop
+  temporary_prefix: s3://marin-us-east-08a/tmp
