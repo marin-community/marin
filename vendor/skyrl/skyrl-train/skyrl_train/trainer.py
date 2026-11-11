@@ -27,7 +27,7 @@ import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
-from skyrl_train.long_context_qualification import qualify_learner_batch, qualify_optimizer_status
+from skyrl_train.long_context_qualification import LongContextQualification, QualificationStatus, qualify_optimizer_status
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
@@ -342,6 +342,7 @@ class RayPPOTrainer:
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
     _policy_version_step: int | None = None
+    _long_context_qualification: LongContextQualification | None = None
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
@@ -361,6 +362,15 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
+        qualification = cfg.trainer.long_context_qualification
+        self._long_context_qualification = (
+            LongContextQualification(
+                minimum_tokens=qualification.minimum_tokens,
+                maximum_tokens=qualification.maximum_tokens,
+                maximum_steps=qualification.maximum_steps,
+            )
+            if qualification.enabled else None
+        )
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -783,8 +793,19 @@ class RayPPOTrainer:
                 self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
-            if self._control.should_save_hf_model:
+            if self._control.should_save_hf_model and (
+                self._long_context_qualification is None
+                or self._long_context_qualification.status is QualificationStatus.PASSED
+            ):
                 await asyncio.to_thread(self.handle_hf_export)
+        if self._long_context_qualification is not None:
+            self._write_long_context_progress(self._long_context_qualification)
+            if self._long_context_qualification.status is not QualificationStatus.PASSED:
+                raise ValueError(
+                    "Natural-long qualification incomplete after "
+                    f"{completed_step} completed updates; native checkpoints retained; "
+                    f"longest observed sequence {self._long_context_qualification.longest_observed_tokens}"
+                )
 
     async def _save_checkpoints_with_residency(self) -> CheckpointSnapshot:
         """Save a checkpoint, swapping colocated training and inference residency when needed."""
@@ -1419,6 +1440,12 @@ class RayPPOTrainer:
             record_policy_step(self.global_step)
 
             stop = self._control.should_training_stop
+            if (
+                self._long_context_qualification is not None
+                and self._long_context_qualification.status is QualificationStatus.EXHAUSTED
+            ):
+                logger.warning("No qualifying natural-long batch within the observation budget; retaining completed steps")
+                stop = True
             if step_state.is_epoch_end:
                 await self._end_epoch(epoch)
                 stop = stop or self._control.should_training_stop
@@ -1532,6 +1559,7 @@ class RayPPOTrainer:
                 on_admitted=self._submit_admitted_groups_for_teacher_scoring,
             )
         self.all_metrics.update(selection_metrics)
+        logger.info("Admitted rollout batch: step={} selection_metrics={}", self.global_step, selection_metrics)
         await self._seal_speculator_capture()
         await self._start_speculator_update()
         if self.colocate_all:
@@ -1658,15 +1686,11 @@ class RayPPOTrainer:
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
     async def _run_training(self, training_input: TrainingInputBatch, *, step_wall: StepWallTime | None = None):
-        qualification = self.cfg.trainer.long_context_qualification if self.global_step == 1 and self.cfg.trainer.long_context_qualification.enabled else None
+        qualification = self._long_context_qualification
         qualification_evidence = None
-        if qualification is not None:
-            if self.cfg.trainer.policy.megatron_config.context_parallel_size != 4:
-                raise ValueError("Natural-long qualification requires CP4")
-            if self.cfg.trainer.step_wise_training or not self.cfg.trainer.dump_data_batch:
-                raise ValueError("Natural-long qualification requires full-turn projection and collation audit")
-            qualification_evidence = qualify_learner_batch(training_input,
-                minimum_tokens=qualification.minimum_tokens, maximum_tokens=qualification.maximum_tokens)
+        if qualification is not None and qualification.status is QualificationStatus.PENDING:
+            qualification_evidence = qualification.observe(training_input, step=self.global_step)
+            self._write_long_context_progress(qualification)
         if (
             "ftpo_chosen_mask" in training_input
             and not training_input["loss_mask"].any()
@@ -1732,9 +1756,11 @@ class RayPPOTrainer:
         with Timer("train_critic_and_policy", self.all_timings), critical_phase("train_step", self.global_step):
             status = await asyncio.to_thread(self.train_critic_and_policy, training_input)
         self._policy_version_step = self.global_step
-        if qualification_evidence is not None:
+        if qualification is not None and qualification_evidence is not None:
             qualify_optimizer_status(status)
             await self._qualify_checkpoint_restore(training_input, qualification_evidence)
+            qualification.qualified_step = self.global_step
+            self._write_long_context_progress(qualification)
 
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None and ftpo.early_stopping_chosen_win is not None:
@@ -1744,8 +1770,26 @@ class RayPPOTrainer:
                 self._control.should_training_stop = True
         return status
 
+    def _write_long_context_progress(self, qualification: LongContextQualification) -> None:
+        payload = {
+            "status": qualification.status,
+            "step": self.global_step,
+            "observed_steps": qualification.observed_steps,
+            "maximum_steps": qualification.maximum_steps,
+            "longest_observed_tokens": qualification.longest_observed_tokens,
+            "minimum_tokens": qualification.minimum_tokens,
+            "maximum_tokens": qualification.maximum_tokens,
+            "qualified_step": qualification.qualified_step,
+        }
+        io.makedirs(self.cfg.trainer.export_path, exist_ok=True)
+        io.write_bytes_atomic(
+            join_resource_path(self.cfg.trainer.export_path, "long-context-qualification-progress.json"),
+            json.dumps(payload).encode(),
+        )
+        logger.info("Natural-long qualification progress: {}", payload)
+
     async def _qualify_checkpoint_restore(self, training_input: TrainingInputBatch, evidence: dict) -> None:
-        """Reload the committed first-step model/optimizer and compare the same learner forward."""
+        """Reload the qualifying update's model/optimizer and compare the same learner forward."""
         with Timer("qualification_save_restore", self.all_timings):
             await self.context.pause_and_drain()
             qualified = False
@@ -1764,7 +1808,7 @@ class RayPPOTrainer:
                 mask = training_input["loss_mask"].bool()
                 actual = after["action_log_probs"]
                 if not torch.allclose(actual[mask], expected[mask], rtol=1e-5, atol=1e-5):
-                    raise ValueError("Native restore changed first-step action logprobs")
+                    raise ValueError("Native restore changed qualifying-update action logprobs")
                 evidence.update(step=self.global_step, context_parallel_size=4, optimizer_update_completed=True,
                     native_model_optimizer_scheduler_load_completed=True, checkpoint=checkpoint,
                     restore_action_logprob_max_difference=float((actual[mask] - expected[mask]).abs().max()),

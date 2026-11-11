@@ -47,6 +47,7 @@ trainer:
     enabled: false
     minimum_tokens: 65537
     maximum_tokens: 102400
+    maximum_steps: 5
   # Best selection queues only the final export, after the last evaluation.
   hf_export_checkpoint: latest  # latest or best native checkpoint for HF export
   evaluation_runner: training # task or harbor selects generated validation for offline preference training

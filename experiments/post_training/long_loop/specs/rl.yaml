@@ -125,6 +125,7 @@ config:
       enabled: true
       minimum_tokens: 65537
       maximum_tokens: 102400
+      maximum_steps: 5
     hf_export_checkpoint: best
     callbacks:
     - type: checkpoint
