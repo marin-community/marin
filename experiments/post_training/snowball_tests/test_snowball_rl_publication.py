@@ -53,7 +53,11 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(recorded
         init="weights@pinned",
     )
     source = recorded_runs(
-        name, "tests/stored-progress", attempt_id="native-attempt", inputs=inputs, legacy=case == "historical-retry"
+        name,
+        "tests/stored-progress",
+        attempt_id="native-attempt",
+        inputs=inputs,
+        metrics={"attempt_id": "native-attempt"} if case == "historical-retry" else None,
     )
     receipt = json.loads((source / "terminal.json").read_text())
     if case == "native-composed":
@@ -93,27 +97,29 @@ print(json.dumps(OmegaConf.to_container(load_launch_config(Path(sys.argv[1])), r
                 values["attempt_id"] = "ancestor" if values["step"] < 2 else "native-attempt"
                 write_json(path, values)
     if case == "native-failed":
-        receipt["result"]["state"] = "failed"
         shutil.rmtree(source / "exports/metrics")
     if case == "invariant-failed":
         path = source / "exports/metrics/step-000001.json"
         write_json(path, json.loads(path.read_text()) | {"policy/raw_grad_norm": float("nan")})
     if case == "missing-tracking":
         (source / "exports/attempts/native-attempt/tracking.json").unlink()
-    if case == "native-failed":
+    if case in {"native-failed", "historical-retry"}:
+        receipt["result"].update(state="failed", model=None)
         (source / "terminal.json").unlink()
         write_json(source / "exports/attempts/native-attempt/receipt.json", receipt)
         write_json(source / "resolved-launch.yaml", {"config": receipt["config"]})
     else:
         write_receipt(source, receipt)
     if case == "historical-retry":
-        write_json(source / "exports/attempts/native-attempt/receipt.json", receipt)
         retry = deepcopy(receipt)
         retry["config"]["run"]["attempt_id"] = "retry"
         retry["result"].update(
-            state="failed", started_at="2026-11-06T20:00:00+00:00", finished_at="2026-11-06T20:05:00+00:00"
+            iris_job_id="/tests/retry",
+            started_at="2026-11-06T20:00:00+00:00",
+            finished_at="2026-11-06T20:05:00+00:00",
         )
-        write_receipt(source, retry)
+        write_json(source / "exports/attempts/retry/receipt.json", retry)
+        write_json(source / "resolved-launch.yaml", {"config": retry["config"]})
         native_json(
             """
 import sys
@@ -138,6 +144,8 @@ print("null")
     selected = "ancestor" if case == "historical-unknown" else "native-attempt"
     row = publication.build_record(str(source), presets.PRESETS["data-medium"], attempt_id=selected)
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == selected
+    if case == "historical-retry":
+        assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"]
     assert row["series"] == name
     assert (
@@ -152,9 +160,12 @@ print("null")
         if historical or case in {"lineage-missing-window", "current-lineage-unknown"}
         else 7200 if case == "legacy-lineage" else 3600
     )
-    assert row["elapsed_seconds"] == expected_time and row["timing_scope"] == "checkpoint_lineage_native_jobs"
-    assert row["optimizer_steps"] == (None if historical else 0 if case == "native-failed" else 2)
-    if case in {"native-failed", "invariant-failed", "historical-unknown"}:
+    expected_updates = None if historical else 0 if case == "native-failed" else 2
+    assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
+    assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
+    if historical:
+        assert row["status"] == "failed" and row["failed_facts"] == ["native_attempt"]
+    elif case in {"native-failed", "invariant-failed"}:
         assert row["status"] == "failed"
         assert ("finite_losses_and_gradients" if case == "invariant-failed" else "native_attempt") in row["failed_facts"]
     else:
