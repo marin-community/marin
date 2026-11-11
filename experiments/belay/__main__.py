@@ -722,16 +722,16 @@ def plan_and_launch(
 
 
 def ladder_hero_mfu(plan: Plan, *, dry_run: bool) -> HeroMfuResult | None:
-    """For a ladder rung, the idea's latest hero-mfu result, which makes the rung official; else None."""
+    """For a ladder rung, the idea's latest hero-mfu result, which sets the rung's steps; else None."""
     if plan.track not in LADDER_RUNGS or (dry_run and not plan.idea.registry_id):
         return None
     hero = hero_mfu_result(load_entry(plan.registry_id))
     if hero is None:
-        print(f"{plan.experiment}: informal ladder rung at equal steps; {plan.registry_id} has no hero-mfu result")
+        print(f"{plan.experiment}: ladder rung at equal steps (provisional: {plan.registry_id} has no hero-mfu result)")
     else:
         steps = hero_mfu_steps(plan.track, hero)
         print(
-            f"{plan.experiment}: official ladder rung, {steps} steps from hero-mfu {hero.trial_id} "
+            f"{plan.experiment}: hero-MFU-matched ladder rung, {steps} steps from hero-mfu {hero.trial_id} "
             f"({hero.step_time_change:+.1%} s/step)"
         )
     return hero
@@ -742,7 +742,7 @@ def trial_protocol(plan: Plan, hero: HeroMfuResult | None) -> tuple[Protocol, st
     if plan.track not in LADDER_RUNGS:
         return Protocol.EQUAL_STEPS, None
     if hero is None:
-        return Protocol.EQUAL_STEPS, "informal ladder rung: equal steps, no hero-mfu result"
+        return Protocol.EQUAL_STEPS, "equal steps, no hero-mfu result: needs hero-mfu before inclusion"
     steps = hero_mfu_steps(plan.track, hero)
     return (
         Protocol.HERO_MFU_MATCHED,

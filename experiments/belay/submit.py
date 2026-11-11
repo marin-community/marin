@@ -262,7 +262,7 @@ def new_spec_text(
     """The run spec for one variant and its same-commit control on ``track``, after checking every setting.
     ``suffix`` (from ``run_suffix``) keeps run names unique when the id ran before; ``shared_control`` (from
     ``shareable_control``) reuses another spec's running control instead of launching one; ``num_steps`` sets the
-    variant's steps (an official ladder rung's, from ``hero_mfu_steps``)."""
+    variant's steps (a hero-MFU-matched ladder rung's, from ``hero_mfu_steps``)."""
     check_variant(variant, settings)
     flags = [part for setting in settings for part in setting]
     if num_steps is not None:
