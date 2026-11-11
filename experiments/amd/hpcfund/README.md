@@ -35,6 +35,48 @@ the fastest path: in per-call microbenchmarks on one MI300X, XLA's bf16 grouped
 GEMM took 11-28% less time per forward+backward triple than the best Triton
 configuration.
 
+## Multi-node runs
+
+Pass `--overlap-collectives` to the wrapper, before the script, to add five XLA flags that overlap collectives with compute: the latency-hiding scheduler, up to 4 collectives in flight (XLA's default is 1), pipelined all-reduce (each loop iteration's all-reduce moves into the next iteration), while-loop double buffering, and starting each collective as early as possible. With data parallelism across nodes, each layer's expert-weight gradients are all-reduced over the network inside the backward layer scan, and without these flags that all-reduce runs with nothing to overlap it. Set any of the flags in `XLA_FLAGS` to override it.
+
+```bash
+sbatch -N2 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh --overlap-collectives \
+    experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --gpus-per-node 8 --expert-axis 8 --replica-axis 2
+```
+
+The flags are off by default because of the correctness caveat below.
+
+June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and data parallelism across nodes (`--expert-axis 8 --replica-axis 2`), 8 sequences of 4,096 tokens per GPU, `--moe-impl ring_filtered --pooled-transport-capacity-factor 1.1 --attention gpu_pallas_triton_flash --remat-mode save_moe`, step time as the median of steps 2-19:
+
+| Hardware | Nodes | Without the flags | With the flags | Change |
+|---|---|---|---|---|
+| MI350X (`mi3508x`, this wrapper and venv) | 2 | 1.975-1.982 s | 1.715-1.717 s | -13% |
+| MI350X, all nine flags of the ablation below | 1 | 1.529-1.534 s | 1.526-1.529 s | none |
+| MI355X (TheRock 7.14 container, JAX 0.11.0) | 2 | 1.955-1.971 s | 1.709-1.736 s | -12% |
+
+In both two-node MI350X jobs, the second run without the flags was slower on every step (2.134 s and 3.026 s); the cause is unknown, and the table uses the first run of each job. Peak memory rises by at most 1 GiB.
+
+Each flag's share, from two MI355X nodes: removing one flag from the full set of nine changes the step as follows. With all nine flags, five runs took 1.707-1.740 s (median 1.725 s); each removal is a single run.
+
+| Flag removed | Step | Change |
+|---|---|---|
+| `--xla_gpu_enable_latency_hiding_scheduler` | 2.065 s | +20% |
+| `--xla_gpu_experimental_parallel_collective_overlap_limit=4` | 1.964 s | +14% |
+| `--xla_gpu_experimental_collective_start_as_early_as_possible` | 1.793 s | +3.9% |
+| `--xla_gpu_enable_pipelined_all_reduce` | 1.768 s | +2.5% |
+| `--xla_gpu_enable_while_loop_double_buffering` | 1.752 s | +1.6% |
+| `--xla_gpu_enable_pipelined_all_gather` | 1.729 s | none |
+| `--xla_gpu_enable_pipelined_reduce_scatter` | 1.719 s | none |
+| 8 GiB all-gather and reduce-scatter combine thresholds | 1.715 s | none |
+
+`--overlap-collectives` keeps the first five. With the overlap limit at 1, the other flags give no gain (1.964 s against 1.955-1.971 s without flags).
+
+On GB200, more than one collective in flight silently corrupted training with Grug's ragged all-to-all transport and the layer-carry offload, so the NVIDIA EP hero forces the limit to 1 (`experiments/grug/moe_hero_ep/train.py`). Here, two runs with the five flags and two without differ in per-step loss by at most 2.7e-4 and in capacity-drop rate by at most 0.4 points; the two runs without the flags already differ from each other by 1.5e-4 and 0.3 points. These runs use synthetic tokens and an untrained router, which detect such races poorly; check loss and drop-rate parity from a trained checkpoint before a long run, or set `--xla_gpu_experimental_parallel_collective_overlap_limit=1` in `XLA_FLAGS` to rule it out at the cost of the gain.
+
+The flags were measured only with this layout on two nodes, not with cross-node FSDP or EP16.
+
+With this venv, runs with the flags sometimes crash as the processes shut down after the last step (`double free or corruption` while `jax.distributed` disconnects, or a segfault): 4 of 17 runs with some of these flags on k007-002 and k007-004, against 0 of 6 runs without them, and one more run with the flags segfaulted about 4 minutes into compilation. Output up to the crash is complete, but Slurm records the step as failed. Twenty-two flagged runs in the MI355X container exited cleanly.
+
 ## Build the venv
 
 The wrapper runs `uv run --no-sync`, so build the venv once on a login node:

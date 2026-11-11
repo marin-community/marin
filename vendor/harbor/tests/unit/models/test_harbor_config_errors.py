@@ -25,9 +25,9 @@ _PERSISTED_EXCEPTION_MODULES = [
     "harbor.llms.base",
     "harbor.verifier.verifier",
     "harbor.environments.base",
-    "harbor.environments.daytona.environment",
-    "harbor.environments.apptainer.apptainer",
-    "harbor.environments.enroot.enroot",
+    "harbor.environments.daytona",
+    "harbor.environments.qemu",
+    "harbor.environments.shellsim",
     "harbor.agents.installed.base",
     "harbor.utils.artifact_writer",
 ]

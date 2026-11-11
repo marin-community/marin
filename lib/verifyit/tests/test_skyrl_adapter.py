@@ -8,11 +8,11 @@ from verifyit.adapters.skyrl import (
     grade_grid_candidate,
     grade_gsm8k_final_line,
     grade_gsm8k_strict,
-    grade_literal_candidate,
     grade_rounded_candidate,
     grade_search_em,
 )
 from verifyit.grade import InvalidTask, Status
+from verifyit.modes.grade_exact import grade_literal_candidate
 
 
 @pytest.mark.parametrize(

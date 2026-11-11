@@ -3,6 +3,8 @@
 Read the medium-specific guide for the deliverable, then apply
 [ai-writing-donts.md](ai-writing-donts.md) as the final prose pass.
 
+For public communications, follow the [conventions](conventions.md).
+
 ## Read The Right File
 
 - Read [blog-posts.md](blog-posts.md) for public explainers and blog posts.

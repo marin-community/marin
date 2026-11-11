@@ -117,16 +117,21 @@ repeated records and rejecting unexpected errors.
 `structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
 fences. `closure_scoring` compares a completed outer region with a known reference and reports
 syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
-completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
-retains the sampled tokens, supplies any generation stop markers, and decides when a completed
-attempt can be scored.
+completed `<tool_call>` markup in decoded assistant text. `reasoning_markup` classifies the
+reasoning span of a decoded reply; the caller states whether the prompt opened a span that a
+leading closer may close. The `reasoning_markup` grading mode scores one when the reply holds at
+most one closed span and no stray closer, taking the prompt to open no span and excusing a span
+left open by a length stop; its verdict names the violation otherwise.
+These helpers inspect text; the caller retains the sampled tokens, supplies any generation stop
+markers, and decides when a completed attempt can be scored.
 
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
 accepts: `unsolvable`, `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
-`structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
-decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
+`structured_exact`, `structure_closure`, `reasoning_markup` and `predicted_action`. Text modes take a string, `structured_exact` takes a
+decoded JSON value, `predicted_action` takes a tuple of `FunctionCall`, and `reasoning_markup`
+takes a `ReasoningReply` of the reply text and its stop reason. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
 tests directory. A specification the mode rejects yields an `invalid_task` reward; a candidate of
 the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script modes run only

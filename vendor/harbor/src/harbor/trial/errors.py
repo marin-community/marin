@@ -33,6 +33,18 @@ class PhaseCancellationError(RuntimeError):
     pass
 
 
+class RuntimeServiceError(RuntimeError):
+    """A required trial service failed to start, run, or close."""
+
+
+class RuntimeLogCollectionError(RuntimeError):
+    """Required runtime logs could not be collected before grading."""
+
+
+class EnvironmentStopError(RuntimeError):
+    """Environment teardown failed or exceeded its deadline."""
+
+
 class TrialNotScoredError(Exception):
     """Base: a single-step verification-enabled trial finalized without a
     ``verifier_result``.

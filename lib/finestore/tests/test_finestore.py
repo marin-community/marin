@@ -372,6 +372,19 @@ def test_schema_evolution_null_promotes_missing_column(archive_root):
     assert by_doc == {"1": None, "2": 3}
 
 
+def test_point_lookup_preserves_schema_from_older_versions(archive_root):
+    with DataStore.open(archive_root, flush_interval=600) as store:
+        table = store.table("samples", primary_key=("id",), on_conflict=OnConflict.SUPERSEDE)
+        table.append({"id": 1, "before": 10})
+        store.flush()
+        table.append({"id": 1, "after": 20})
+        store.flush()
+
+        row = ReadView(archive_root).point("samples", id=1)
+        assert row["before"] is None
+        assert row["after"] == 20
+
+
 def test_empty_dict_column_is_writable(archive_root):
     # Every row's metrics is empty: the column would be a zero-field parquet struct, so it is dropped
     # at write time and reads back as absent rather than failing the flush.

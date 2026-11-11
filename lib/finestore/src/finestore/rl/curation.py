@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
@@ -34,6 +34,15 @@ class JudgmentStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+# Assessments may publish with a small share of recorded unavailable judgments — reviewer
+# refusals or unparseable answers on adversarial tasks — instead of failing the campaign.
+# 2% matches the observed rate of pathological model answers on validation cohorts (1-2 of a
+# 105-task sample); a larger share signals systemic reviewer or transport failure, so the
+# campaign, publish, and load gates all fail closed above it. Defined once; every gate imports
+# this constant.
+MAX_UNAVAILABLE_JUDGMENT_SHARE: float = 0.02
+
+
 class AssessmentStatus(StrEnum):
     COMPLETE = "complete"
     FAILED = "failed"
@@ -51,12 +60,41 @@ class CatalogRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class IndependentQC(CatalogRecord):
+    """Quality checks reported by a pinned source release."""
+
+    verdict: Verdict
+    method: str = Field(min_length=1)
+    reviewed: int = Field(ge=0)
+    # Absent when the release retained its reviewed population without an admission claim.
+    admitted: int | None = Field(default=None, ge=0)
+    evidence_url: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _admitted_within_reviewed(self) -> "IndependentQC":
+        if self.admitted is not None and self.admitted > self.reviewed:
+            raise ValueError(f"admitted {self.admitted} exceeds reviewed {self.reviewed}")
+        return self
+
+
 class PipelineReference(CatalogRecord):
     name: str
     version: str
     source: str | None
     revision: str | None
     files: list[str]
+
+
+class DaytonaSafety(StrEnum):
+    """Whether running a source fits the Daytona snapshot budget."""
+
+    SAFE = "safe"
+    UNSAFE = "unsafe"
+    UNASSESSED = "unassessed"
+
+
+DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
+"""The unique-snapshot budget a source must fit to count as Daytona-safe."""
 
 
 class SourceDeclaration(CatalogRecord):
@@ -77,6 +115,10 @@ class SourceDeclaration(CatalogRecord):
     kind: str
     status: str
     pipeline: PipelineReference | None
+    independent_qc: IndependentQC | None = None
+    # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
+    # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
+    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
 
 
 class AdmissionCounts(CatalogRecord):

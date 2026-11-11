@@ -16,6 +16,8 @@ from unittest.mock import patch
 import click
 import pytest
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -29,7 +31,7 @@ from fray.types import JobStatus
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION, source_config_digest
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runner import (
@@ -38,14 +40,12 @@ from marin.evaluation.evalchemy.runner import (
     _coverage_with_aggregate_counts,
     run_evalchemy,
 )
-from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
+from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_SOURCE,
     HarborDatasetKind,
     HarborErrorTaxonomy,
     ValidatedHarborConfig,
-    harbor_runtime_descriptor,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval_samples import samples_from_lm_eval
@@ -88,7 +88,9 @@ from marin.inference.config import (
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import launch_provenance
 
 from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import (
@@ -122,7 +124,7 @@ def _install_fake_harbor_preflight(
 ) -> list[Mapping[str, object]]:
     received: list[Mapping[str, object]] = []
 
-    def preflight(requests):
+    def preflight(requests, *, judge_model):
         configs = []
         for path, model_agent_kwargs in requests:
             received.append(model_agent_kwargs)
@@ -143,7 +145,6 @@ def _install_fake_harbor_preflight(
                         agent=frozenset({"AgentError"}),
                         passthrough=frozenset({"PassthroughError"}),
                         undecided=frozenset({"VerifierTimeoutError"}),
-                        commit=HARBOR_SOURCE.commit,
                     ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
@@ -172,37 +173,37 @@ def _install_fake_harbor_preflight(
     return received
 
 
-@pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
-def test_verified_harbor_launch_rejects_vendored_runtime(monkeypatch, version):
+def _write_harbor_config(path: Path) -> Path:
+    path.write_text("{}")
+    return path
+
+
+def test_harbor_cache_reuses_launch_tree_and_invalidates_changed_provenance(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        model=ModelConfig(name="test-model", location="org/test-model"),
+        model=models()["qwen3-8b"],
         evals=(),
         evalchemy_definitions=(),
-        harbor_definitions=(
-            HarborDefinition(
-                name="ot-tblite-recovery",
-                config_path=Path("experiments/evaluation/configs/harbor/ot-tblite-recovery.yaml"),
-            ),
-        ),
+        harbor_definitions=(HarborDefinition("test", _write_harbor_config(tmp_path / "policy.yaml")),),
         platform=Platform.GPU,
         accelerator="H100x8",
-        limit=None,
+        limit=1,
         records_prefix="memory://records",
         submission_cluster="marin",
         federated_cluster=None,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        version=version,
+        cache_key="same-pipeline",
     )
-
-    with pytest.raises(ValueError, match="evaluator runtime must use commit"):
-        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
-
-
-def _write_harbor_config(path: Path) -> Path:
-    path.write_text("{}")
-    return path
+    provenance = LaunchProvenance(git_sha="abc", launch_host="host")
+    before = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    unchanged = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    assert unchanged == before
+    captured = launch_provenance()
+    monkeypatch.setattr(
+        "marin.evaluation.harbor.driver_config.launch_provenance", lambda: replace(captured, tree_hash="changed-tree")
+    )
+    changed = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
+    assert changed != before
 
 
 def _write_model_config(path: Path) -> Path:
@@ -295,7 +296,9 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
-        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+        lambda model, *_args, **_kwargs: SimpleNamespace(
+            model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1)
+        ),
     )
 
 
@@ -349,7 +352,9 @@ def _evaluate_with_session(
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
-            lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+            lambda model, *_args, **_kwargs: SimpleNamespace(
+                model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1)
+            ),
         ),
     ):
         return _run_test_batch(batch)
@@ -1529,6 +1534,13 @@ def test_evalchemy_executor_normalizes_native_prompts_into_rollouts(tmp_path, mo
 def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
     captured: dict = {}
     resolved_value = "resolved-evaluation-secret"
+    runtime_values = {"DAYTONA_TARGET": "test-target", "DAYTONA_API_URL": "https://daytona.example/api"}
+    for name, value in runtime_values.items():
+        monkeypatch.setenv(name, value)
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        assert {name: env_vars[name] for name in runtime_values} == runtime_values
+        return _successful_evaluation(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
 
     class Client:
         def submit(self, **kwargs):
@@ -1544,7 +1556,7 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
             eval_ref=EvalRef(name="secret", mechanism="test"),
             eval_runtime="test-runtime",
         ),
-        executor=_successful_evaluation,
+        executor=executor,
         endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
@@ -1573,7 +1585,54 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
     launch_group(batch, Client())
 
     assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
+    assert {name: captured["environment"].env_vars[name] for name in runtime_values} == runtime_values
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
+    for name, value in captured["environment"].env_vars.items():
+        monkeypatch.setenv(name, value)
+    _evaluate_with_session(batch, _remote_session(), "/orchestrator")
+    assert (tmp_path / "secret" / "endpoint.txt").is_file()
+
+
+def test_launch_group_declares_the_hosts_its_evaluations_reach(monkeypatch):
+    """Harbor's sandbox service and registry, and an Evalchemy judge, become the orchestrator's egress rules."""
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setenv("DAYTONA_API_KEY", "daytona-key")
+    monkeypatch.setenv("TOGETHER_API_KEY", "together-key")
+    captured: dict = {}
+
+    class Client:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(job_id="/eval/job")
+
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("aime-harbor", "tb2"),
+        evalchemy_definitions=(
+            EvalchemyDefinition(
+                name="financebench",
+                config_path=Path("experiments/evaluation/configs/evalchemy/financebench.yaml"),
+            ),
+        ),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    launch_group(build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester"), Client())
+
+    assert captured["egress_allow"] == (
+        "app.daytona.io",
+        "*.app.daytona.io",
+        "hlqxxzsirfrgeqasvaps.supabase.co",
+        "api.together.xyz",
+    )
 
 
 @pytest.mark.parametrize(
@@ -1621,6 +1680,8 @@ def test_launch_group_only_federates_to_a_different_cluster(tmp_path, submission
 
 def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
     captured: dict = {}
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-rno2a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-rno2a")
 
     class Client:
         def submit(self, **kwargs):
@@ -1649,6 +1710,13 @@ def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
         Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a")
     ]
     assert captured["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
+    child_env = captured["environment"].env_vars
+    with monkeypatch.context() as child:
+        child.delenv("MARIN_PREFIX")
+        child.delenv("MARIN_TEMP_PREFIX")
+        child.setenv("MARIN_PREFIX", child_env["MARIN_PREFIX"])
+        child.setenv("MARIN_TEMP_PREFIX", child_env["MARIN_TEMP_PREFIX"])
+        assert marin_temp_bucket(14, prefix="eval") == "s3://marin-rno2a/tmp/ttl=14d/eval"
 
 
 def test_build_evaluation_batch_places_hosted_judge_with_candidate(monkeypatch):
@@ -1754,7 +1822,6 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
-    assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {harbor_runtime_descriptor()}
     assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
@@ -1794,7 +1861,7 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
 
 
 def test_resolve_eval_keys_validates_programmatic_selections() -> None:
-    assert resolve_eval_keys("gsm8k-smoke,aime-smoke") == ("gsm8k-smoke", "aime-smoke")
+    assert resolve_eval_keys("gsm8k-smoke,aime-harbor") == ("gsm8k-smoke", "aime-harbor")
     with pytest.raises(ValueError):
         resolve_eval_keys("gsm8k-smoke,missing")
 
@@ -1821,9 +1888,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(
-        ("serve-eval", "math500"), evalchemy_runtime_source_hash()
-    )
+    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(("serve-eval", "math500"))
 
 
 def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
@@ -2188,9 +2253,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(
-        ("serve-eval", "ifeval"), evalchemy_runtime_source_hash()
-    )
+    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(("serve-eval", "ifeval"))
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
@@ -2257,7 +2320,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
-            "harbor_config_commit": HARBOR_SOURCE.commit,
             "max_input_tokens": _PREFLIGHT_MAX_INPUT_TOKENS,
             "max_output_tokens": _PREFLIGHT_MAX_OUTPUT_TOKENS,
         },
@@ -2500,7 +2562,7 @@ def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, m
     iris_opened = False
     error = "Harbor config must declare exactly one agent"
 
-    def reject_preflight(_requests):
+    def reject_preflight(_requests, *, judge_model):
         raise ValueError(error)
 
     def open_iris_client(**_kwargs):
@@ -2687,6 +2749,34 @@ def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
     assert "requires exactly one Harbor evaluation" in result.output
 
 
+def test_policy_launch_rejects_resume_outside_an_evaldash_run(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    finalization = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evals",
+            "tb2",
+            "--policy-finalization-config",
+            str(finalization),
+            "--resume-results-path",
+            "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/results",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "is not a run's results directory that EvalDash catalogs" in result.output
+
+
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
@@ -2720,7 +2810,7 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
 
     def inference_config(model, *_args, priority, **_kwargs):
         priorities.append(priority)
-        return SimpleNamespace(model=SimpleNamespace(model_id=model.name))
+        return SimpleNamespace(model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1))
 
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
@@ -2761,3 +2851,35 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
+
+
+@pytest.mark.parametrize("code", [Code.NOT_FOUND, Code.PERMISSION_DENIED])
+def test_inference_readiness_retries_missing_registration_but_preserves_access_errors(monkeypatch, code):
+    session = replace(_remote_session(), jobs=())
+    addresses = iter((ConnectError(code, "registry response"), "http://inference:8000"))
+    probed = []
+
+    def resolve_endpoint(_name):
+        result = next(addresses)
+        if isinstance(result, ConnectError):
+            raise result
+        return result
+
+    def probe(url, *, timeout):
+        probed.append(url)
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(
+        "marin.inference.iris.iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=resolve_endpoint)),
+    )
+    monkeypatch.setattr("marin.inference.iris.requests.get", probe)
+    monkeypatch.setattr("marin.inference.iris.time", SimpleNamespace(sleep=lambda _interval: None))
+    if code == Code.NOT_FOUND:
+        session.wait_until_ready()
+        assert probed == ["http://inference:8000/v1/models"]
+    else:
+        with pytest.raises(ConnectError) as raised:
+            session.wait_until_ready()
+        assert raised.value.code == Code.PERMISSION_DENIED
+        assert not probed

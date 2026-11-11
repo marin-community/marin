@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Type
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.config.callbacks import has_explicit_callbacks, interval_hf_export_enabled
+from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
@@ -46,8 +46,16 @@ from skyrl_train.inference_observability import (
 )
 
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
+from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
-from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
+from .base import (
+    CallbackHandler,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    checkpoint_save_allowed,
+    validate_save_after_fraction,
+)
 from .types import (
     CallbackErrorBehavior,
     CHECKPOINT_CALLBACK_TYPE,
@@ -56,7 +64,7 @@ from .types import (
 
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
-CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {}
+CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
 
 
 def register_callback(name: str):
@@ -102,11 +110,14 @@ class CheckpointCallback(TrainerCallback):
     Args:
         save_steps: Save a checkpoint every N steps. Set to -1 or 0 to disable.
         save_on_train_end: Whether to save a final checkpoint when training ends.
+        save_after_fraction: Suppress saves before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True):
+    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_after_fraction = save_after_fraction
 
     def on_step_end(
         self,
@@ -114,7 +125,11 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (
+            self.save_steps > 0
+            and state.global_step % self.save_steps == 0
+            and checkpoint_save_allowed(state, self.save_after_fraction)
+        ):
             control.should_save = True
         return control
 
@@ -124,7 +139,7 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and self.save_steps > 0 and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 
@@ -205,13 +220,12 @@ class BestCheckpointCallback(TrainerCallback):
         save_after_fraction: float = 0.0,
         preservation_max_drop: dict[str, float] | None = None,
     ):
+        validate_save_after_fraction(save_after_fraction)
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
         self.selection_metric = selection_metric
-        if not 0 <= save_after_fraction <= 1:
-            raise ValueError("save_after_fraction must be between zero and one")
         self.save_after_fraction = save_after_fraction
         self.preservation_max_drop = dict(preservation_max_drop or {})
         if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
@@ -246,12 +260,12 @@ class BestCheckpointCallback(TrainerCallback):
                 raise ValueError(f"Nonfinite preservation metric: {key}")
             if value < self.preservation_baseline[key] - maximum_drop:
                 return control
-        if state.global_step and state.global_step < math.ceil(self.save_after_fraction * state.total_steps):
-            return control
         score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
         if self.best_score is not None and score <= self.best_score:
+            return control
+        if state.global_step and not checkpoint_save_allowed(state, self.save_after_fraction):
             return control
         model_uri = self.initial_model_uri
         model_format = "hf"
@@ -455,19 +469,23 @@ class EvaluationCallback(TrainerCallback):
 @register_callback(HF_MODEL_SAVE_CALLBACK_TYPE)
 class HFModelSaveCallback(TrainerCallback):
     """
-    Callback for requesting Hugging Face exports at regular intervals.
+    Callback for requesting Hugging Face exports at the end of training and, optionally, at intervals.
 
     Normal training records a request beside the immutable sharded checkpoint;
     a dedicated export job later converts and optionally publishes that checkpoint.
 
     Args:
-        save_steps: Request an HF export every N steps. Set to -1 or 0 to disable.
+        save_steps: Request an HF export every N steps. Set to -1 or 0 to request only the
+            terminal export.
         save_on_train_end: Whether to request a final HF export when training ends.
+        save_after_fraction: Suppress exports before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True):
+    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_after_fraction = save_after_fraction
 
     def on_step_end(
         self,
@@ -475,7 +493,11 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (
+            self.save_steps > 0
+            and state.global_step % self.save_steps == 0
+            and checkpoint_save_allowed(state, self.save_after_fraction)
+        ):
             control.should_save_hf_model = True
         return control
 
@@ -485,7 +507,7 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save_hf_model = True
         return control
 
@@ -1045,7 +1067,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
         )
 
     # HF model save callback
-    if interval_hf_export_enabled(cfg):
+    if hf_export_destination_configured(cfg):
         callbacks.append(HFModelSaveCallback(save_steps=int(cfg.trainer.hf_save_interval)))
 
     # Reference model update callback

@@ -233,6 +233,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     # the evaluator task's own default; explicit 0 must still override defaults such as gsm8k's 5-shot.
     if task["num_fewshot"] is not None:
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    if config.get("judge_protocol", "default") != "default":
+        cmd += ["--judge-protocol", config["judge_protocol"]]
     if config.get("batch_size") is not None:
         cmd += ["--batch_size", str(config["batch_size"])]
     if config.get("dataset_cache") is not None:

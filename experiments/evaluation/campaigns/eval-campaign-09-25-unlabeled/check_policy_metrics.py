@@ -10,7 +10,6 @@ available. The unit workflow runs this check on pull requests and every day.
 
 from __future__ import annotations
 
-import ast
 import runpy
 from pathlib import Path
 from typing import NamedTuple
@@ -77,17 +76,6 @@ def _evalchemy_metric(metric: PolicyMetric, custom: CustomTaskManager, lm_eval: 
     return ResolvedMetric(source, primary, frozenset(item.source_name for item in metrics))
 
 
-def _sotopia_score_fields() -> set[str]:
-    path = CAMPAIGN / "analysis/sotopia_length_control/rank.py"
-    tree = ast.parse(path.read_text())
-    model_score = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ModelScore")
-    return {
-        node.target.id
-        for node in model_score.body
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-    }
-
-
 def main() -> None:
     expected = POLICY_METRICS_2026_10_16
     config_names = _campaign_config_names()
@@ -102,8 +90,8 @@ def main() -> None:
     if custom.load_failures:
         raise ValueError(f"custom benchmark load failures: {custom.load_failures}")
     lm_eval = LMEvalTaskManager(include_path=[str(ROOT / "vendor/evalchemy/eval/lm_eval_tasks")])
-    harbor_factory = runpy.run_path(ROOT / "vendor/harbor/src/harbor/models/benchmark.py")["reward_benchmark_metadata"]
-    harbor = harbor_factory("policy-example", n_benchmark=1, n_attempted=1)
+    harbor_metadata = runpy.run_path(ROOT / "vendor/harbor/src/harbor/models/benchmark.py")
+    harbor = harbor_metadata["reward_benchmark_metadata"]("policy-example", n_benchmark=1, n_attempted=1)
 
     for name, metric in expected.items():
         if metric.mechanism == PolicyMechanism.EVALCHEMY:
@@ -115,7 +103,11 @@ def main() -> None:
             if name != "cruxeval" and metric.published_metric not in resolved.available_source_names:
                 raise ValueError(f"{name}: publication metric {metric.published_metric!r} is not declared")
         else:
-            actual = harbor.metrics[0].source_name, harbor.primary_metric
+            metadata = harbor_metadata["sotopia_benchmark_metadata"](harbor) if name == "sotopia-hard" else harbor
+            primary = next(item for item in metadata.metrics if item.name == metadata.primary_metric)
+            actual = primary.source_name, metadata.primary_metric
+            if metric.published_metric not in {item.name for item in metadata.metrics}:
+                raise ValueError(f"{name}: publication metric is missing from Harbor metadata")
         wanted = metric.evaluator_metric, metric.record_metric
         if actual != wanted:
             raise ValueError(f"{name}: evaluator/record metrics {actual} differ from policy map {wanted}")
@@ -125,8 +117,6 @@ def main() -> None:
     crux_publication = crux.REDUCER.groups["direction"].format(group="output", metric=crux.REDUCER.accuracy)
     if expected["cruxeval"].published_metric != crux_publication:
         raise ValueError("CRUXEval publication metric differs from the output-direction reducer")
-    if expected["sotopia-hard"].published_metric not in _sotopia_score_fields():
-        raise ValueError("SOTOPIA publication metric is missing from its cohort score")
     print(f"validated {len(expected)} policy metric contracts")
 
 

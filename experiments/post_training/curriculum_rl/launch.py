@@ -533,7 +533,6 @@ trainer:
   eval_before_train: {str(preset.eval_interval > 0).lower()}
   eval_interval: {preset.eval_interval}
   ckpt_interval: {preset.ckpt_interval}
-  hf_save_interval: {preset.max_steps}
   resume_mode: latest
   logger: wandb
   project_name: {WANDB_PROJECT}

@@ -28,6 +28,7 @@ from marinskyrl.speculative_decoding import (
     runai_model_uri,
 )
 from skyrl_train.hf_model_io import HF_WEIGHT_FILENAME
+from skyrl_train.inference_engines.base import request_group_from_id
 from skyrl_train.io import io
 
 
@@ -37,7 +38,6 @@ _TRAINER_STATE_FORMAT = "marinskyrl-online-eagle-trainer-state"
 _TRAINER_STATE_VERSION = 2
 ONLINE_EAGLE_MANIFEST_FILENAME = "manifest.json"
 ONLINE_EAGLE_MERGED_CAPTURE_DIRECTORY = "merged"
-_SKYRL_REQUEST_PREFIX = "skyrl-group-"
 ONLINE_EAGLE_TARGET_CONFIG_FILENAME = "target-config.json"
 ONLINE_EAGLE_TARGET_WEIGHTS_FILENAME = "target.safetensors"
 TRAINER_STATE_FILENAME = "trainer_state.pt"
@@ -81,22 +81,6 @@ class OnlineEagleCaptureConfig:
 
     def to_mapping(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def request_group_from_id(request_id: str) -> str:
-    """Return SkyRL's prompt-group digest, or the ungrouped request ID."""
-    if request_id.startswith(_SKYRL_REQUEST_PREFIX):
-        remainder = request_id[len(_SKYRL_REQUEST_PREFIX) :]
-        group, separator, _attempt = remainder.partition("-")
-        if separator and group:
-            return group
-    return request_id
-
-
-def request_id_for_group(group_id: object) -> str:
-    """Return a unique request ID carrying SkyRL's prompt-group digest."""
-    group_digest = hashlib.sha256(str(group_id).encode()).hexdigest()[:16]
-    return f"{_SKYRL_REQUEST_PREFIX}{group_digest}-{uuid4().hex}"
 
 
 def _window_group_id(window: Mapping[str, Any]) -> str:

@@ -111,7 +111,7 @@ allocation, task bootstrap, training, checkpoint export, and the persisted run m
                     +-> derive Iris resources
 resolved launch.yaml +-> configure Ray and staging
                     +-> call the registered run(cfg.skyrl)
-                    +-> derive checkpoint-export launch.yaml
+                    +-> derive checkpoint-export launch.yaml (only when requested)
 ```
 
 This shape keeps validation mechanical. Adding a launch setting means adding one structured field and
@@ -161,7 +161,11 @@ The preflight requires positive role dimensions, checks batch divisibility, and 
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
 rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
-the GPUs assigned to each role.
+the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
+must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
+parallelism. An omitted or null ETP inherits the role's TP before these checks.
+Context-parallel ranks participate in the expert grid, so EP need not divide dense
+data parallelism.
 
 ## Artifact and runtime boundaries
 
@@ -188,7 +192,11 @@ Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
 recipes can set that field directly. Cleanup runs after the replacement checkpoint
 has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
-rolling window. Each successful Marin run also produces a durable terminal export.
+rolling window. HF export is opt-in: `skyrl_step(..., export_hf=True)` requests a durable terminal
+model and a separate export job. The structured launch config defaults `run.export_hf`
+to false as well. Without export, successful runs retain native recovery checkpoints,
+in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
+is null. Pipelines that serve the resulting model for downstream evaluation must request export.
 
 The `best_checkpoint` callback accepts a `selection_metric` whose values must be
 finite normalized scores in [0, 1], with larger values preferred. Set

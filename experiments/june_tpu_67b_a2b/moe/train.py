@@ -32,7 +32,7 @@ from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
@@ -73,7 +73,7 @@ class GrugTrainerConfig:
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
     diagnose_numerics: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # Grug builds its own compact (replica_dcn, data, expert, context, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
@@ -135,21 +135,7 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
-    pos = Axis("position", max_seq_len)
-    mix_key, shuffle_key = jax.random.split(key)
-    weights = data_config.train_weights
-    if isinstance(weights, list):
-        weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
-
-    initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-    return MixtureDataset(
-        datasets=datasets,
-        weights=weights,
-        stop_strategy=data_config.stop_strategy,
-        key=mix_key,
-        block_size=data_config.mixture_block_size,
-    )
+    return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -162,7 +148,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -192,7 +178,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
