@@ -24,7 +24,6 @@ be written, committed, pushed, launched or posted, without doing it.
 import argparse
 import dataclasses
 import datetime
-import getpass
 import importlib.util
 import json
 import os
@@ -40,6 +39,7 @@ from pathlib import Path
 
 import s3fs
 import yaml
+from iris.cluster.client.job_info import resolve_job_user
 
 from experiments.belay.analysis import Header, fetch_series, report_dir, report_url, write_report
 from experiments.belay.branch import (
@@ -1276,7 +1276,7 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
         print(f"would copy {out}/report.md and its figures to {target} and commit them to {CONFIG.registry_branch}")
     else:
         subprocess.run(command, check=True, capture_output=True)
-        job = f"/{getpass.getuser()}/{name}"
+        job = f"/{resolve_job_user()}/{name}"
         print(f"waiting for {job} ...")
         job_state = wait_for_job(job)
         print("\n".join(job_output(job)))
@@ -1598,7 +1598,7 @@ def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: boo
     if dry_run:
         return
     subprocess.run(command, check=True, capture_output=True)
-    job = f"/{getpass.getuser()}/{name}"
+    job = f"/{resolve_job_user()}/{name}"
     print(f"waiting for {job} ...")
     state = wait_for_job(job)
     print("\n".join(job_output(job)))
