@@ -100,7 +100,7 @@ function gateChip(g, more = null) {
   })
   return cell
 }
-const checklistView = { sort: 'date', descending: true, query: '' }
+const checklistView = { sort: 'date', descending: true, query: '', liveOnly: false }
 const openRows = new Set() // checklist rows expanded to their thread, by registry id
 const logView = { query: '' }
 const openPosts = new Set() // agent log entries expanded, by registry id
@@ -356,6 +356,7 @@ function renderChecklist() {
   if (!registry) return
   const q = checklistView.query.toLowerCase()
   const rows = checklistRows(config)
+    .filter((r) => !checklistView.liveOnly || r.accepted)
     .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category} ${recipeEvent(r.idea, config.recipe_tag)?.type === 'removed' ? 'retest' : ''}`.toLowerCase().includes(q))
     .sort(checklistOrder())
   document.getElementById('checklist-n').textContent = String(rows.length)
@@ -463,6 +464,10 @@ function checklistRow(r, registryUrl) {
 }
 
 function wireChecklist() {
+  document.getElementById('ck-live').addEventListener('change', (e) => {
+    checklistView.liveOnly = e.target.checked
+    renderChecklist()
+  })
   document.getElementById('ck-filter').addEventListener('input', (e) => {
     checklistView.query = e.target.value
     renderChecklist()

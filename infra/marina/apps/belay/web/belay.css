@@ -477,6 +477,7 @@ pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow
 .ck-bar h2 { margin: 0 auto 0 0; }
 #ck-filter { font: 13px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
 #ck-filter { min-width: 240px; }
+.ck-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--slate); cursor: pointer; }
 .ck-table { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .ck-row { display: grid; grid-template-columns: minmax(180px, 1fr) 112px 84px repeat(4, 100px) 168px 56px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .ck-head { border-top: 0; background: var(--surface-2); font: 600 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--slate); }
