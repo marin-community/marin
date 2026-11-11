@@ -38,6 +38,13 @@ def test_group_weight_splits_by_member_tokens():
     assert weights == pytest.approx({"c01q0": 0.5, "c02q0": 0.375, "c03q0": 0.125})
 
 
+def test_group_shards_fills_parts_in_order():
+    shards = [{"key": f"s{i}", "tokens": tokens} for i, tokens in enumerate([100, 100, 300, 50, 50, 10])]
+    groups = sample_mix.group_shards(shards, copies_per_token=0.5, part_tokens=100)
+    assert [[s["key"] for s in group] for group in groups] == [["s0", "s1"], ["s2"], ["s3", "s4", "s5"]]
+    assert sample_mix.group_shards([], copies_per_token=0.5, part_tokens=100) == []
+
+
 def _write_cell(store, cell, shard_docs):
     root = sample_mix.cell_dir(store, cell)
     paths, stubs, counts = [], [], []
@@ -68,7 +75,7 @@ def test_end_to_end_on_a_small_store(tmp_path):
     rng = np.random.default_rng(0)
     store = str(tmp_path / "store")
     source = {
-        "c00q0": [_docs(rng, 400), _docs(rng, 300)],
+        "c00q0": [_docs(rng, 400), _docs(rng, 300), _docs(rng, 200)],
         "c01q4": [_docs(rng, 500)],
         "c02q1": [_docs(rng, 60)],  # small: the main cache must repeat its documents
     }
@@ -85,9 +92,10 @@ def test_end_to_end_on_a_small_store(tmp_path):
         groups={"small": ("c02q1",)},
     )
     out = str(tmp_path / "out")
-    plan = sample_mix.plan_recipe(recipe, "test", out, seed=3, store=None, target_overrides={})
+    # A part size larger than any cell makes one item per cell, so c00q0's three shards share one part.
+    plan = sample_mix.plan_recipe(recipe, "test", out, seed=3, store=None, target_overrides={}, part_tokens=10**9)
     assert plan["cells"]["c02q1"]["bands"]["main"][1] > 1  # repeats
-    assert len(plan["items"]) == 4
+    assert [(item["cell"], len(item["shards"])) for item in plan["items"]] == [("c00q0", 3), ("c01q4", 1), ("c02q1", 1)]
 
     sample_mix.sample(out, num_tasks=2, task_index=0)
     sample_mix.sample(out, num_tasks=2, task_index=1)
@@ -113,5 +121,7 @@ def test_end_to_end_on_a_small_store(tmp_path):
 
     # Re-running a finished task is a no-op, and the plan is deterministic given the seed.
     sample_mix.sample(out, num_tasks=1, task_index=0)
-    replanned = sample_mix.plan_recipe(recipe, "test", str(tmp_path / "out2"), seed=3, store=None, target_overrides={})
+    replanned = sample_mix.plan_recipe(
+        recipe, "test", str(tmp_path / "out2"), seed=3, store=None, target_overrides={}, part_tokens=10**9
+    )
     assert json.dumps(replanned["cells"], sort_keys=True) == json.dumps(plan["cells"], sort_keys=True)
