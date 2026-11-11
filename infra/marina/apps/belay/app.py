@@ -91,6 +91,9 @@ LABEL_WIDTH = 90
 RECENT_SESSIONS = 20
 RECENT_ACTIVITY = 60
 
+# A registry id: the experiment of a Belay run starts with its idea's (see parse_run_name).
+REGISTRY_ID_PATTERN = "X[0-9]{4}"
+
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_by TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
@@ -109,7 +112,7 @@ SCHEMA = (
     # A run's registry_id is its idea's (X0221); a ladder rung's run also carries its rung in experiment (X0221d512).
     # Rows from before this held the experiment in registry_id; move it over once.
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS experiment TEXT",
-    "UPDATE runs SET experiment = registry_id, registry_id = substring(registry_id FROM '^X[0-9]{4}') "
+    f"UPDATE runs SET experiment = registry_id, registry_id = substring(registry_id FROM '^{REGISTRY_ID_PATTERN}') "
     "WHERE experiment IS NULL",
     """CREATE TABLE IF NOT EXISTS events (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, ref TEXT,
@@ -143,7 +146,7 @@ SCHEMA = (
 
 # A Belay run is named belay-<experiment>-<run>. The experiment is the idea's registry id, plus a rung tag for a
 # ladder rung: belay-X0221d512-seed0 is run seed0 of rung d512 of X0221.
-REGISTRY_ID_PREFIX = re.compile(r"X\d{4}")
+REGISTRY_ID_PREFIX = re.compile(REGISTRY_ID_PATTERN)
 
 
 @dataclasses.dataclass(frozen=True)
