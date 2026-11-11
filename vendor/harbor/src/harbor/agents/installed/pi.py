@@ -33,6 +33,7 @@ from harbor.models.trajectories.observation_result import ObservationResult
 from harbor.models.trajectories.step import Step
 from harbor.models.trajectories.tool_call import ToolCall
 from harbor.models.trajectories.trajectory import Trajectory
+from harbor.models.trial.paths import EnvironmentPaths
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
 from harbor.utils.artifact_writer import get_artifact_writer
@@ -65,8 +66,10 @@ class Pi(BaseInstalledAgent):
     _SUPPORTED_THINKING_FORMATS = frozenset({"chat-template", "qwen-chat-template"})
     _API_BASE_ENV = "HARBOR_PI_API_BASE"
     _API_KEY_ENV = "HARBOR_PI_API_KEY"
-    _ENDPOINT_ENV_PATH = "/logs/agent/harbor-pi-endpoint.env"
-    _CONTEXT_BUDGET_EXTENSION_PATH = "/tmp/harbor-pi-context-budget.js"
+    # Provider uploads are root-owned. The agent must unlink both files, so
+    # their parent must be agent-writable rather than the sticky shared /tmp.
+    _ENDPOINT_ENV_PATH = str(EnvironmentPaths.agent_dir / "harbor-pi-endpoint.env")
+    _CONTEXT_BUDGET_EXTENSION_PATH = str(EnvironmentPaths.agent_dir / "harbor-pi-context-budget.js")
     _MCP_EXTENSION_PATH = "/opt/harbor-pi/node_modules/pi-mcp-extension/src/index.ts"
     _MCP_CONFIGURE_PATH = "/installed-agent/pi_configure_mcp.cjs"
     _PROVIDER_CONFIG_RELATIVE_PATH = ".pi/agent/models.json"
