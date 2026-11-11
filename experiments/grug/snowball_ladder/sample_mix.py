@@ -3,9 +3,12 @@
 
 """Build fixed-size, pre-mixed token caches for the Snowball scaling ladder.
 
-The ladder trains on a GPU cluster that cannot stream the full datakit stores from CoreWeave, so
-each data phase becomes one flat Levanter cache, built once in ``marin-us-east-02a`` and copied to
-the cluster. Training reads it as a single ``DatasetComponent(flat_cache=True)`` at weight 1.
+The ladder trains on a GPU cluster that cannot stream the full datakit stores, so each data phase
+becomes one flat Levanter cache, built once next to its source store and copied to the cluster.
+Training reads it as a single ``DatasetComponent(flat_cache=True)`` at weight 1.
+
+Sampling a few percent of documents still touches nearly every 256k-token chunk of the source, so a
+build reads about the whole source store. Run it in the store's region.
 
 Each recipe samples whole documents from a 200-cell ``cluster=N/quality=Q`` store. Tokens are
 copied as stored, so there is no decode or retokenization and every document keeps its EOS (the
@@ -18,14 +21,17 @@ the expected tokens per cell hit the mixture exactly, the caches share no docume
 bands fit in ``[0, 1)``, and a cell that is too small repeats documents instead of falling short.
 The draw is seeded by (seed, cell, shard), so results do not depend on how work is split.
 
+Each work item is a run of one cell's shards expected to yield about ``PART_TOKENS`` output tokens,
+and writes one part per cache, which keeps the copied caches to a few thousand parts.
+
 Recipes (targets carry a 1% margin so a run never wraps):
 
 * ``harrier``: the hero store ``store_4d2e363d``. ``harrier_main`` uses the September mixture
   (phase ``main``) for Snowball's 2.114T pretraining tokens; ``harrier_cooldown`` uses the hero
   cooldown weights for Snowball's 211B cooldown tokens.
-* ``snowball``: Snowball's own store ``store_8ac06c74`` and mixture-3 weights, sized for the
-  June-prep d1024 reference run (678B tokens, phase 1 from 80%). Smaller reference runs read a
-  subset.
+* ``snowball``: Snowball's own store ``store_8ac06c74`` (only on GCS in ``us-central2``) and
+  mixture-3 weights, sized for the June-prep d1024 reference run (678B tokens, phase 1 from 80%).
+  Smaller reference runs read a subset.
 
 The output is in document order by cell. Train with a full permutation shuffle
 (``LmDataConfig(shuffle=True)``), which works at any sequence length.
@@ -63,7 +69,8 @@ from experiments.grug.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_we
 logger = logging.getLogger(__name__)
 
 HARRIER_STORE = "s3://marin-us-east-02a/marin/datakit/store_4d2e363d"
-SNOWBALL_STORE = "s3://marin-us-east-02a/marin/datakit/store_8ac06c74"
+# The CoreWeave rebuild of this store (#6798) has been deleted; the GCS copy in us-central2 is the training copy.
+SNOWBALL_STORE = "gs://marin-us-central2/datakit/store_8ac06c74"
 
 # Snowball (the 2.33T checkpoint, #6811): steps 0-15k at 4096 x 8192, steps 15k-39k at 8192 x 8192,
 # then a 3150-step cooldown at 1024 x 65536.
@@ -81,6 +88,9 @@ _EXEMPLAR = {"input_ids": np.zeros(0, dtype=np.int32)}
 READ_CACHE_BYTES = 256_000_000
 READ_BATCH_TOKENS = 64_000_000
 READ_BATCH_DOCS = 2_000
+# Expected output tokens per item, summed over caches. Bounds the file count of the copied caches.
+PART_TOKENS = 2_000_000_000
+SELECT_THREADS = 16
 
 
 @dataclass(frozen=True)
@@ -182,24 +192,39 @@ def document_draws(seed: int, cell: str, shard_key: str, n: int) -> np.ndarray:
     return np.random.default_rng(int.from_bytes(digest, "big")).random(n)
 
 
-def _cell_items(store: str, cell: str) -> tuple[int, list[dict]]:
-    """Total tokens and readable shards of one cell cache."""
-    root = cell_dir(store, cell)
-    ledger = CacheLedger.load(root)
+def _cell_shards(store: str, cell: str) -> tuple[int, list[dict]]:
+    """Total tokens and non-empty shards of one cell cache. A consolidated cache is one shard, ``"."``."""
+    ledger = CacheLedger.load(cell_dir(store, cell))
     tokens = int(ledger.field_counts["input_ids"])
-    if ledger.layout == CACHE_LAYOUT_SHARDED:
-        shards = [
-            {
-                "path": prefix_join(root, shard),
-                "key": shard,
-                "rows": int(ledger.shard_rows[shard]),
-                "tokens": int(ledger.field_counts_by_shard.get(shard, {}).get("input_ids", 0)),
-            }
-            for shard in ledger.finished_shards
-        ]
-    else:
-        shards = [{"path": root, "key": ".", "rows": int(ledger.total_num_rows), "tokens": tokens}]
-    return tokens, shards
+    if ledger.layout != CACHE_LAYOUT_SHARDED:
+        return tokens, [{"key": ".", "rows": int(ledger.total_num_rows), "tokens": tokens}]
+    shards = [
+        {
+            "key": shard,
+            "rows": int(ledger.shard_rows[shard]),
+            "tokens": int(ledger.field_counts_by_shard[shard]["input_ids"]),
+        }
+        for shard in ledger.finished_shards
+    ]
+    return tokens, [shard for shard in shards if shard["rows"] > 0]
+
+
+def shard_path(store: str, cell: str, key: str) -> str:
+    root = cell_dir(store, cell)
+    return root if key == "." else prefix_join(root, key)
+
+
+def group_shards(shards: Sequence[dict], copies_per_token: float, part_tokens: int) -> list[list[dict]]:
+    """Split a cell's shards, in order, into groups that each yield about ``part_tokens`` output tokens."""
+    groups: list[list[dict]] = [[]]
+    expected = 0.0
+    for shard in shards:
+        if groups[-1] and expected >= part_tokens:
+            groups.append([])
+            expected = 0.0
+        groups[-1].append(shard)
+        expected += shard["tokens"] * copies_per_token
+    return groups if groups[-1] else []
 
 
 def recipe_cells(recipe: Recipe) -> list[str]:
@@ -214,11 +239,17 @@ def recipe_cells(recipe: Recipe) -> list[str]:
 
 def plan(recipe_name: str, out: str, seed: int, store: str | None, target_overrides: dict[str, int]) -> dict:
     recipe = RECIPES[recipe_name]()
-    return plan_recipe(recipe, recipe_name, out, seed, store, target_overrides)
+    return plan_recipe(recipe, recipe_name, out, seed, store, target_overrides, PART_TOKENS)
 
 
 def plan_recipe(
-    recipe: Recipe, recipe_name: str, out: str, seed: int, store: str | None, target_overrides: dict[str, int]
+    recipe: Recipe,
+    recipe_name: str,
+    out: str,
+    seed: int,
+    store: str | None,
+    target_overrides: dict[str, int],
+    part_tokens: int,
 ) -> dict:
     store = store or recipe.store
     caches = tuple(OutputCache(c.name, target_overrides.get(c.name, c.target_tokens), c.weights) for c in recipe.caches)
@@ -228,13 +259,17 @@ def plan_recipe(
 
     cells = recipe_cells(recipe)
     with ThreadPoolExecutor(32) as pool:
-        listed = dict(zip(cells, pool.map(lambda c: _cell_items(store, c), cells), strict=True))
+        listed = dict(zip(cells, pool.map(lambda c: _cell_shards(store, c), cells), strict=True))
     cell_tokens = {cell: tokens for cell, (tokens, _) in listed.items()}
     cell_weights = {c.name: resolve_cell_weights(c.weights, recipe.groups, cell_tokens) for c in caches}
     bands = cell_bands(caches, cell_weights, cell_tokens)
 
+    # One item per group of a cell's shards; each item writes one output part per cache.
     items = [
-        {"cell": cell, **shard} for cell in cells if cell in bands for shard in listed[cell][1] if shard["rows"] > 0
+        {"cell": cell, "shards": group}
+        for cell in cells
+        if cell in bands
+        for group in group_shards(listed[cell][1], sum(b - a for a, b in bands[cell].values()), part_tokens)
     ]
     result = {
         "recipe": recipe_name,
@@ -258,7 +293,13 @@ def plan_recipe(
 
 def _log_plan_summary(result: dict) -> None:
     store_tokens = sum(cell["tokens"] for cell in result["cells"].values())
-    logger.info("store %s: %.3fT tokens, %d shards to read", result["store"], store_tokens / 1e12, len(result["items"]))
+    logger.info(
+        "store %s: %.3fT tokens, %d shards to read in %d items",
+        result["store"],
+        store_tokens / 1e12,
+        sum(len(item["shards"]) for item in result["items"]),
+        len(result["items"]),
+    )
     for name, target in result["caches"].items():
         widths = {
             cell: info["bands"][name][1] - info["bands"][name][0]
@@ -312,31 +353,50 @@ def _read_docs(store: JaggedArrayStore, indices: np.ndarray, lengths: np.ndarray
         start = stop
 
 
+@dataclass(frozen=True)
+class _ShardSelection:
+    store: JaggedArrayStore
+    # Per cache: source row indices, repeated for multiple copies, and the source document lengths.
+    indices: dict[str, np.ndarray]
+    lengths: np.ndarray
+
+
+def _select(the_plan: dict, cell: str, shard: dict) -> _ShardSelection:
+    path = shard_path(the_plan["store"], cell, shard["key"])
+    store = JaggedArrayStore.open(prefix_join(path, "input_ids"), mode="r", dtype=np.int32)
+    lengths = _doc_lengths(store)
+    if len(lengths) != shard["rows"]:
+        raise ValueError(f"{path}: plan has {shard['rows']} rows, store has {len(lengths)}")
+    draws = document_draws(the_plan["seed"], cell, shard["key"], len(lengths))
+    indices = {
+        cache: np.repeat(np.arange(len(lengths)), document_copies(draws, tuple(band)))
+        for cache, band in the_plan["cells"][cell]["bands"].items()
+    }
+    return _ShardSelection(store, indices, lengths)
+
+
 def sample_item(the_plan: dict, index: int, out: str) -> dict:
     item = the_plan["items"][index]
     cell = item["cell"]
-    bands = the_plan["cells"][cell]["bands"]
-    store = JaggedArrayStore.open(prefix_join(item["path"], "input_ids"), mode="r", dtype=np.int32)
-    lengths = _doc_lengths(store)
-    if len(lengths) != item["rows"]:
-        raise ValueError(f"{item['path']}: plan has {item['rows']} rows, store has {len(lengths)}")
-    draws = document_draws(the_plan["seed"], cell, item["key"], len(lengths))
+    with ThreadPoolExecutor(SELECT_THREADS) as pool:
+        selections = list(pool.map(lambda shard: _select(the_plan, cell, shard), item["shards"]))
 
     written = {}
-    for cache, band in bands.items():
-        copies = document_copies(draws, tuple(band))
-        indices = np.repeat(np.arange(len(lengths)), copies)
-        if not len(indices):
+    for cache in the_plan["cells"][cell]["bands"]:
+        picked = [(s, s.indices[cache]) for s in selections if len(s.indices[cache])]
+        if not picked:
             continue
+        docs = (doc for s, indices in picked for doc in _read_docs(s.store, indices, s.lengths))
+        lengths = np.concatenate([s.lengths[indices] for s, indices in picked])
         path = prefix_join(out, f"{cache}/part-{index:06d}")
-        ledger = write_bucket_cache(path, _read_docs(store, indices, lengths), lengths[indices])
+        ledger = write_bucket_cache(path, docs, lengths)
         written[cache] = {
             "path": path,
             "rows": int(ledger.total_num_rows),
             "tokens": int(ledger.field_counts["input_ids"]),
         }
-        logger.info("item %d (%s): %s %d docs, %d tokens", index, cell, cache, len(indices), written[cache]["tokens"])
-    return {"cell": cell, "source": item["path"], "written": written}
+        logger.info("item %d (%s): %s %d docs, %d tokens", index, cell, cache, len(lengths), written[cache]["tokens"])
+    return {"cell": cell, "written": written}
 
 
 def _sidecar(out: str, index: int) -> str:
