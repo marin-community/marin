@@ -211,73 +211,74 @@ private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
 limits, harnesses and verifier backends when it loads these canonical tasks.
 
-### Independent test panels
+### Snowball test panel
 
-Build the checked-in panel recipe from its completed converted corpus:
+The test panel is a fixed sample of 1,500 public benchmark tasks that RL runs
+grade on the training job's own machines, with no container image or judge
+service. It draws only from evaluation sources and skips any task that matches
+training data or the 910-task development panel, which tuning looks at. It
+compares checkpoints of one model; it is not a headline benchmark (use
+[`experiments/evaluation`](https://github.com/marin-community/marin/blob/main/experiments/evaluation) for that) and does not
+cover multi-turn agent work or long context.
 
-```bash
-uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
-  --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/snowball-test-panel-inputs/2026.11.04/corpus.json \
-  --test-panel experiments/post_training/task_curation/recipes/snowball-test-panel.json --run
-```
+| family | sources (tasks) | fast subset |
+|---|---|---|
+| scientific_reasoning | MATH500 (500), AIME24 (20) | 35 |
+| general | MMLU-Pro (200), GPQA-Diamond (50) | 17 |
+| competitive_coding | HumanEval+ (164), MBPP+ (111) | 18 |
+| structural | IFEval (150), IFBench (140) | 19 |
+| agents | NeMo next tool call (165) | 11 |
 
-Each part declares a catalog source ID, converted population, format, family,
-Artificial Analysis (AAII) category, license and selection count. The corpus
-pins its source roots and manifest hashes. Formats are `evaluation` for a
-verified Evalchemy corpus and `normalized` for evaluation-only curation output.
-Normalized populations count converted tasks; rejections stay in the source ledger.
-The recipe lists the immutable training files and development panel separately.
+Benchmark tasks come from the catalog's Evalchemy corpora, asked once in chat
+form without examples. An agents task shows a tool-use conversation and asks for
+the next tool call; only the exact function name with exact JSON arguments
+scores 1. It measures tool-call accuracy, not agent ability. The agents part
+stays only while the starting model passes 5%–95% of its answers; the published
+panel measured 19.2%.
 
-The producer skips overlap by task ID, canonical full conversation or the
-whitespace-normalized final user statement, when present. It records overlap
-counts before seeded sampling. Tasks must carry the `eval` tag and use an
-in-process or package grader. Image graders and judge services are refused.
-Part order assigns cross-part duplicates to the first part that selects them.
-Fast-subset counts are explicit for each family.
+To change the panel:
 
-Every task is answered in chat form without benchmark trials or examples.
-MMLU-Pro uses its declared zero-shot context; MBPP+ uses its public problem and
-tests in one code-writing request. Canonical benchmark protocols and graders
-remain attached to their sources.
+1. Edit the parts of
+   [`recipes/snowball-test-panel.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-test-panel.json)
+   (`source_id`, `family`, `count`, `fast_counts`) and its `version`. A new source
+   is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
+   intended_use=IntendedUse.EVAL)` registered in `sources.py`, as in
+   [`nemo_tool_calls.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/nemo_tool_calls.py).
+   Its tasks need the `eval` tag and an in-process or package grader.
+2. Build it:
 
-The artifact contains `full_validation.parquet`, `validation.parquet`,
-`task_manifest.parquet` and `summary.json`. The manifest records family, category,
-agentic flag, grader kind, recipe part, source, license and nullable difficulty.
-After qualification and eight-answer initializer evaluation, publish a distinct
-recipe version with `pass_rates`. Each measured row carries `task_id`,
-`task_digest` (the canonical SHA256 of the complete chat-adapted TaskSpec),
-`model_revision`, `attempted`, `samples`, `passed` and `mean_score`. Every selected
-task needs eight attempts, a scored answer and a matching digest; additional
-measured tasks are allowed. Difficulty is one minus mean score.
+   ```bash
+   uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
+     --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/snowball-test-panel-inputs/2026.11.04/corpus.json \
+     --test-panel experiments/post_training/task_curation/recipes/snowball-test-panel.json --run
+   ```
 
-Pass rates measure the initializer named by `model_revision`: eight answers per
-task at temperature 1.0, a 24,576-token request window and at most 8,192 generated
-tokens. A changed part needs matching measurements and a new immutable recipe
-version. Rows whose task digests still match can be reused.
+3. Measure the starting model with eight answers per task (temperature 1.0,
+   24,576-token window, at most 8,192 generated tokens), add the result as
+   `pass_rates`, and publish that as the final version. Rows bind a task by the
+   SHA-256 of its TaskSpec, so rows of unchanged tasks can be reused. A separate
+   greedy evaluation must score at least 99% of tasks with zero grading errors.
 
-The Agents part stays in the final recipe only when its measured initializer
-pass rate is 5%–95%, inclusive. Otherwise edit the recipe's parts and fast
-counts and record the gap. Qualification is a separate evaluation with at least
-99% scored and zero grading exceptions.
+The artifact contains `full_validation.parquet` (all tasks), `validation.parquet`
+(fast subset), `task_manifest.parquet` (family, category, grader kind, source,
+license and difficulty per task) and `summary.json`.
 
 ### Rebuild a Snowball training selection
 
-`recipes/snowball-100k.json` selects 100,000 tasks with local graders. Training
-excludes both its `heldout` development input and the independent test panel
-listed in `exclusions`. Both match task IDs, complete conversations and
-whitespace-normalized final user statements. The build refuses training tasks
-that require a container image or a judge service before publishing any files.
+`recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
+admitted training sources, with a quota for each source. It excludes the
+development panel (`heldout`) and the test panel (`exclusions`) by task ID, full
+conversation and whitespace-normalized final user statement, and refuses tasks
+that need a container image or a judge service.
 
 The checked-in recipe names version `2026.11.10.1`, which is not yet published;
-build it before training on it. The published `snowball-100k@2026.11.04.1`
-(built before the test panel existed, without `exclusions`) and
-`snowball-test-panel@2026.11.06.1` stay frozen; any further recipe change takes
-a new version. Existing
-Snowball controls adopt those published task files.
+build it before training on it. The published `snowball-100k@2026.11.04.1` was
+built before the test panel and has no `exclusions`; the panel build excludes it
+instead, and existing Snowball controls use it. Published versions are frozen;
+any recipe change takes a new version.
 
 Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
-`--run`. The corpus pins its complete FULL admission outputs, source recipes,
-quotas and seed. Use a separate `--artifact-root` for an independent rebuild.
+`--run`. Use a separate `--artifact-root` for an independent rebuild.
 
 ## Dataset-owned invocation
 
