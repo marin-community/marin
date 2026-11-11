@@ -18,6 +18,7 @@ const GATE = {
   none: { icon: '–', cls: 'tested' },
   na: { icon: '·', cls: 'tested' },
   partial: { icon: '◌', cls: 'partial' },
+  failed: { icon: '!', cls: 'partial' },
 }
 const OUTSIDE = /outside the verdict|not part of the verdict/
 
@@ -90,7 +91,7 @@ function inLiveRecipe(idea, recipeTag) {
 // expand inline on a tap at phone width.
 function gateChip(g, more = null) {
   const look = GATE[g.kind] ?? GATE.none
-  const shown = ['win', 'loss', 'running', 'partial'].includes(g.kind) && g.short ? ` ${g.short}` : ''
+  const shown = ['win', 'loss', 'running', 'partial', 'failed'].includes(g.kind) && g.short ? ` ${g.short}` : ''
   const chip = el('span', { class: `gate-chip ${look.cls}` }, el('b', {}, look.icon), shown)
   const lines = [g.text, ...(g.title ? g.title.split('\n') : [])].filter((x, i, a) => x && a.indexOf(x) === i)
   const tip = el('span', { class: 'gate-tip', role: 'tooltip' }, ...lines.map((x) => el('span', {}, x)), more)
@@ -286,20 +287,27 @@ const LADDER_RUNGS = ['d512', 'd768', 'd1024', 'd1280']
 
 // Gate 4, the hero-scale projection. Official only once all four competitive rungs are recorded at equal time, the
 // protocol that accounts for MFU; an equal-data ladder, a partial one or a legacy single-scale trial shows its
-// deltas without a verdict, and a ladder with rungs in flight shows as running.
-function scalingGate(idea, cfg, liveRungs) {
+// deltas without a verdict. ``rungRuns`` is the idea's latest launch of ladder rungs: while any is in flight the
+// ladder shows as running, and once all have ended it shows any that failed or that results are still to be recorded.
+function scalingGate(idea, cfg, rungRuns) {
   const ladder = new Map(counted(idea.trials.filter((t) => t.rung?.startsWith('competitive-'))).map((t) => [t.rung.replace('competitive-', ''), t]))
   const legacy = new Map(counted(idea.trials.filter((t) => ['d768', 'd1024', 'd1280'].includes(t.rung))).map((t) => [t.rung, t]))
   const shown = ladder.size ? ladder : legacy
   const parts = [...shown].map(([r, t]) => `${r} ${signed(t.delta[0])} (${t.protocol === 'fixed_time' ? 'equal time' : 'equal data'})`)
   const title = parts.join('\n')
   const recorded = LADDER_RUNGS.filter((r) => ladder.has(r)).length
+  const registered = new Set(idea.trials.filter((t) => t.rung?.startsWith('competitive-')).map((t) => t.rung)).size
+  const failed = rungRuns.filter((r) => TERMINAL.has(r.state) && r.state !== 'succeeded').length
   if (recorded === LADDER_RUNGS.length && [...ladder.values()].every((t) => t.protocol === 'fixed_time')) {
     const verdicts = [...ladder.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, `competitive-${t.rung.replace('competitive-', '')}`).noise))
     const kind = verdicts.includes('loss') ? 'loss' : verdicts.every((v) => v === 'win') ? 'win' : 'noise'
     return { kind, short: signed(ladder.get('d1280').delta[0]), text: `${kind} at all 4 rungs, equal time`, title }
   }
-  if (liveRungs) return { kind: 'running', short: `${recorded}/4`, text: `ladder running · ${recorded}/4 rungs recorded`, title }
+  if (rungRuns.some((r) => !TERMINAL.has(r.state))) return { kind: 'running', short: `${recorded}/4`, text: `ladder running · ${recorded}/4 rungs recorded`, title }
+  if (registered > recorded) {
+    const why = failed ? `${failed} rung${failed > 1 ? 's' : ''} failed` : 'results not yet recorded'
+    return { kind: failed ? 'failed' : 'partial', short: `${recorded}/4`, text: `ladder ${recorded}/4 · ${why}`, title: title || why }
+  }
   if (!shown.size) return { kind: 'none', text: 'not run', title: '' }
   if (!ladder.size) {
     return { kind: 'partial', short: [...legacy.keys()].join('+'), text: `unofficial: legacy ${[...legacy.keys()].join(', ')} only`, title }
@@ -336,8 +344,8 @@ function approvalDate(idea, pageIdea) {
 function checklistRows(cfg) {
   // The speedrun gate's run in flight: a live run of the idea itself, not of one of its ladder rungs.
   const live = new Map(state.runs.filter((r) => !TERMINAL.has(r.state) && r.experiment === r.registry_id).map((r) => [r.registry_id, r]))
-  // Live ladder rungs per idea: runs whose experiment carries a rung tag.
-  const liveRungs = (xid) => state.runs.filter((r) => !TERMINAL.has(r.state) && r.registry_id === xid && r.experiment !== r.registry_id).length
+  // An idea's latest launch of ladder rungs: its runs whose experiment carries a rung tag.
+  const rungRuns = (xid) => launches(state.runs.filter((r) => r.registry_id === xid && r.experiment !== r.registry_id)).latest
   return registry.ideas.map((idea) => {
     const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
     // A link from before the agent log: an idea's post on the old running issue, kept in place there.
@@ -354,13 +362,13 @@ function checklistRows(cfg) {
       dense: denseGate(idea, cfg),
       speedrun: speedrunGate(idea, live.get(idea.xid), cfg),
       hero: heroGate(idea, cfg),
-      scaling: scalingGate(idea, cfg, liveRungs(idea.xid)),
+      scaling: scalingGate(idea, cfg, rungRuns(idea.xid)),
     }
   })
 }
 
 // Gate verdicts, best first: a descending sort puts wins on top.
-const GATE_RANK = { win: 6, running: 5, noise: 4, loss: 3, partial: 2, na: 1, none: 0 }
+const GATE_RANK = { win: 7, running: 6, noise: 5, loss: 4, partial: 3, failed: 2, na: 1, none: 0 }
 const RECIPE_RANK = { adopted: 2, removed: 1 }
 // The checklist columns, each with the ascending order a click on its header sorts by; ties go newest first. A first
 // click sorts descending (newest, best or highest first), except on Author, which starts A to Z.
