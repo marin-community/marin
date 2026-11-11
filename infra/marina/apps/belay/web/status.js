@@ -282,10 +282,9 @@ function heroGate(idea, cfg) {
   return { kind: 'none', text: stc ? `not run · speedrun ${stc.step_time_change} step time` : 'not run', title: '' }
 }
 
-// Gate 4, the hero-scale projection: the competitive ladder's Δ per rung (legacy wider rungs count too).
 const LADDER_RUNGS = ['d512', 'd768', 'd1024', 'd1280']
 
-// Gate 4, the scale projection. Official only once all four competitive rungs are recorded at equal time, the
+// Gate 4, the hero-scale projection. Official only once all four competitive rungs are recorded at equal time, the
 // protocol that accounts for MFU; an equal-data ladder, a partial one or a legacy single-scale trial shows its
 // deltas without a verdict, and a ladder with rungs in flight shows as running.
 function scalingGate(idea, cfg, liveRungs) {
