@@ -1,0 +1,14 @@
+experiment: X0221d768
+track: competitive-d768
+runs:
+  seed0:
+    seed: 0
+    variant: CPLM Plus copy head (cplm_plus=true)
+    flags:
+    - --model-set
+    - cplm_plus=true
+  control:
+    seed: 0
+    variant: competitive-d768 control
+    control: true
+    shared: s7n-d768
