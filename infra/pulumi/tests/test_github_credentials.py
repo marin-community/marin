@@ -35,6 +35,7 @@ EXAMPLE_REPOSITORY = "example/repo"
 
 EXPECTED_REMOVAL_CANDIDATES = frozenset(
     {
+        "repository:marin-community/marin:BELAY_INTAKE_TOKEN",
         "repository:marin-community/marin:DISCORD_WEBHOOK_CODE_REVIEW",
         "repository:marin-community/marin:DUCKY_CW_ACCESS_KEY",
         "repository:marin-community/marin:GCP_ARTIFACT_REPOSITORY_SA_KEY",
