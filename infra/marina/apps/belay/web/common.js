@@ -286,12 +286,56 @@ const STAGES = [
   ['recorded', 'Recorded'],
 ]
 
-function renderPipeline(pipeline) {
+let openStage = null // the stage whose ideas are listed under the counts
+
+// The stage counts; a click on one lists its ideas underneath (again to close). The list comes from the same ideas
+// as the counts, so the two always agree.
+function renderPipeline(pipeline, ideas) {
+  const focused = document.activeElement?.dataset?.stage
   setChildren(
     'pipeline',
     STAGES.map(([key, label]) =>
-      el('li', { dataset: { hot: String(pipeline[key] > 0) } }, el('b', {}, String(pipeline[key])), el('span', {}, label)),
+      el(
+        'li',
+        { dataset: { hot: String(pipeline[key] > 0), open: String(openStage === key) } },
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'pipe-btn',
+            dataset: { stage: key },
+            'aria-expanded': String(openStage === key),
+            'aria-controls': 'pipeline-list',
+            onclick: () => {
+              openStage = openStage === key ? null : key
+              renderPipeline(pipeline, ideas)
+            },
+          },
+          el('b', {}, String(pipeline[key])),
+          el('span', {}, label),
+        ),
+      ),
     ),
+  )
+  if (focused) document.querySelector(`#pipeline [data-stage="${focused}"]`).focus({ preventScroll: true })
+  const listed = openStage ? ideas.filter((i) => i.state === openStage) : []
+  const label = STAGES.find(([key]) => key === openStage)?.[1]
+  setChildren(
+    'pipeline-list',
+    !openStage
+      ? null
+      : listed.length
+        ? listed.map((i) =>
+            el(
+              'div',
+              { class: 'pipe-idea' },
+              el('span', { class: 'mono muted' }, `#${i.id}`),
+              i.registry_id ? el('a', { class: 'xid mono', href: `#status/${i.registry_id}` }, i.registry_id) : null,
+              el('span', { class: 'nm' }, i.title ?? i.body.trim().split('\n')[0]),
+              i.url ? link(i.url, 'GitHub ↗') : null,
+            ),
+          )
+        : el('div', { class: 'none' }, `No ideas ${label.toLowerCase()}`),
   )
 }
 

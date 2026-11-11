@@ -543,7 +543,7 @@ function renderFeed() {
 
 function render() {
   renderNext(state.next)
-  renderPipeline(state.pipeline)
+  renderPipeline(state.pipeline, state.ideas)
   renderRunning()
   renderRecent()
   renderChecklist()

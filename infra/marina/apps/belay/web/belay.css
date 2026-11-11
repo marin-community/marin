@@ -294,6 +294,14 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
 .pipe li:not(:last-child)::after { content: "›"; position: absolute; right: -6px; top: 50%; transform: translateY(-50%); color: var(--faint); }
 .pipe b { font-family: var(--display); font-weight: 900; font-stretch: 112%; font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--faint); }
 .pipe li[data-hot="true"] b { color: var(--rope); }
+.pipe li[data-open="true"] { border-color: var(--rope); }
+.pipe-btn { all: unset; display: flex; align-items: baseline; gap: 8px; width: 100%; cursor: pointer; }
+.pipe-btn:focus-visible { outline: 2px solid var(--rope); outline-offset: 4px; border-radius: 4px; }
+.pipe-list:not(:empty) { margin-top: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px; }
+.pipe-idea { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 0; font-size: 13px; }
+.pipe-idea + .pipe-idea { border-top: 1px solid var(--line); }
+.pipe-idea .nm { flex: 1 1 16em; min-width: 0; }
+.pipe-idea a { color: var(--rope); }
 .pipe span { font-size: 12.5px; color: var(--slate); }
 
 /* compact lines (status and admin) */
