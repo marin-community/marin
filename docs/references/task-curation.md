@@ -297,7 +297,7 @@ reads `rl-data/task-selection/NAME/VERSION` under `s3://marin-us-east-02a/marin`
 driver's default `--artifact-root`. It refuses selections that contain AI-judged tasks,
 and data presets require the default selection's heldout input. Snowball presets do not
 evaluate the selection's `validation.parquet`; held-out comparisons use the
-[test panel](../recipes/snowball-rl.md#tasks-and-evaluation).
+[EvalLite](../recipes/snowball-rl.md#tasks-and-evaluation).
 
 ## Dataset-owned invocation
 

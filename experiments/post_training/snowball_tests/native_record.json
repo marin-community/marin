@@ -1,13 +1,14 @@
 {
   "source": {
-    "source": "s3://marin-us-east-02a/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.11.1",
+    "source": "s3://marin-us-east-02a/marin/checkpoints/snowball-rl/control/learning-medium-648b5687f0-r0/2026.11.06.1",
     "files": [
       "resolved-launch.yaml",
       "terminal.json",
       "exports/metrics/step-000025.json",
       "exports/dumped_evals/global_step_25_evals/HuggingFaceH4_MATH-500.jsonl"
     ],
-    "redactions": "Only gate-consumed fields; no command line, environment credentials, prompt, response text or model data."
+    "redactions": "Only gate-consumed fields; no command line, environment credentials, prompt, response text or model data.",
+    "description": "Synthetic EvalLite fixture adapted from the recorded native shape"
   },
   "receipt": {
     "config": {
