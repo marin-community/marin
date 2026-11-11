@@ -289,7 +289,7 @@ def _opencode_prompt(content: str, question: str) -> str:
 def _repair_user_prompts(messages: list[dict], row: dict, *, family: str, partition_name: str, counter: str) -> None:
     """Remove export artifacts from the user prompts of OpenCode and SWE v2 agentless rows, in place."""
     if family == _OPENCODE_FAMILY:
-        question = _restore_backslash_b(row.get("question"))
+        question = row.get("question")
         for message in messages:
             content = message.get("content")
             if message.get("role") == "user" and isinstance(content, str) and isinstance(question, str):
