@@ -145,7 +145,9 @@ Publication updates selected sources and preserves all other production entries,
 including their pinned declarations. Use `--source` to grade only new or changed
 sources; the other sources' assessments carry forward without executing their
 pipelines. Metadata-only edits to names, tags or URLs
-therefore reach production when that source is selected. Removing a declaration
+therefore reach production when that source is selected. Inventory-only sources
+have no pipeline to select, so every publication takes their declarations,
+including `independent_qc`, from the current code. Removing a declaration
 from code does not retire its production entry. Older attempts are ignored per
 source, so an out-of-order campaign can still publish its other sources. Failed
 attempts under a changed assessment key clear the old grade; exact-key retries

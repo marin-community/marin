@@ -587,6 +587,7 @@ jobs:
             skyrl-train/tests/cpu/test_compact_distillation.py \
             skyrl-train/tests/cpu/test_tracking.py \
             skyrl-train/tests/cpu/test_evaluation_score_order.py \
+            skyrl-train/tests/cpu/test_grug_log_scaling.py \
             skyrl-train/tests/cpu/test_reference_likelihood.py
 
   unit_tests:
