@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import os
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
@@ -12,7 +14,9 @@ from marin.execution.artifact import RECORD_FILENAME, write_artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
+from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 
+from experiments.post_training.long_loop import archive_stage
 from experiments.post_training.long_loop.archive import (
     ArchiveInput,
     checkpoint_cleanup,
@@ -200,7 +204,10 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
     assert Path(root, "cleanup-blocked.json").exists() == incomplete
 
 
-def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(tmp_path):
+@pytest.mark.parametrize("incomplete_wandb_history", [False, True])
+def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
+    tmp_path, monkeypatch, incomplete_wandb_history
+):
     def document(path, value):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
@@ -225,10 +232,40 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(tmp_pat
     for stage, entries in settings["stage_files"].items():
         for entry in entries:
             document(Path(roots[stage]) / entry["path"], {})
+    tracker = {"entity": None, "project": "test", "id": None}
+    rows = [{"_step": 4, "loss": 0.4, "nested": {"key": "é"}}, {"other": 12}, {"_step": 2, "loss": 0.6}]
+    if incomplete_wandb_history:
+        tracker = {"entity": "test-entity", "project": "test", "id": "sft-id"}
+
+        class Run:
+            def download_history_exports(self, directory, require_complete_history):
+                assert require_complete_history
+                raise IncompleteRunHistoryError()
+
+            def scan_history(self):
+                yield from rows
+
+        class Client:
+            def __init__(self, *, api_key):
+                assert api_key == "fake-for-offline-test"
+
+            def run(self, path):
+                assert path == "test-entity/test/sft-id"
+                return Run()
+
+        monkeypatch.setattr(archive_stage.wandb, "Api", Client)
+        monkeypatch.setattr(
+            archive_stage.subprocess,
+            "run",
+            lambda args, **kwargs: subprocess.CompletedProcess(
+                args, 1, stdout=b"", stderr=b"wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError\n"
+            ),
+        )
+        monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
     document(
         Path(roots["sft"]) / "consumed-config.json",
         {
-            "trainer": {"trainer": {"tracker": {"entity": None, "project": "test", "id": None}}},
+            "trainer": {"trainer": {"tracker": tracker}},
             "resources": {"replicas": 2},
             "processes_per_task": 4,
         },
@@ -268,3 +305,59 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(tmp_pat
     assert sum(item["name"].endswith("trace.zip") for item in plan["inputs"]) == 2
     evidence = json.loads((tmp_path / "archive/derived-inputs/evidence-status.json").read_text())
     assert evidence["native_sft_timing_coverage"]["native-sft-journal"]["expected"] == 8
+    if incomplete_wandb_history:
+        manifest = seal_archive(
+            str(tmp_path / "sealed"), [ArchiveInput(**item) for item in plan["inputs"]], plan["provenance"]
+        )
+        history = next(item for item in manifest["objects"] if item["destination"].endswith("scan-history.jsonl"))
+        raw = Path(history["destination"]).read_bytes()
+        assert [json.loads(line) for line in raw.splitlines()] == rows
+        receipt_object = next(
+            item for item in manifest["objects"] if item["destination"].endswith("scan-history-receipt.json")
+        )
+        receipt = json.loads(Path(receipt_object["destination"]).read_text())
+        assert receipt["sha256"] == hashlib.sha256(raw).hexdigest() == history["sha256"]
+        assert receipt["bytes"] == len(raw)
+        status = manifest["provenance"]["wandb_runs"][0]
+        assert (status["observed_rows"], status["step_min"], status["step_max"]) == (3, 2, 4)
+        assert status["provider_completeness_certified"] is False
+        assert status["deletion_ready"] is False
+        assert status["status"] == "scan_history_fallback_verified"
+        assert "wandb" in manifest["provenance"]["missing_evidence"]
+        assert manifest["provenance"]["cleanup_blockers"]
+
+
+def test_wandb_export_propagates_unrelated_export_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
+    monkeypatch.setattr(
+        archive_stage.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"PermissionError: denied\n"),
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        archive_stage._wandb_export(
+            [{"stage": "sft", "entity": "test", "project": "test", "id": "run"}],
+            {"package": "fake-exporter", "include": {}},
+            str(tmp_path),
+        )
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
+
+    class Run:
+        def download_history_exports(self, directory, require_complete_history):
+            raise PermissionError("provider denied history")
+
+    class Client:
+        def __init__(self, *, api_key):
+            assert api_key == "fake-for-offline-test"
+
+        def run(self, path):
+            return Run()
+
+    monkeypatch.setattr(archive_stage.wandb, "Api", Client)
+    with pytest.raises(PermissionError, match="provider denied history"):
+        archive_stage._scan_wandb_history("test/project/run", tmp_path)
+    assert not list(tmp_path.glob("scan-history*"))

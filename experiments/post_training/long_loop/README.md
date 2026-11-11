@@ -109,6 +109,14 @@ verification produces an explicitly partial archive and prevents checkpoint
 cleanup. Model exports go to public Hugging Face repositories; native optimizer
 payloads remain location/TTL references.
 
+If the strict W&B exporter reports `IncompleteRunHistoryError`, the archive
+confirms that typed provider error and automatically streams every row from
+unfiltered, unsampled `run.scan_history()`. The JSONL and its SHA256 receipt are
+archived with observed row count and `_step` bounds in the manifest. This fallback
+does not certify provider completeness or permit checkpoint deletion. Other
+export/provider failures propagate. A running coordinator uses an immutable
+source bundle; older runs need archive-only postprocessing to use a later fix.
+
 ### CPU data and configuration validation
 
 Strict composition checks literal source-route keys survive translation. Before

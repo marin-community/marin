@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import click
+import wandb
 import yaml
 from fray.types import ResourceConfig
 from marin.evaluation.records import EvalRunRecord
@@ -24,6 +25,7 @@ from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
+from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 
 from experiments.grug.moe_hero_ep.ops.upload_hf import RESPONSIBLE_USE, WARNING
 from experiments.post_training.long_loop.archive import (
@@ -42,6 +44,7 @@ from experiments.post_training.long_loop.hf_archive import (
 )
 
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
+INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
 
 
 def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
@@ -197,6 +200,45 @@ def _input(source: str, name: str, category: str) -> dict:
     return {"source": source, "name": name, "category": category}
 
 
+def _scan_wandb_history(run_path: str, directory: Path) -> dict:
+    run = wandb.Api(api_key=require_secret("WANDB_API_KEY")).run(run_path)
+    # The exporter crosses a process boundary. Confirm its reported cause with
+    # the typed provider exception before taking the only permitted fallback.
+    try:
+        run.download_history_exports(directory / "native", require_complete_history=True)
+    except IncompleteRunHistoryError:
+        pass
+    else:
+        raise RuntimeError("Strict history export failed, but the provider no longer reports incomplete history")
+    rows, first_step, last_step = 0, None, None
+    history = directory / "scan-history.jsonl"
+    checksum = hashlib.sha256()
+    with history.open("wb") as stream:
+        for row in run.scan_history():
+            raw = (json.dumps(row, sort_keys=True) + "\n").encode()
+            stream.write(raw)
+            checksum.update(raw)
+            rows += 1
+            step = row.get("_step")
+            if step is not None:
+                first_step = step if first_step is None else min(first_step, step)
+                last_step = step if last_step is None else max(last_step, step)
+    receipt = {
+        "run_path": run_path,
+        "method": "run.scan_history() without sampling, key filters or step bounds",
+        "observed_rows": rows,
+        "step_min": first_step,
+        "step_max": last_step,
+        "bytes": history.stat().st_size,
+        "sha256": checksum.hexdigest(),
+        "provider_completeness_certified": False,
+        "deletion_ready": False,
+        "limitation": "Provider refused complete native history; only the observed API rows are preserved.",
+    }
+    (directory / "scan-history-receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2))
+    return receipt
+
+
 def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[list[dict], list[dict]]:
     """Run the pinned, strict exporter only for fully identified training runs."""
     inputs, status = [], []
@@ -233,20 +275,32 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
             env = {**os.environ, "WANDB_API_KEY": require_secret("WANDB_API_KEY")}
             backup = subprocess.run([*command, "backup", str(path), "--run", run_path], env=env, capture_output=True)
             if backup.returncode:
-                status.append(
-                    {
-                        **ref,
-                        "status": "strict_export_failed",
-                        "exit_code": backup.returncode,
-                        "diagnostic_sha256": hashlib.sha256(backup.stderr).hexdigest(),
-                    }
-                )
+                # The pinned CLI serializes exception types as traceback lines.
+                # Other export failures, including auth and security errors,
+                # must propagate rather than silently becoming partial backups.
+                if not any(
+                    line.decode().partition(":")[0] == INCOMPLETE_HISTORY_EXCEPTION
+                    for line in backup.stderr.splitlines()
+                ):
+                    backup.check_returncode()
+                receipt = _scan_wandb_history(run_path, local)
+                files = []
+                for name in ("scan-history.jsonl", "scan-history-receipt.json"):
+                    raw = (local / name).read_bytes()
+                    uri = prefix_join(destination, prefix_join(identity, name))
+                    write_once(uri, raw)
+                    item = _input(uri, prefix_join("wandb/" + ref["stage"], prefix_join(identity, name)), "wandb")
+                    inputs.append(item)
+                    files.append({**item, "sha256": hashlib.sha256(raw).hexdigest()})
+                result = {**ref, "status": "scan_history_fallback_verified", **receipt}
+                status.append(result)
+                write_once(marker, json.dumps({"files": files, "status": result}, sort_keys=True).encode())
                 continue
             verified = subprocess.run([*command, "verify", str(path), "--deep"], env=env, capture_output=True)
             summary = json.loads(verified.stdout) if verified.returncode == 0 else {}
             if not summary.get("ok") or summary.get("run_count") != 1:
-                status.append({**ref, "status": "export_verification_failed", "verification": summary})
-                continue
+                verified.check_returncode()
+                raise ValueError(f"W&B archive verification failed: {summary}")
             generation = hashlib.sha256((local / "archive" / "archive.json").read_bytes()).hexdigest()
             files = []
             for file in sorted((local / "archive").rglob("*")):
@@ -464,6 +518,7 @@ def derive_archive_plan(
         "provenance": {
             "marin_commit": revision,
             "evaluation_complete": True,
+            "wandb_runs": wandb_status,
             "missing_evidence": missing,
             "cleanup_blockers": blockers,
             "limitations": limitations,
