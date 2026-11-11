@@ -18,7 +18,7 @@ environment:
         max_turns: 8
         attempt_timeout: 900
         total_turn_timeout: 600
-        model_turn_timeout: 180
+        model_turn_timeout: 300
         verifier_timeout: 180
 trainer:
   strategy: megatron
