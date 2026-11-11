@@ -52,7 +52,10 @@ def _task(task_id: str, *, image: str | None = IMAGE, capabilities: tuple[str, .
         source=Source(dataset="d", revision="r", row=task_id, importer_revision="1"),
         resources=ResourceGroups(),
     )
-    return {"path": task_id, "lowered_task_spec": json.dumps({"task": spec.model_dump(mode="json"), "runtime": {"task_machine": {}}})}
+    return {
+        "path": task_id,
+        "lowered_task_spec": json.dumps({"task": spec.model_dump(mode="json"), "runtime": {"task_machine": {}}}),
+    }
 
 
 def _write(tmp_path, rows: list[dict]):

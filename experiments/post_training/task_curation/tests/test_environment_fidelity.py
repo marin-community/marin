@@ -6,7 +6,10 @@
 import pytest
 
 from experiments.post_training.task_curation.environment_fidelity import (
+    PINNED_BASES,
+    UnlowerableRecipe,
     environment_unused,
+    lower_environment,
     missing_environment,
     provably_no_op_against,
 )
@@ -35,7 +38,8 @@ def test_anything_the_image_cannot_already_satisfy_is_not_a_no_op(recipe, files)
 def test_a_spec_that_replaces_its_archive_environment_is_flagged():
     archive = {"environment/Dockerfile": b"FROM ubuntu:24.04\nRUN pip install pandas\n"}
     replaced = {"environment_requirements": {"docker_image": AGENT}}
-    assert "declares no build context" in environment_unused(replaced, archive)
+    # The archive lowers onto ubuntu:24.04, so an iris-task image is not its environment.
+    assert "does not use the archive's base image" in environment_unused(replaced, archive)
     faithful = {"environment_requirements": {"docker_build": {"files": [{"path": "Dockerfile", "source": {}}]}}}
     assert environment_unused(faithful, archive) is None
 
@@ -43,3 +47,47 @@ def test_a_spec_that_replaces_its_archive_environment_is_flagged():
 def test_an_agentic_task_without_an_environment_is_rejected():
     assert missing_environment({"environment_requirements": {"capabilities": ["agent:pi"]}})
     assert missing_environment({"environment_requirements": {"docker_image": AGENT}}) is None
+
+
+def test_a_recipe_lowers_onto_its_pinned_base():
+    recipe = (
+        "FROM ubuntu:24.04\n"
+        "ENV DEBIAN_FRONTEND=noninteractive\n"
+        "WORKDIR /workspace\n"
+        "RUN mkdir -p /out && chmod 777 /out\n"
+    )
+    lowered = lower_environment(recipe, PINNED_BASES)
+    assert lowered.base_ref == PINNED_BASES["ubuntu:24.04"]
+    assert lowered.working_directory == "/workspace"
+    assert lowered.setup_commands == (
+        "mkdir -p /workspace",
+        "(cd /workspace && DEBIAN_FRONTEND=noninteractive mkdir -p /out && chmod 777 /out)",
+    )
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    [
+        "FROM python:3.9-slim\n",  # unmapped base
+        "FROM ubuntu:24.04\nCOPY files/ /app/\n",  # build context
+        "FROM ubuntu:24.04\nUSER app\n",  # identity change
+    ],
+)
+def test_a_recipe_is_refused_when_it_cannot_be_expressed(recipe):
+    with pytest.raises(UnlowerableRecipe):
+        lower_environment(recipe, PINNED_BASES)
+
+
+def test_replaying_the_archive_steps_counts_as_using_its_environment():
+    archive = {"environment/Dockerfile": b"FROM ubuntu:24.04\nWORKDIR /workspace\nRUN mkdir -p /out\n"}
+    lowered = lower_environment(archive["environment/Dockerfile"].decode(), PINNED_BASES)
+    faithful = {
+        "environment_requirements": {
+            "docker_image": lowered.base_ref,
+            "working_directory": lowered.working_directory,
+            "setup_commands": list(lowered.setup_commands),
+        }
+    }
+    assert environment_unused(faithful, archive) is None
+    stale = {**faithful, "environment_requirements": {**faithful["environment_requirements"], "setup_commands": []}}
+    assert "does not replay" in environment_unused(stale, archive)
