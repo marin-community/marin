@@ -96,6 +96,7 @@ from experiments.belay.submit import (
     tracks_of_comment,
     with_launched,
 )
+from experiments.belay.sync import is_belay_file
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -853,3 +854,8 @@ def test_a_post_shows_who_granted_the_priority() -> None:
     granted = dataclasses.replace(intake_idea(None), priority_grant="interactive", priority_by="ClassicLarry")
     assert granted.priority_line == "Priority: interactive (granted by @ClassicLarry)"
     assert intake_idea(None).priority_line is None
+
+
+def test_storage_leaves_out_data_belay_runs() -> None:
+    assert is_belay_file("runs/belay-X0221-seed0/checkpoints/step-100/metadata.json")
+    assert not is_belay_file("runs/dbelay-d1024-open-web-math-p20-3802f0-s2/checkpoints/step-100/metadata.json")

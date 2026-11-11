@@ -35,6 +35,9 @@ REVIEW_REACTION_WINDOW = datetime.timedelta(days=1)
 UNDECIDED_STATES = ("pending", "dismissed")
 WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
+# Data Belay (experiments/data_belay) launches through the Belay Track command, so its runs land under the same root.
+# They are not Belay's, so storage use leaves them out.
+DATA_BELAY_RUN_PREFIX = "runs/dbelay-"
 PLACEHOLDER_BPB_RATIO = "0.4147"
 
 
@@ -64,6 +67,11 @@ def registry_results(registry_dir: Path) -> tuple[str, dict]:
         text=True,
     ).stdout
     return revision, json.loads(built)
+
+
+def is_belay_file(relative_path: str) -> bool:
+    """Whether a file under the Belay output root belongs to Belay rather than to a Data Belay run."""
+    return not relative_path.startswith(DATA_BELAY_RUN_PREFIX)
 
 
 class Watcher:
@@ -134,9 +142,9 @@ class Watcher:
             config_kwargs={"s3": {"addressing_style": "virtual"}},
         )
         prefix = f"{STORAGE_BUCKET}/marin/{CONFIG.output_root.rsplit('/', 1)[0]}/"  # the launcher writes under marin/
-        files = fs.find(prefix, detail=True)
+        files = [f for path, f in fs.find(prefix, detail=True).items() if is_belay_file(path.removeprefix(prefix))]
         self.storage_at = now
-        return sum(f["size"] for f in files.values()), len(files)
+        return sum(f["size"] for f in files), len(files)
 
     def upload_registry(self) -> None:
         """Rebuild and upload the registry's results when the registry checkout moved."""
