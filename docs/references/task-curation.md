@@ -292,10 +292,10 @@ An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
 `SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
 search tags, notes and an optional input-row count. `independent_qc` records
 quality control a pinned release performed outside curation, so inventory-only
-pointers surface that evidence in the Atlas. `daytona_safe` records whether
+pointers surface that evidence in the Atlas. `daytona_safety` records whether
 running the source fits the Daytona snapshot budget (`DAYTONA_SAFE_SNAPSHOT_LIMIT`,
 ten unique snapshots); every non-agentic source is safe automatically, and an
-agentic source stays unset until its snapshot requirement is assessed. A
+agentic source stays `unassessed` until its snapshot requirement is assessed. A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed

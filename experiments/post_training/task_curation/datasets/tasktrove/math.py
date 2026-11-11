@@ -13,6 +13,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.grader import verifyit_package
@@ -238,7 +239,7 @@ SOURCES = (
             notes=(
                 "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     MathSource(
@@ -254,7 +255,7 @@ SOURCES = (
             tags=("agentic", "multi-turn"),
             count=42636,
             notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     MathSource(
@@ -270,7 +271,7 @@ SOURCES = (
             tags=("agentic", "multi-turn"),
             count=57777,
             notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     MathSource(
@@ -286,7 +287,7 @@ SOURCES = (
             tags=("agentic", "multi-turn"),
             count=2404,
             notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     MathSource(
@@ -302,7 +303,7 @@ SOURCES = (
             tags=("agentic", "multi-turn"),
             count=110730,
             notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
 )

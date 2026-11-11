@@ -10,6 +10,7 @@ source's ``solution/solve.sh``.
 """
 
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
@@ -69,7 +70,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn", "language:bash"),
                 count=1498,
                 notes="Semantic output comparison against an oracle command run in the same sandbox.",
-                daytona_safe=True,
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-nl2bash",

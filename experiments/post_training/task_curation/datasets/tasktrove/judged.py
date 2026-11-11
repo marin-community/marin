@@ -14,6 +14,7 @@ sources have no controls and their kept rows are admitted without them.
 import re
 from dataclasses import dataclass, field
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -214,7 +215,7 @@ SOURCES = (
                 "ships under tests/, which the agent never sees. Kept as rubric-only (tag no-"
                 "reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -232,7 +233,7 @@ SOURCES = (
                 "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -251,7 +252,7 @@ SOURCES = (
                 "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
                 "ones, help with the benign ones)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -269,7 +270,7 @@ SOURCES = (
                 "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -287,7 +288,7 @@ SOURCES = (
                 "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -305,7 +306,7 @@ SOURCES = (
                 "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
                 "fall to the dedup step. Kept as rubric-only (tag no-reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -323,7 +324,7 @@ SOURCES = (
                 "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
     JudgedSource(
@@ -341,7 +342,7 @@ SOURCES = (
                 "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
                 "as rubric-only (tag no-reference)."
             ),
-            daytona_safe=True,
+            daytona_safety=DaytonaSafety.SAFE,
         ),
     ),
 )

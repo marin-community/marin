@@ -85,6 +85,14 @@ class PipelineReference(CatalogRecord):
     files: list[str]
 
 
+class DaytonaSafety(StrEnum):
+    """Whether running a source fits the Daytona snapshot budget."""
+
+    SAFE = "safe"
+    UNSAFE = "unsafe"
+    UNASSESSED = "unassessed"
+
+
 DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 """The unique-snapshot budget a source must fit to count as Daytona-safe."""
 
@@ -108,10 +116,9 @@ class SourceDeclaration(CatalogRecord):
     status: str
     pipeline: PipelineReference | None
     independent_qc: IndependentQC | None = None
-    # True when running the source needs at most DAYTONA_SAFE_SNAPSHOT_LIMIT unique Daytona
-    # snapshots. Non-agentic sources never provision Daytona sandboxes and are always safe;
-    # an agentic source is None until its snapshot requirement is assessed.
-    daytona_safe: bool | None = None
+    # Non-agentic sources never provision Daytona sandboxes; an agentic source stays
+    # UNASSESSED until its unique snapshot count is assessed against DAYTONA_SAFE_SNAPSHOT_LIMIT.
+    daytona_safety: DaytonaSafety = DaytonaSafety.UNASSESSED
 
 
 class AdmissionCounts(CatalogRecord):

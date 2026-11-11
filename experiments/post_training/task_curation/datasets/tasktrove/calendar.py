@@ -14,6 +14,7 @@ golden control; an archive whose witness is not a nonempty JSON list of events i
 import json
 from typing import Any
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.models import (
@@ -172,7 +173,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=2699,
                 notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
-                daytona_safe=True,
+                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
         (
@@ -190,7 +191,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "
                     "agent-calendar-v2."
                 ),
-                daytona_safe=True,
+                daytona_safety=DaytonaSafety.SAFE,
             ),
         ),
     )

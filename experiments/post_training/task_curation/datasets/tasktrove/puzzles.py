@@ -9,6 +9,7 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 
 import json
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.models import TaskSpec
@@ -89,7 +90,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
                     "fine under the new grader."
                 ),
-                daytona_safe=True,
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles",

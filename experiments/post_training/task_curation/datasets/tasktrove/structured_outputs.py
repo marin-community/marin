@@ -5,6 +5,7 @@
 
 import json
 
+from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
@@ -121,7 +122,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn"),
                 count=53870,
                 notes="All formats require both a format check and a source-grounding judge.",
-                daytona_safe=True,
+                daytona_safety=DaytonaSafety.SAFE,
             ),
             config=CurationRecipe(
                 name="tasktrove-structured_outputs",
