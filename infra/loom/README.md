@@ -355,8 +355,9 @@ which keeps the Marin high-level board and the goals document below its
   itself that mints a documents-scoped token.
 
 The `belay` watch runs the `belay` profile every 10 minutes
-([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
-runbook session that drains the queue only when events wait. Turning dispatch off in the
+([prompt](watches/belay.md)): it re-queues the events of a session that ended
+without reporting, checks the Belay app's queue, and runs a runbook session that
+works through the queued events only when events wait. Turning dispatch off in the
 Belay app's admin page pauses it without a Loom deploy.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)

@@ -18,7 +18,7 @@ The kernel serves three groups of routes under ``/belay/api``:
 - ``/agent/*``: the watcher's and sessions' event queue, session reports and syncs. The caller must be a Marina
   identity listed in ``session_identities`` (Loom's session service account) or an approver, or send the service
   token in the ``X-Belay-Token`` header, checked against ``service_token_sha256`` (unset: no token is accepted).
-  A session's own writes (its reports, threads, activity, expected finishes, its finish and a drain claim) also need
+  A session's own writes (its reports, threads, activity, expected finishes, its finish and a retried claim) also need
   the session id and secret that its ``claim`` issued, in ``X-Belay-Session`` and ``X-Belay-Session-Secret``, while
   the session is running: another caller with the same identity can only claim, never write into that session.
 """
@@ -76,8 +76,8 @@ SESSION_SECRET_HEADER = "X-Belay-Session-Secret"
 PUBLIC_EXCERPT = 600
 PUBLIC_ACTIVITY = 30
 TERMINAL_RUN_STATES = frozenset({"succeeded", "failed", "killed", "worker_failed", "unschedulable"})
-# A session that has not reported back within this long is presumed lost, so the queue is not blocked forever.
-# Loom ends a session after 4 hours; a draining session stops taking new work well before that.
+# A backstop for a session that never reports back: Loom ends a session after 4 hours. The watch pass normally reaps
+# a dead session within one interval (reap_sessions).
 SESSION_TIMEOUT = datetime.timedelta(hours=4, minutes=15)
 # A run still going this long past its expected finish gets a run_overdue event, once.
 OVERDUE_GRACE = datetime.timedelta(minutes=30)
@@ -350,8 +350,6 @@ class RunExpectation(BaseModel):
 
 class Claim(BaseModel):
     session_id: str
-    kinds: list[EventKind] | None = None
-    """Only these kinds of event (a draining session past its budget takes only run results); None takes all."""
 
 
 class SessionFinish(BaseModel):
@@ -771,13 +769,10 @@ def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> 
     return {"state": report.state.value}
 
 
-def claim_events(
-    conn: Connection, session_id: str, kinds: list[EventKind] | None = None, secret: str | None = None
-) -> dict[str, Any]:
-    """Give every undispatched event (of ``kinds``, if given) to a new session, when dispatch is on and no session is
-    active; a new session gets a ``session_secret`` that its later writes present. An existing session (a draining
-    session, or a retried claim) must present that secret; it takes the newly queued events too, and gets back every
-    event it holds."""
+def claim_events(conn: Connection, session_id: str, secret: str | None = None) -> dict[str, Any]:
+    """Give every undispatched event to a new session, when dispatch is on and no session is active; a new session
+    gets a ``session_secret`` that its later writes present. A retried claim must present that secret and gets back
+    the events it holds."""
     conn.execute(text("SELECT pg_advisory_xact_lock(4917)"))
     _expire_sessions(conn)
     mine = _rows(conn, "SELECT state FROM sessions WHERE id = :id", id=session_id)
@@ -788,9 +783,8 @@ def claim_events(
             return {"launch": False, "reason": "dispatch is off"}
         if _session_active(conn):
             return {"launch": False, "reason": "a session is active"}
-    wanted = [k.value for k in kinds] if kinds is not None else [k.value for k in EventKind]
-    new = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL AND kind = ANY(:kinds) ORDER BY id", kinds=wanted)
     issued = None
+    new = [] if mine else _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
     if not mine:
         if not new:
             return {"launch": False, "reason": "no queued events"}
@@ -805,8 +799,7 @@ def claim_events(
             {"s": session_id, "ids": [e["id"] for e in new]},
         )
         summary = "; ".join(e["summary"] for e in new)
-        verb = "Started session for" if not mine else "Session took"
-        _activity(conn, ActivityPost(kind="dispatch", session_id=session_id, title=f"{verb}: {summary}"))
+        _activity(conn, ActivityPost(kind="dispatch", session_id=session_id, title=f"Started session for: {summary}"))
     events = _rows(conn, "SELECT * FROM events WHERE session_id = :s ORDER BY id", s=session_id)
     claimed = {"launch": True, "session_id": session_id, "events": _plain(events)}
     return {**claimed, "session_secret": issued} if issued else claimed
@@ -976,6 +969,25 @@ def _requeue(conn: Connection, session_id: str) -> None:
             continue
         payload = {**event["payload"], "retry_of": session_id}
         _enqueue(conn, EventKind(event["kind"]), event["ref"], f"{event['summary']} (retry)", payload)
+
+
+def reap_sessions(conn: Connection) -> list[str]:
+    """Mark every running session lost and offer its events again; returns their ids. Only the watch pass calls this,
+    as it starts: Loom runs one watch pass at a time and each session is a watch pass, so a session still running then
+    ended without reporting."""
+    lost = (
+        conn.execute(
+            text(
+                "UPDATE sessions SET state = 'lost', ended_at = now(), "
+                "summary = 'Its watch pass ended without a report.' WHERE state = 'running' RETURNING id"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for session_id in lost:
+        _requeue(conn, session_id)
+    return list(lost)
 
 
 def _expire_sessions(conn: Connection) -> None:
@@ -1435,9 +1447,15 @@ def create_api(services: Services) -> RegisteredApi:
 
     @agent.post("/dispatch/claim")
     def claim(request: Claim, x_belay_session_secret: str | None = Header(default=None)) -> dict[str, Any]:
-        """``claim_events``: a new session's claim, or an existing session's (with its secret) drain claim."""
+        """``claim_events``: a new session's claim, or a retry of it (with its secret)."""
         with engine.begin() as conn:
-            return claim_events(conn, request.session_id, request.kinds, x_belay_session_secret)
+            return claim_events(conn, request.session_id, x_belay_session_secret)
+
+    @agent.post("/sessions/reap")
+    def reap() -> dict[str, list[str]]:
+        """``reap_sessions``, for the watch pass as it starts."""
+        with engine.begin() as conn:
+            return {"lost": reap_sessions(conn)}
 
     @agent.post("/sessions/{session_id}/finish")
     def finish(session_id: str, report: SessionFinish, caller: str = Depends(session)) -> dict[str, str]:

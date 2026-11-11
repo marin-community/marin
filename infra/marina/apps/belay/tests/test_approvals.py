@@ -12,7 +12,6 @@ import pytest
 from belay.app import (
     DEFAULT_SETTINGS,
     Approval,
-    EventKind,
     IdeaReport,
     IntakeApproval,
     IntakeComment,
@@ -34,6 +33,7 @@ from belay.app import (
     migrate,
     note_overdue_runs,
     offer_pending_work,
+    reap_sessions,
     record_intake_comment,
     registered_comments,
     requeue_idea,
@@ -308,20 +308,27 @@ def test_a_session_report_cannot_grant_nodes_or_hours() -> None:
             IdeaReport.model_validate({"note": "x", **grant})
 
 
-def test_a_draining_session_takes_only_the_kinds_it_asks_for(conn) -> None:
+def test_a_retried_claim_takes_no_newly_queued_events(conn) -> None:
     record_intake_comment(conn, comment())
     approve_idea(conn, idea_id(conn), "maintainer")
     enable_dispatch(conn)
     secret = claim_events(conn, "s1")["session_secret"]
-    conn.execute(
-        text(
-            "INSERT INTO events (kind, ref, summary) VALUES "
-            "('run_finished', 'belay-X0001-seed0', 'finished'), ('approved', '99', 'another idea')"
-        )
-    )
-    held = claim_events(conn, "s1", [EventKind.RUN_FINISHED], secret)
-    assert [e["kind"] for e in held["events"]] == ["approved", "run_finished"]
-    assert conn.execute(text("SELECT kind FROM events WHERE session_id IS NULL")).scalars().all() == ["approved"]
+    conn.execute(text("INSERT INTO events (kind, ref, summary) VALUES ('run_finished', 'belay-X0001-seed0', 'done')"))
+    assert [e["kind"] for e in claim_events(conn, "s1", secret=secret)["events"]] == ["approved"]
+    assert conn.execute(text("SELECT kind FROM events WHERE session_id IS NULL")).scalars().all() == ["run_finished"]
+
+
+def test_the_watch_pass_reaps_a_session_that_ended_without_reporting(conn) -> None:
+    record_intake_comment(conn, comment())
+    approve_idea(conn, idea_id(conn), "maintainer")
+    enable_dispatch(conn)
+    claim_events(conn, "s1")
+    assert reap_sessions(conn) == ["s1"]
+    assert conn.execute(text("SELECT state FROM sessions WHERE id = 's1'")).scalar_one() == "lost"
+    # Its event is offered again, and the next pass's session can claim it.
+    retried = claim_events(conn, "s2")["events"]
+    assert [(e["kind"], e["payload"]["retry_of"]) for e in retried] == [("approved", "s1")]
+    assert reap_sessions(conn) == ["s2"]
 
 
 def test_an_overdue_run_is_noted_once(conn) -> None:
