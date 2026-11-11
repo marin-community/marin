@@ -453,6 +453,9 @@ def main() -> None:
         "base_refs": sorted(set(base_refs)),
         "digest_pinned": False,
         "admission": "not_run",
+        # The cohort ships no oracle solutions, so execution is uncertified until
+        # no_oracle_qualification runs; that report supplies the real value.
+        "oracle_validation": "skipped",
         "tasks": evidence,
     }
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
