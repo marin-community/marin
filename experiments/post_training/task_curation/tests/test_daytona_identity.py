@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
     count_registry_identities,
     count_task_identities,
+    daytona_execution_failure,
 )
 
 
@@ -159,3 +160,12 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
             archive.addfile(info, io.BytesIO(content))
     plain = count_task_identities([("task", gzip.compress(non_executable.getvalue(), mtime=0))])
     assert list(plain.sizes) != [expected]  # the executable bit is part of the identity
+
+
+def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
+    """Snapshot count is not enough: an unsupported capability blocks the verdict."""
+    image = "ubuntu:24.04@sha256:" + "a" * 64
+    plain = {"capabilities": [], "command_semantics": "linux_process", "docker_image": image}
+    assert daytona_execution_failure(plain) is None
+    assert daytona_execution_failure({**plain, "capabilities": ["docker"]}) == "Unsupported capabilities: docker"
+    assert "linux_process" in daytona_execution_failure({**plain, "command_semantics": None})
