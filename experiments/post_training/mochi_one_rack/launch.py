@@ -71,7 +71,7 @@ def build_smoke(version: str) -> MochiSmoke:
         cluster="cw-us-east-08a",
         cluster_config="lib/iris/config/cw-us-east-08a.yaml",
         cpu=120,
-        memory="890GB",
+        memory="940GB",
         disk="2TB",
         priority="production",
         max_retries=0,

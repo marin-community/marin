@@ -4,6 +4,8 @@ This experiment starts from a privately retained Mochi SFT step 395161 and its B
 
 The allocation is 15 GB200 trays in one NVLink domain on `cw-us-east-08a`, at `production` priority: 48 training GPUs (TP1/PP12/EP4/CP4) and 12 rollout GPUs (TP1/PP1/DP12/EP12). The cluster's ordinary Kueue topology policy keeps this gang in one domain. This fits the 15 schedulable trays observed in the remaining domain; the initial 64-GPU candidate needed one more tray. AdamW optimizer state uses the existing CPU offload path to fit the trainer footprint. vLLM compilation uses mode 3 and piecewise CUDA graphs. The recipe excludes attention/cache updates and `vllm::grug_moe_short_conv` from capture, as Grug's stateful ShortConv requires. Without that explicit configuration, vLLM automatically disables CUDA graphs even with `enforce_eager=false`.
 
+Each tray requests 120 CPUs, 940 GiB RAM and 2 TiB disk (`940GB`/`2TB` in Iris's resource parser). Ray's existing per-job override caps its object store at 32 GiB. RunAI uses its CPU-buffered loading path with an 8 GiB buffer and four requests per worker, keeping temporary loading allocations bounded. The model stays BF16; distributed expert-parallel inference and weight publication use their ordinary NCCL paths.
+
 The recipe comes from Ben's long-loop recipe at `bf163020a7115d85fd3fcb02099d3abfda3b6cf2`. It preserves RLOO-N and eight responses per prompt group, using two groups per update. Sample packing enables the existing Megatron context-parallel path; training still uses full trajectories. It keeps zero-reward groups for this runtime smoke, so the controlled length probe is not filtered out. The real tasks are two original Harbor CalibForge tasks and two non-agentic arithmetic/sequence tasks from Ben's pinned mixed-task artifact. The second stage replaces one short arithmetic prompt with a clearly marked visible ledger plus the same arithmetic question and verifier. Its rendered prompt has 31,611 valid tokens; it does not use masked padding to reach that length.
 
 `data.py` checks the original Parquet SHA-256 values before selection and emits a manifest of task identities and stage checksums. The tokenizer and chat template are copied without changes from the SFT run's `2026.09.18` tokenizer. The source tokenizer manifest pins their hashes. Generation stops on both token IDs 128001 and 128009.
@@ -14,7 +16,7 @@ Build and inspect the graph before submitting it:
 
 ```bash
 uv run python -m experiments.post_training.mochi_one_rack.launch \
-  --stage 32k --version 2026.11.11.9265
+  --stage 32k --version 2026.11.11.9266
 ```
 
 Load the dedicated `DAYTONA_RL_API_KEY` and `DAYTONA_EVAL_API_KEY` through the documented Secret Manager path. Set `MARIN_PREFIX` to the private experiment prefix, then add `--run` to the same command. Stop at `--stage 4k` for a diagnostic of only the first stage. Use a fresh calendar version after runtime changes; the input artifact identities remain explicit in `launch.py`.
