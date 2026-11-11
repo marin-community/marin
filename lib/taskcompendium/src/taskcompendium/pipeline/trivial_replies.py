@@ -33,10 +33,12 @@ from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ConversationTrace,
     GradingAttempt,
+    JsonValueAnswer,
     NoGrader,
     ScriptGrader,
     TaskSpec,
     TextMessage,
+    decode_json_value,
     grades_with_judge,
 )
 from taskcompendium.pipeline.controls import GradingMachines
@@ -194,9 +196,23 @@ def grading_plan(task: TaskSpec, machines: GradingMachines | None) -> GradingPla
     return GradingPlan(task, (factory, spec))
 
 
+def json_value_text(text: str) -> str:
+    """``text`` if it is one JSON value, else ``text`` as a JSON string."""
+    try:
+        decode_json_value(text)
+    except ValueError:
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
 def grade_reply(plan: GradingPlan, text: str) -> GradeResult:
-    """Grade ``text``, in the task's answer format, as the final reply of a turn that stopped normally."""
+    """Grade ``text``, in the task's answer format, as the final reply of a turn that stopped normally.
+
+    A JSON-value format parses the whole reply as one JSON value, so other text is presented as a JSON string.
+    """
     task = plan.task
+    if isinstance(task.answer_format, JsonValueAnswer):
+        text = json_value_text(text)
     attempt = GradingAttempt(
         ConversationTrace(events=(*task.context.events, answer_event(task, text))), stop_reason=COMPLETED_STOP_REASON
     )

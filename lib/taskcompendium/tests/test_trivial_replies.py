@@ -8,14 +8,15 @@ import json
 import pytest
 from fray.local_backend import LocalClient
 from shellbox.machine import UnsupportedMachineSpec
-from verifyit.spec import Constraint, JudgeSpec
+from verifyit.spec import Constraint, ExactSpec, JudgeSpec, Spec, StructuredExactSpec
 from zephyr.context import ZephyrContext
 
-from taskcompendium.convert.answers import exact_answer_task, ifeval_task, numeric_answer_task
+from taskcompendium.convert.answers import answer_task, exact_answer_task, ifeval_task, numeric_answer_task
 from taskcompendium.evaluation.corpus import EvaluationCorpus, chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import AnswerType, NoGrader, Source, TaskSpec
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import AnswerType, JsonValueAnswer, NoGrader, Source, TaskSpec
 from taskcompendium.pipeline import trivial_replies
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
@@ -66,6 +67,11 @@ def zero_task(index: int) -> TaskSpec:
     )
 
 
+def json_value_task(index: int, verifier: Spec) -> TaskSpec:
+    task = answer_task(row(index), prompt="Answer with one JSON value.", spec=verifier)
+    return TaskSpec.model_validate({**dict(task), "answer_type": AnswerType.JSON, "answer_format": JsonValueAnswer()})
+
+
 def scores(task: TaskSpec, machines=None) -> dict[TrivialReply, float | None]:
     plan = grading_plan(task, machines)
     assert isinstance(plan, GradingPlan)
@@ -93,6 +99,20 @@ def test_machine_graders_grade_replies_in_the_grading_machine():
     # The grader passes any nonempty answer file; the empty reply is rejected before the grader runs.
     task = script_graded(capital_task(0), b"test -s answer.txt\n")
     assert scores(task, FixtureGradingMachines()) == {**dict.fromkeys(ALL_REPLIES, 1.0), TrivialReply.EMPTY: 0.0}
+
+
+def test_json_value_tasks_receive_each_reply_as_a_json_value():
+    # The format parses the whole reply as JSON: 0 is already a JSON value, and every other reply becomes a string.
+    zero = json_value_task(0, StructuredExactSpec(expected=0))
+    plan = grading_plan(zero, None)
+    assert isinstance(plan, GradingPlan)
+    grades = {reply: grade_reply(plan, reply_text(zero, reply)) for reply in ALL_REPLIES}
+    assert {reply: (grade.status, grade.reward) for reply, grade in grades.items()} == {
+        **dict.fromkeys(ALL_REPLIES, (Outcome.GRADED, 0.0)),
+        TrivialReply.ZERO: (Outcome.GRADED, 1.0),
+    }
+    abstention = json_value_task(1, ExactSpec(expected=("I don't know.",)))
+    assert scores(abstention) == {**dict.fromkeys(ALL_REPLIES, 0.0), TrivialReply.ABSTAIN: 1.0}
 
 
 def test_tasks_this_audit_cannot_grade_are_skipped_with_their_reason():
