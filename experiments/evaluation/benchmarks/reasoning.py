@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned GPQA-Diamond and MMLU-Pro generated-choice populations."""
+"""Pinned reasoning benchmark populations and evaluation protocols."""
 
 from functools import partial
 

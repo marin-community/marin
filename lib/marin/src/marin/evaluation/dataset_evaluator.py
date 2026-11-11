@@ -17,6 +17,7 @@ from openai import OpenAI
 from rigging.timing import Duration
 from rolloutengine.models import RolloutLimits
 
+from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import CuratedSettings, RunStatus
 from marin.evaluation.runner import (
@@ -77,9 +78,9 @@ def runtime_config(
         limits=RolloutLimits(
             max_turns=1,
             max_total_tokens=None,
-            model_turn_timeout=1800,
+            model_turn_timeout=EVALUATION_REQUEST_TIMEOUT_SECONDS,
             tool_turn_timeout=None,
-            total_turn_timeout=1800,
+            total_turn_timeout=EVALUATION_REQUEST_TIMEOUT_SECONDS,
             attempt_timeout=2400,
             verifier_timeout=600,
             cleanup_timeout=60,
