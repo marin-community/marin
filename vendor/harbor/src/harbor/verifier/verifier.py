@@ -102,7 +102,10 @@ class Verifier(BaseVerifier):
                 raise VerifierOutputParseError("Invalid structured verifier verdict") from error
             if not isinstance(verdict, dict) or not isinstance(verdict.get("detail"), dict):
                 raise VerifierOutputParseError("Invalid structured verifier verdict fields")
-            if verdict.get("status") != "scored" or verdict["detail"].get("reason") == "setup_failed":
+            # The task's verifier owns setup responsibility. A scored setup
+            # failure can be an agent failure (for example, not cloning a repo).
+            # Infrastructure failures are explicitly non-scored verdicts.
+            if verdict.get("status") != "scored":
                 raise VerifierRuntimeError(
                     f"Structured verifier did not score the candidate: {verdict}"
                 )

@@ -523,7 +523,7 @@ class TestVerifierWindowsScripts:
     json.loads((Path(__file__).parent / "fixtures" / "swesmith_verifier_failures.json").read_text()),
     ids=lambda record: record["trial"],
 )
-async def test_captured_swesmith_verifier_failures_do_not_become_rewards(tmp_path, record):
+async def test_captured_swesmith_verdicts_preserve_setup_ownership(tmp_path, record):
     task_dir = _create_task_dir(tmp_path)
     (task_dir / "tests" / "verifier.toml").write_text('mode = "pytest"\n')
     task = Task(task_dir)
@@ -540,7 +540,7 @@ async def test_captured_swesmith_verifier_failures_do_not_become_rewards(tmp_pat
     environment.os = TaskOS.LINUX
     environment.exec = AsyncMock(return_value=ExecResult(return_code=0))
     verifier = Verifier(task, paths, environment)
-    if verdict is None or verdict["status"] != "scored" or verdict["detail"].get("reason") == "setup_failed":
+    if verdict is None or verdict["status"] != "scored":
         with pytest.raises(VerifierRuntimeError):
             await verifier.verify()
     else:
