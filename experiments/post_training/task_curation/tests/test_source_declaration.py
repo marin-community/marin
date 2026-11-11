@@ -61,7 +61,11 @@ def test_status_prefers_deprecated_then_excluded_then_inventory():
     assert deprecated.declaration.status == "Deprecated"
     assert excluded.declaration.status == "Deprecated"
     assert pointer.declaration.status == "Inventory"  # no pipeline: visible, never admitted
-    assert available.declaration.status == "Available"
+    runnable = RlDataSource(
+        info=SourceInfo(id="trove:run", title="Run", origin="fixture", tags=("rlvr",)),
+        pipeline=lambda source, options: None,
+    )
+    assert runnable.declaration.status == "Available"
 
 
 def test_oracle_validation_projects_into_the_declaration():

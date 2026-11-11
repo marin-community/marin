@@ -26,7 +26,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any
 
-from finestore.rl.curation import DaytonaSafety
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_defect, unsupported

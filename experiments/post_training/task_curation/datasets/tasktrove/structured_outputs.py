@@ -6,7 +6,6 @@
 import json
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts

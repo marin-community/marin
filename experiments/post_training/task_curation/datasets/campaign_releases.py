@@ -26,7 +26,12 @@ from finestore.rl.curation import (
 )
 
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
+from experiments.post_training.task_curation.source import (
+    RlDataSource,
+    SourceInfo,
+    SourceReference,
+    TaskFormat,
+)
 
 TASK_TROVE_PUBLIC = "open-athena/task-trove"
 PUBLIC_STAGED_REVISION = "5d6a5c9cbbf1541ae7325cbdba290a102ab05ca0"
@@ -112,6 +117,7 @@ def sources() -> list[RlDataSource]:
                 origin="Snowball Smartie RL",
                 family="terminal-agent",
                 tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "converted"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
                 count=1357,
                 daytona_snapshot_count=7,
                 daytona_count_basis=(

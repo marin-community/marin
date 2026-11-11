@@ -12,7 +12,6 @@ import json
 import re
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from taskcompendium.convert.answers import ifeval_task, json_schema_task, source_defect, unsupported

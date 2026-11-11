@@ -14,7 +14,6 @@ source has no controls and its kept rows are admitted without them.
 import tomllib
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task

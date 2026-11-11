@@ -10,7 +10,6 @@ private copies of the repository with restored trusted tests.
 import json
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import (

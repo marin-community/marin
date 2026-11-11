@@ -11,7 +11,6 @@ an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
 import json
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow

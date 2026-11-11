@@ -11,7 +11,6 @@ source's ``solution/solve.sh``.
 
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 

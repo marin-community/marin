@@ -14,7 +14,6 @@ sources have no controls and their kept rows are admitted without them.
 import re
 from dataclasses import dataclass, field, replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task

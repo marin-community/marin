@@ -10,7 +10,6 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 import json
 from dataclasses import replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.models import TaskSpec

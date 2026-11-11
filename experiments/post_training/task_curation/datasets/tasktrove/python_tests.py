@@ -12,7 +12,6 @@ the grader packages include the same ones, so a submission that imports one ther
 
 from dataclasses import dataclass, field, replace
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
 

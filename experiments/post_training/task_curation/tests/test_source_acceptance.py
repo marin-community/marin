@@ -4,6 +4,7 @@
 """Agentic sources are admitted only in an accepted task format."""
 
 import pytest
+from finestore.rl.curation import DaytonaSafety
 
 from experiments.post_training.task_curation.source import (
     GRANDFATHERED_MARINSKYRL_SOURCES,
@@ -84,7 +85,5 @@ def test_pipeline_less_pointers_are_inventory_never_admitted():
 
 
 def test_every_runnable_source_reads_available():
-    from experiments.post_training.task_curation.sources import runnable_sources
-
     for source in runnable_sources().values():
         assert source.declaration.status == "Available"

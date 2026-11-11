@@ -17,7 +17,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.nemotron_ultra import blend_task, text_request
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
