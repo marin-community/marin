@@ -218,7 +218,7 @@ grade on the training job's own machines, with no container image or judge
 service. It draws only from evaluation sources and skips any task that matches
 training data or the 910-task development panel, which tuning looks at. It
 compares checkpoints of one model; it is not a headline benchmark (use
-[`experiments/evaluation`](https://github.com/marin-community/marin/blob/main/experiments/evaluation) for that) and does not
+[`experiments/evaluation`](https://github.com/marin-community/marin/tree/main/experiments/evaluation) for that) and does not
 cover multi-turn agent work or long context.
 
 | family | sources (tasks) | fast subset |
