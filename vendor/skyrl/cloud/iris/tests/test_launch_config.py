@@ -389,6 +389,12 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
         ("scalar-sampling", {"sampling_params": 7}, "profile sampled: sampling_params must be a mapping"),
         ("list-sampling", {"sampling_params": []}, "profile sampled: sampling_params must be a mapping"),
         ("list-profiles", {}, "additional_evaluations must be a mapping"),
+        ("mixed-field-keys", {1: 0, "typo": 0}, "profile sampled has unknown fields"),
+        ("mixed-sampling-keys", {"sampling_params": {1: 0, "typo": 0}}, "profile sampled has unknown sampling keys"),
+        ("scalar-files", {"data_files": 7}, "profile sampled: data_files must be nonempty"),
+        ("string-files", {"data_files": "panel.parquet"}, "profile sampled: data_files must be nonempty"),
+        ("nonstring-files", {"data_files": [7]}, "profile sampled: data_files must be nonempty"),
+        ("null-callback", {}, r"trainer.callbacks\[0\] must be a mapping"),
     ],
 )
 def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch, case, patch, error) -> None:
@@ -431,6 +437,8 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         document["skyrl"]["trainer"]["callbacks"] = []
     elif case == "list-profiles":
         document["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"] = []
+    elif case == "null-callback":
+        document["skyrl"]["trainer"]["callbacks"] = [None]
     path.write_text(yaml.safe_dump(document))
     if error is not None:
         with pytest.raises(ValueError, match=error):

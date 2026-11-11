@@ -1,9 +1,9 @@
-"""Resolve trainer.callbacks[*].additional_evaluations into recorded native requests.
+"""Resolve trainer.callbacks[*].additional_evaluations into recorded native configuration.
 
 Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Literal, get_args
 
@@ -29,14 +29,26 @@ class EvaluationProfile:
             type(self.n_samples_per_prompt) is not int or self.n_samples_per_prompt <= 0
         ):
             raise ValueError("n_samples_per_prompt must be a positive integer")
-        if self.data_files is not None and not self.data_files:
-            raise ValueError("data_files must be nonempty when provided")
+        if self.data_files is not None and (
+            not isinstance(self.data_files, Sequence)
+            or isinstance(self.data_files, str)
+            or not self.data_files
+            or not all(isinstance(path, str) and path for path in self.data_files)
+        ):
+            raise ValueError("data_files must be nonempty file-path strings in a sequence")
 
 
 def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile]:
     profiles = {}
     allowed = {field.name for field in fields(EvaluationProfile)}
-    for callback in config.get("trainer", {}).get("callbacks") or []:
+    callbacks = config.get("trainer", {}).get("callbacks")
+    if callbacks is None:
+        callbacks = ()
+    if not isinstance(callbacks, Sequence) or isinstance(callbacks, str):
+        raise ValueError("trainer.callbacks must be a sequence")
+    for index, callback in enumerate(callbacks):
+        if not isinstance(callback, Mapping):
+            raise ValueError(f"trainer.callbacks[{index}] must be a mapping")
         if callback.get("type") != "evaluation":
             continue
         declarations = callback.get("additional_evaluations")
@@ -55,14 +67,14 @@ def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile
                 raise ValueError(f"evaluation profile {name}: sampling_params must be a mapping")
             unknown = set(parameters) - allowed
             if unknown:
-                raise ValueError(f"evaluation profile {name} has unknown fields: {sorted(unknown)}")
+                raise ValueError(f"evaluation profile {name} has unknown fields: {sorted(unknown, key=str)}")
             try:
                 profile = EvaluationProfile(**parameters)
             except (TypeError, ValueError) as error:
                 raise ValueError(f"evaluation profile {name}: {error}") from error
             unknown_sampling = set(profile.sampling_params or {}) - SAMPLING_PARAMETER_KEYS
             if unknown_sampling:
-                raise ValueError(f"evaluation profile {name} has unknown sampling keys: {sorted(unknown_sampling)}")
+                raise ValueError(f"evaluation profile {name} has unknown sampling keys: {sorted(unknown_sampling, key=str)}")
             profiles[name] = profile
     return profiles
 
