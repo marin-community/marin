@@ -180,7 +180,7 @@ def test_zero_spread_is_unavailable_and_required_guards_are_invalid(recorded_run
         )
     recorded_runs("learning-medium", "users/test/zero-objective", score=0.625, initial_score=0)
     report = rescore("learning-medium", "--candidate", "users/test/zero-objective")
-    row = comparisons(report, "objective")["test_panel/family_mean/gain_per_h100_hour"]
+    row = comparisons(report, "objective")["eval_lite/family_mean/gain_per_h100_hour"]
     assert (row["sd"], row["noise_percent"], row["change"], report["label"]) == (0, None, "unavailable", "no change")
     for i in range(pin.runs):
         recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, i), score=0.5)
@@ -349,8 +349,8 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
     if preset == "speed-short":
         coverage = [row for row in report["invariants"] if row["name"].endswith("/panel_scored_fraction")]
         assert coverage and all(row["comparator"] == ">=" for row in coverage)
-        values["eval/test_panel/all/outcome/graded"] = 1480
-        values["eval/test_panel/all/outcome/unavailable"] = 20
+        values["eval/eval_lite/all/outcome/graded"] = 1480
+        values["eval/eval_lite/all/outcome/unavailable"] = 20
         _json(root / "exports/metrics/step-000000.json", values)
         alias = root.parent.parent / "current-bad-counter" / root.name
         shutil.copytree(root, alias)
@@ -454,7 +454,7 @@ def test_refusals_use_exit_four(selection, arguments):
     assert result.exit_code == 4, (result.output, result.exception)
 
 
-def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
+def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     answers = [
         _answer("bounded", 3, low=1, high=5)
         | {"score": 0.8, "output_response": "first\u2028second\u2029third\u0085fourth"},
@@ -491,7 +491,7 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         directory.mkdir(parents=True)
         (directory / "panel.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in answers) + "\n")
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    scores = scoring.panel_scores(presets.EVALUATIONS["test_panel_100"], str(tmp_path))
+    scores = scoring.panel_scores(presets.EVALUATIONS["eval_lite_100"], str(tmp_path))
     final = [row for row in scores.to_pylist() if row["step"] == 25]
     assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
         ("bounded", 0, True, 0.5),
@@ -511,7 +511,7 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
         "all_wrong_fraction": 2 / 3,
     }
     expected |= {"scored_fraction": 4 / 7, "aaii_category/format/mean": 0.5}
-    assert {key: statistics["test_panel_100/" + key] for key in expected} == pytest.approx(expected)
+    assert {key: statistics["eval_lite_100/" + key] for key in expected} == pytest.approx(expected)
 
 
 @pytest.mark.timeout(180)
@@ -580,7 +580,7 @@ def test_task_set_identity_uses_contents_and_ignores_row_order_and_storage_locat
 
     roots = controls(recorded_runs, preset_name)
     roots.append(recorded_runs(preset_name, "users/test/wrong-cohort"))
-    panel_root = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
+    panel_root = Path(presets.selection_artifact(presets.EVALUATIONS["eval_lite"].source).path())
     manifest = pq.read_table(panel_root / presets.TASK_MANIFEST_FILENAME).to_pylist()
     manifest.append(manifest[0] | {"task_id": "task-outside-input"})
     pq.write_table(pa.Table.from_pylist(manifest), panel_root / presets.TASK_MANIFEST_FILENAME)

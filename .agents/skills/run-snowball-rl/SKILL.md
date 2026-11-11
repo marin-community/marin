@@ -16,7 +16,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
 2. Track or stage new source under `experiments/`, `lib/` and `vendor/`. The source tree hash enters
    the run name. Custom tasks follow the
    [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
-   They need an immutable recipe, the same development holdout, the full test panel in
+   They need an immutable recipe, the same development holdout, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
 3. Print the plan:
 
@@ -70,12 +70,12 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 ```
 
 Requirements can name computed step metrics or panel slices such as
-`test_panel/aaii_category/coding/mean`. Preflight refuses unavailable or mistyped keys.
+`eval_lite/aaii_category/coding/mean`. Preflight refuses unavailable or mistyped keys.
 `--replicates N` makes 1–5 copies with one seed. Saved typed inputs support CPU re-scoring:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl_gate \
-  --preset learning-medium --candidate RUN_NAME --require 'test_panel/aaii_category/coding/mean>=control'
+  --preset learning-medium --candidate RUN_NAME --require 'eval_lite/aaii_category/coding/mean>=control'
 ```
 
 ## Inspect saved answers

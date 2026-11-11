@@ -5,6 +5,7 @@ import json
 import subprocess
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,11 +41,19 @@ def write_receipt(root: Path, receipt: dict) -> None:
 
 
 def selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        gate,
+        "CONTROLS",
+        {
+            name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
+            for name, pins in gate.CONTROLS.items()
+        },
+    )
     monkeypatch.setattr(gate, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
-    panel = tmp_path / presets.DEFAULT_TEST_PANEL_NAME / presets.DEFAULT_TEST_PANEL_VERSION
+    panel = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / presets.DEFAULT_EVAL_LITE_VERSION
     summary = {
         "recipe": {"heldout": [{"version": "2026.10.23.1", "rows": 910}]},
         "training_rows": 100000,
@@ -107,7 +116,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    panel = Path(presets.selection_artifact(presets.EVALUATIONS["test_panel"].source).path())
+    panel = Path(presets.selection_artifact(presets.EVALUATIONS["eval_lite"].source).path())
     pq.write_table(
         pa.Table.from_pylist(
             [
