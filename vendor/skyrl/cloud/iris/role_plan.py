@@ -309,7 +309,7 @@ def _minimum_disaggregated_rollout_nodes(
     expert_parallel_workers = (
         backend == "vllm"
         and tensor_parallel_size == pipeline_parallel_size == 1
-        and expert_parallel_size == data_parallel_size > 1
+        and expert_parallel_size == data_parallel_size > gpus_per_node
     )
 
     if tensor_pipeline_size > gpus_per_node:

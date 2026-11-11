@@ -109,11 +109,13 @@ class SkyRLRolePlan:
 
     @property
     def uses_expert_parallel_placement(self) -> bool:
-        """Whether rollout uses the runtime's verified one-GPU EP placement atoms."""
+        """Whether rollout needs the verified cross-node one-GPU EP placement path."""
         return (
             self.inference_engine_tensor_parallel_size == 1
             and self.inference_engine_pipeline_parallel_size == 1
-            and self.inference_engine_expert_parallel_size == self.inference_engine_data_parallel_size > 1
+            and self.inference_engine_expert_parallel_size
+            == self.inference_engine_data_parallel_size
+            > self.policy_num_gpus_per_node
         )
 
     @property

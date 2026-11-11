@@ -282,6 +282,29 @@ def test_cross_host_expert_parallel_plan_renders_one_rack_allocation() -> None:
     assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 16
 
 
+@pytest.mark.parametrize("backend", ["vllm", "sglang"])
+def test_host_local_expert_parallel_engines_keep_whole_engine_node_packing(backend: str) -> None:
+    # Two three-GPU engines cannot share a four-GPU host. The cross-host EP
+    # exception must not change this existing allocation contract.
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        num_inference_engines=4,
+        inference_engine_data_parallel_size=3,
+        inference_engine_expert_parallel_size=3,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["generator"]["backend"] = backend
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=yaml.safe_dump(recipe),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    assert yaml.safe_load(config.launch_config_yaml)["iris"]["allocation"]["num_nodes"] == 5
+
+
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
 @pytest.mark.parametrize("value", [False, True])
 def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
