@@ -55,9 +55,11 @@ from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
+    RepeatAggregate,
     list_record_paths,
     scan_records,
 )
+from marin.evaluation.repeat_aggregates import normalize_repeat_record
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, ConfigDict
@@ -136,6 +138,7 @@ class PanelCellResponse(BaseModel):
     interval_kind: str
     metric: str
     metric_kind: str
+    repeat_aggregation: RepeatAggregate | None = None
     declared: bool
     n_scored: int
     n_benchmark: int | None
@@ -431,7 +434,7 @@ class RecordStore:
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
         """Replace the direct-scan snapshot used by the local store."""
-        records = _deduplicate_records(records)
+        records = [normalize_repeat_record(record) for record in _deduplicate_records(records)]
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
