@@ -19,7 +19,6 @@
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 import megatron.core.parallel_state as mpu
 
 
