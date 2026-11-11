@@ -235,44 +235,26 @@ def test_an_approval_without_instructions_leaves_the_note_alone(conn) -> None:
     assert conn.execute(text("SELECT note FROM ideas WHERE id = :id"), {"id": idea_id(conn)}).one().note is None
 
 
-def escalated_plan(conn, minutes_ago: int) -> int:
+def failed_plan(conn) -> int:
+    """A planned idea whose only run failed."""
     record_intake_comment(conn, comment())
     approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("UPDATE ideas SET state = 'planned', registry_id = 'X0014' WHERE id = :id"), {"id": idea_id(conn)})
     conn.execute(
         text(
-            "UPDATE ideas SET state = 'planned', registry_id = 'X0037', note = 'Escalated: registry write failed', "
-            "updated_at = now() - make_interval(mins => :m) WHERE id = :id"
-        ),
-        {"m": minutes_ago, "id": idea_id(conn)},
+            "INSERT INTO runs (name, job_id, registry_id, run, state) "
+            "VALUES ('belay-X0014d512-seed0', 'j', 'X0014d512', 'seed0', 'failed')"
+        )
     )
     return idea_id(conn)
 
 
-def test_a_stalled_plan_can_be_requeued(conn) -> None:
-    assert requeue_idea(conn, escalated_plan(conn, 30), "maintainer", "again")["state"] == "approved"
+def test_a_planned_idea_with_failed_runs_can_be_requeued(conn) -> None:
+    assert requeue_idea(conn, failed_plan(conn), "maintainer", "retry the ladder")["state"] == "approved"
 
 
-def test_a_plan_is_not_stalled_while_it_may_still_be_launching(conn) -> None:
-    fresh = escalated_plan(conn, 1)
-    with pytest.raises(HTTPException, match="moments ago"):
-        requeue_idea(conn, fresh, "maintainer", "again")
-    conn.execute(
-        text("UPDATE ideas SET note = NULL, updated_at = now() - interval '1 hour' WHERE id = :id"), {"id": fresh}
-    )
-    with pytest.raises(HTTPException, match="not escalated"):
-        decline_idea(conn, fresh, "maintainer", "no")
-
-
-def test_a_plan_with_a_run_is_not_stalled(conn) -> None:
-    stalled = escalated_plan(conn, 30)
-    conn.execute(
-        text(
-            "INSERT INTO runs (name, job_id, registry_id, run, state) "
-            "VALUES ('belay-X0037d512-seed0', 'j', 'X0037d512', 'seed0', 'pending')"
-        )
-    )
-    with pytest.raises(HTTPException, match="has Belay runs"):
-        requeue_idea(conn, stalled, "maintainer", "again")
+def test_a_planned_idea_can_be_declined(conn) -> None:
+    assert decline_idea(conn, failed_plan(conn), "maintainer", "superseded")["state"] == "declined"
 
 
 def test_an_approval_records_its_node_grant(conn) -> None:
