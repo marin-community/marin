@@ -35,13 +35,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from rolloutengine.machines import task_machine
+from daytona import Resources
+from rolloutengine.machines import _install_resources, task_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, snapshot_identity
-from shellbox.machine import Command, ExitReason, NetworkPolicy
 from shellbox.image import RegistryImage
-from daytona import Resources
+from shellbox.machine import Command, ExitReason, NetworkPolicy
 from taskcompendium.models import TaskSpec
+
 
 def _resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int) -> Resources:
     """The ``Resources`` the Daytona factory builds from the same numbers."""
@@ -96,7 +97,15 @@ def sample_by_base(specs: dict[str, dict], bases: dict[str, str], per_base: int,
 async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> LivenessResult:
     task = TaskSpec.model_validate(spec["task"])
     runtime = MachineRuntimeSpec.model_validate(
-        spec["runtime"]["task_machine"] | {"backend": "daytona", "network": NetworkPolicy.ALLOW}
+        {
+            **(spec["runtime"]["task_machine"] or {}),
+            "backend": "daytona",
+            "network": NetworkPolicy.ALLOW,
+            "gpus": 0,
+            "user": None,
+            "startup_timeout": 900.0,
+            "cleanup_timeout": 120.0,
+        }
     )
     snapshot = snapshot_identity(
         RegistryImage(task.environment_requirements.docker_image),
@@ -105,6 +114,9 @@ async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> Live
     workdir = task.environment_requirements.working_directory or "/app"
     try:
         async with task_machine(task, factory, runtime, cleanup_timeout=runtime.cleanup_timeout or 120.0) as machine:
+            # A grading machine installs the verifier resources under /tests; the task
+            # machine only installs all/worker, so the phase adds them here.
+            await _install_resources(machine, task.resources.verifier)
             await machine.run(Command(("mkdir", "-p", "/logs/verifier"), timeout=60))
             result = await machine.run(Command(("bash", "-lc", VERIFIER_COMMAND), cwd=workdir, timeout=VERIFIER_TIMEOUT))
             reward = None
@@ -114,12 +126,22 @@ async def run_one(spec: dict, base: str, factory: DaytonaMachineFactory) -> Live
                 reward = float(text[-1]) if text else None
     except TimeoutError as error:
         return LivenessResult(task.id, base, "timeout", None, None, snapshot, str(error))
-    except Exception as error:  # noqa: BLE001
-        return LivenessResult(task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500])
+    except Exception as error:
+        return LivenessResult(
+            task.id, base, "infra_error", None, None, snapshot, f"{type(error).__name__}: {error}"[:500]
+        )
     if result.reason == ExitReason.TIMED_OUT:
         return LivenessResult(task.id, base, "timeout", None, reward, snapshot)
     if result.exit_code != 0:
-        return LivenessResult(task.id, base, "infra_error", result.exit_code, reward, snapshot, result.stderr.decode(errors="replace")[-300:])
+        return LivenessResult(
+            task.id,
+            base,
+            "infra_error",
+            result.exit_code,
+            reward,
+            snapshot,
+            result.stderr.decode(errors="replace")[-300:],
+        )
     if reward is None:
         return LivenessResult(task.id, base, "missing_reward", result.exit_code, None, snapshot)
     outcome = "negative_verdict" if reward < 1.0 else "positive_reward"
