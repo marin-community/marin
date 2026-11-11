@@ -33,7 +33,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.evaluation.metric_selection import base_metric, canonical_metric_name
+from marin.evaluation.metric_selection import canonical_metric_name
 from marin.evaluation.records import MetricKind, RepeatAggregate, RunStatus
 
 ALPHA = 0.05
