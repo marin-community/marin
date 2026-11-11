@@ -312,7 +312,9 @@ built through Harbor's own task-config mapping
 Daytona factory uses to name and create snapshots. A task the production
 validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
 build) counts as a failure and is reported, not treated as safe. No Daytona API
-calls are made. A
+calls are made. `oracle_validation` separately records how execution was
+qualified; see [Sources without oracle solutions](#sources-without-oracle-solutions).
+A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
