@@ -462,7 +462,7 @@ class FlopsBaseline:
 class MixtureContinuation:
     """Continue another run's mixture at this run's batch size.
 
-    The mixture keeps the layout the other run read at ``batch_size`` sequences per step, and this run's
+    The mixture keeps the layout it was planned with, at ``batch_size`` sequences per step, and this run's
     ``step`` reads its sequence ``sequence``.
     """
 
@@ -500,6 +500,8 @@ class GrugRunConfig:
     max_task_failures: int = 10
 
     def __post_init__(self):
+        if self.mixture_continuation is not None and self.trainer.training_data_mode != TrainingDataMode.MIXTURE:
+            raise ValueError("mixture_continuation requires TrainingDataMode.MIXTURE")
         if self.stop_after_steps is not None and self.stop_after_steps > self.last_step:
             raise ValueError(
                 f"stop_after_steps={self.stop_after_steps} is past the optimizer's last defined step {self.last_step}; "
