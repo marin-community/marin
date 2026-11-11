@@ -87,6 +87,12 @@ def test_capability_url_redaction(url: str, expected: str) -> None:
     assert _redacted_url(url) == expected
 
 
+@pytest.fixture(autouse=True)
+def _no_model_cache(monkeypatch) -> None:
+    """Serving tests here use placeholder model ids; model cache preparation has its own tests."""
+    monkeypatch.setattr(iris_module, "resolve_hf_model_ref", lambda *_args, **_kwargs: None)
+
+
 def _json_bytes(payload: object) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode()
 

@@ -392,7 +392,6 @@ def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path
         raise RemoteInferenceStartupError("endpoint registration failed", (FailedJob(),))
         yield
 
-    monkeypatch.setattr(policy_module, "precache_inference_model", lambda _config: None)
     monkeypatch.setattr(policy_module, "remote_inference", failed_inference)
     with pytest.raises(EvaluationError) as caught:
         executor(None, str(tmp_path / "output"), {}, backend_state=lambda: None)
