@@ -83,7 +83,18 @@ def main() -> None:
     probe, tokens = length_probe(tasks[NONAGENTIC_IDS[0]], tokenizer)
     selections = {
         "4k": [tasks[AGENTIC_IDS[0]], tasks[NONAGENTIC_IDS[0]], tasks[AGENTIC_IDS[1]], tasks[NONAGENTIC_IDS[1]]],
-        "32k": [tasks[AGENTIC_IDS[0]], probe, tasks[AGENTIC_IDS[1]], tasks[NONAGENTIC_IDS[1]]],
+        "32k": [
+            tasks[AGENTIC_IDS[0]],
+            probe,
+            tasks[AGENTIC_IDS[1]],
+            tasks[NONAGENTIC_IDS[1]],
+            tasks[AGENTIC_IDS[0]],
+            tasks[NONAGENTIC_IDS[0]],
+            tasks[AGENTIC_IDS[1]],
+            tasks[NONAGENTIC_IDS[1]],
+            tasks[AGENTIC_IDS[0]],
+            tasks[NONAGENTIC_IDS[0]],
+        ],
     }
     manifest = {"source_files": SOURCE_FILES, "controlled_probe_prompt_tokens": tokens, "stages": {}}
     for stage, rows in selections.items():

@@ -15,7 +15,7 @@ environment:
       harness_by_dataset:
         long-loop-smartie-calibforge: harbor_trial
       session:
-        max_turns: 8
+        max_turns: 4
         attempt_timeout: 900
         total_turn_timeout: 600
         model_turn_timeout: 300
@@ -74,7 +74,7 @@ trainer:
       expert_tensor_parallel_size: 1
       optimizer_config_kwargs:
         optimizer_cpu_offload: true
-        optimizer_offload_fraction: 0.75
+        optimizer_offload_fraction: 0.5
         overlap_cpu_optimizer_d2h_h2d: false
       optimizer_checkpoint_sharding_type: dp_reshardable
   ref:
@@ -168,6 +168,9 @@ generator:
 data:
   kind: parquet
   shuffle: false
+trajectory_runner:
+  rollout_workers:
+    num_workers: 2
 extra_env:
   DAYTONA_TARGET: us
   OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
@@ -180,7 +183,7 @@ terminal_bench:
     environment_type: daytona
     daytona_api_key_env: DAYTONA_RL_API_KEY
     eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
-    override_timeout_sec: 600
+    override_timeout_sec: 300
     trial_attempt_timeout_sec: 900
     n_concurrent_trials: 16
     max_retries: 0
@@ -191,10 +194,10 @@ terminal_bench:
       override_setup_timeout_sec: 300
       kwargs:
         version: 2.1.0
-        max_turns: 8
+        max_turns: 4
         temperature: 1.0
     setup_timeout: 300
-    run_timeout: 600
+    run_timeout: 300
     cleanup_timeout: 60
     service_startup_timeout: 60
     service_shutdown_timeout: 60

@@ -31,6 +31,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 TRIAL_ROOT = "s3://marin-us-east-08a/tmp/ttl=7d/romain/mochi-rl-smoke/2026.11.11.01a1c926.a1"
 INPUT_VERSION = "2026.11.11.9263"
+DATA_VERSION = "2026.11.11.9270"
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=12,
@@ -78,7 +79,7 @@ def build_smoke(version: str) -> MochiSmoke:
         target_cluster="cw-us-east-08a",
         parent_cluster_config="lib/iris/config/marin.yaml",
         coordinator_timeout_hours=8,
-        job_timeout_seconds=10800,
+        job_timeout_seconds=18000,
         wandb_entity="marin-community",
         required_env_vars=("DAYTONA_RL_API_KEY", "DAYTONA_EVAL_API_KEY", "MARIN_PREFIX"),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -89,15 +90,16 @@ def build_smoke(version: str) -> MochiSmoke:
         recipe["context_budget"] = {
             "request_window_tokens": cap,
             "max_new_tokens_per_turn": 2048 if cap == 4096 else 1024,
-            "max_turns": 8,
+            "max_turns": 4,
         }
         recipe["trainer"]["max_steps"] = max_steps
         if stage == "32k":
             recipe["trainer"].update(resume_mode="latest", restore_dataloader_state=False)
+            recipe["environment"]["task_sessions"]["task_spec"]["session"]["model_turn_timeout"] = 600
         data = ArtifactStep.adopt(
             f"users/romain/documents/mochi-one-rack/{stage}",
-            INPUT_VERSION,
-            source=str(trial_root / "data" / stage),
+            DATA_VERSION,
+            source=str(trial_root / "data" / DATA_VERSION / stage),
             kind=Artifact,
         )
         step = skyrl_step(
