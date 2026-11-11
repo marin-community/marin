@@ -292,6 +292,13 @@ def validate_fixed_completions(cfg: DictConfig) -> None:
     except ValueError as error:
         raise ValueError(f"invalid data.fixed_completion_format: {error}") from error
     algorithm = cfg.trainer.algorithm
+    if algorithm.sft_restore_source_mean is not None:
+        if not isinstance(algorithm.sft_restore_source_mean, str) or not algorithm.sft_restore_source_mean:
+            raise ValueError("sft_restore_source_mean must name a fixed-completion data source")
+        if cfg.trainer.policy_mini_batch_size != cfg.trainer.train_batch_size or cfg.trainer.update_epochs_per_batch != 1:
+            raise ValueError("sft_restore_source_mean requires one complete optimizer step per fixed-completion batch")
+        if off_policy_correction(algorithm).rules:
+            raise ValueError("sft_restore_source_mean cannot share the correction-weights channel")
     if algorithm.policy_loss_type != PolicyLossType.SFT:
         raise ValueError(
             f"fixed-completion training requires policy_loss_type=sft (the static runner has no rollouts); "
@@ -350,6 +357,8 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     validate_ftpo(cfg)
     budget = training_budget(cfg)
     validate_response_caps(cfg, budget.response_caps)
+    if cfg.trainer.algorithm.sft_restore_source_mean is not None and str(cfg.environment.env_class) != FIXED_COMPLETION_ENV_CLASS:
+        raise ValueError("sft_restore_source_mean requires fixed-completion SFT")
     logger.info("Training budget per optimizer step: {}", budget)
     if str(cfg.environment.env_class) == FIXED_COMPLETION_ENV_CLASS:
         validate_fixed_completions(cfg)

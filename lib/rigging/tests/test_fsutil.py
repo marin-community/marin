@@ -452,19 +452,13 @@ def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp
             self.file = file
             self.path = path
 
-        def __enter__(self):
-            self.file.__enter__()
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            result = self.file.__exit__(exc_type, exc_value, traceback)
-            if exc_type is None:
-                path = Path(self.path)
-                path.write_bytes(b"x" * path.stat().st_size)
-            return result
-
         def write(self, data):
             return self.file.write(data)
+
+        def close(self):
+            self.file.close()
+            path = Path(self.path)
+            path.write_bytes(b"x" * path.stat().st_size)
 
     class CorruptingDestination:
         def __getattr__(self, name):
@@ -526,10 +520,62 @@ class _EtagDestination:
         return found
 
 
+def test_verified_copy_promotes_small_s3_multipart_object_without_etag_preservation(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abc")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class SmallMultipartDestination:
+        protocol = "s3"
+        fixed_upload_size = False
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def info(self, path):
+            info = destination_filesystem.info(path)
+            if path.endswith("weights.bin"):
+                info["ETag"] = (
+                    '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1"'
+                    if STAGING_SUFFIX in path
+                    else '"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+                )
+            return info
+
+        def find(self, path, *, detail):
+            found = destination_filesystem.find(path, detail=detail)
+            if detail:
+                for name in found:
+                    found[name] = self.info(name)
+            return found
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            if kwargs.get("preserve_etag"):
+                raise OSError("CoreWeave rejects small multipart UploadPartCopy")
+            destination_filesystem.cp_file(source_path, destination_path)
+
+    routed_destination = SmallMultipartDestination()
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return routed_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"abc"
+    assert (destination / COMPLETION_MANIFEST).exists()
+
+
 @pytest.mark.parametrize(
     ("contents", "etag"),
     [
-        (b"abc", "900150983cd24fb0d6963f7d28e17f72"),
         (b"abcdefghij", "446feba4c1b5cc7ad93bf4d44a0e36ac-3"),
     ],
 )

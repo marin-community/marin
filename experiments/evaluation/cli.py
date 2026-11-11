@@ -26,6 +26,7 @@ from rigging.config_discovery import find_project_root
 from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
+    DEFAULT_ORCHESTRATOR_MEMORY,
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
     launch_group,
@@ -235,6 +236,12 @@ def cli() -> None:
     help="Object-store prefix for run records; defaults to GCS, or CW S3 for CoreWeave-routed runs.",
 )
 @click.option(
+    "--orchestrator-memory",
+    default=DEFAULT_ORCHESTRATOR_MEMORY,
+    show_default=True,
+    help="Memory request for the CPU evaluation orchestrator, e.g. '64g'.",
+)
+@click.option(
     "--federated_cluster",
     default=None,
     help="Override the federated cluster for GPU serving; defaults to the fleet profile.",
@@ -274,6 +281,7 @@ def launch(
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
+    orchestrator_memory: str,
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
@@ -312,6 +320,7 @@ def launch(
         instances=instances,
         seed=seed,
         records_prefix=records_prefix,
+        orchestrator_memory=orchestrator_memory,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),

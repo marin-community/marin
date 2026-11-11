@@ -346,18 +346,26 @@ def _dataset_with_runtime(
 
 def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     agent = _effective_agent(config.agents[0], overlay)
-    dataset = _dataset_with_runtime(
-        config.datasets[0],
-        dataset_path=overlay.dataset_path,
-        task_limit=overlay.task_limit,
+    datasets = (
+        [
+            _dataset_with_runtime(
+                config.datasets[0],
+                dataset_path=overlay.dataset_path,
+                task_limit=overlay.task_limit,
+            )
+        ]
+        if config.datasets
+        else []
     )
+    tasks = config.tasks[: overlay.task_limit] if overlay.task_limit is not None else config.tasks
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
             "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
-            "datasets": [dataset],
+            "datasets": datasets,
+            "tasks": tasks,
             "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
             "archive": ArchiveConfig(
                 root=overlay.archive_root,
@@ -420,15 +428,28 @@ def _harbor_config_commit() -> str:
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
-    if config.tasks:
-        raise ValueError("Harbor config tasks are incompatible with the shared launcher; declare one dataset")
     agent = _single_entry(config, "agents")
-    dataset = _single_entry(config, "datasets")
     assert isinstance(agent, AgentConfig)
-    assert isinstance(dataset, DatasetConfig)
     agent_name = _validate_agent(agent)
     environment_name = _validate_environment(config)
-    dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
+    if config.tasks:
+        if config.datasets:
+            raise ValueError("Harbor config must declare either tasks or one dataset")
+        sources = {task.source for task in config.tasks}
+        if len(sources) != 1 or None in sources:
+            raise ValueError("Harbor package tasks must have one shared source")
+        if any(task.name is None or task.ref is None or not task.ref.startswith("sha256:") for task in config.tasks):
+            raise ValueError("Harbor package tasks must pin name and sha256 ref")
+        task_digest = hashlib.sha256(_stable_json([(task.name, task.ref) for task in config.tasks]).encode()).hexdigest()
+        dataset_metadata = _DatasetMetadata(
+            _DatasetKind.HARBOR_REGISTRY,
+            sources.pop(),
+            f"sha256:{task_digest}",
+        )
+    else:
+        dataset = _single_entry(config, "datasets")
+        assert isinstance(dataset, DatasetConfig)
+        dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)
     stable_policy_json = _stable_policy_json(stable_config)
@@ -529,7 +550,9 @@ async def _run(config: JobConfig) -> None:
 def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:
     """Parse an opaque policy, apply the Marin overlay, and validate the full job."""
     policy = JobConfig.model_validate_json(policy_path.read_text(), extra="forbid")
-    if policy.tasks or len(policy.agents) != 1 or len(policy.datasets) != 1:
+    pinned_tasks = bool(policy.tasks) and not policy.datasets
+    one_dataset = not policy.tasks and len(policy.datasets) == 1
+    if len(policy.agents) != 1 or not (pinned_tasks or one_dataset):
         raise ValueError("Harbor stable policy violates the shared launcher contract")
     overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
     return _effective_config(policy, overlay)

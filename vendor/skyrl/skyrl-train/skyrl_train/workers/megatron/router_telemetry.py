@@ -18,18 +18,20 @@ ever summed across layers.
 The bias guard snapshots Grug's ``expert_bias`` buffers and asserts they stay
 byte-identical across optimizer steps.
 
-Per-step vectors land in a JSONL sidecar next to the exports:
-``<export_path>/router_telemetry.jsonl`` holds one record per step with the
-full per-(layer, expert) load counts and per-task collision norms, which the
-load-shift JSD analysis reads.
+Per-step vectors land next to the exports. Local runs append to
+``<export_path>/router_telemetry.jsonl``. Cloud runs write one object per step
+under ``<export_path>/router_telemetry/`` so no S3 append rewrites the growing
+sidecar. Remote telemetry writes have a bounded wait and cannot block training.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
+import threading
 from collections.abc import Mapping
 from typing import Any
 
@@ -43,6 +45,9 @@ from skyrl_train.models.router_instrumentation import RouterObservation
 ROUTER_LOAD_METRIC_PREFIX = "router/load"
 ROUTER_COLLISION_METRIC_PREFIX = "router/collision"
 ROUTER_TELEMETRY_SIDECAR_FILENAME = "router_telemetry.jsonl"
+ROUTER_TELEMETRY_UPLOAD_TIMEOUT = 5.0
+_telemetry_upload: threading.Thread | None = None
+_logger = logging.getLogger(__name__)
 
 # Real Megatron parameter names for routed experts. TEGroupedMLP (Grug's
 # grouped-GEMM path) names experts by an index suffix on the fused weights;
@@ -356,12 +361,37 @@ def router_telemetry_record(
 
 
 def write_router_telemetry_record(export_path: str, record: Mapping[str, Any]) -> None:
-    """Append one JSON line to the telemetry sidecar under the export root."""
+    """Publish one record without letting a cloud write block a training collective."""
+    global _telemetry_upload
+
     separator = "/" if io.is_cloud_path(export_path) else os.sep
-    sidecar = export_path.rstrip("/\\") + separator + ROUTER_TELEMETRY_SIDECAR_FILENAME
-    io.makedirs(export_path, exist_ok=True)
-    with io.open_file(sidecar, "a") as handle:
-        handle.write(json.dumps(dict(record), sort_keys=True) + "\n")
+    root = export_path.rstrip("/\\")
+    payload = json.dumps(dict(record), sort_keys=True) + "\n"
+    if not io.is_cloud_path(export_path):
+        io.makedirs(root, exist_ok=True)
+        with io.open_file(root + separator + ROUTER_TELEMETRY_SIDECAR_FILENAME, "a") as handle:
+            handle.write(payload)
+        return
+
+    if _telemetry_upload is not None and _telemetry_upload.is_alive():
+        _logger.warning("Skipping router telemetry step %s: prior cloud upload is still running", record["step"])
+        return
+
+    path = root + separator + "router_telemetry" + separator + f"step_{int(record['step']):06d}.jsonl"
+
+    def upload() -> None:
+        try:
+            io.makedirs(root + separator + "router_telemetry", exist_ok=True)
+            with io.open_file(path, "w") as handle:
+                handle.write(payload)
+        except Exception:
+            _logger.exception("Router telemetry upload failed for %s", path)
+
+    _telemetry_upload = threading.Thread(target=upload, name="router-telemetry-upload", daemon=True)
+    _telemetry_upload.start()
+    _telemetry_upload.join(ROUTER_TELEMETRY_UPLOAD_TIMEOUT)
+    if _telemetry_upload.is_alive():
+        _logger.warning("Router telemetry upload timed out for %s; training will continue", path)
 
 
 def merge_router_telemetry_metrics(

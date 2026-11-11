@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 import yaml
+from omegaconf import OmegaConf
 
 from cloud.iris.launch import ExportedPolicy, LaunchOutcome, LaunchState, execute_launch
+from cloud.iris.launch_config import load_launch_config
 from cloud.iris.tests.test_launch_config import _raw_config
 
 
@@ -113,3 +117,44 @@ def test_wait_does_not_commit_nonterminal_zero_exit_outcome(tmp_path: Path, monk
     assert result.failure == "Iris job reached submitted"
     assert not backend.exported
     assert [uri for uri, _ in writes] == ["s3://runs/smoke/attempts/attempt-1.json"]
+
+
+def test_completed_run_is_reused_only_while_all_exports_remain_complete(tmp_path: Path) -> None:
+    config = yaml.safe_load(_config_path(tmp_path).read_text())
+    run_root = tmp_path / "run"
+    config["artifacts"] = {
+        "checkpoint_root": str(run_root / "checkpoints"),
+        "export_root": str(run_root / "exports"),
+        "attempts_root": str(run_root / "attempts"),
+        "resolved_config_uri": str(run_root / "resolved.yaml"),
+        "terminal_manifest_uri": str(run_root / "terminal.json"),
+    }
+    config["skyrl"]["trainer"]["hf_export_steps"] = [10, 125]
+    config_path = tmp_path / "completed.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+    (run_root / "checkpoints").mkdir(parents=True)
+    (run_root / "checkpoints" / "latest_ckpt_global_step.txt").write_text("125")
+    for step in (10, 125):
+        policy = run_root / "exports" / f"global_step_{step}" / "policy"
+        policy.mkdir(parents=True)
+        (policy / "config.json").write_text("{}")
+        (policy / "tokenizer.json").write_text("{}")
+        (policy / "model.safetensors").write_bytes(b"weights")
+    manifest = {
+        "config": OmegaConf.to_container(load_launch_config(config_path), resolve=True),
+        "result": {"state": "succeeded", "iris_job_id": "/user/prior", "iris_job_state": "succeeded"},
+    }
+    (run_root / "terminal.json").write_text(json.dumps(manifest))
+    backend = RecordingBackend()
+
+    result = execute_launch(config_path, backend=backend)
+
+    assert result.state is LaunchState.SUCCEEDED
+    assert result.iris_job_id == "/user/prior"
+    assert result.model is not None and result.model.global_step == 125
+    assert not backend.launched
+
+    (run_root / "exports" / "global_step_10" / "policy" / "model.safetensors").unlink()
+    with pytest.raises(RuntimeError, match="no safetensors weights"):
+        execute_launch(config_path, backend=backend)
+    assert not backend.launched

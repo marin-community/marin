@@ -215,6 +215,9 @@ trainer:
       beta: 0.1
       label_smoothing: 0.0
     loss_reduction: "token_mean"
+    # Fixed-completion SFT only: restore this source's solo token-mean coefficient
+    # within each complete mixed-task optimizer step.
+    sft_restore_source_mean: null
     grpo_norm_by_std: true
     rloo_n_filter_zero_reward_groups: true
     lambd: 1.0

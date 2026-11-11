@@ -9,6 +9,9 @@ breaks these tests instead of silently emptying the telemetry.
 """
 
 import json
+import threading
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 import torch
@@ -17,6 +20,7 @@ from torch import nn
 
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.models.router_instrumentation import RouterObservation
+from skyrl_train.workers.megatron import router_telemetry
 from skyrl_train.workers.megatron.router_telemetry import (
     RouterCollisionTracker,
     RouterLoadStats,
@@ -247,6 +251,39 @@ def test_sidecar_record_writes_per_layer_expert_vectors(tmp_path):
     lines = (tmp_path / "router_telemetry.jsonl").read_text().splitlines()
     assert json.loads(lines[0])["step"] == 17
     assert json.loads(lines[0])["collision_norms"]["task_X"]["layer0"] == [2.0, 1.0]
+
+
+def test_cloud_telemetry_writes_new_objects_without_blocking_training(tmp_path, monkeypatch):
+    gate = threading.Event()
+    upload_started = threading.Event()
+    upload_finished = threading.Event()
+    writes = []
+
+    @contextmanager
+    def open_file(path, mode):
+        writes.append((path, mode))
+        if path.endswith("step_000018.jsonl"):
+            upload_started.set()
+            gate.wait(timeout=3)
+        with (tmp_path / Path(path).name).open(mode) as handle:
+            yield handle
+        upload_finished.set()
+
+    monkeypatch.setattr(router_telemetry.io, "is_cloud_path", lambda path: path.startswith("s3://"))
+    monkeypatch.setattr(router_telemetry.io, "makedirs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(router_telemetry.io, "open_file", open_file)
+    monkeypatch.setattr(router_telemetry, "ROUTER_TELEMETRY_UPLOAD_TIMEOUT", 0.01)
+
+    write_router_telemetry_record("s3://bucket/exports", {"step": 17})
+    assert json.loads((tmp_path / "step_000017.jsonl").read_text())["step"] == 17
+    upload_finished.clear()
+    write_router_telemetry_record("s3://bucket/exports", {"step": 18})
+    assert upload_started.is_set()
+    assert not gate.is_set()
+    gate.set()
+    assert upload_finished.wait(timeout=1)
+    assert json.loads((tmp_path / "step_000018.jsonl").read_text())["step"] == 18
+    assert all(mode == "w" for _, mode in writes)
 
 
 def test_bias_guard_accepts_identical_buffers_and_rejects_drift():

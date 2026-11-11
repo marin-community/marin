@@ -59,8 +59,9 @@ BACKOFF_SECONDS = 4
 # timeout, endpoint loss) loses at most that many rows, and a restart samples
 # only the probes still missing.
 RAW_WRITE_EVERY = 100
-# Every render passes the shared template explicitly, so the export's own template is not needed.
+# Phase 0 uses the shared template; native-template probes also need the export's Jinja file.
 TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
+CHAT_TEMPLATE_FILE = "chat_template.jinja"
 
 
 # The pre-registered single-turn decode for Snowball's probe and expert continuations
@@ -107,8 +108,10 @@ def continuation_row(
     }
 
 
-def request_body(model: str, prompt_ids: list[int], seed: int, decode: Decode, stop_id: int) -> dict[str, Any]:
-    """A completions request on token ids that returns the sampled ids and stops only on the turn close."""
+def request_body(
+    model: str, prompt_ids: list[int], seed: int, decode: Decode, stop_ids: tuple[int, ...]
+) -> dict[str, Any]:
+    """A completions request on token ids that stops on the specified end tokens."""
     return {
         "model": model,
         "prompt": prompt_ids,
@@ -119,7 +122,7 @@ def request_body(model: str, prompt_ids: list[int], seed: int, decode: Decode, s
         "seed": seed,
         "skip_special_tokens": False,
         "ignore_eos": True,
-        "stop_token_ids": [stop_id],
+        "stop_token_ids": list(stop_ids),
         "return_token_ids": True,
     }
 
@@ -149,7 +152,7 @@ def _sampled_responses(
     endpoint: OpenAIEndpoint,
     rows: list[dict[str, Any]],
     prompt_ids: list[list[int]],
-    stop_id: int,
+    stop_ids: tuple[int, ...],
     raw_path: str,
     *,
     decode: Decode = SNOWBALL_DECODE,
@@ -184,7 +187,7 @@ def _sampled_responses(
                 ids,
                 request_seed(MASTER_SEED, row["probe_id"], 0),
                 replace(decode, max_tokens=min(decode.max_tokens, context_window - len(ids))),
-                stop_id,
+                stop_ids,
             )
             for row, ids in todo
         ]
@@ -232,6 +235,9 @@ def local_tokenizer(checkpoint: str):
     filesystem, root = fsspec.core.url_to_fs(checkpoint)
     for name in TOKENIZER_FILES:
         filesystem.get(f"{root.rstrip('/')}/{name}", f"{directory}/{name}")
+    template = f"{root.rstrip('/')}/{CHAT_TEMPLATE_FILE}"
+    if filesystem.exists(template):
+        filesystem.get(template, f"{directory}/{CHAT_TEMPLATE_FILE}")
     return AutoTokenizer.from_pretrained(directory)
 
 
@@ -310,7 +316,7 @@ def main() -> None:
                 endpoint,
                 rows,
                 prompt_ids,
-                stop_id,
+                (stop_id,),
                 raw_path,
                 decode=decodes[name],
                 context_window=args.max_model_len,

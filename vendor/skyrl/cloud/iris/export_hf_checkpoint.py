@@ -71,6 +71,12 @@ def _verify_hf_model_export(export_path: str) -> None:
     verify_hf_model_export(export_path)
 
 
+def _has_completed_hf_model_export(export_path: str) -> bool:
+    from skyrl_train.hf_model_io import has_completed_hf_model_export  # noqa: PLC0415 - keep launcher imports Torch-free
+
+    return has_completed_hf_model_export(export_path)
+
+
 @dataclass(frozen=True)
 class ExportJobSpec:
     request: HFExportRequest
@@ -276,6 +282,7 @@ def argument_parser() -> argparse.ArgumentParser:
         help="submit a manual export and return immediately; request-driven exports must record completion",
     )
     ap.add_argument("--dry-run", action="store_true", help="print the command and exit")
+    ap.add_argument("--verify-only", action="store_true", help="verify a request's existing export and record completion")
     return ap
 
 
@@ -382,10 +389,17 @@ def _run_export(spec: ExportJobSpec, command: list[str]) -> None:
 
 def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     """Submit one export job, verify synchronous output, and persist request state."""
+    export_path = policy_export_path(spec.request.export_path, spec.request.step)
+    if _has_completed_hf_model_export(export_path):
+        _write_hf_export_request(spec.request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
+        print(f"[export-hf] reused verified global_step_{spec.request.step} export")
+        return
     request = spec.request.with_status(HFExportStatus.IN_PROGRESS, timeout=spec.timeout, increment_attempts=True)
     _write_hf_export_request(request)
     try:
         _run_export(spec, command)
+        if not _has_completed_hf_model_export(export_path):
+            raise RuntimeError(f"Export job returned without a completed HF model at {export_path}")
     except BaseException as error:
         exit_code = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         _write_hf_export_request(request.with_status(HFExportStatus.PENDING, last_exit_code=exit_code))
@@ -472,12 +486,22 @@ def main() -> None:
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive for an export job")
+    if args.verify_only and (not args.request or args.dry_run):
+        parser.error("--verify-only requires --request and cannot be combined with --dry-run")
     if args.request:
         spec = request_spec(args, parser)
         request = spec.request
     else:
         request = None
         spec = manual_spec(args, parser)
+
+    if args.verify_only:
+        export_path = policy_export_path(spec.request.export_path, spec.request.step)
+        if not _has_completed_hf_model_export(export_path):
+            raise RuntimeError(f"No completed HF export at {export_path}")
+        _write_hf_export_request(spec.request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
+        print(f"[export-hf] verified global_step_{spec.request.step} and recorded completion")
+        return
 
     if request is not None and request.status is HFExportStatus.COMPLETE:
         print(f"[export-hf] global_step_{request.step} is already complete")

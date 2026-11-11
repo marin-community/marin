@@ -71,10 +71,10 @@ def test_stray_bytes_that_form_no_character_keep_their_alignment():
     assert reply_tags(row, prompt_ids) == ["final_message"] * (1 + len(answer)) + ["delimiter"]
 
 
-def test_the_request_samples_token_ids_and_stops_only_on_the_turn_close():
-    body = request_body("b", [1, 2], seed=3, decode=Decode(repetition_penalty=1.05), stop_id=9)
+def test_the_request_samples_token_ids_and_stops_on_all_configured_tokens():
+    body = request_body("b", [1, 2], seed=3, decode=Decode(repetition_penalty=1.05), stop_ids=(9, 10))
     assert body["prompt"] == [1, 2] and body["return_token_ids"] and body["ignore_eos"]
-    assert body["stop_token_ids"] == [9] and body["repetition_penalty"] == 1.05 and not body["skip_special_tokens"]
+    assert body["stop_token_ids"] == [9, 10] and body["repetition_penalty"] == 1.05 and not body["skip_special_tokens"]
 
 
 class _Response:
@@ -148,7 +148,7 @@ def test_a_killed_pass_restarts_from_the_raw_file(monkeypatch, tmp_path):
         return next(sampled_ids)
 
     monkeypatch.setattr(continuations, "sample_token_ids", fake_sample)
-    responses = continuations._sampled_responses(endpoint, rows, prompt_ids, stop_id=9, raw_path=raw_path)
+    responses = continuations._sampled_responses(endpoint, rows, prompt_ids, stop_ids=(9,), raw_path=raw_path)
     assert responses == [[10, 11], [20], [30]]
 
     # The raw file holds all three probes, so a third pass samples nothing.
@@ -156,7 +156,7 @@ def test_a_killed_pass_restarts_from_the_raw_file(monkeypatch, tmp_path):
     assert sorted(stored) == ["p-0", "p-1", "p-2"]
     sampled_ids2 = iter([])
     monkeypatch.setattr(continuations, "sample_token_ids", lambda _e, _b: next(sampled_ids2))
-    assert continuations._sampled_responses(endpoint, rows, prompt_ids, stop_id=9, raw_path=raw_path) == responses
+    assert continuations._sampled_responses(endpoint, rows, prompt_ids, stop_ids=(9,), raw_path=raw_path) == responses
 
 
 def test_a_raw_file_with_a_different_prompt_is_rejected(monkeypatch, tmp_path):
@@ -166,7 +166,7 @@ def test_a_raw_file_with_a_different_prompt_is_rejected(monkeypatch, tmp_path):
     raw_path_file = tmp_path / "P_X.jsonl"
     raw_path_file.write_text(json.dumps({"probe_id": "p-0", "prompt_ids": [99], "response_ids": [1]}) + "\n")
     with pytest.raises(ValueError, match="different prompt"):
-        continuations._sampled_responses(endpoint, rows, [[1]], stop_id=9, raw_path=raw_path)
+        continuations._sampled_responses(endpoint, rows, [[1]], stop_ids=(9,), raw_path=raw_path)
 
 
 @pytest.mark.parametrize("cap,expected", [(32768, 32768), (131072, 131068)])
@@ -184,7 +184,7 @@ def test_generation_keeps_remote_raw_records_and_reserves_prompt_context(monkeyp
         endpoint,
         [_probe_row("p-0")],
         [[1, 2, 3, 4]],
-        9,
+        (9,),
         raw_path,
         decode=Decode(repetition_penalty=1.05, max_tokens=cap),
         context_window=131072,
