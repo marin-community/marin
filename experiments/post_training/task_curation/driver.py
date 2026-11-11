@@ -64,9 +64,9 @@ from experiments.post_training.task_curation.embedding import (
 )
 from experiments.post_training.task_curation.inventory import (
     SELECTION_INPUT_PREFIX,
-    PanelRecipe,
+    EvalLiteRecipe,
     SelectionRecipe,
-    panel_step,
+    eval_lite_step,
     task_selection_step,
 )
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
@@ -262,7 +262,7 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
 
 def _corpus_inputs(corpus: _CorpusSources, population: str, name: str, version: str) -> dict[str, ArtifactStep]:
     if corpus.population != population:
-        raise click.UsageError("Test panels require a converted corpus; training selection requires an admitted corpus")
+        raise click.UsageError("EvalLite requires a converted corpus; training selection requires an admitted corpus")
     return {
         source_id: ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
         for source_id, root in sorted(corpus.roots.items())
@@ -392,7 +392,7 @@ def _embedding_pass(
 @click.option("--corpus", help="Run embedding or selection from a completed corpus.json without rerunning curation.")
 @click.option("--embed", type=click.Choice(EMBEDDING_STAGES), help="Run this embedding stage after curation.")
 @click.option("--selection", help="Selection recipe JSON: append task-selection after FULL or an admitted --corpus.")
-@click.option("--test-panel", help="Test-panel recipe JSON: select from a completed converted --corpus.")
+@click.option("--eval-lite", help="EvalLite recipe JSON: select from a completed converted --corpus.")
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
@@ -500,7 +500,7 @@ def main(
     corpus: str | None,
     embed: str | None,
     selection: str | None,
-    test_panel: str | None,
+    eval_lite: str | None,
     representation: str,
     embedding_sample_size: int | None,
     catalog_root: str | None,
@@ -541,10 +541,10 @@ def main(
         )
     if mode is None and corpus is None:
         raise click.UsageError("Supply --mode or --corpus")
-    if corpus is not None and embed is None and selection is None and test_panel is None:
-        raise click.UsageError("--corpus requires --embed, --selection or --test-panel")
-    if test_panel is not None and (corpus is None or selection is not None or embed is not None):
-        raise click.UsageError("--test-panel requires --corpus and cannot combine with --selection or --embed")
+    if corpus is not None and embed is None and selection is None and eval_lite is None:
+        raise click.UsageError("--corpus requires --embed, --selection or --eval-lite")
+    if eval_lite is not None and (corpus is None or selection is not None or embed is not None):
+        raise click.UsageError("--eval-lite requires --corpus and cannot combine with --selection or --embed")
     if corpus is not None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("--corpus uses completed conversions; omit local input overrides")
     configure_coreweave_s3()
@@ -575,10 +575,10 @@ def main(
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
     if corpus is not None and embed is None:
-        if test_panel is not None:
-            panel = PanelRecipe.model_validate_json(StoragePath(test_panel).read_text())
+        if eval_lite is not None:
+            panel = EvalLiteRecipe.model_validate_json(StoragePath(eval_lite).read_text())
             inputs = _corpus_inputs(_corpus_sources(corpus), "converted", panel.name, panel.version)
-            step = panel_step(inputs, panel)
+            step = eval_lite_step(inputs, panel)
         else:
             assert selection_recipe is not None
             inputs = _corpus_inputs(_corpus_sources(corpus), "admitted", selection_recipe.name, selection_recipe.version)

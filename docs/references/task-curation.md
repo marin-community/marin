@@ -211,9 +211,9 @@ private grader resources and command stay attached to each task. The historical
 structural heldout tasks use the shared closure converter. SkyRL chooses rollout
 limits, harnesses and verifier backends when it loads these canonical tasks.
 
-### Snowball test panel
+### EvalLite
 
-The test panel is a fixed sample of 1,500 public benchmark tasks that RL runs
+EvalLite is a fixed sample of 1,500 public benchmark tasks that RL runs
 grade on the training job's own machines, with no container image or judge
 service. It draws only from evaluation sources and skips any task that matches
 training data or the 910-task development panel, which tuning looks at. It
@@ -239,18 +239,18 @@ panel measured 19.2%.
 To change the panel:
 
 1. Edit the parts of
-   [`recipes/snowball-test-panel.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-test-panel.json)
+   [`recipes/eval-lite.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/eval-lite.json)
    (`source_id`, `family`, `count`, `fast_counts`) and its `version`. A new source
    is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
    intended_use=IntendedUse.EVAL)` registered in `sources.py`, as in
    [`nemo_tool_calls.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/nemo_tool_calls.py).
    Its tasks need the `eval` tag and an in-process or package grader.
-2. Build it:
+2. Set `CORPUS_URI` to the converted corpus artifact from the campaign, then build it:
 
    ```bash
    uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
-     --corpus s3://marin-us-east-02a/marin/rl-data/campaigns/snowball-test-panel-inputs/2026.11.04/corpus.json \
-     --test-panel experiments/post_training/task_curation/recipes/snowball-test-panel.json --run
+     --corpus "$CORPUS_URI" \
+     --eval-lite experiments/post_training/task_curation/recipes/eval-lite.json --run
    ```
 
 3. Measure the starting model with eight answers per task (temperature 1.0,
@@ -267,13 +267,13 @@ license and difficulty per task) and `summary.json`.
 
 `recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
 admitted training sources, with a quota for each source. It excludes the
-development panel (`heldout`) and the test panel (`exclusions`) by task ID, full
+development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
 conversation and whitespace-normalized final user statement, and refuses tasks
 that need a container image or a judge service.
 
 The checked-in recipe names version `2026.11.10.1`, which is not yet published;
 build it before training on it. The published `snowball-100k@2026.11.04.1` was
-built before the test panel and has no `exclusions`; the panel build excludes it
+built before EvalLite and has no `exclusions`; the panel build excludes it
 instead, and existing Snowball controls use it. Published versions are frozen;
 any recipe change takes a new version.
 

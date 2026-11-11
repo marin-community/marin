@@ -48,7 +48,7 @@
   "seed": 20261019,
   "exclusions": [
     {
-      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-test-panel/2026.11.06.1/full_validation.parquet",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/task-selection/eval-lite/2026.11.11.1/full_validation.parquet",
       "version": "2026.11.06.1",
       "rows": 1500,
       "format": "task_spec"

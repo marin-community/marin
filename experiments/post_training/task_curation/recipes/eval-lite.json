@@ -12,9 +12,9 @@
     "scientific_reasoning": 35,
     "structural": 19
   },
-  "name": "snowball-test-panel",
+  "name": "eval-lite",
   "pass_rates": {
-    "uri": "s3://marin-us-east-02a/marin/rl-data/selection-inputs/snowball-test-panel/pass-rates/2026.11.04.2/pass_rates.parquet",
+    "uri": "s3://marin-us-east-02a/marin/rl-data/selection-inputs/eval-lite/pass-rates/2026.11.04.2/pass_rates.parquet",
     "version": "2026.11.04.2",
     "rows": 1500,
     "model_revision": "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -117,5 +117,5 @@
       "format": "task_spec"
     }
   ],
-  "version": "2026.11.06.1"
+  "version": "2026.11.11.1"
 }
