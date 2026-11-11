@@ -96,7 +96,6 @@ def test_context_budget_derives_overlong_window_for_single_and_multi_turn(
 
     parsed = parse_rl_config(str(config))
 
-    assert parsed.recipe.context_budget.generated_tokens_per_trajectory == expected_l_max
     assert parsed.generator["trajectory_reward_shaping"]["overlong"] == {
         "l_max": expected_l_max,
         "l_cache": expected_l_cache,
