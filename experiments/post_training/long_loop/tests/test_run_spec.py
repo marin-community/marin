@@ -4,6 +4,7 @@
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -215,8 +216,25 @@ def test_emitted_stage_timeouts_default_to_three_days(tmp_path, monkeypatch, ove
     trained = next(s for s in stages if s.name.endswith("/sft"))
     context = StepContext.for_run(str(tmp_path / "sft"), str(tmp_path), deps=trained.deps)
     assert trained.build_config(context)["recipe"]["task_timeout_seconds"] == expected
-    assert not any(c["type"] == "wall_time_budget" for c in resolved["rl"]["config"]["trainer"]["callbacks"])
+    learned = next(s for s in stages if s.name.endswith("/" + resolved["rl"]["name"]))
+    rl_context = StepContext.for_run(
+        str(tmp_path / "rl"), str(tmp_path), deps=learned.deps, runtime_args=learned.runtime_args
+    )
+    launch = learned.build_config(replace(rl_context, is_fingerprint=True))
+    emitted = yaml.safe_load(launch.launch_config_yaml)["skyrl"]["trainer"]["callbacks"]
+    assert not any(c["type"] == "wall_time_budget" for c in emitted)
     resolved["rl"]["wall_clock_budget"] = {"seconds": 43200, "drain_margin": 1800}
+    budgeted = build_spec_graph(resolved, "2026.11.13", through="rl")
+    budget_context = StepContext.for_run(
+        str(tmp_path / "budgeted"), str(tmp_path), deps=budgeted.deps, runtime_args=budgeted.runtime_args
+    )
+    budget_launch = budgeted.build_config(replace(budget_context, is_fingerprint=True))
+    actual = [
+        c
+        for c in yaml.safe_load(budget_launch.launch_config_yaml)["skyrl"]["trainer"]["callbacks"]
+        if c["type"] == "wall_time_budget"
+    ]
+    assert actual == [{"type": "wall_time_budget", "seconds": 43200, "drain_margin": 1800, "groups_per_step": 64}]
     resolved["rl"]["execution"]["job_timeout_seconds"] = 32400
     with pytest.raises(ValueError, match="exceed the explicit budget"):
         build_spec_graph(resolved, "2026.11.13", through="rl")
