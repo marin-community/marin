@@ -695,9 +695,11 @@ def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[
         text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
         {"n": f"Declined by {login}: {note or 'no reason given'}", "id": idea_id},
     )
-    # An approved idea's queued approval must not reach a session after the decline.
+    # No queued approval or work offer (one a failed session handed back included) may reach a session after the
+    # decline.
     conn.execute(
-        text("DELETE FROM events WHERE kind = 'approved' AND ref = :ref AND session_id IS NULL"), {"ref": str(idea_id)}
+        text("DELETE FROM events WHERE kind IN ('approved', 'work_pending') AND ref = :ref AND session_id IS NULL"),
+        {"ref": str(idea_id)},
     )
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
     return {"state": IdeaState.DECLINED.value}

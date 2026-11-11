@@ -253,8 +253,14 @@ def test_a_planned_idea_with_failed_runs_can_be_requeued(conn) -> None:
     assert requeue_idea(conn, failed_plan(conn), "maintainer", "retry the ladder")["state"] == "approved"
 
 
-def test_a_planned_idea_can_be_declined(conn) -> None:
-    assert decline_idea(conn, failed_plan(conn), "maintainer", "superseded")["state"] == "declined"
+def test_declining_a_planned_idea_drops_its_queued_work(conn) -> None:
+    planned = failed_plan(conn)
+    conn.execute(
+        text("INSERT INTO events (kind, ref, summary, payload) VALUES ('work_pending', :ref, 'retry', '{}')"),
+        {"ref": str(planned)},
+    )
+    assert decline_idea(conn, planned, "maintainer", "superseded")["state"] == "declined"
+    assert not conn.execute(text("SELECT 1 FROM events WHERE session_id IS NULL")).all()
 
 
 def test_an_approval_records_its_node_grant(conn) -> None:
