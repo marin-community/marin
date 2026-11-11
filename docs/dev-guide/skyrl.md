@@ -154,6 +154,10 @@ Experiments can import `SkyRLRecipe` and generated section classes from `skyrlre
 unpublished `marin-skyrlrecipe` workspace library. SkyRL installs the same library from its editable
 path source. The library depends only on Pydantic; Hydra composes runtime defaults in SkyRL.
 
+The typed object is the sparse authored document. Unset fields read as the base YAML default, or
+the unset sentinel where no single base value exists. Only Hydra composition gives the values training uses:
+`algorithm_recipe=gspo` leaves `eps_clip_high` at `0.2` on the object and composes it to `0.0004`.
+
 ```python
 from skyrlrecipe import ContextBudget, SkyRLRecipe
 from skyrlrecipe.sections import Trainer

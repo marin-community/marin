@@ -111,7 +111,11 @@ def field(default: Any = ...) -> Any:
 
 
 class Section(BaseModel):
-    """A strict schema section whose document contains only explicitly set fields."""
+    """A sparse authored document whose unset fields read as base YAML defaults.
+
+    Fields without a single base value read as the unset sentinel. Only Hydra composition gives training values:
+    algorithm_recipe=gspo leaves eps_clip_high at 0.2 on the object and composes it to 0.0004.
+    """
 
     model_config = ConfigDict(
         extra="forbid",
