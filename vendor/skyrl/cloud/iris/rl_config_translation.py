@@ -18,7 +18,7 @@ from typing import Any, Dict, Mapping, Optional, Protocol
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.evaluation_profiles import named_evaluation_profiles
+from skyrl_train.evaluation_profiles import evaluation_profiles
 
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.ftpo import FTPOConfig
@@ -920,10 +920,6 @@ def apply_task_local_values(config: DictConfig, values: TaskLocalSkyRLValues) ->
             continue
         for path in paths:
             OmegaConf.update(updated, path, list(value) if isinstance(value, tuple) else value, force_add=False)
-    for name, data_files in values.evaluation_data:
-        profile = named_evaluation_profiles(updated).get(name)
-        if profile is None:
-            raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-        OmegaConf.update(profile, "data_files", list(data_files), force_add=True)
+    evaluation_profiles(updated, evaluation_data=values.evaluation_data)
     OmegaConf.resolve(updated)
     return updated

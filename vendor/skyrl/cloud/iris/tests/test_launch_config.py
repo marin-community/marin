@@ -372,12 +372,25 @@ def test_callback_setup_rejects_final_metrics_during_periodic_evaluation(consume
     create_default_callbacks(config)
 
 
-def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "case",
+    ["inherit", "explicit", "duplicate", "field", "sampling", "zero-answers", "empty-files", "missing-profile", "two-inputs"],
+)
+def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: Path, monkeypatch, case) -> None:
     path = tmp_path / "evaluation.yaml"
     document = raw_config()
     document["run"]["export_hf"] = False
     document["skyrl"]["entrypoint"] = "generate"
-    document["skyrl"]["trainer"]["callbacks"] = [{"type": "evaluation", "additional_evaluations": {"sampled": {}}}]
+    generator = document["skyrl"].setdefault("generator", {})
+    generator["eval_sampling_params"] = {"temperature": 0.5, "stop": ["base-stop"]}
+    generator["eval_n_samples_per_prompt"] = 2
+    profile = {
+        "sampling_params": {"temperature": 0.0, "stop": None, "seed": 42},
+        "n_samples_per_prompt": 3 if case == "explicit" else None,
+    }
+    document["skyrl"]["trainer"]["callbacks"] = [
+        {"type": "evaluation", "additional_evaluations": {"sampled": profile}}
+    ]
     sources = []
     for name, identifier in (("primary", "throughput-only"), ("panel", "panel-only")):
         directory = tmp_path / name
@@ -394,7 +407,36 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         )
     document["inputs"]["validation_data"] = sources[:1]
     document["inputs"]["evaluation_data"] = {"sampled": sources[1:]}
+    errors = {
+        "duplicate": "duplicate evaluation profile: sampled",
+        "field": "unknown fields.*answer_count",
+        "sampling": "unknown sampling keys.*temprature",
+        "zero-answers": "n_samples_per_prompt must be a positive integer",
+        "empty-files": "data_files must be nonempty",
+        "missing-profile": "evaluation data has no additional evaluation profile: sampled",
+        "two-inputs": "both data_files and evaluation_data",
+    }
+    if case == "duplicate":
+        document["skyrl"]["trainer"]["callbacks"].append(
+            {"type": "evaluation", "additional_evaluations": {"sampled": profile}}
+        )
+    elif case == "field":
+        profile["answer_count"] = 2
+    elif case == "sampling":
+        profile["sampling_params"]["temprature"] = 0.1
+    elif case == "zero-answers":
+        profile["n_samples_per_prompt"] = 0
+    elif case == "empty-files":
+        profile["data_files"] = []
+    elif case == "missing-profile":
+        document["skyrl"]["trainer"]["callbacks"] = []
+    elif case == "two-inputs":
+        profile["data_files"] = [str(tmp_path / "another.parquet")]
     path.write_text(yaml.safe_dump(document))
+    if case in errors:
+        with pytest.raises(ValueError, match=errors[case]):
+            load_launch_config(path)
+        return
     prepared = launch._prepare_config(load_launch_config(path))
     task_runtime.materialize_data_sources(task_runtime._runtime_namespace(prepared).data_sources_json)
     runner = training_driver.LocalRLRunner(
@@ -414,14 +456,29 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(tmp_path: 
         profile = config.skyrl.trainer.callbacks[0].additional_evaluations.sampled
         observed["primary"] = pq.read_table(config.skyrl.data.val_data[0])["task_id"].to_pylist()
         observed["profile"] = pq.read_table(profile.data_files[0])["task_id"].to_pylist()
+        observed["request"] = {
+            "count": profile.n_samples_per_prompt,
+            "temperature": profile.sampling_params.temperature,
+            "stop": profile.sampling_params.stop,
+            "seed": profile.sampling_params.seed,
+        }
+        assert config.skyrl.generator.eval_sampling_params.stop == ["base-stop"]
         return 0
 
     monkeypatch.setattr(runner, "_setup_environment", lambda: None)
     monkeypatch.setattr(runner, "_run_skyrl", read_datasets)
     assert runner.run() == 0
-    assert observed == {"primary": ["throughput-only"], "profile": ["panel-only"]}
+    assert observed == {
+        "primary": ["throughput-only"],
+        "profile": ["panel-only"],
+        "request": {"count": 3 if case == "explicit" else 2, "temperature": 0.0, "stop": None, "seed": 42},
+    }
     record = json.loads((tmp_path / "resolved.json").read_text())
     assert record["config"]["inputs"]["evaluation_data"]["sampled"][0]["identity"] == "panel"
+    stored = record["config"]["skyrl"]["trainer"]["callbacks"][0]["additional_evaluations"]["sampled"]
+    assert stored["n_samples_per_prompt"] == observed["request"]["count"]
+    assert stored["sampling_params"]["stop"] is None
+    assert stored["sampling_params"]["seed"] == 42
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:

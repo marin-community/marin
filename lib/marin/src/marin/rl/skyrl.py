@@ -492,18 +492,6 @@ class SkyRLSpec:
         names = [name for name, _ in self.evaluation_data]
         if len(names) != len(set(names)):
             raise ValueError("duplicate evaluation data names")
-        profiles = {
-            name: profile
-            for callback in _parsed_config(self.config_yaml).get("trainer", {}).get("callbacks") or []
-            if callback.get("type") == "evaluation"
-            for name, profile in (callback.get("additional_evaluations") or {}).items()
-        }
-        for name, _ in self.evaluation_data:
-            profile = profiles.get(name)
-            if profile is None:
-                raise ValueError(f"evaluation data has no additional evaluation profile: {name}")
-            if profile.get("data_files") is not None:
-                raise ValueError(f"evaluation profile {name} has both data_files and evaluation_data")
 
 
 @dataclass(frozen=True)

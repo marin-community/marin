@@ -16,8 +16,8 @@ from marinskyrl.runtime_options import EvaluationRunner
 from skyrl_train.evaluation_profiles import (
     named_evaluation_metrics,
     evaluation_profile_config,
-    named_evaluation_profiles,
-    parse_evaluation_profiles,
+    evaluation_profiles,
+    evaluation_profile_due,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import (
@@ -74,8 +74,8 @@ class EvalOnlyEntrypoint(BasePPOExp):
         return results
 
     async def _evaluate(self) -> dict[str, Any]:
-        profiles = parse_evaluation_profiles(named_evaluation_profiles(self.cfg))
-        if any(profile.schedule == "final" for profile in profiles.values()):
+        profiles = evaluation_profiles(self.cfg)
+        if any(not evaluation_profile_due(profile, step=0, last_step=False) for profile in profiles.values()):
             raise ValueError("final evaluation profiles require training updates")
         datasets = self.get_named_eval_datasets()
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
