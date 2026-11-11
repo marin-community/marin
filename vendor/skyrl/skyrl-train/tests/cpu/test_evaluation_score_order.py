@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from dataclasses import replace
 
 import pytest
+from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -15,6 +16,7 @@ from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
+from skyrl_train.entrypoints.terminal_bench import TerminalBenchExp
 from skyrl_train.rollouts.task_projections import StepTaskProjection, WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -24,15 +26,20 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
+from tests.cpu.tiny_training.experiment import TinyTrainingExp
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
 
-def test_final_profiles_build_primary_and_named_datasets_without_periodic_evaluation(tmp_path):
+@pytest.mark.parametrize("experiment_type", [BasePPOExp, TerminalBenchExp, TinyTrainingExp])
+def test_final_profiles_build_primary_and_named_datasets_without_periodic_evaluation(tmp_path, experiment_type):
     config = get_default_config()
     primary, named = tmp_path / "primary.parquet", tmp_path / "named.parquet"
     for path in (primary, named):
         write_tasks(path, [lowered_task(text_task(path.stem))])
     config.data.val_data = [str(primary)]
+    config.data.task_cache_dir = str(tmp_path / "task-cache")
+    if experiment_type is TerminalBenchExp:
+        OmegaConf.update(config, "terminal_bench_config", {}, force_add=True)
     config.trainer.eval_interval = 0
     config.trainer.callbacks = [{
         "type": "evaluation", "eval_steps": 0,
@@ -41,7 +48,7 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
             "named_final": {"schedule": "final", "data_files": [str(named)]},
         },
     }]
-    experiment = BasePPOExp.__new__(BasePPOExp)
+    experiment = experiment_type.__new__(experiment_type)
     experiment.cfg = config
     experiment.tokenizer = AutoTokenizer.from_pretrained(build_tiny_policy(tmp_path / "model"))
 
@@ -52,6 +59,8 @@ def test_final_profiles_build_primary_and_named_datasets_without_periodic_evalua
     assert [row["input"].spec.task.id for row in primary_dataset.collate_fn(list(primary_dataset))] == ["primary"]
     named_dataset = named_datasets["named_final"]
     assert [row["input"].spec.task.id for row in named_dataset.collate_fn(list(named_dataset))] == ["named"]
+    if experiment_type is TerminalBenchExp:
+        assert (primary_dataset.uid(0), named_dataset.uid(0)) == ("primary", "named")
 
 
 @pytest.mark.parametrize("per_token", [False, True])

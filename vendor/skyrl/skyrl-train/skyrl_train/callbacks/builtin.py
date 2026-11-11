@@ -1196,6 +1196,24 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             logger.error(f"Failed to create callback: {e}")
             raise
 
+    evaluations = [callback for callback in callbacks if isinstance(callback, EvaluationCallback)]
+    if any(callback.eval_steps > 0 for callback in evaluations):
+        final_prefixes = tuple(
+            f"eval/{name}/"
+            for callback in evaluations
+            for name, profile in callback.additional_evaluations.items()
+            if profile.schedule == "final"
+        )
+        for callback in evaluations:
+            inputs = set(callback.stop_when)
+            inputs.update(key for members in callback.metric_groups.values() for key in members)
+            final_inputs = sorted(key for key in inputs if key.startswith(final_prefixes))
+            if final_inputs:
+                raise ValueError(
+                    "final-only metrics in metric_groups or stop_when require eval_steps=0 on all evaluation callbacks "
+                    f"({', '.join(final_inputs)})"
+                )
+
     return callbacks
 
 
