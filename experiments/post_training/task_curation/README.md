@@ -1,5 +1,8 @@
 # Task data curation
 
+New contributor to RL data? Start with
+[Getting started with TaskTrove](GETTING_STARTED.md).
+
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
