@@ -8,6 +8,9 @@ Run commands from the repository root. You need Iris access and permission to us
 the selected compute and storage. Daytona runs also need a credential; see
 [Harbor credentials](../../docs/tutorials/run-lm-evals.md#harbor-credentials).
 
+For Hugging Face checkpoint preparation, cache placement, and failure behavior,
+see [running evaluations](../../docs/tutorials/run-lm-evals.md).
+
 ## Launch
 
 Check the plan before submitting an unfamiliar configuration:
