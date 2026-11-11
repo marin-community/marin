@@ -24,15 +24,12 @@ from rigging.auth import IapCredentialsUnavailable
 from experiments.belay import __main__ as belay_main
 from experiments.belay import page
 from experiments.belay.__main__ import (
-    EventKind,
-    WaitOutcome,
     carried_ideas,
     ladder_rungs_left,
     launch,
     prior_trials_hold,
     reproduce,
     score_value,
-    wait_outcome,
     write_spec,
 )
 from experiments.belay.analysis import Header, series_from_rows, write_report
@@ -321,26 +318,6 @@ def test_a_node_grant_lets_an_idea_past_the_cap_up_to_its_grant() -> None:
     check_launch(parse_spec(SPEC), full, NODE_CAP, grant=2)  # its two runs fit its grant
     with pytest.raises(SystemExit, match="node grant 1"):
         check_launch(parse_spec(SPEC), full, NODE_CAP, grant=1)
-
-
-def test_a_draining_session_waits_only_for_runs_due_before_its_hard_stop() -> None:
-    start = datetime.datetime(2026, 11, 2, 9, 0, tzinfo=datetime.UTC)
-    now = start + datetime.timedelta(minutes=30)
-    soon, tomorrow = now + datetime.timedelta(minutes=20), now + datetime.timedelta(hours=20)
-    assert wait_outcome(now, start, 1, [], [soon]) is WaitOutcome.WAIT
-    assert wait_outcome(now, start, 1, [], [tomorrow]) is WaitOutcome.DRAINED
-    assert wait_outcome(now, start, 1, [EventKind.APPROVED], [tomorrow]) is WaitOutcome.WORK
-
-
-def test_a_draining_session_past_its_budget_takes_only_run_results() -> None:
-    start = datetime.datetime(2026, 11, 2, 9, 0, tzinfo=datetime.UTC)
-    late = start + datetime.timedelta(hours=3, minutes=10)
-    assert wait_outcome(late, start, 2, [EventKind.APPROVED], []) is WaitOutcome.DRAINED
-    assert wait_outcome(late, start, 2, [EventKind.RUN_FINISHED], []) is WaitOutcome.WORK
-    assert wait_outcome(start, start, 10, [EventKind.APPROVED], []) is WaitOutcome.DRAINED  # ten ideas taken
-    assert wait_outcome(start + datetime.timedelta(hours=4), start, 0, [EventKind.RUN_FINISHED], []) is (
-        WaitOutcome.OUT_OF_TIME
-    )
 
 
 def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:

@@ -6,13 +6,17 @@ This file is the only set of instructions for a Belay session. Follow it exactly
 
 Each section below is one command, `B <section name>`. Every command ends by printing a line that starts with
 `next:`. Run that line next, unchanged except for the `<placeholders>` it names. When it says `next: stop`, go on
-with the drain loop (section 0b) unless it says the session is done.
+to the next item of your events file, or finish once every item is done.
 
-A session drains the queue, then exits:
+A session works through the events it claimed, then exits:
 
 1. `B start --events <file>` and work through every item it lists (sections 1 to 3, 6).
-2. `B wait --events <that file>`, then follow its `next:` line, repeating from step 1 with the file it prints.
-3. When `wait` prints `drained:`, finish with the final message (section 7).
+2. Finish with the final message (section 7).
+
+Never wait for runs. A run that finishes or runs late queues an event, and a later watch pass (every 10 minutes)
+starts a session for it. Run every command in the foreground: a scheduled session ends as soon as its agent stops
+working, so a background loop or a scheduled wake-up is killed with it, and its events are re-queued only at the
+next watch pass.
 
 Run section 6 (escalate) and stop when:
 
@@ -33,20 +37,6 @@ A human then decides what happens. Never work around a refusal.
    - `no events`: stop;
    - a numbered `do these in order:` list. Work through it from the top. Each item names its section and its
      first command. An item marked `skip:` needs nothing; go on to the next one.
-
-## 0b. wait (the drain loop)
-
-1. **Run:** `B wait --events <the events file you last worked through>` (give the shell command a 10-minute
-   timeout; a scheduled session adds the `--session <id>` that `claim` printed). It polls the Belay page once a minute and spends no model turns while it waits.
-2. **Expect** one of:
-   - `claimed <n> event(s) into <file>`: new work (a finished run, an overdue run, or a newly approved idea). Run
-     `B start --events <file>` and work through it, then run `wait` again with that file.
-   - `still waiting on <n> run(s) ...`: runs due before this session's hard stop are still going. Run the same
-     `wait` again.
-   - `drained: ...`: nothing is queued and nothing short is running. Runs due later (long ladder rungs) are left to
-     a later session, which the page starts when they finish or run late. Finish with section 7.
-3. **Budget:** after 3 hours or 10 ideas, `wait` takes only run results (finished or overdue runs), so the session
-   finishes what it launched; at 3 hours 45 minutes it prints `drained:` regardless.
 
 ## 1. new-idea (events `approved` and `work_pending`)
 
