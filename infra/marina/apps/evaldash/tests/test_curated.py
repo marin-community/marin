@@ -514,7 +514,6 @@ def test_policy_finalization_uses_the_same_scored_trial_coverage_as_evaldash(raw
     executor = PolicyJudge(source, model, AcceleratorChoice(platform=Platform.GPU, gpu_type="H100"), 0)
     session = SimpleNamespace(jobs=(), wait_until_ready=lambda **_kwargs: None)
     monkeypatch.setattr("experiments.evaluation.policy_finalization.inference_config_for_model", lambda *_a, **_k: None)
-    monkeypatch.setattr("experiments.evaluation.policy_finalization.precache_inference_model", lambda _config: None)
     monkeypatch.setattr(
         "experiments.evaluation.policy_finalization.remote_inference", lambda _config: nullcontext(session)
     )
