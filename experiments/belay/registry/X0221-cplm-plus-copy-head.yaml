@@ -96,6 +96,18 @@ trials:
     cplm_plus: 'true'
   commit: ee33e87e1e
   priority: batch
+- id: t006
+  variant: CPLM Plus copy head (cplm_plus=true)
+  rung: competitive-d1024
+  protocol: equal_steps
+  batch: X0221
+  date: '2026-11-11'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0221
+  wandb: []
+  settings:
+    cplm_plus: 'true'
+  commit: e99890b69f
+  priority: batch
 potential:
   score: 7
   rationale: -0.0148 at speedrun equal time, 0% step; -0.0578 equal data at +31%; seed 1 under a dropped protocol; ladder,
