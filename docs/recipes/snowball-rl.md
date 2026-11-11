@@ -22,7 +22,7 @@ Without `--run`, the command prints the graph and saved status. Add `--run` to s
 coordinator, or `--run --wait` to poll every 60 seconds and print the final report.
 Repeating the same command reuses completed artifacts. Track or stage source files under
 `experiments/`, `lib/` and `vendor/`: their working-tree hash forms part of the run name.
-`--version dev` satisfies the standard launcher interface; steps use `PRESET_REVISION`.
+`--version dev` satisfies the standard launcher interface; each preset's steps use its `revision`.
 
 Exit codes are 0 for PASS or a completed ungated run, 1 for FAIL, 2 for INVALID,
 3 for an unavailable required verdict, and 4 for refusal before execution. Submission without
@@ -96,10 +96,14 @@ The typed preset, normalized settings, tasks, initializer and requirements are s
 `gate_inputs.json` beside the native receipt, including for Python `build_run` callers.
 Re-scoring reads that file rather than interpreting a command line.
 
-The gate reads exact names in `snowball_rl_gate.CONTROLS`, at the current `PRESET_REVISION`.
-The pins record the branch commit `648b5687f0` used for collection. Multiple pins pool deviations
+The gate selects exact control names in `snowball_rl_gate.CONTROLS` at the selected preset's
+revision. Pins record the collection source and replicate count. Multiple pins pool deviations
 from each pin's own mean. A missing pin refuses submission with exit 4 and a collection command.
-The collected configurations and training/generation numerical path remain the comparison basis.
+Current default configurations are composed on CPU. Controls must match those defaults outside
+settings or input bindings the candidate explicitly changed; every candidate must match its
+recorded inputs. Config differences make the comparison INVALID and identify the differing keys.
+`run.config_changes` lists requested settings, input bindings and derived configuration changes in JSON,
+Markdown and status.
 
 For each built-in guard, tolerance is
 `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with fixed `k = len(preset.guards)`.
@@ -147,6 +151,18 @@ Leave-one-out uses a control pin's fixed
 default inputs and compares that replicate against the remaining controls. Reports use the
 caller's namespace under `MARIN_PREFIX`; controls are read-only. Status lists changed RL paths
 against the control commit, or gives the reason a local git comparison is unavailable.
+
+## Change a preset's default
+
+1. Edit the preset in `snowball_rl_presets.py`: `tasks`, `model`, `eval_lite` or `settings`.
+   Promote a winning `--set KEY=VALUE` by putting the same string in `settings`.
+2. Bump that preset's `revision`. Data-medium inherits learning-medium's setting and revision.
+3. Update that preset's native and envelope golden hashes in
+   `snowball_tests/test_snowball_rl.py` and verify its composed configuration.
+4. Collect the preset's controls from a clean checkout of the final source, then pin their
+   source, revision and count in `snowball_rl_gate.CONTROLS`.
+5. Run the leave-one-out check for every replicate, publish the control records, and update
+   the control table.
 
 ## Tasks and evaluation
 

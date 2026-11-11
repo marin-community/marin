@@ -201,7 +201,7 @@ print(json.dumps([{
         for source in row["profile_inputs"].get("eval_lite", []):
             assert (
                 source["identity"].partition(":")[0]
-                == f"{presets.SELECTION_PREFIX}/{presets.EVALUATIONS['eval_lite'].source}"
+                == f"{presets.SELECTION_PREFIX}/{presets.PRESETS['speed-short'].eval_lite}"
             )
             assert source["relative_path"] == "full_validation.parquet"
         if row["training"] and row["validation"]:
@@ -214,7 +214,7 @@ print(json.dumps([{
             presets.PRESETS["learning-medium"],
             settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
         )
-    summary = Path(presets.default_selection().path()) / "summary.json"
+    summary = Path(presets.default_selection(presets.PRESETS["learning-medium"]).path()) / "summary.json"
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
     summary.write_text(json.dumps(content))
@@ -224,7 +224,7 @@ print(json.dumps([{
 
 @pytest.mark.timeout(180)
 def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
-    summary = (Path(presets.default_selection().path()) / "summary.json").read_text()
+    summary = (Path(presets.default_selection(presets.PRESETS["learning-medium"]).path()) / "summary.json").read_text()
     panel_name = presets.DEFAULT_EVAL_LITE_NAME
     panel_version = presets.DEFAULT_EVAL_LITE_VERSION
     panel_summary = (tmp_path / panel_name / panel_version / "summary.json").read_text()
@@ -233,15 +233,14 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     (StoragePath(presets.SELECTION_ROOT) / panel_name / panel_version / "summary.json").write_text(panel_summary)
-    expected = {
-        "2026.11.11.1": {
-            "speed-short": ("b89085a7", "6fee9e38"),
-            "data-short": ("5de6ea64", "deb49a2a"),
-            "speed-medium": ("98e2f8dd", "8fe22250"),
-            "learning-medium": ("cd894082", "39624cc1"),
-            "speed-long": ("970a1522", "dc09e061"),
-        }
-    }[presets.PRESET_REVISION]
+    revisions = {
+        "speed-short": {"2026.11.11.1": ("b89085a7", "6fee9e38")},
+        "data-short": {"2026.11.11.1": ("5de6ea64", "deb49a2a")},
+        "speed-medium": {"2026.11.11.1": ("98e2f8dd", "8fe22250")},
+        "learning-medium": {"2026.11.11.1": ("cd894082", "39624cc1")},
+        "speed-long": {"2026.11.11.1": ("970a1522", "dc09e061")},
+    }
+    expected = {name: versions[presets.PRESETS[name].revision] for name, versions in revisions.items()}
     paths = []
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
@@ -281,7 +280,7 @@ print(json.dumps([
         )
         for name, config in zip(expected, configs[:-1], strict=True)
     }
-    assert actual == expected, "Fingerprint envelope changed: bump PRESET_REVISION and recollect controls."
+    assert actual == expected, "Fingerprint envelope changed: bump the changed preset revision and recollect controls."
     learning_control = configs[list(expected).index("learning-medium")]
     assert configs[-1]["skyrl"] == learning_control["skyrl"]
     assert configs[-1]["iris"]["allocation"] == learning_control["iris"]["allocation"]
@@ -312,7 +311,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     (new_panel / "summary.json").write_bytes((tmp_path / panel_name / panel_version / "summary.json").read_bytes())
     changed_panel = replace(
         learning,
-        evaluations=tuple(replace(evaluation, source=f"{panel_name}@2026.11.05") for evaluation in learning.evaluations),
+        eval_lite=f"{panel_name}@2026.11.05",
     )
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
@@ -329,7 +328,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     original = run(long)
     run(long, "trainer.policy.optimizer_config.weight_decay=0.2")
     assert run(long).fingerprint() == original.fingerprint()
-    pin = snowball.snowball_rl_gate.control_pins("learning-medium")[0]
+    pin = snowball.snowball_rl_gate.control_pins(presets.PRESETS["learning-medium"])[0]
     for index in range(pin.runs):
         recorded_runs("learning-medium", presets.control_name(pin.preset, pin.commit, index))
     first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",))
@@ -348,6 +347,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     summary = json.loads(summary_path.read_text())
     summary["recipe"]["exclusions"] = []
     summary_path.write_text(json.dumps(summary))
-    for tasks in (presets.default_selection(), selection):
+    for tasks in (presets.default_selection(presets.PRESETS["learning-medium"]), selection):
         with pytest.raises(click.BadParameter, match="full EvalLite"):
             snowball.build_run(data, tasks=tasks)

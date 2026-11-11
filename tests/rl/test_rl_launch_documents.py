@@ -23,7 +23,7 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, mon
         gate,
         "CONTROLS",
         {
-            name: tuple(replace(pin, revision=snowball.PRESET_REVISION) for pin in pins)
+            name: tuple(replace(pin, revision=snowball.PRESETS[name].revision) for pin in pins)
             for name, pins in gate.CONTROLS.items()
         },
     )

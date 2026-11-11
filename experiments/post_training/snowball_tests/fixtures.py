@@ -27,7 +27,7 @@ from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import artifact_identity
+from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -38,6 +38,7 @@ from verifyit.spec import ExactSpec
 
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_recipe as recipe
 
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
@@ -88,7 +89,7 @@ def selection(tmp_path, monkeypatch):
         gate,
         "CONTROLS",
         {
-            name: tuple(replace(pin, revision=presets.PRESET_REVISION) for pin in pins)
+            name: tuple(replace(pin, revision=presets.PRESETS[name].revision) for pin in pins)
             for name, pins in gate.CONTROLS.items()
         },
     )
@@ -155,11 +156,11 @@ def answer(task, score, *, tokens=1, error=None, low=0, high=1, status="verified
     return row
 
 
-def recorded_runs(selection, tmp_path, monkeypatch, request):
+def recorded_runs(selection, tmp_path, monkeypatch, request, native_json):
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    panel = Path(presets.selection_artifact(presets.EVALUATIONS["eval_lite"].source).path())
+    panel = Path(presets.selection_artifact(presets.PRESETS["learning-medium"].eval_lite).path())
     pq.write_table(
         pa.Table.from_pylist(
             [
@@ -191,6 +192,35 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         spec=ExactSpec(("cat",)),
     )
 
+    templates = {}
+
+    def composed(preset, inputs):
+        key = (repr(preset), inputs.model_dump_json())
+        if key not in templates:
+            source_root = tmp_path / "composed" / str(len(templates))
+            source_root.mkdir(parents=True)
+            spec = recipe.run_spec(
+                preset,
+                name="fixture",
+                tasks=presets.selection_artifact(inputs.tasks) if inputs.tasks else None,
+                init=presets.published_artifact(inputs.init, revision=preset.revision) if inputs.init else None,
+                settings=tuple(map(presets.parse_setting, inputs.settings)),
+            )
+            step = recipe.run_step(preset, spec)
+            context = StepContext.for_run(
+                str(source_root), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps
+            )
+            document = source_root / "launch.yaml"
+            document.write_text(step.build_config(context).launch_config_yaml)
+            config = native_json(
+                "import json,sys\nfrom cloud.iris.launch_config import load_launch_config\n"
+                "from omegaconf import OmegaConf\n"
+                "print(json.dumps(OmegaConf.to_container(load_launch_config(sys.argv[1]), resolve=True)))\n",
+                [str(document)],
+            )
+            templates[key] = (source_root, config)
+        return templates[key]
+
     def write(
         preset_name: str,
         name,
@@ -205,24 +235,26 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         missing_steps=(),
     ):
         preset = presets.PRESETS[preset_name]
-        root = tmp_path / name / presets.PRESET_REVISION
+        root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
-        native = deepcopy(NATIVE_RECORD["receipt"])
-        launch, result = native["config"], native["result"]
+        inputs = inputs or gate.GateInputs(preset_name=preset.name)
+        source_root, config = composed(preset, inputs)
+        old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = "recorded-attempt"
-        launch["run"].update(
-            id=f"{name}-{presets.PRESET_REVISION}",
-            attempt_id=attempt,
-            mode="generate" if preset.recipe.layout.role_plan.generate_only else "train",
-        )
-        launch["artifacts"].update(export_root=str(root / "exports"), attempts_root=str(root / "attempts"))
-        launch["iris"]["max_retries"] = 0
-        launch["skyrl"]["trainer"]["logger"] = ["console", "records", "wandb"]
-        launch["iris"]["allocation"].update(num_nodes=preset.recipe.layout.role_plan.num_nodes, gpus_per_node=8)
-        launch["skyrl"]["trainer"].update(max_steps=preset.updates, seed=presets.SEED, callbacks=[])
-        launch["inputs"]["validation_data"] = []
-        launch["inputs"]["evaluation_data"] = {}
-        pin = gate.control_pins(preset.name)[0]
+        run_id = f"{name}-{preset.revision}"
+
+        def relocate(value):
+            if isinstance(value, dict):
+                return {key: relocate(child) for key, child in value.items()}
+            if isinstance(value, list):
+                return [relocate(child) for child in value]
+            if isinstance(value, str):
+                return value.replace(str(source_root), str(root)).replace(old_id, run_id).replace(old_attempt, attempt)
+            return value
+
+        native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
+        launch, result = native["config"], native["result"]
+        pin = gate.control_pins(preset)[0]
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
@@ -231,13 +263,12 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         result["provenance"].update(
             base_commit=pin.commit, dirty=False, command_line=["unrelated-command", "--preset", "train-long"]
         )
-        inputs = inputs or gate.GateInputs(preset_name=preset.name)
         write_json(root / gate.GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_json(
             root / RECORD_FILENAME,
             ArtifactRecord(
                 name=name,
-                version=presets.PRESET_REVISION,
+                version=preset.revision,
                 fingerprint=fingerprint,
                 result_type=result_type_name(SkyRLRun),
                 result=SkyRLRun(
@@ -293,50 +324,26 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 }
                 row.update({"generate/wall_seconds": 1.0, "generate/tokens_per_second_per_gpu": speed})
             stored_metrics[step] = row
-        default = presets.default_selection()
+        default = presets.default_selection(preset)
         selected = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
         for index, evaluation in enumerate(preset.evaluations):
-            source = evaluation.tasks(selected, default)
-            directory = Path(source.path())
+            source = evaluation.tasks(selected, default, preset.eval_lite)
+            sources = (
+                launch["inputs"]["validation_data"]
+                if index == 0
+                else launch["inputs"]["evaluation_data"][evaluation.name]
+            )
+            assert len(sources) == 1
+            descriptor = sources[0]
+            directory = Path(descriptor["uri"])
+            directory.mkdir(parents=True, exist_ok=True)
             count = evaluation.sample or presets.selection_summary(source)[f"{evaluation.file}_rows"]
             ids = [f"train-task-{i}" if evaluation.file == "train" else f"task-{i}" for i in range(count)]
-            path = directory / f"{evaluation.file}.parquet"
+            path = directory / descriptor["relative_path"]
             if not path.exists():
                 pq.write_table(
                     pa.table({"task_spec": [task.model_copy(update={"id": item}).model_dump_json() for item in ids]}),
                     path,
-                )
-            binding = (
-                presets.sampled_tasks_step(source, evaluation.file, evaluation.sample, presets.SEED)
-                if evaluation.sample
-                else source
-            )
-            descriptor = deepcopy(NATIVE_RECORD["receipt"]["config"]["inputs"]["validation_data"][0])
-            descriptor.update(
-                uri=str(directory),
-                relative_path=path.name,
-                local_path=str(directory),
-                identity=artifact_identity(binding),
-            )
-            sampling = {
-                **launch["skyrl"]["generator"]["eval_sampling_params"],
-                "temperature": 0.0,
-                "max_generate_length": 8192,
-            }
-            if index:
-                launch["inputs"]["evaluation_data"][evaluation.name] = [descriptor]
-                launch["skyrl"]["trainer"]["callbacks"].append(
-                    {
-                        "type": "evaluation",
-                        "additional_evaluations": {
-                            evaluation.name: {"sampling_params": sampling, "n_samples_per_prompt": evaluation.answers}
-                        },
-                    }
-                )
-            else:
-                launch["inputs"]["validation_data"] = [descriptor]
-                launch["skyrl"]["generator"].update(
-                    eval_n_samples_per_prompt=evaluation.answers, eval_sampling_params=sampling
                 )
             sessions = [(-1 if generating else preset.updates, score)]
             if evaluation.at_start:

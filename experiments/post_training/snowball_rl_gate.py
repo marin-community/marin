@@ -3,7 +3,7 @@
 
 """Compare a saved Snowball run, or one control replicate, with the preset's pinned controls.
 
-Reads saved metrics and panel scores only, so it needs no GPU. Writes gate_report.json and
+Checks saved measurements against current preset defaults and pinned controls on CPU. Writes gate_report.json and
 gate_report.md under the caller's namespace and prints the report as JSON. snowball_rl runs this
 comparison itself after a gated run; use this command to re-score a finished run, for example
 with a new --require, or to check calibration by scoring a control against the other controls.
@@ -21,9 +21,13 @@ import json
 import math
 import re
 import statistics
+import subprocess
+import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import click
 import pyarrow as pa
@@ -34,17 +38,26 @@ from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, run
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, Label, Verdict
-from marin.rl.skyrl import SkyRLReceiptLookupError, SkyRLRun, read_skyrl_launch_receipt
+from marin.rl.skyrl import (
+    MISSING_CONFIG_VALUE,
+    SkyRLReceiptLookupError,
+    SkyRLRun,
+    declared_config_value,
+    read_skyrl_launch_receipt,
+    set_config_value,
+    skyrl_cpu_command,
+)
 from marin.rl.skyrl_records import read_skyrl_metrics
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from scipy.stats import t
 from tabulate import tabulate
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_recipe as recipe
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
@@ -122,7 +135,7 @@ def validate_candidate(preset: presets.Preset, requirements: Sequence[str], *, c
     if requirements and (control or not gated):
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
-    pins = control_pins(preset.name) if not control and gated else ()
+    pins = control_pins(preset) if not control and gated else ()
     if not requirements:
         return
     reference = _with_objectives(_load_run(control_path(preset, pins[0], 0), preset), preset)
@@ -156,6 +169,7 @@ class RunMetadata(GateInputs):
     panel: str | None = None
     engines: tuple[dict, ...] = ()
     attempt_ids: tuple[str, ...] = ()
+    config_changes: tuple[str, ...] = ()
 
 
 class ControlMetadata(BaseModel):
@@ -368,6 +382,7 @@ def _session_invariants(
 
 @dataclass(frozen=True)
 class RunData:
+    config: dict
     path: str
     version: str
     panel: str | None
@@ -400,9 +415,9 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
     evaluation = presets.panel_evaluation(preset)
     if evaluation is None:
         return None
-    default = presets.default_selection()
+    default = presets.default_selection(preset)
     selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
-    selected = evaluation.tasks(selection, default)
+    selected = evaluation.tasks(selection, default, preset.eval_lite)
     panel = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
     binding = selected
     if evaluation.sample is not None:
@@ -411,6 +426,7 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
             evaluation.file,
             evaluation.sample,
             launch["skyrl"]["trainer"]["seed"],
+            revision=preset.revision,
         )
     expected = f"{binding.name}@{binding.version}"
     sources = scoring.recorded_sources(launch, evaluation.name)
@@ -491,13 +507,13 @@ def _load_run(
         raise InvalidComparison(f"recorded evaluation identity is malformed: {error}") from error
     panel = _panel_identity(preset, launch, inputs)
     scores, initial_scores, panel_ids = [scoring.EVAL_SCORE_SCHEMA.empty_table()], [], {}
-    default = presets.default_selection()
+    default = presets.default_selection(preset)
     selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
     for evaluation in preset.evaluations:
         quality = evaluation.file != scoring.TRAIN_STEM and any(
             metric.key.startswith(evaluation.name + "/") for metric in preset.guards
         )
-        expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default))
+        expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default, preset.eval_lite))
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
         table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
@@ -564,6 +580,7 @@ def _load_run(
     if record is None:
         raise FileNotFoundError(f"no artifact record at {path}")
     return RunData(
+        config=launch,
         path=path,
         version=record.version,
         panel=panel,
@@ -757,6 +774,205 @@ def _render_markdown(report: GateReport) -> str:
     return "\n".join([*lines, "", "## Gaps", "", *[f"- {gap}" for gap in report.gaps], ""])
 
 
+def _config_values(value, prefix: str = "") -> dict[str, object]:
+    if isinstance(value, (dict, list)) and value:
+        items = value.items() if isinstance(value, dict) else enumerate(value)
+        return {
+            path: leaf
+            for key, child in items
+            for path, leaf in _config_values(child, f"{prefix}.{key}".lstrip(".")).items()
+        }
+    return {prefix: value}
+
+
+def comparison_config(launch: dict) -> dict[str, object]:
+    """Compare complete native configuration with declared runtime aliases resolved."""
+    config = deepcopy(launch)
+    inputs = launch["inputs"]
+
+    def replace_alias(path, aliases, replacement):
+        current = declared_config_value(config, path)
+        if any(current == alias for alias in aliases):
+            set_config_value(config, path, replacement)
+
+    def sources_at(sources, prefix):
+        normalized = []
+        for index, source in enumerate(sources):
+            copied = dict(source)
+            copied["local_path"] = f"<staging:{prefix}.{index}>"
+            normalized.append(copied)
+        return normalized
+
+    def bound_data(values, sources, normalized, path):
+        if not isinstance(values, list) or len(values) != len(sources):
+            raise InvalidComparison(f"native data binding differs from declared inputs: {path}")
+        for value, source in zip(values, sources, strict=True):
+            aliases = [prefix_join(source[key], source["relative_path"]) for key in ("uri", "local_path")]
+            if value != source and value not in aliases:
+                raise InvalidComparison(f"native data binding differs from declared inputs: {path}")
+        return normalized
+
+    for name, path in (("train_data", "skyrl.data.train_data"), ("validation_data", "skyrl.data.val_data")):
+        sources = inputs[name]
+        normalized = sources_at(sources, f"inputs.{name}")
+        config["inputs"][name] = normalized
+        if sources:
+            set_config_value(config, path, bound_data(declared_config_value(config, path), sources, normalized, path))
+        else:
+            filename = "train.parquet" if name == "train_data" else "validation.parquet"
+            aliases = [[str(Path(home) / "data/gsm8k" / filename)] for home in (str(Path.home()), "/root")]
+            replace_alias(path, aliases, [f"${{oc.env:HOME}}/data/gsm8k/{filename}"])
+    for name, sources in inputs.get("evaluation_data", {}).items():
+        normalized = sources_at(sources, f"inputs.evaluation_data.{name}")
+        config["inputs"]["evaluation_data"][name] = normalized
+        for index, callback in enumerate(config["skyrl"]["trainer"]["callbacks"]):
+            if name in callback.get("additional_evaluations", {}):
+                profile = callback["additional_evaluations"][name]
+                profile["data_files"] = (
+                    normalized
+                    if profile.get("data_files") is None
+                    else bound_data(
+                        profile["data_files"],
+                        sources,
+                        normalized,
+                        f"skyrl.trainer.callbacks.{index}.additional_evaluations.{name}.data_files",
+                    )
+                )
+
+    model = inputs["model"]
+    aliases = [model["uri"], model["local_path"]]
+    config["inputs"]["model"]["local_path"] = "<model-staging>"
+    for path in (
+        "skyrl.trainer.policy.model.path",
+        "skyrl.trainer.ref.model.path",
+        "skyrl.trainer.policy.model.tokenizer_path",
+        "skyrl.trainer.ref.model.tokenizer_path",
+        "skyrl.generator.model_name",
+        "skyrl.generator.trajectory_retention.model_path",
+    ):
+        value = declared_config_value(config, path)
+        if value is MISSING_CONFIG_VALUE:
+            continue
+        if value not in aliases:
+            raise InvalidComparison(f"native model binding differs from declared inputs: {path}")
+        set_config_value(config, path, "<model-staging>")
+    replace_alias(
+        "skyrl.generator.engine_init_kwargs.served_model_name",
+        [uri.rstrip("/").rsplit("/", 1)[-1] for uri in aliases],
+        "<served-model-name>",
+    )
+    for field in ("checkpoint_root", "export_root", "attempts_root", "resolved_config_uri", "terminal_manifest_uri"):
+        config["artifacts"][field] = f"<output:{field}>"
+    for path, field, suffix in (
+        ("skyrl.trainer.ckpt_path", "checkpoint_root", ""),
+        ("skyrl.trainer.export_path", "export_root", ""),
+        ("ray.rendezvous_dir", "attempts_root", "rendezvous"),
+        ("ray.log_dir", "attempts_root", "ray-logs"),
+        ("skyrl.generator.trajectory_retention.output_path", "attempts_root", "trajectories"),
+    ):
+        root = launch["artifacts"][field]
+        replace_alias(path, [prefix_join(root, suffix) if suffix else root], f"<output:{field}/{suffix}>")
+    for path in (
+        "run.id",
+        "run.attempt_id",
+        "run.coordinator_iris_job_id",
+        "iris.job_name",
+        "iris.wandb_entity",
+        "skyrl.trainer.run_name",
+    ):
+        set_config_value(config, path, f"<identity:{path}>")
+    replace_alias(
+        "skyrl.generator.trajectory_retention.run_id",
+        [launch["run"]["id"], launch["iris"]["job_name"]],
+        "<run-identity>",
+    )
+    runtime = config["skyrl"].get("runtime", {})
+    for field in ("run_id", "attempt_id", "coordinator_iris_job_id", "iris_job_id"):
+        runtime.pop(field, None)
+    if not runtime:
+        config["skyrl"].pop("runtime", None)
+    return _config_values(config)
+
+
+def _current_configs(preset: presets.Preset, inputs: GateInputs) -> tuple[dict, dict]:
+    with tempfile.TemporaryDirectory(prefix="snowball-current-config-") as directory:
+        root = Path(directory)
+        paths = []
+        for index, candidate in enumerate((GateInputs(preset_name=preset.name), inputs)):
+            spec = recipe.run_spec(
+                preset,
+                name=f"current-config-{index}",
+                tasks=presets.selection_artifact(candidate.tasks) if candidate.tasks else None,
+                init=presets.published_artifact(candidate.init, revision=preset.revision) if candidate.init else None,
+                settings=tuple(map(presets.parse_setting, candidate.settings)),
+            )
+            step = recipe.run_step(preset, spec)
+            context = StepContext.for_run(
+                str(root / f"run-{index}"), str(root), runtime_args=step.runtime_args, deps=step.deps
+            )
+            path = root / f"config-{index}.yaml"
+            path.write_text(step.build_config(context).launch_config_yaml)
+            paths.append(str(path))
+        native_root = str(presets.REPO_ROOT / "vendor/skyrl")
+        program = (
+            "import json,sys\nfrom pathlib import Path\nfrom omegaconf import OmegaConf\n"
+            "from cloud.iris import launch_config\n"
+            f"assert Path(launch_config.__file__).resolve().is_relative_to({native_root!r})\n"
+            "print(json.dumps([OmegaConf.to_container(launch_config.load_launch_config(path), resolve=True) "
+            "for path in sys.argv[1:]]))\n"
+        )
+        try:
+            result = subprocess.run(
+                skyrl_cpu_command("python", "-c", program, *paths), capture_output=True, text=True, timeout=120
+            )
+            result.check_returncode()
+            defaults, expected = json.loads(result.stdout.splitlines()[-1])
+        except (subprocess.SubprocessError, ValueError, IndexError) as error:
+            raise InvalidComparison("current preset recipe cannot be composed") from error
+    return defaults, expected
+
+
+def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> set[str]:
+    return {
+        key
+        for key in left.keys() | right.keys()
+        if key not in left or key not in right or canonical_json(left[key]) != canonical_json(right[key])
+    }
+
+
+def _config_exceptions(preset: presets.Preset, inputs: GateInputs, keys: set[str]) -> set[str]:
+    prefixes = []
+    for text in inputs.settings:
+        for setting in presets.setting_leaves(presets.parse_setting(text)):
+            prefix = "skyrl." + setting.key
+            if setting.key.startswith("extra_env."):
+                prefix = "runtime.task_env." + setting.key.removeprefix("extra_env.")
+            prefixes.append(prefix)
+    allowed = {key for key in keys if any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)}
+    if inputs.init:
+        allowed.update({"inputs.model.uri", "inputs.model.identity"})
+    if inputs.tasks:
+        bindings = ["inputs.train_data", "skyrl.data.train_data"]
+        for index, evaluation in enumerate(preset.evaluations):
+            if evaluation.source != "tasks":
+                continue
+            if index == 0:
+                bindings.extend(("inputs.validation_data", "skyrl.data.val_data"))
+            else:
+                bindings.append(f"inputs.evaluation_data.{evaluation.name}")
+                bindings.extend(
+                    key.rsplit(".data_files.", 1)[0] + ".data_files"
+                    for key in keys
+                    if f".additional_evaluations.{evaluation.name}.data_files." in key
+                )
+        allowed.update(
+            key
+            for key in keys
+            if key.endswith((".uri", ".identity")) and any(key.startswith(prefix + ".") for prefix in bindings)
+        )
+    return allowed
+
+
 def _write_gate(
     preset_name: str,
     run_paths: tuple[str, ...],
@@ -809,7 +1025,7 @@ def _write_gate(
                 f"candidate={sorted({candidate.version for candidate in runs})}; "
                 f"controls={sorted({candidate.version for candidate in controls})}"
             )
-        if any(candidate.version != presets.PRESET_REVISION for candidate in runs):
+        if any(candidate.version != preset.revision for candidate in runs):
             raise InvalidComparison("preset revision differs")
         if any(candidate.panel_ids != controls[0].panel_ids for candidate in (*runs, *controls)):
             raise InvalidComparison("held-out panel task IDs differ")
@@ -817,6 +1033,25 @@ def _write_gate(
             raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
         if any(candidate.missing_tokens for candidate in (*runs, *controls)):
             raise InvalidComparison("mismatch guard has missing or zero selected-token counts")
+        current_config, expected_config = _current_configs(preset, inputs)
+        current, expected = comparison_config(current_config), comparison_config(expected_config)
+        changed = _changed_config_keys(current, expected)
+        explicit = _config_exceptions(preset, inputs, set(current) | set(expected))
+        metadata = metadata.model_copy(update={"config_changes": tuple(sorted(changed | explicit))})
+        for candidate in runs:
+            differences = _changed_config_keys(comparison_config(candidate.config), expected)
+            if differences:
+                raise InvalidComparison(
+                    f"candidate config differs from recorded inputs: {', '.join(sorted(differences))}"
+                )
+        for candidate in controls:
+            recorded = comparison_config(candidate.config)
+            allowed = changed | _config_exceptions(preset, inputs, set(current) | set(recorded))
+            differences = _changed_config_keys(recorded, current) - allowed
+            if differences:
+                raise InvalidComparison(
+                    f"control config differs from current preset defaults: {', '.join(sorted(differences))}"
+                )
         comparisons = _compare(preset, runs, grouped, inputs.requirements)
         verdict, label = _verdict(invariants, comparisons)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -846,17 +1081,17 @@ def _write_gate(
     return report
 
 
-def control_pins(preset: str) -> tuple[ControlPin, ...]:
-    control_preset = SHARED_CONTROLS.get(preset, preset)
+def control_pins(preset: presets.Preset) -> tuple[ControlPin, ...]:
+    control_preset = SHARED_CONTROLS.get(preset.name, preset.name)
     known = CONTROLS.get(control_preset, ())
-    pins = tuple(pin for pin in known if pin.revision == presets.PRESET_REVISION)
+    pins = tuple(pin for pin in known if pin.revision == preset.revision)
     if not pins:
         name, replicas = (known[0].preset, known[0].runs) if known else (control_preset, 4)
         revisions = sorted({pin.revision for pin in known})
         raise InvalidComparison(
-            f"no control pin for {preset} at {presets.PRESET_REVISION}; recorded control revisions={revisions}; "
+            f"no control pin for {preset.name} at {preset.revision}; recorded control revisions={revisions}; "
             f"collect with python -m experiments.post_training.snowball_rl --preset {name} "
-            f"--version {presets.PRESET_REVISION} --control --replicates {replicas} --run"
+            f"--version {preset.revision} --control --replicates {replicas} --run"
         )
     return pins
 
@@ -876,7 +1111,7 @@ def _gate_artifact(
     *,
     run_paths: tuple[str, ...],
 ) -> ArtifactStep[GateReport]:
-    pins = control_pins(preset.name)
+    pins = control_pins(preset)
     controls = tuple(
         tuple(
             (
@@ -934,7 +1169,7 @@ def _gate_artifact(
 def gate_step(
     preset: presets.Preset, runs: tuple[ArtifactStep[SkyRLRun], ...], *, inputs: GateInputs
 ) -> ArtifactStep[GateReport]:
-    pins = control_pins(preset.name)
+    pins = control_pins(preset)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].commit}"
     paths = tuple(candidate.path(presets.artifact_prefix(preset.recipe.layout.cluster)) for candidate in runs)
     identities = tuple(f"{candidate.name}@{candidate.version}" for candidate in runs)
@@ -971,7 +1206,7 @@ class SnowballCommand(click.Command):
     "candidate_name",
     metavar="NAME[@VERSION]",
     help="Saved run to re-score, by the name and version the status block prints for it; VERSION defaults "
-    "to PRESET_REVISION. Give this or --leave-out.",
+    "to the preset's revision. Give this or --leave-out.",
 )
 @click.option(
     "--leave-out",
@@ -997,7 +1232,7 @@ def main(
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
     preset = presets.PRESETS[preset_name]
     try:
-        pins = control_pins(preset_name)
+        pins = control_pins(preset)
         index = None
         if leave_out is not None:
             if not re.fullmatch(r"r\d+", leave_out) or int(leave_out[1:]) >= pins[0].runs:
@@ -1005,7 +1240,7 @@ def main(
             index = int(leave_out[1:])
             candidate_name = presets.control_name(pins[0].preset, pins[0].commit, index)
         name, separator, version = candidate_name.partition("@")
-        source = presets.run_path(preset.recipe.layout.cluster, name, version if separator else presets.PRESET_REVISION)
+        source = presets.run_path(preset.recipe.layout.cluster, name, version if separator else preset.revision)
         namespace = user_owned_name(
             f"{presets.RUN_PREFIX}/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
         )
@@ -1020,7 +1255,7 @@ def main(
         step = _gate_artifact(
             f"{namespace}/gate-n1-{pins[0].commit}",
             preset,
-            (f"{name}@{version if separator else presets.PRESET_REVISION}",),
+            (f"{name}@{version if separator else preset.revision}",),
             inputs,
             index,
             run_paths=(source,),

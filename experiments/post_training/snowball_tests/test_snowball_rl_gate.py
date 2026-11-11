@@ -42,7 +42,7 @@ KL = "policy/mismatch/staleness0/kl_k3"
 
 
 def controls(write, name, **kwargs):
-    pin = gate.control_pins(name)[0]
+    pin = gate.control_pins(presets.PRESETS[name])[0]
     return [
         write(
             name,
@@ -79,7 +79,9 @@ def edit_metrics(root, edit):
 
 
 def test_calibrate_pools_deviations_within_pins():
-    pins = [gate.ControlPin("speed-medium", commit, presets.PRESET_REVISION, 3) for commit in ("a", "b")]
+    pins = [
+        gate.ControlPin("speed-medium", commit, presets.PRESETS["speed-medium"].revision, 3) for commit in ("a", "b")
+    ]
     noise = gate.calibrate(
         {pins[0]: [{"x": value} for value in (1, 2, 3)], pins[1]: [{"x": value} for value in (10, 12, 14)]}
     )["x"]
@@ -159,7 +161,7 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
 def test_verdict_labels_use_objectives_and_guards(
     recorded_runs, speed, telemetry, control_values, kl, verdict, label, change
 ):
-    pin = gate.control_pins("speed-medium")[0]
+    pin = gate.control_pins(presets.PRESETS["speed-medium"])[0]
     for i, value in enumerate(control_values):
         recorded_runs(
             "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={VLLM: value}
@@ -174,7 +176,7 @@ def test_verdict_labels_use_objectives_and_guards(
 
 
 def test_zero_spread_is_unavailable_and_required_guards_are_invalid(recorded_runs):
-    pin = gate.control_pins("learning-medium")[0]
+    pin = gate.control_pins(presets.PRESETS["learning-medium"])[0]
     for i in range(pin.runs):
         value = (i + 1) / 4
         recorded_runs(
@@ -193,7 +195,7 @@ def test_zero_spread_is_unavailable_and_required_guards_are_invalid(recorded_run
 
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     key = "policy/raw_grad_norm"
-    pin = gate.control_pins("speed-medium")[0]
+    pin = gate.control_pins(presets.PRESETS["speed-medium"])[0]
     for i in range(pin.runs):
         recorded_runs(
             "speed-medium", presets.control_name(pin.preset, pin.commit, i), speed=100 + i, metrics={key: 100 + i}
@@ -227,7 +229,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     for i, value in enumerate((0, 0.01)):
         name = f"users/test/absolute-{i}"
         path = recorded_runs("speed-medium", name, metrics={key: value})
-        candidates.append(ArtifactStep.adopt(name, presets.PRESET_REVISION, str(path), kind=SkyRLRun))
+        candidates.append(ArtifactStep.adopt(name, presets.PRESETS["speed-medium"].revision, str(path), kind=SkyRLRun))
     step = gate.gate_step(
         presets.PRESETS["speed-medium"],
         tuple(candidates),
@@ -426,7 +428,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
         client.submit.side_effect = AssertionError("coordinator execution submitted another job")
     try:
         result = CliRunner().invoke(
-            snowball.main, ["--preset", "speed-medium", "--version", presets.PRESET_REVISION, "--run", "--wait"]
+            snowball.main,
+            ["--preset", "speed-medium", "--version", presets.PRESETS["speed-medium"].revision, "--run", "--wait"],
         )
     finally:
         set_job_info(None)
@@ -451,7 +454,7 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
 @pytest.mark.parametrize("arguments", [("--wait",), ("--replicates", "0"), ("--set", "trainer.resume_mode=latest")])
 def test_refusals_use_exit_four(selection, arguments):
     result = CliRunner().invoke(
-        snowball.main, ["--preset", "speed-medium", "--version", presets.PRESET_REVISION, *arguments]
+        snowball.main, ["--preset", "speed-medium", "--version", presets.PRESETS["speed-medium"].revision, *arguments]
     )
     assert result.exit_code == 4, (result.output, result.exception)
 

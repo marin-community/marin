@@ -27,6 +27,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     MISSING_CONFIG_VALUE,
     ArtifactDataSource,
+    ArtifactHfModel,
     MegatronGeometry,
     SkyRLRolePlan,
     SkyRLRun,
@@ -52,7 +53,6 @@ from experiments.post_training.task_curation.selection import (
 )
 
 REPO_ROOT = find_project_root(Path(__file__))
-PRESET_REVISION = "2026.11.11.1"
 RUN_PREFIX = "checkpoints/snowball-rl"
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
@@ -68,6 +68,78 @@ DEFAULT_EVAL_LITE_NAME = "eval-lite"
 DEFAULT_EVAL_LITE_VERSION = "2026.11.11.1"
 EVAL_REPLY_TOKENS = 8192
 GRAFANA_URL = "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training"
+
+_DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
+_DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
+_DEFAULT_MODEL = ArtifactHfModel(
+    ArtifactStep.adopt(
+        f"models/snowball-datakit-sft-{MODEL_REVISION}", "2026.09.21", MODEL_URI, kind=LevanterCheckpoint
+    ),
+    MODEL_ID,
+    MODEL_REVISION,
+    relative_path="",
+)
+_DEFAULT_SETTINGS = (
+    "context_budget.max_turns=1",
+    "environment.task_sessions.local={}",
+    'data.kind="parquet"',
+    "data.shuffle=true",
+    'trainer.strategy="megatron"',
+    "trainer.flash_attn=false",
+    "trainer.use_sample_packing=false",
+    "trainer.gradient_checkpointing=true",
+    "trainer.offload_optimizer_during_rollouts=false",
+    "trainer.epochs=50",
+    "trainer.update_epochs_per_batch=1",
+    "trainer.eval_batch_size=256",
+    "trainer.eval_before_train=false",
+    'trainer.logger=["console","records","wandb"]',
+    'trainer.project_name="marin-snowball-rl"',
+    "trainer.tracker_commit_each_step=true",
+    "trainer.training_metrics=true",
+    "trainer.rollout_spans=true",
+    "trainer.policy_train_spans=true",
+    "trainer.algorithm.batch_invariant=false",
+    'trainer.rollout_buffer.batch_policy="full_batch"',
+    "trainer.rollout_buffer.object_store_root=null",
+    "trainer.ckpt_interval=0",
+    "trainer.hf_save_interval=-1",
+    "trainer.callbacks=[]",
+    'generator.backend="vllm"',
+    'generator.model_dtype="bfloat16"',
+    'generator.vllm_attention_backend="FLASH_ATTN"',
+    "generator.run_engines_locally=true",
+    'generator.weight_sync_backend="nccl"',
+    'generator.weight_sync_pause.mode="keep"',
+    "generator.weight_sync_pause.clear_cache=true",
+    'generator.weight_sync_transport="expert_block"',
+    "generator.expert_block_sync.timeout_seconds=600",
+    "generator.expert_block_sync.verify=false",
+    "generator.gpu_memory_utilization=0.75",
+    "generator.max_num_seqs=1024",
+    "generator.max_num_batched_tokens=8192",
+    "generator.enable_prefix_caching=true",
+    "generator.trajectory_reward_shaping.enabled=true",
+    "generator.trajectory_reward_shaping.overlong.penalty_scale=0.0",
+    "generator.trajectory_reward_shaping.reasoning_span.penalty=0.1",
+    'generator.trajectory_reward_shaping.reasoning_span.target="marker"',
+    "generator.enable_chunked_prefill=true",
+    "generator.enforce_eager=false",
+    "generator.enable_http_endpoint=false",
+    "generator.chat_template=null",
+    "generator.apply_overlong_filtering=false",
+    'generator.engine_init_kwargs.moe_backend="triton"',
+    "generator.engine_init_kwargs.enable_auto_tools=true",
+    'generator.engine_init_kwargs.tool_parser="hermes"',
+    "generator.sampling_params.temperature=1.0",
+    "generator.sampling_params.top_p=1.0",
+    "generator.sampling_params.logprobs=0",
+    "trajectory_runner.max_concurrent_tasks=1024",
+    'extra_env.PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
+    'extra_env.NCCL_NET="Socket"',
+    'extra_env.NCCL_IB_DISABLE="1"',
+    'extra_env.NCCL_SOCKET_FAMILY="AF_INET"',
+)
 
 
 class Focus(StrEnum):
@@ -101,18 +173,24 @@ class Gap(StrEnum):
 class Evaluation:
     name: str
     file: str
-    source: str = "default"
+    source: Literal["default", "tasks", "eval_lite"] = "default"
     sample: int | None = None
     answers: int = 1
     every: int | None = None
     at_start: bool = False
 
-    def tasks(self, selection: ArtifactStep, default: ArtifactStep) -> ArtifactStep:
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.isidentifier():
+            raise ValueError(f"evaluation name must be an identifier: {self.name!r}")
+
+    def tasks(self, selection: ArtifactStep, default: ArtifactStep, eval_lite: str) -> ArtifactStep:
         if self.source == "default":
             return default
         if self.source == "tasks":
             return selection
-        return selection_artifact(self.source)
+        if self.source == "eval_lite":
+            return selection_artifact(eval_lite)
+        raise ValueError(f"unknown evaluation source: {self.source}")
 
 
 @dataclass(frozen=True)
@@ -144,11 +222,16 @@ class Metric:
 
 @dataclass(frozen=True)
 class Preset:
+    revision: str
     focus: Focus
     duration: Duration
     recipe: Recipe
     updates: int
     measured: range
+    tasks: str = _DEFAULT_TASKS
+    model: ArtifactHfModel = _DEFAULT_MODEL
+    settings: tuple[str, ...] = _DEFAULT_SETTINGS
+    eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
     keep_weights: bool = False
     checkpoint_every: int | None = None
@@ -197,9 +280,13 @@ def evaluation_callbacks(evaluation: Evaluation, *, updates: int) -> list[dict]:
     ]
 
 
-def configure_evaluation(evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
+def configure_evaluation(
+    evaluation: Evaluation, config: dict, tasks: ArtifactStep, *, revision: str
+) -> tuple[ArtifactDataSource, ...]:
     if evaluation.sample is not None:
-        tasks = sampled_tasks_step(tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"])
+        tasks = sampled_tasks_step(
+            tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], revision=revision
+        )
     config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
     sampling = (
         {
@@ -221,16 +308,14 @@ def configure_evaluation(evaluation: Evaluation, config: dict, tasks: ArtifactSt
     return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
-_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
-
 EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
-            Evaluation(name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, source=_EVAL_LITE),
-            Evaluation(name="eval_lite_100", file=Path(VALIDATION_FILENAME).stem, source=_EVAL_LITE),
-            Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4),
-            Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
+            Evaluation(name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, source="eval_lite"),
+            Evaluation(name="eval_lite_100", file=Path(VALIDATION_FILENAME).stem, source="eval_lite"),
+            Evaluation(name="speed_512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4),
+            Evaluation(name="screen_256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
     }
 )
@@ -307,6 +392,7 @@ _GAPS = (
 )
 _PANEL = EVALUATIONS["eval_lite_100"]
 _LEARNING_MEDIUM = Preset(
+    revision="2026.11.11.1",
     focus=Focus.LEARNING,
     duration=Duration.MEDIUM,
     recipe=_LEARNING,
@@ -324,30 +410,33 @@ PRESETS = MappingProxyType(
         preset.name: preset
         for preset in (
             Preset(
+                revision="2026.11.11.1",
                 focus=Focus.SPEED,
                 duration=Duration.SHORT,
                 objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
                 recipe=replace(_LEARNING, layout=E8, fixed_reply_tokens=4096),
                 updates=0,
                 measured=range(1),
-                evaluations=(EVALUATIONS["speed-512x4"], EVALUATIONS["eval_lite"]),
+                evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
                 guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
                 gaps=_GAPS,
                 budget="14-17 min; 2 H100-h",
             ),
             Preset(
+                revision="2026.11.11.1",
                 focus=Focus.DATA,
                 duration=Duration.SHORT,
-                objectives=(Metric("screen-256x4/mixed_fraction", True),),
+                objectives=(Metric("screen_256x4/mixed_fraction", True),),
                 recipe=replace(_LEARNING, layout=E8),
                 updates=0,
                 measured=range(1),
-                evaluations=(EVALUATIONS["screen-256x4"],),
-                guards=(Metric("screen-256x4/mixed_fraction", True),),
+                evaluations=(EVALUATIONS["screen_256x4"],),
+                guards=(Metric("screen_256x4/mixed_fraction", True),),
                 gaps=_GAPS,
                 budget="10-15 min; 2 H100-h",
             ),
             Preset(
+                revision="2026.11.11.1",
                 focus=Focus.SPEED,
                 duration=Duration.MEDIUM,
                 objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
@@ -366,6 +455,7 @@ PRESETS = MappingProxyType(
                 budget="35-40 min; 25 H100-h",
             ),
             Preset(
+                revision="2026.11.11.1",
                 focus=Focus.SPEED,
                 duration=Duration.LONG,
                 objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.MEDIAN),),
@@ -382,6 +472,7 @@ PRESETS = MappingProxyType(
             _LEARNING_MEDIUM,
             replace(_LEARNING_MEDIUM, focus=Focus.DATA),
             Preset(
+                revision="2026.11.11.1",
                 focus=Focus.TRAIN,
                 duration=Duration.LONG,
                 recipe=_ASYNC_P40,
@@ -450,12 +541,12 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
                 target.write(source.read())
 
 
-def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed: int) -> ArtifactStep:
+def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed: int, *, revision: str) -> ArtifactStep:
     identity = fingerprint_hash(json.dumps((selection.name, selection.version, filename, count, seed)))
     return apply(
         f"datasets/snowball-rl/sample-{identity}",
         _write_sample,
-        version=PRESET_REVISION,
+        version=revision,
         selection=selection,
         filename=filename,
         count=count,
@@ -546,8 +637,8 @@ def apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
         raise click.BadParameter(str(error)) from error
 
 
-def default_selection() -> ArtifactStep[Artifact]:
-    return selection_artifact(f"snowball-100k@{DEFAULT_SELECTION_VERSION}")
+def default_selection(preset: Preset) -> ArtifactStep[Artifact]:
+    return selection_artifact(preset.tasks)
 
 
 def cluster_config_path(cluster: str) -> str:
@@ -592,10 +683,10 @@ def selection_artifact(value: str) -> ArtifactStep:
     return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version))
 
 
-def published_artifact(value: str) -> ArtifactStep:
+def published_artifact(value: str, *, revision: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator:
-        name, version = value, PRESET_REVISION
+        name, version = value, revision
     if is_mutable_version(version):
         raise click.BadParameter("use an immutable artifact version instead of dev")
     root = str(StoragePath(artifact_prefix(P40.cluster)) / name / version)

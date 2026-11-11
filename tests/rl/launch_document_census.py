@@ -31,8 +31,8 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
 
 
 def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
-    panel = snowball.selection_artifact(f"{snowball.DEFAULT_EVAL_LITE_NAME}@{snowball.DEFAULT_EVAL_LITE_VERSION}")
-    selection = snowball.default_selection()
+    panel = snowball.selection_artifact(preset.eval_lite)
+    selection = snowball.default_selection(preset)
     for source, full_rows in ((selection, 910), (panel, 1500)):
         summary = {
             "recipe": {

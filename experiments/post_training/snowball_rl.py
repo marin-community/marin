@@ -29,12 +29,10 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
 from __future__ import annotations
 
 import json
-import math
 import os
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from functools import partial, wraps
 from pathlib import Path
@@ -47,8 +45,7 @@ from iris.client.client import IrisClient, get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState
-from iris.rpc import job_pb2
-from marin.execution.artifact import is_mutable_version, read_record
+from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
@@ -56,42 +53,31 @@ from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.rl.cli import submit_or_run
 from marin.rl.skyrl import (
-    BEST_CHECKPOINT_CALLBACK,
     IRIS_HUB_CLUSTER_CONFIG,
-    ArtifactDataSource,
-    ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModelSource,
-    SkyRLPolicyModel,
     SkyRLReceiptLookupError,
-    SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRunConfig,
-    SkyRLSpec,
-    SkyRLTopology,
     read_skyrl_launch_receipt,
     run_skyrl,
-    skyrl_step,
 )
 from marin.rl.skyrl_records import (
     read_skyrl_metrics,
     read_stored_skyrl_receipt,
 )
-from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
 from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training import snowball_rl_recipe as recipe
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
-    TRAIN_FILENAME,
-    GraderKind,
 )
 
 # Iris limit for one Snowball run, coordinator and job alike.
-RUN_TIMEOUT_HOURS = 72
+RUN_TIMEOUT_HOURS = recipe.RUN_TIMEOUT_HOURS
 
 
 DEFAULT_WANDB_ENTITY = "marin-community"
@@ -99,129 +85,10 @@ _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 
 
-def training_config(
-    preset: presets.Preset,
-    settings: tuple[presets.Setting, ...] = (),
-    evaluations: tuple[presets.Evaluation, ...] = (),
-) -> dict:
-    recipe = preset.recipe
-    plan = recipe.layout.role_plan
-    config = {
-        "context_budget": {
-            "request_window_tokens": recipe.request_window_tokens,
-            "max_new_tokens_per_turn": (
-                recipe.fixed_reply_tokens if recipe.fixed_reply_tokens is not None else recipe.max_new_tokens
-            ),
-            "max_turns": 1,
-        },
-        "environment": {
-            "task_sessions": {
-                "local": {},
-            }
-        },
-        "data": {"kind": "parquet", "shuffle": True},
-        "trainer": {
-            "strategy": "megatron",
-            "flash_attn": False,
-            "use_sample_packing": False,
-            "gradient_checkpointing": True,
-            "offload_optimizer_during_rollouts": False,
-            "epochs": 50,
-            "max_steps": preset.updates or 1,
-            "update_epochs_per_batch": 1,
-            "micro_forward_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-            "eval_batch_size": 256,
-            "eval_interval": max(1, preset.updates) if evaluations else -1,
-            "eval_before_train": False,
-            "resume_mode": "latest" if preset.focus == presets.Focus.TRAIN else "none",
-            "seed": presets.SEED,
-            "logger": ["console", "records", "wandb"],
-            "project_name": "marin-snowball-rl",
-            "tracker_commit_each_step": True,
-            "training_metrics": True,
-            "rollout_spans": True,
-            "policy_train_spans": True,
-            "algorithm": {**deepcopy(dict(recipe.estimator)), "batch_invariant": False},
-            "policy": {"optimizer_config": deepcopy(dict(recipe.optimizer))},
-            "rollout_buffer": {
-                "max_staleness_steps": recipe.staleness,
-                "batch_policy": "full_batch",
-                "max_in_flight": plan.train_batch_size,
-                "object_store_root": None,
-            },
-            "ckpt_interval": 0,
-            "hf_save_interval": -1,
-            "callbacks": [],
-        },
-        "generator": {
-            "backend": "vllm",
-            "model_dtype": "bfloat16",
-            "vllm_attention_backend": "FLASH_ATTN",
-            "run_engines_locally": True,
-            "weight_sync_backend": "nccl",
-            "weight_sync_pause": {"mode": "keep", "clear_cache": True},
-            "weight_sync_transport": "expert_block",
-            "expert_block_sync": {"timeout_seconds": 600, "verify": False},
-            "gpu_memory_utilization": 0.75,
-            "max_num_seqs": 1024,
-            "max_num_batched_tokens": 8192,
-            "enable_prefix_caching": True,
-            "trajectory_reward_shaping": {
-                "enabled": True,
-                "overlong": {"penalty_scale": 0.0},
-                "reasoning_span": {"penalty": 0.1, "target": "marker"},
-            },
-            "enable_chunked_prefill": True,
-            "enforce_eager": False,
-            "enable_http_endpoint": False,
-            "chat_template": None,
-            "apply_overlong_filtering": False,
-            "engine_init_kwargs": {"moe_backend": "triton", "enable_auto_tools": True, "tool_parser": "hermes"},
-            "sampling_params": {
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "logprobs": 0,
-                "ignore_eos": recipe.fixed_reply_tokens is not None,
-            },
-        },
-        "trajectory_runner": {"max_concurrent_tasks": 1024},
-        "extra_env": {
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        },
-    }
-    geometry = recipe.layout.megatron
-    config["trainer"]["policy"]["megatron_config"] = asdict(geometry)
-    config["trainer"]["ref"] = {"megatron_config": asdict(geometry)}
-    config["extra_env"].update(NCCL_NET="Socket", NCCL_IB_DISABLE="1", NCCL_SOCKET_FAMILY="AF_INET")
-    for setting in settings:
-        presets.apply_setting(config, setting, preset)
-    return config
-
-
 @dataclass(frozen=True)
 class SnowballRun:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
     gate: ArtifactStep[snowball_rl_gate.GateReport] | None = None
-
-
-def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
-    if init is None:
-        model = ArtifactStep.adopt(
-            f"models/snowball-datakit-sft-{presets.MODEL_REVISION}",
-            "2026.09.21",
-            presets.MODEL_URI,
-            kind=LevanterCheckpoint,
-        )
-        return ArtifactHfModel(model, presets.MODEL_ID, presets.MODEL_REVISION, relative_path="")
-    if init.artifact_type is SkyRLRun:
-        record = read_record(init.path())
-        if record is None:
-            raise click.BadParameter("the initializer requires a completed published artifact record")
-        result = record.result or {}
-        if not result.get("hf_model_uri"):
-            raise click.BadParameter("the initializer run has no HF export")
-        return SkyRLPolicyModel(init)
-    return ArtifactHfModel(init, presets.MODEL_ID, presets.MODEL_REVISION)
 
 
 def _provenance(*, control: bool) -> Provenance:
@@ -238,105 +105,12 @@ def _provenance(*, control: bool) -> Provenance:
     return provenance
 
 
-def _callbacks(
-    preset: presets.Preset,
-    evaluation: presets.Evaluation | None,
-    profiles: dict,
-    expected_tasks: int,
-) -> list[dict]:
-    if preset.recipe.layout.role_plan.generate_only:
-        return [{"type": "evaluation", "additional_evaluations": profiles}] if profiles else []
-    callbacks = []
-    if preset.checkpoint_every:
-        callbacks.append({"type": "checkpoint", "save_steps": preset.checkpoint_every})
-    if evaluation is not None:
-        for callback in presets.evaluation_callbacks(evaluation, updates=preset.updates):
-            if profiles and callback["type"] == "evaluation":
-                callback["additional_evaluations"] = profiles
-            callbacks.append(callback)
-    if preset.focus == presets.Focus.TRAIN:
-        callbacks.extend(
-            [
-                {
-                    "type": BEST_CHECKPOINT_CALLBACK,
-                    "expected_tasks": expected_tasks,
-                    "minimum_scored_tasks": math.ceil(presets.MINIMUM_PANEL_COVERAGE * expected_tasks),
-                },
-                {
-                    "type": "hf_model_save",
-                    "save_steps": ((preset.updates // preset.checkpoint_every) + 1) * preset.checkpoint_every,
-                    "save_on_train_end": True,
-                },
-            ]
-        )
-    if preset.keep_weights and preset.focus != presets.Focus.TRAIN:
-        callbacks.extend(
-            (
-                {"type": "checkpoint", "save_steps": preset.updates + 1, "save_on_train_end": True},
-                {"type": "hf_model_save", "save_steps": -1, "save_on_train_end": True},
-            )
-        )
-    return callbacks
-
-
 def _run_snowball(config: SkyRLRunConfig, *, inputs: snowball_rl_gate.GateInputs) -> SkyRLRun:
     path = StoragePath(config.output.resolved_config_uri).parent / snowball_rl_gate.GATE_INPUTS_FILENAME
     if not path.exists():
         path.parent.mkdirs()
         path.write_text(inputs.model_dump_json(indent=2) + "\n")
     return run_skyrl(config)
-
-
-def _run_step(
-    name: str,
-    config: dict,
-    model: SkyRLModelSource,
-    selection: ArtifactStep,
-    *,
-    layout: presets.Layout,
-    export_hf: bool,
-    retention: int,
-    validation_data: tuple[ArtifactDataSource, ...],
-    wandb_entity: str | None,
-    evaluation_data: tuple[tuple[str, tuple[ArtifactDataSource, ...]], ...] = (),
-) -> ArtifactStep[SkyRLRun]:
-    plan = layout.role_plan
-    return skyrl_step(
-        SkyRLSpec(
-            name=name,
-            version=presets.PRESET_REVISION,
-            config_yaml=yaml.safe_dump(config, sort_keys=False),
-            model=model,
-            train_data=(() if plan.generate_only else (ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),)),
-            validation_data=validation_data,
-            evaluation_data=evaluation_data,
-            topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=retention),
-            seed=config["trainer"]["seed"],
-        ),
-        IrisSkyRLExecution(
-            cluster=layout.cluster,
-            cluster_config=presets.cluster_config_path(layout.cluster),
-            cpu=32,
-            memory=layout.host_memory,
-            disk="2TB",
-            priority="interactive",
-            max_retries=0,
-            target_cluster=layout.cluster,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=RUN_TIMEOUT_HOURS,
-            job_timeout_seconds=RUN_TIMEOUT_HOURS * 3600,
-            wandb_entity=wandb_entity or DEFAULT_WANDB_ENTITY,
-            required_env_vars=(("WANDB_API_KEY", _WANDB_ENTITY_ENV) if wandb_entity else ("WANDB_API_KEY",)),
-            container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-        ),
-        export_hf=export_hf,
-    )
-
-
-def _refuse_judged(summary: dict, filename: str) -> None:
-    if summary["grader_kind_counts"][filename].get(GraderKind.REMOTE_JUDGE, 0):
-        raise click.BadParameter("Snowball selections must contain no AI-judge-graded tasks")
 
 
 def build_run(
@@ -351,7 +125,6 @@ def build_run(
 ) -> SnowballRun:
     """Construct a Snowball experiment: one run step per replicate and, for a gated preset, its gate step."""
     wandb_entity = os.environ.get(_WANDB_ENTITY_ENV)
-    export_hf = preset.keep_weights
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -368,11 +141,7 @@ def build_run(
         settings or tasks is not None or init is not None or preset.name in snowball_rl_gate.SHARED_CONTROLS
     ):
         raise click.BadParameter("controls use only the preset's pinned default inputs")
-    batch_changes = {field: setting.value for setting in settings if (field := presets.BATCH_SETTINGS.get(setting.key))}
-    if batch_changes:
-        plan = replace(preset.recipe.layout.role_plan, **batch_changes)
-        preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, role_plan=plan)))
-    default = presets.default_selection()
+    default = presets.default_selection(preset)
     selection = tasks or default
     if is_mutable_version(selection.version):
         raise click.BadParameter("curated task selections must have an immutable version")
@@ -384,43 +153,17 @@ def build_run(
     ):
         raise click.BadParameter("candidate tasks use a different heldout input; curate against the default panel")
     if tasks is not None:
-        panel = presets.selection_artifact(f"{presets.DEFAULT_EVAL_LITE_NAME}@{presets.DEFAULT_EVAL_LITE_VERSION}")
+        panel = presets.selection_artifact(preset.eval_lite)
         excluded = summary["recipe"].get("exclusions", ())
         expected = str(StoragePath(panel.path()) / FULL_VALIDATION_FILENAME)
         if not any(row["uri"] == expected and row["version"] == panel.version for row in excluded):
             raise click.BadParameter("candidate tasks must record the full EvalLite in recipe.exclusions")
-    chosen = preset.evaluations
-    generating = preset.recipe.layout.role_plan.generate_only
-    _refuse_judged(summary, "train")
-    config = training_config(preset, settings, chosen)
-    preset = replace(preset, updates=config["trainer"]["max_steps"])
-    model = _model_input(init)
-    validation_data = ()
-    evaluation_data = []
-    profiles = {}
-    evaluation_inputs = []
-    expected_tasks = 0
-    for index, evaluation in enumerate(chosen):
-        evaluation_tasks = evaluation.tasks(selection, default)
-        evaluation_inputs.append((evaluation.name, evaluation_tasks.name, evaluation_tasks.version))
-        _refuse_judged(presets.selection_summary(evaluation_tasks), evaluation.file)
-        profile_config = config if index == 0 else deepcopy(config)
-        sources = presets.configure_evaluation(evaluation, profile_config, evaluation_tasks)
-        if index == 0:
-            validation_data = sources
-            answer_count = presets.evaluation_answer_count(evaluation, evaluation_tasks)
-            expected_tasks = answer_count // evaluation.answers
-            if generating:
-                config["trajectory_runner"]["max_concurrent_tasks"] = answer_count
-        else:
-            evaluation_data.append((evaluation.name, sources))
-            profiles[evaluation.name] = {
-                "sampling_params": profile_config["generator"]["eval_sampling_params"],
-                "n_samples_per_prompt": profile_config["generator"]["eval_n_samples_per_prompt"],
-            }
-            if not generating:
-                profiles[evaluation.name]["schedule"] = "final"
-    config["trainer"]["callbacks"] = _callbacks(preset, chosen[0] if chosen else None, profiles, expected_tasks)
+    spec = recipe.run_spec(preset, name="snowball-config", tasks=tasks, init=init, settings=settings)
+    evaluation_inputs = [
+        (evaluation.name, source.name, source.version)
+        for evaluation in preset.evaluations
+        for source in (evaluation.tasks(selection, default, preset.eval_lite),)
+    ]
     changes = {
         "tasks": (selection.name, selection.version),
         "init": None if init is None else (init.name, init.version),
@@ -441,18 +184,7 @@ def build_run(
     runs = []
     for replicate in range(replicates):
         name = presets.run_name(preset, provenance, inputs_hash, replicate, control=control)
-        run = _run_step(
-            name,
-            config,
-            model,
-            selection,
-            layout=preset.recipe.layout,
-            export_hf=export_hf,
-            retention=5 if preset.checkpoint_every else 2,
-            validation_data=validation_data,
-            evaluation_data=tuple(evaluation_data),
-            wandb_entity=wandb_entity,
-        )
+        run = recipe.run_step(preset, replace(spec, name=name), wandb_entity=wandb_entity)
         runs.append(replace(run, run=partial(_run_snowball, inputs=inputs)))
     gate = (
         snowball_rl_gate.gate_step(
@@ -644,6 +376,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
         "context_budget": planned[0]["skyrl"]["context_budget"],
         "updates": 0 if preset.recipe.layout.role_plan.generate_only else planned[0]["skyrl"]["trainer"]["max_steps"],
         "measured_updates": list(preset.measured),
+        "config_changes": list(report.run.config_changes) if report else [],
         "budget_estimate": preset.budget,
         "guards": [metric.key for metric in preset.guards],
         "gaps": [gap.value for gap in preset.gaps],
@@ -812,7 +545,7 @@ def main(
         preset,
         settings=tuple(presets.parse_setting(setting) for setting in settings),
         tasks=presets.selection_artifact(tasks_name) if tasks_name else None,
-        init=presets.published_artifact(init_name) if init_name else None,
+        init=presets.published_artifact(init_name, revision=preset.revision) if init_name else None,
         replicates=replicates,
         control=control,
         requirements=requirements,
