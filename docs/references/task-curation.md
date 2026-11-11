@@ -568,7 +568,7 @@ environments; uv retains its configured package cache.
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
 `solution_binary` is an empty archive. The controls above cannot run there, so
-execution is qualified by two checks that need no oracle. Apply them whenever a
+execution is qualified by three checks that need no oracle. Apply them whenever a
 source is admitted without one, including every rebuilt cohort that inherits a
 native source's missing oracles.
 
@@ -578,6 +578,17 @@ identical bytes and mode. This catches a rebuild that drops directory sources,
 rewrites fixture data or changes an executable bit. `ADD` recipes have no
 preservation contract and must be deferred by the converter.
 
+**Setup execution (local Docker).** Preservation proves the bytes travel; it does
+not prove the artifact stages them. Run the lowered spec's own
+`environment_requirements.setup_commands` in its declared base image, with its
+resources installed under `/setup_files`, then compare the files it writes at the
+native recipe's `COPY` destinations against the same expectation set. A spec that
+declares no setup commands reports `no_setup_commands` rather than passing: a hook
+the runtime never executes must not count as evidence. Container DNS may need an
+explicit resolver (`--docker-dns 1.1.1.1`); package installation is real, because
+the rebuilt setup no longer installs task dependencies and the base image owns
+provisioning.
+
 **Verifier liveness (sandbox).** The task's own verifier runs in the task's
 graded environment against the untouched workspace. The verifier "actually ran"
 only when it executed and returned a well-formed negative verdict: exit code 0
@@ -586,8 +597,8 @@ empty or unparsable report, or a positive reward on an unsolved workspace is an
 infrastructure error or a defect, never a pass. A solved submission is not
 needed; the rebuild changed the environment, not the grading contract.
 
-**Pass criteria.** A source reaches `verifier_executed` only when both phases
-ran and every sampled task passed (`minimum_rate` 1.0). Sampling is stratified
+**Pass criteria.** A source reaches `verifier_executed` only when every phase ran
+and every sampled task passed (`minimum_rate` 1.0). Sampling is stratified
 per base reference, twenty tasks per base by default, and the report lists the
 pass rate per base and overall. A single infrastructure error blocks the status
 until it is explained, because the check's purpose is to prove the environment
