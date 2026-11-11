@@ -128,6 +128,13 @@ def test_adopted_sft_full_graph_report_has_no_fresh_base_dependency(monkeypatch,
     terminal = build_spec_graph(resolved, "2026.11.10.1", through="archive")
     names = [step.name for step in graph_handles([terminal])]
     validate_graph(terminal, tmp_path / "full-graph", "s3://marin-us-east-02a/marin/")
+    executions = [
+        value
+        for step in graph_handles([terminal])
+        for value in [step.runtime_args.get("skyrl_execution")]
+        if value is not None
+    ]
+    assert {execution.coordinator_name for execution in executions} == {"long-loop-full-2026.11.10.1"}
     assert "long-loop/report" in names
     assert any(name.endswith("/adopt-sft") for name in names)
     assert not any(name.endswith("/sft") or name.endswith("/base") for name in names)

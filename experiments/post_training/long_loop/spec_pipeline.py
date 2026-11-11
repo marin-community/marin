@@ -27,7 +27,7 @@ from experiments.post_training.long_loop.sft import export_sft, fresh_sft_config
 
 
 def runtime_execution(value: dict) -> IrisSkyRLExecution:
-    gpu = value["coordinator_gpu"]
+    gpu = value.get("coordinator_gpu")
     return IrisSkyRLExecution(
         **{
             **value,
@@ -35,6 +35,13 @@ def runtime_execution(value: dict) -> IrisSkyRLExecution:
             "required_env_vars": tuple(value["required_env_vars"]),
         }
     )
+
+
+def stage_execution(value: dict, coordinator: IrisSkyRLExecution) -> IrisSkyRLExecution:
+    """Bind stage resources to the loop's single parent allocation."""
+    if {"coordinator_name", "coordinator_gpu", "coordinator_timeout_hours"} & value.keys():
+        raise ValueError("Coordinator settings belong only in execution.coordinator")
+    return replace(coordinator, **{**value, "required_env_vars": tuple(value["required_env_vars"])})
 
 
 def verify_inputs(*, output: str, manifests: dict) -> None:
@@ -183,19 +190,13 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     if len(routes) != sum(len(datasets[route]["source_names"]) for route in ("agentic", "nonagentic")):
         raise ValueError("Agentic and nonagentic source names overlap")
     rl_config["trainer"]["rollout_buffer"]["source_routes"] = routes
-    rl_execution = runtime_execution(rl["execution"])
+    rl_execution = stage_execution(rl["execution"], coordinator)
     if "local" in rl["config"]["environment"]["task_sessions"]:
         if (
             coordinator.container_profile != job_pb2.CONTAINER_PROFILE_PRIVILEGED
             or rl_execution.container_profile != job_pb2.CONTAINER_PROFILE_PRIVILEGED
         ):
             raise ValueError("Local sandbox requires privileged coordinator and RL child profiles")
-    rl_execution = replace(
-        rl_execution,
-        coordinator_name=coordinator.coordinator_name,
-        coordinator_gpu=coordinator.coordinator_gpu,
-        coordinator_timeout_hours=coordinator.coordinator_timeout_hours,
-    )
     learned = configured_rl_step(
         version=version,
         name=rl["name"],
@@ -241,7 +242,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             name=evaluation["name"],
             config=evaluation["config"],
             role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
-            execution=runtime_execution(evaluation["execution"]),
+            execution=stage_execution(evaluation["execution"], coordinator),
             judge=draccus.decode(ModelConfig, evaluation["judge"]),
             seed=evaluation["seed"],
             expected_step=None,

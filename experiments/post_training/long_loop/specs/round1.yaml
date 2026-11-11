@@ -39,10 +39,10 @@ archive:
   sha256: fbf7b18a38b9619cfe5196f8a66f1ac35c8cf1668ddb34dfe292abe86a87a142
 rl:
   path: rl.yaml
-  sha256: 20a627e3ab27ae8a7ee6352f64c9d63b6e35e2ffc272467e95739df64df1ff2b
+  sha256: 8c7f27085f3b3f23eb96cc8870cc9bd2e94c6f864a93b198f330f89bc95d04cf
 evaluation:
   path: evaluation.yaml
-  sha256: e1fccf76640875787cb5ed6a5cd19bc879fc402ab4a0a3c970ad4c4b433f5011
+  sha256: 3b11ffe44955c185b38bb2fb1abc7700e368e98b0d8df556787b59a49ced8b50
 smoke_overrides:
   sft_steps: 2
   rl_steps: 5

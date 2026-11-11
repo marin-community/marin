@@ -276,9 +276,6 @@ execution:
   max_retries: 0
   target_cluster: cw-rno2a
   parent_cluster_config: lib/iris/config/marin.yaml
-  coordinator_timeout_hours: 12
-  coordinator_name: PENDING_RUN_COORDINATOR_NAME
-  coordinator_gpu: null
   wandb_entity: marin-community
   job_timeout_seconds: 32400
   required_env_vars:

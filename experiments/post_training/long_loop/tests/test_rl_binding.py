@@ -12,7 +12,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan
 
 from experiments.post_training.long_loop import rl
-from experiments.post_training.long_loop.spec_pipeline import runtime_execution
+from experiments.post_training.long_loop.spec_pipeline import runtime_execution, stage_execution
 
 
 def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch):
@@ -27,7 +27,12 @@ def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch):
         validation_data=(ArtifactDataSource(data, relative_path="validation.parquet"),),
         config=recipe["config"],
         plan=draccus.decode(SkyRLRolePlan, recipe["role_plan"]),
-        execution=runtime_execution(recipe["execution"]),
+        execution=stage_execution(
+            recipe["execution"],
+            runtime_execution(
+                yaml.safe_load((Path(__file__).parents[1] / "specs/execution.yaml").read_text())["coordinator"]
+            ),
+        ),
         name=recipe["name"],
         retained=recipe["retained"],
         seed=recipe["seed"],
