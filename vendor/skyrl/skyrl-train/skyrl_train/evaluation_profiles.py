@@ -4,13 +4,12 @@ Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs
 """
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, fields
-from functools import cache
-from pathlib import Path
+from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Literal, get_args
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
+from skyrl_train.inference_engines.sampling import SAMPLING_PARAMETER_KEYS
 
 
 EvaluationSchedule = Literal["every_evaluation", "final"]
@@ -34,24 +33,26 @@ class EvaluationProfile:
             raise ValueError("data_files must be nonempty when provided")
 
 
-@cache
-def _sampling_fields() -> frozenset[str]:
-    config = OmegaConf.load(Path(__file__).parent / "config" / "ppo_base_config.yaml")
-    # Per-request seeds and minimum lengths are consumed by the native sampling adapters.
-    return frozenset(config.generator.eval_sampling_params) | {"seed", "min_tokens"}
-
-
 def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile]:
     profiles = {}
     allowed = {field.name for field in fields(EvaluationProfile)}
     for callback in config.get("trainer", {}).get("callbacks") or []:
         if callback.get("type") != "evaluation":
             continue
-        for name, parameters in (callback.get("additional_evaluations") or {}).items():
+        declarations = callback.get("additional_evaluations")
+        if declarations is None:
+            continue
+        if not isinstance(declarations, Mapping):
+            raise ValueError("evaluation additional_evaluations must be a mapping")
+        for name, parameters in declarations.items():
             if not isinstance(name, str) or not name.isidentifier():
                 raise ValueError(f"evaluation name must be an identifier: {name!r}")
             if name in profiles:
                 raise ValueError(f"duplicate evaluation profile: {name}")
+            if not isinstance(parameters, Mapping):
+                raise ValueError(f"evaluation profile {name} must be a mapping")
+            if parameters.get("sampling_params") is not None and not isinstance(parameters["sampling_params"], Mapping):
+                raise ValueError(f"evaluation profile {name}: sampling_params must be a mapping")
             unknown = set(parameters) - allowed
             if unknown:
                 raise ValueError(f"evaluation profile {name} has unknown fields: {sorted(unknown)}")
@@ -59,7 +60,7 @@ def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile
                 profile = EvaluationProfile(**parameters)
             except (TypeError, ValueError) as error:
                 raise ValueError(f"evaluation profile {name}: {error}") from error
-            unknown_sampling = set(profile.sampling_params or {}) - _sampling_fields()
+            unknown_sampling = set(profile.sampling_params or {}) - SAMPLING_PARAMETER_KEYS
             if unknown_sampling:
                 raise ValueError(f"evaluation profile {name} has unknown sampling keys: {sorted(unknown_sampling)}")
             profiles[name] = profile
@@ -81,11 +82,10 @@ def evaluation_profiles(
 ) -> dict[str, EvaluationProfile]:
     """Resolve and record named requests in one complete native SkyRL configuration."""
     profiles = _declared_profiles(config)
-    data = dict(evaluation_data)
+    for name, paths in evaluation_data:
+        profiles[name] = replace(profiles[name], data_files=list(paths))
     resolved = {}
     for name, profile in profiles.items():
-        if name in data:
-            profile = EvaluationProfile(**{**asdict(profile), "data_files": list(data[name])})
         merged = evaluation_profile_config(config, profile, name)
         resolved[name] = EvaluationProfile(
             sampling_params=OmegaConf.to_container(merged.generator.eval_sampling_params, resolve=True),

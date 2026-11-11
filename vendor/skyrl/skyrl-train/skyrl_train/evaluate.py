@@ -32,7 +32,7 @@ from skyrl_train.utils.trainer_utils import (
     evaluation_response_metrics,
 )
 from skyrl_train.trajectory_runners.trajectory_processing import validate_trajectory_batch
-from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
 from skyrl_train.utils.logging_utils import log_example
 from skyrl_train.trajectory_runners.trajectory_retention import (
     RetentionSink,
