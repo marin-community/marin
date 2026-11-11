@@ -195,9 +195,7 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
 
 
 @pytest.mark.parametrize("explicit_run_id", [True, False])
-def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
-    tmp_path, submitted_batches, explicit_run_id, monkeypatch
-):
+def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(tmp_path, submitted_batches, explicit_run_id):
     runner = CliRunner()
     command = _command(tmp_path)
     if not explicit_run_id:
