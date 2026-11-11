@@ -1205,7 +1205,7 @@ def test_finished_policy_resolves_terminal_export_as_model_input(tmp_path):
     )
     assert evaluated.identity == evaluation_identity.identity == f"tests/finished@2026.10.26:{source.fingerprint()}"
     assert evaluation_identity.location == f"tests/finished@2026.10.26:{source.fingerprint()}/policy"
-    other = ArtifactStep.adopt("tests/other-policy", "v2", str(root), kind=SkyRLRun)
+    other = ArtifactStep.adopt("tests/other-policy", "2026.10.27", str(root), kind=SkyRLRun)
     other_model = resolve_skyrl_model(StepContext.for_fingerprint({}, (other,)), other, evaluation)
-    assert other_model.identity == f"tests/other-policy@v2:{other.fingerprint()}"
-    assert other_model.location == f"tests/other-policy@v2:{other.fingerprint()}/policy"
+    assert other_model.identity == f"tests/other-policy@2026.10.27:{other.fingerprint()}"
+    assert other_model.location == f"tests/other-policy@2026.10.27:{other.fingerprint()}/policy"
