@@ -9,7 +9,9 @@ import sys
 from dataclasses import replace
 
 import pytest
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 from verifyit.grade import Status
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec
@@ -28,6 +30,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
+from experiments.post_training.task_curation.datasets.tasktrove.nl2bash import convert_nl2bash_task
 
 DOCKERFILE = b"FROM python:3.12-slim\n"
 SUM_PROMPT = b"Read two integers and print their sum to stdout in /app/solution.py."
@@ -186,3 +189,19 @@ def test_python_archive_does_not_infer_unstated_module_names():
     assert isinstance(converted.spec, PytestSpec)
     assert "calculator" not in converted.spec.candidate_modules
     assert "app.calculator" not in converted.spec.candidate_modules
+
+
+def test_a_conversion_that_replaces_the_archive_environment_is_rejected():
+    """A task must run in the environment its archive specifies, not a substituted image."""
+    data = archive_data(verifier_data({"expected_output": "7\n"}))
+    row = RawRow(id="row", source=Source(dataset="d", revision="r", row="row", importer_revision="1"), data=data)
+    context = ConversionContext(
+        inputs={},
+        grader_environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="file:///lock"
+        ),
+    )
+    rejection = convert_nl2bash_task(row, context)
+    assert isinstance(rejection, ImportRejection)
+    assert rejection.reason == "environment_substituted"
+    assert "environment/Dockerfile" in rejection.detail

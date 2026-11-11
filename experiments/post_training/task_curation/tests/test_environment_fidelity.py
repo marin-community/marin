@@ -23,7 +23,7 @@ def test_a_stock_agent_image_recipe_is_provably_no_op():
     ("recipe", "files"),
     [
         (f"FROM {AGENT}\nRUN pip install requests==2.32.3\n", []),
-        (f"FROM python:3.13-slim-bookworm\nWORKDIR /app\n", []),
+        ("FROM python:3.13-slim-bookworm\nWORKDIR /app\n", []),
         (f"FROM {AGENT}\nCOPY data/ /app/data/\n", ["setup_files/data.csv"]),
     ],
 )
@@ -36,9 +36,7 @@ def test_a_spec_that_replaces_its_archive_environment_is_flagged():
     archive = {"environment/Dockerfile": b"FROM ubuntu:24.04\nRUN pip install pandas\n"}
     replaced = {"environment_requirements": {"docker_image": AGENT}}
     assert "declares no build context" in environment_unused(replaced, archive)
-    faithful = {
-        "environment_requirements": {"docker_build": {"files": [{"path": "Dockerfile", "source": {}}]}}
-    }
+    faithful = {"environment_requirements": {"docker_build": {"files": [{"path": "Dockerfile", "source": {}}]}}}
     assert environment_unused(faithful, archive) is None
 
 
