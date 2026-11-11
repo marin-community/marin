@@ -88,6 +88,7 @@ from marin.inference.config import (
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
@@ -1679,6 +1680,8 @@ def test_launch_group_only_federates_to_a_different_cluster(tmp_path, submission
 
 def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
     captured: dict = {}
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-rno2a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-rno2a")
 
     class Client:
         def submit(self, **kwargs):
@@ -1707,6 +1710,13 @@ def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
         Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a")
     ]
     assert captured["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
+    child_env = captured["environment"].env_vars
+    with monkeypatch.context() as child:
+        child.delenv("MARIN_PREFIX")
+        child.delenv("MARIN_TEMP_PREFIX")
+        child.setenv("MARIN_PREFIX", child_env["MARIN_PREFIX"])
+        child.setenv("MARIN_TEMP_PREFIX", child_env["MARIN_TEMP_PREFIX"])
+        assert marin_temp_bucket(14, prefix="eval") == "s3://marin-rno2a/tmp/ttl=14d/eval"
 
 
 def test_build_evaluation_batch_places_hosted_judge_with_candidate(monkeypatch):
